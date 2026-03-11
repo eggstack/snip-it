@@ -1,0 +1,127 @@
+# Monitoring - System monitoring and resource commands
+Description = "System monitoring commands for CPU, memory, processes, and performance."
+
+[[Snippets]]
+  Description = "System overview (htop)"
+  Tag = ["monitor", "process"]
+  command = "htop"
+
+[[Snippets]]
+  Description = "System overview (top)"
+  Tag = ["monitor", "process"]
+  command = "top"
+
+[[Snippets]]
+  Description = "Memory usage"
+  Tag = ["monitor", "memory"]
+  command = "free -h"
+
+[[Snippets]]
+  Description = "Memory details"
+  Tag = ["monitor", "memory"]
+  command = "cat /proc/meminfo"
+
+[[Snippets]]
+  Description = "CPU usage per core"
+  Tag = ["monitor", "cpu"]
+  command = "mpstat -P ALL 1"
+
+[[Snippets]]
+  Description = "CPU info"
+  Tag = ["monitor", "cpu"]
+  command = "lscpu"
+
+[[Snippets]]
+  Description = "Load average"
+  Tag = ["monitor", "load"]
+  command = "uptime"
+
+[[Snippets]]
+  Description = "I/O statistics"
+  Tag = ["monitor", "io"]
+  command = "iostat -xz 1"
+
+[[Snippets]]
+  Description = "Virtual memory stats"
+  Tag = ["monitor", "memory"]
+  command = "vmstat 1"
+
+[[Snippets]]
+  Description = "Disk I/O"
+  Tag = ["monitor", "disk"]
+  command = "iostat -dxh 1"
+
+[[Snippets]]
+  Description = "Network statistics"
+  Tag = ["monitor", "network"]
+  command = "sar -n DEV 1"
+
+[[Snippets]]
+  Description = "System resource summary"
+  Tag = ["monitor", "system"]
+  command = "dstat -a"
+
+[[Snippets]]
+  Description = "Continuous monitoring"
+  Tag = ["monitor", "system"]
+  command = "watch -n 1 'cat /proc/meminfo | head -5; echo; ps aux --sort=-%mem | head -6'"
+
+[[Snippets]]
+  Description = "List open files"
+  Tag = ["monitor", "files"]
+  command = "lsof | head -20"
+
+[[Snippets]]
+  Description = "User processes"
+  Tag = ["monitor", "user"]
+  command = "ps -u $(whoami)"
+
+[[Snippets]]
+  Description = "Zombie processes"
+  Tag = ["monitor", "process"]
+  command = "ps aux | grep defunct"
+
+[[Snippets]]
+  Description = "Kernel messages"
+  Tag = ["monitor", "kernel"]
+  command = "dmesg | tail -50"
+
+[[Snippets]]
+  Description = "Real-time dmesg"
+  Tag = ["monitor", "kernel"]
+  command = "dmesg -w"
+
+[[Snippets]]
+  Description = "System logs (journal)"
+  Tag = ["monitor", "logs"]
+  command = "journalctl -n 50"
+
+[[Snippets]]
+  Description = "Failed login attempts"
+  Tag = ["monitor", "security"]
+  command = "grep 'Failed' /var/log/auth.log | tail -20"
+
+[[Snippets]]
+  Description = "Last logins"
+  Tag = ["monitor", "security"]
+  command = "last -20"
+
+[[Snippets]]
+  Description = "Who's logged in"
+  Tag = ["monitor", "users"]
+  command = "who"
+
+[[Snippets]]
+  Description = "Uptime details"
+  Tag = ["monitor", "system"]
+  command = "uptime -p"
+
+[[Snippets]]
+  Description = "Process tree"
+  Tag = ["monitor", "process"]
+  command = "pstree -p"
+
+[[Snippets]]
+  Description = "GPU info (if available)"
+  Tag = ["monitor", "gpu"]
+  command = "nvidia-smi"

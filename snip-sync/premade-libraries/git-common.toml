@@ -1,0 +1,102 @@
+# Git Common - Frequently used Git commands
+Description = "Common Git commands for version control workflows."
+
+[[Snippets]]
+  Description = "Initialize a new repository"
+  Tag = ["git", "version-control"]
+  command = "git init"
+
+[[Snippets]]
+  Description = "Clone a repository"
+  Tag = ["git", "version-control"]
+  command = "git clone <repository_url>"
+
+[[Snippets]]
+  Description = "Check current status"
+  Tag = ["git", "version-control"]
+  command = "git status"
+
+[[Snippets]]
+  Description = "Stage all changes"
+  Tag = ["git", "version-control"]
+  command = "git add ."
+
+[[Snippets]]
+  Description = "Commit with message"
+  Tag = ["git", "version-control"]
+  command = "git commit -m \"<message>\""
+
+[[Snippets]]
+  Description = "Push to remote"
+  Tag = ["git", "version-control"]
+  command = "git push origin <branch=main>"
+
+[[Snippets]]
+  Description = "Pull from remote"
+  Tag = ["git", "version-control"]
+  command = "git pull origin <branch=main>"
+
+[[Snippets]]
+  Description = "Create and switch to new branch"
+  Tag = ["git", "branches"]
+  command = "git checkout -b <branch_name>"
+
+[[Snippets]]
+  Description = "Switch to existing branch"
+  Tag = ["git", "branches"]
+  command = "git checkout <branch_name>"
+
+[[Snippets]]
+  Description = "Merge branch into current"
+  Tag = ["git", "version-control"]
+  command = "git merge <branch_name>"
+
+[[Snippets]]
+  Description = "View commit history"
+  Tag = ["git", "version-control"]
+  command = "git log --oneline -n 20"
+
+[[Snippets]]
+  Description = "Show diff of unstaged changes"
+  Tag = ["git", "version-control"]
+  command = "git diff"
+
+[[Snippets]]
+  Description = "Show diff of staged changes"
+  Tag = ["git", "version-control"]
+  command = "git diff --cached"
+
+[[Snippets]]
+  Description = "Reset to previous commit (keep changes)"
+  Tag = ["git", "version-control"]
+  command = "git reset --soft HEAD~1"
+
+[[Snippets]]
+  Description = "Discard all local changes"
+  Tag = ["git", "version-control"]
+  command = "git checkout -- ."
+
+[[Snippets]]
+  Description = "Stash changes"
+  Tag = ["git", "version-control"]
+  command = "git stash"
+
+[[Snippets]]
+  Description = "Apply stashed changes"
+  Tag = ["git", "version-control"]
+  command = "git stash pop"
+
+[[Snippets]]
+  Description = "Add remote repository"
+  Tag = ["git", "remote"]
+  command = "git remote add origin <repository_url>"
+
+[[Snippets]]
+  Description = "List all remotes"
+  Tag = ["git", "remote"]
+  command = "git remote -v"
+
+[[Snippets]]
+  Description = "Rebase onto another branch"
+  Tag = ["git", "version-control"]
+  command = "git rebase <branch_name>"

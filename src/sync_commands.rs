@@ -1,0 +1,409 @@
+use crate::config::{SyncDirection, SyncSettings};
+use crate::library::{self, Snippet, Snippets};
+use crate::sync;
+use snip_proto::Snippet as ProtoSnippet;
+
+pub fn run_premade_sync(sync_settings: &SyncSettings) {
+    if !sync_settings.enabled || sync_settings.api_key.is_empty() {
+        return;
+    }
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to create async runtime: {}", e);
+            return;
+        }
+    };
+
+    let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to create sync client: {}", e);
+            return;
+        }
+    };
+
+    if let Ok(libs) = runtime.block_on(client.list_premade_libraries()) {
+        if libs.is_empty() {
+            return;
+        }
+
+        let mgr = match library::LibraryManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to initialize library manager: {}", e);
+                return;
+            }
+        };
+
+        let mut premade_results: Vec<(String, bool, String)> = Vec::new();
+
+        for lib in libs {
+            if mgr.premade_exists(&lib.filename) {
+                continue;
+            }
+
+            match runtime.block_on(client.get_premade_library(&lib.filename)) {
+                Ok(content) => match mgr.save_premade_library(&lib.filename, &content) {
+                    Ok(path) => {
+                        premade_results.push((lib.filename, true, path.display().to_string()));
+                    }
+                    Err(e) => {
+                        premade_results.push((lib.filename, false, e.to_string()));
+                    }
+                },
+                Err(e) => {
+                    premade_results.push((lib.filename, false, e.to_string()));
+                }
+            }
+        }
+
+        if !premade_results.is_empty() {
+            println!("\nPremade libraries:");
+            for (name, success, msg) in premade_results {
+                if success {
+                    println!("  + {} → {}", name, msg);
+                } else {
+                    println!("  ✗ {}: {}", name, msg);
+                }
+            }
+        }
+    }
+}
+
+pub fn run_sync(
+    sync_settings: &SyncSettings,
+    library_name: Option<&str>,
+    _non_interactive: bool,
+    push_only: bool,
+    pull_only: bool,
+    runtime: &tokio::runtime::Runtime,
+) {
+    let direction = if push_only {
+        SyncDirection::Push
+    } else if pull_only {
+        SyncDirection::Pull
+    } else {
+        SyncDirection::Bidirectional
+    };
+
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return;
+    }
+
+    if sync_settings.api_key.is_empty() {
+        eprintln!("Sync is enabled but no API key configured");
+        return;
+    }
+
+    let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to create sync client: {}", e);
+            return;
+        }
+    };
+
+    if let Ok(false) = runtime.block_on(client.health_check()) {
+        eprintln!("Server is not reachable at {}", sync_settings.server_url);
+        return;
+    }
+
+    let mut mgr = match library::LibraryManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to initialize library manager: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = mgr.ensure_library_mode() {
+        eprintln!("Failed to initialize library mode: {}", e);
+        return;
+    }
+
+    let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
+        vec![name.to_string()]
+    } else {
+        std::fs::read_dir(mgr.get_libraries_dir())
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+                    .filter_map(|e| {
+                        e.path()
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    if libraries_to_sync.is_empty() {
+        eprintln!("No libraries to sync.");
+        return;
+    }
+
+    for lib_name in &libraries_to_sync {
+        let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
+
+        if !lib_path.exists() {
+            eprintln!("Library file '{}' not found, skipping", lib_name);
+            continue;
+        }
+
+        let (library_id, _last_sync) = match mgr.get_library_by_filename(lib_name) {
+            Some(l) => (l.library_id.clone(), l.last_sync.unwrap_or(0)),
+            None => (String::new(), 0),
+        };
+
+        if library_id.is_empty() {
+            println!("Creating library '{}' on server...", lib_name);
+            let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+
+            match runtime.block_on(client.create_library(&normalized_name)) {
+                Ok(server_lib) => {
+                    let new_id = server_lib.id.clone();
+
+                    if mgr.get_library_by_filename(lib_name).is_none() {
+                        if let Err(e) = mgr.add_existing_library(lib_name) {
+                            eprintln!("  Warning: Failed to add library to config: {}", e);
+                        }
+                    }
+
+                    if let Err(e) = mgr.update_library_id(lib_name, &new_id) {
+                        eprintln!("  Warning: Failed to link library in config: {}", e);
+                    }
+
+                    println!(
+                        "  Created and linked library '{}' to server ID '{}'",
+                        lib_name, new_id
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  Failed to create library on server: {}", e);
+                    continue;
+                }
+            }
+        }
+    }
+
+    let total = libraries_to_sync.len();
+    let mut completed = 0;
+    let mut results: Vec<(String, bool, String)> = Vec::new();
+
+    for lib_name in &libraries_to_sync {
+        print!("\r[{}/{}] Syncing {}...", completed + 1, total, lib_name);
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
+
+        if !lib_path.exists() {
+            eprintln!("Library file '{}' not found, skipping", lib_name);
+            continue;
+        }
+
+        let (library_id, _last_sync) = match mgr.get_library_by_filename(lib_name) {
+            Some(l) => (l.library_id.clone(), l.last_sync.unwrap_or(0)),
+            None => (String::new(), 0),
+        };
+
+        if library_id.is_empty() {
+            eprintln!("Library '{}' not linked to server, skipping", lib_name);
+            continue;
+        }
+
+        let mut snippets = match library::load_library(&lib_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to load library '{}': {}", lib_name, e);
+                continue;
+            }
+        };
+
+        let mut snippets_needing_ids: Vec<usize> = Vec::new();
+        let now = chrono::Utc::now().timestamp();
+
+        for (idx, s) in snippets.snippets.iter_mut().enumerate() {
+            if s.id.is_empty() {
+                s.id = uuid::Uuid::new_v4().to_string();
+                s.created_at = now;
+                s.updated_at = now;
+                snippets_needing_ids.push(idx);
+            }
+        }
+
+        if !snippets_needing_ids.is_empty() {
+            if let Err(e) = library::save_library(&lib_path, &snippets) {
+                eprintln!("Warning: Failed to save generated IDs: {}", e);
+            }
+        }
+
+        if direction == SyncDirection::Push || direction == SyncDirection::Bidirectional {
+            let local_snippets: Vec<ProtoSnippet> = snippets
+                .snippets
+                .iter()
+                .filter(|s| s.updated_at >= _last_sync || s.created_at >= _last_sync)
+                .map(|s| ProtoSnippet {
+                    id: s.id.clone(),
+                    description: s.description.clone(),
+                    command: s.command.clone(),
+                    tags: s.tags.clone(),
+                    created_at: s.created_at,
+                    updated_at: s.updated_at,
+                    device_id: s.device_id.clone(),
+                    deleted: s.deleted,
+                    encrypted: false,
+                })
+                .collect();
+
+            if local_snippets.is_empty() && direction == SyncDirection::Push {
+                println!("  No local changes to push, skipping.");
+                continue;
+            }
+
+            let result =
+                runtime.block_on(client.sync_encrypted(local_snippets, _last_sync, &library_id));
+
+            match result {
+                Ok(response) => {
+                    if response.success {
+                        let new_timestamp = response.server_timestamp;
+
+                        if direction == SyncDirection::Push {
+                            let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                            completed += 1;
+                            results.push((lib_name.clone(), true, String::new()));
+                            continue;
+                        }
+
+                        let server_snippets = response.snippets;
+                        let merged = merge_snippets(&snippets, &server_snippets);
+
+                        let _ = library::backup_library(&lib_path).ok();
+
+                        if let Err(e) = library::save_library(&lib_path, &merged) {
+                            results.push((lib_name.clone(), false, e.to_string()));
+                            continue;
+                        }
+
+                        let _ = mgr.update_last_sync(lib_name, new_timestamp);
+
+                        if response.skipped_count > 0 {
+                            results.push((
+                                lib_name.clone(),
+                                true,
+                                format!("{} skipped", response.skipped_count),
+                            ));
+                        } else {
+                            results.push((lib_name.clone(), true, String::new()));
+                        }
+                    } else {
+                        results.push((lib_name.clone(), false, response.message));
+                    }
+                }
+                Err(e) => {
+                    results.push((lib_name.clone(), false, e.to_string()));
+                }
+            }
+        }
+
+        if direction == SyncDirection::Pull && !library_id.is_empty() {
+            let result = runtime.block_on(client.sync_encrypted(vec![], _last_sync, &library_id));
+
+            match result {
+                Ok(response) => {
+                    if response.success {
+                        let new_timestamp = response.server_timestamp;
+                        let server_snippets = response.snippets;
+                        let merged = merge_snippets(&snippets, &server_snippets);
+
+                        let _ = library::backup_library(&lib_path).ok();
+
+                        if let Err(e) = library::save_library(&lib_path, &merged) {
+                            results.push((lib_name.clone(), false, e.to_string()));
+                            continue;
+                        }
+
+                        let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                        results.push((lib_name.clone(), true, String::new()));
+                    }
+                }
+                Err(e) => results.push((lib_name.clone(), false, e.to_string())),
+            }
+        }
+
+        completed += 1;
+    }
+
+    for (name, _success, msg) in results {
+        if !msg.is_empty() {
+            println!("  {} - {}", name, msg);
+        }
+    }
+}
+
+fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippets {
+    let local_by_id: std::collections::HashMap<_, _> =
+        local.snippets.iter().map(|s| (s.id.clone(), s)).collect();
+
+    let mut merged_snippets: Vec<Snippet> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for server_snip in server_snippets {
+        if server_snip.deleted {
+            continue;
+        }
+        seen_ids.insert(server_snip.id.clone());
+
+        if let Some(local_snip) = local_by_id.get(&server_snip.id) {
+            if server_snip.updated_at > local_snip.updated_at {
+                merged_snippets.push(Snippet {
+                    id: server_snip.id.clone(),
+                    description: server_snip.description.clone(),
+                    command: server_snip.command.clone(),
+                    output: local_snip.output.clone(),
+                    tags: server_snip.tags.clone(),
+                    folders: local_snip.folders.clone(),
+                    favorite: local_snip.favorite,
+                    created_at: local_snip.created_at,
+                    updated_at: server_snip.updated_at,
+                    device_id: local_snip.device_id.clone(),
+                    deleted: false,
+                });
+            } else {
+                merged_snippets.push((*local_snip).clone());
+            }
+        } else {
+            merged_snippets.push(Snippet {
+                id: server_snip.id.clone(),
+                description: server_snip.description.clone(),
+                command: server_snip.command.clone(),
+                output: String::new(),
+                tags: server_snip.tags.clone(),
+                folders: Vec::new(),
+                favorite: false,
+                created_at: server_snip.created_at,
+                updated_at: server_snip.updated_at,
+                device_id: server_snip.device_id.clone(),
+                deleted: false,
+            });
+        }
+    }
+
+    for local_snip in &local.snippets {
+        if !seen_ids.contains(&local_snip.id) && !local_snip.deleted {
+            merged_snippets.push(local_snip.clone());
+        }
+    }
+
+    merged_snippets.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    Snippets {
+        snippets: merged_snippets,
+        folders: local.folders.clone(),
+    }
+}

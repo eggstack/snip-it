@@ -1,0 +1,137 @@
+# Package Manager - apt, dnf, and yum commands
+Description = "Package management commands for Debian/Ubuntu (apt) and RedHat/Fedora (dnf/yum)."
+
+[[Snippets]]
+  Description = "Update package lists (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt update"
+
+[[Snippets]]
+  Description = "Upgrade all packages (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt upgrade"
+
+[[Snippets]]
+  Description = "Full upgrade (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt full-upgrade"
+
+[[Snippets]]
+  Description = "Install package (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt install <package_name>"
+
+[[Snippets]]
+  Description = "Remove package (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt remove <package_name>"
+
+[[Snippets]]
+  Description = "Purge package (apt)"
+  Tag = ["package", "apt"]
+  command = "sudo apt purge <package_name>"
+
+[[Snippets]]
+  Description = "Search packages (apt)"
+  Tag = ["package", "apt"]
+  command = "apt search <keyword>"
+
+[[Snippets]]
+  Description = "Show package info (apt)"
+  Tag = ["package", "apt"]
+  command = "apt show <package_name>"
+
+[[Snippets]]
+  Description = "List installed packages"
+  Tag = ["package", "apt"]
+  command = "dpkg -l"
+
+[[Snippets]]
+  Description = "Check if package installed"
+  Tag = ["package", "apt"]
+  command = "dpkg -l | grep <package_name>"
+
+[[Snippets]]
+  Description = "Install .deb file"
+  Tag = ["package", "apt"]
+  command = "sudo dpkg -i <package>.deb"
+
+[[Snippets]]
+  Description = "Fix broken dependencies"
+  Tag = ["package", "apt"]
+  command = "sudo apt install -f"
+
+[[Snippets]]
+  Description = "Clean apt cache"
+  Tag = ["package", "apt"]
+  command = "sudo apt clean"
+
+[[Snippets]]
+  Description = "Remove unused packages"
+  Tag = ["package", "apt"]
+  command = "sudo apt autoremove"
+
+[[Snippets]]
+  Description = "Update (dnf)"
+  Tag = ["package", "dnf"]
+  command = "sudo dnf update"
+
+[[Snippets]]
+  Description = "Install package (dnf)"
+  Tag = ["package", "dnf"]
+  command = "sudo dnf install <package_name>"
+
+[[Snippets]]
+  Description = "Remove package (dnf)"
+  Tag = ["package", "dnf"]
+  command = "sudo dnf remove <package_name>"
+
+[[Snippets]]
+  Description = "Search packages (dnf)"
+  Tag = ["package", "dnf"]
+  command = "dnf search <keyword>"
+
+[[Snippets]]
+  Description = "List updates (dnf)"
+  Tag = ["package", "dnf"]
+  command = "dnf check-update"
+
+[[Snippets]]
+  Description = "Clean dnf cache"
+  Tag = ["package", "dnf"]
+  command = "sudo dnf clean all"
+
+[[Snippets]]
+  Description = "Update (yum)"
+  Tag = ["package", "yum"]
+  command = "sudo yum update"
+
+[[Snippets]]
+  Description = "Install package (yum)"
+  Tag = ["package", "yum"]
+  command = "sudo yum install <package_name>"
+
+[[Snippets]]
+  Description = "Remove package (yum)"
+  Tag = ["package", "yum"]
+  command = "sudo yum remove <package_name>"
+
+[[Snippets]]
+  Description = "Search packages (yum)"
+  Tag = ["package", "yum"]
+  command = "yum search <keyword>"
+
+[[Snippets]]
+  Description = "List installed (yum)"
+  Tag = ["package", "yum"]
+  command = "yum list installed"
+
+[[Snippets]]
+  Description = "List available (yum)"
+  Tag = ["package", "yum"]
+  command = "yum list available"
+
+[[Snippets]]
+  Description = "Package info (yum)"
+  Tag = ["package", "yum"]
+  command = "yum info <package_name>"

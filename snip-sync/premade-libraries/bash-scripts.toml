@@ -1,0 +1,77 @@
+# Bash Scripts - Useful bash functions and scripts
+Description = "Useful bash functions, aliases, and scripts for daily tasks."
+
+[[Snippets]]
+  Description = "Extract any archive"
+  Tag = ["script", "extract"]
+  command = "extract() { for file in \"$@\"; do if [ -f \"$file\" ]; then case \"$file\" in *.tar.bz2) tar xjf \"$file\" ;; *.tar.gz) tar xzf \"$file\" ;; *.bz2) bunzip2 \"$file\" ;; *.rar) unrar x \"$file\" ;; *.gz) gunzip \"$file\" ;; *.tar) tar xf \"$file\" ;; *.tbz2) tar xjf \"$file\" ;; *.tgz) tar xzf \"$file\" ;; *.zip) unzip \"$file\" ;; *.Z) uncompress \"$file\" ;; *.7z) 7z x \"$file\" ;; esac; fi; done; }"
+
+[[Snippets]]
+  Description = "Weather (curl)"
+  Tag = ["script", "weather"]
+  command = "weather() { curl -s \"wttr.in/${1:-}\" | head -20; }"
+
+[[Snippets]]
+  Description = "Get my public IP"
+  Tag = ["script", "network"]
+  command = "myip() { curl ifconfig.me; echo; }"
+
+[[Snippets]]
+  Description = "Calculator"
+  Tag = ["script", "math"]
+  command = "calc() { echo \"$*\" | bc -l; }"
+
+[[Snippets]]
+  Description = "Mkdir and cd"
+  Tag = ["script", "cd"]
+  command = "mkcd() { mkdir -p \"$1\" && cd \"$1\"; }"
+
+[[Snippets]]
+  Description = "Find and replace in directory"
+  Tag = ["script", "replace"]
+  command = "replace() { find . -type f -name \"$1\" -exec sed -i 's/$2/$3/g' {} \\;; }"
+
+[[Snippets]]
+  Description = "Git branch cleanup (merged)"
+  Tag = ["script", "git"]
+  command = "git-clean-branches() { git branch --merged | grep -v '\\*' | xargs -n 1 git branch -d; }"
+
+[[Snippets]]
+  Description = "Docker cleanup"
+  Tag = ["script", "docker"]
+  command = "docker-clean() { docker container prune -f; docker image prune -a -f; docker volume prune -f; }"
+
+[[Snippets]]
+  Description = "Tail all log files"
+  Tag = ["script", "logs"]
+  command = "tailall() { for f in /var/log/*.log; do echo \"=== $f ===\"; tail -n 20 \"$f\"; done; }"
+
+[[Snippets]]
+  Description = "Process tree"
+  Tag = ["script", "process"]
+  command = "pstree() { ps auxf | head -50; }"
+
+[[Snippets]]
+  Description = "Sort by size (directory)"
+  Tag = ["script", "disk"]
+  command = "dsize() { du -h --max-depth=1 | sort -h; }"
+
+[[Snippets]]
+  Description = "Quick serve current directory"
+  Tag = ["script", "server"]
+  command = "serve() { python3 -m http.server ${1:-8000}; }"
+
+[[Snippets]]
+  Description = "Base64 encode"
+  Tag = ["script", "encode"]
+  command = "encode() { echo \"$1\" | base64; }"
+
+[[Snippets]]
+  Description = "Base64 decode"
+  Tag = ["script", "decode"]
+  command = "decode() { echo \"$1\" | base64 -d; }"
+
+[[Snippets]]
+  Description = "URL encode"
+  Tag = ["script", "encode"]
+  command = "urlencode() { python3 -c \"import urllib.parse; print(urllib.parse.quote('${1}'))\" ; }"

@@ -1,0 +1,16 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo registry and git checkout directories (if any)
+**/.cargo/*
+
+# Rust documentation files
+**/*.html
+
+# VS Code settings
+.vscode/
+
+# macOS artifacts
+.DS_Store
+._*

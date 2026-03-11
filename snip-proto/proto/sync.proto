@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package snip_proto;
+
+option go_package = "github.com/snip-it/snip-proto;snip_proto";
+
+service SnippetSync {
+    // Get snippets from server (optionally since a timestamp)
+    rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);
+    
+    // Push local snippets to server
+    rpc PushSnippets (PushSnippetsRequest) returns (PushSnippetsResponse);
+    
+    // Two-way sync - merge local and server snippets
+    rpc Sync (SyncRequest) returns (SyncResponse);
+    
+    // Health check
+    rpc Health (HealthRequest) returns (HealthResponse);
+
+    // Register a new device/user
+    rpc Register (RegisterRequest) returns (RegisterResponse);
+
+    // Library management
+    rpc CreateLibrary (CreateLibraryRequest) returns (CreateLibraryResponse);
+    rpc ListLibraries (ListLibrariesRequest) returns (ListLibrariesResponse);
+    rpc DeleteLibrary (DeleteLibraryRequest) returns (DeleteLibraryResponse);
+
+    // Premade libraries (server->client only)
+    rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
+    rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
+}
+
+message GetSnippetsRequest {
+    string api_key = 1;
+    int64 since = 2;
+    string library_id = 3;
+    int32 limit = 4;
+    int32 offset = 5;
+}
+
+message PushSnippetsRequest {
+    string api_key = 1;
+    string library_id = 3;
+    repeated Snippet snippets = 2;
+}
+
+message PushSnippetsResponse {
+    bool success = 1;
+    string message = 2;
+    int32 accepted_count = 3;
+    int32 rejected_count = 4;
+}
+
+message SyncRequest {
+    string api_key = 1;
+    repeated Snippet local_snippets = 2;
+    int64 last_sync_timestamp = 3;
+    string library_id = 4;
+    int32 limit = 5;
+}
+
+message SyncResponse {
+    bool success = 1;
+    string message = 2;
+    repeated Snippet snippets = 3;
+    int64 server_timestamp = 4;
+    int32 skipped_count = 5;
+    repeated string skipped_ids = 6;
+}
+
+message Snippet {
+    string id = 1;
+    string description = 2;
+    string command = 3;
+    repeated string tags = 4;
+    int64 created_at = 5;
+    int64 updated_at = 6;
+    string device_id = 7;
+    bool deleted = 8;
+    bool encrypted = 9;
+}
+
+message SnippetList {
+    repeated Snippet snippets = 1;
+    int32 total_count = 2;
+    bool has_more = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+    bool healthy = 1;
+    string version = 2;
+}
+
+message RegisterRequest {
+    string device_id = 1;
+}
+
+message RegisterResponse {
+    bool success = 1;
+    string api_key = 2;
+    string message = 3;
+    string device_id = 4;
+}
+
+message CreateLibraryRequest {
+    string api_key = 1;
+    string name = 2;
+}
+
+message CreateLibraryResponse {
+    bool success = 1;
+    string library_id = 2;
+    string message = 3;
+}
+
+message ListLibrariesRequest {
+    string api_key = 1;
+    int32 limit = 2;
+    int32 offset = 3;
+}
+
+message ListLibrariesResponse {
+    repeated Library libraries = 1;
+    int32 total_count = 2;
+    bool has_more = 3;
+}
+
+message DeleteLibraryRequest {
+    string api_key = 1;
+    string library_id = 2;
+}
+
+message DeleteLibraryResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message Library {
+    string id = 1;
+    string name = 2;
+    int64 created_at = 3;
+    int64 snippet_count = 4;
+}
+
+message ListPremadeLibrariesRequest {
+    string api_key = 1;
+}
+
+message ListPremadeLibrariesResponse {
+    repeated PremadeLibrary libraries = 1;
+}
+
+message PremadeLibrary {
+    string name = 1;
+    string filename = 2;
+    string description = 3;
+    int32 snippet_count = 4;
+}
+
+message GetPremadeLibraryRequest {
+    string api_key = 1;
+    string filename = 2;
+}
+
+message GetPremadeLibraryResponse {
+    bool success = 1;
+    string name = 2;
+    string content = 3;
+    string message = 4;
+}

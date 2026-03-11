@@ -1,0 +1,142 @@
+# SSH & Security - SSH key management and security commands
+Description = "SSH key management, security hardening, and related commands."
+
+[[Snippets]]
+  Description = "Generate SSH key (Ed25519)"
+  Tag = ["ssh", "key"]
+  command = "ssh-keygen -t ed25519 -C \"<email>\""
+
+[[Snippets]]
+  Description = "Generate SSH key (RSA)"
+  Tag = ["ssh", "key"]
+  command = "ssh-keygen -t rsa -b 4096 -C \"<email>\""
+
+[[Snippets]]
+  Description = "Copy SSH key to server"
+  Tag = ["ssh", "key"]
+  command = "ssh-copy-id <user>@<host>"
+
+[[Snippets]]
+  Description = "Copy SSH key manually"
+  Tag = ["ssh", "key"]
+  command = "cat ~/.ssh/id_ed25519.pub | ssh <user>@<host> 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'"
+
+[[Snippets]]
+  Description = "List SSH keys"
+  Tag = ["ssh", "key"]
+  command = "ls -la ~/.ssh/"
+
+[[Snippets]]
+  Description = "Change SSH key passphrase"
+  Tag = ["ssh", "key"]
+  command = "ssh-keygen -p -f ~/.ssh/id_ed25519"
+
+[[Snippets]]
+  Description = "Test SSH connection"
+  Tag = ["ssh", "test"]
+  command = "ssh -v <user>@<host>"
+
+[[Snippets]]
+  Description = "SSH with specific key"
+  Tag = ["ssh", "connect"]
+  command = "ssh -i ~/.ssh/<key_file> <user>@<host>"
+
+[[Snippets]]
+  Description = "SSH with port"
+  Tag = ["ssh", "connect"]
+  command = "ssh -p <port> <user>@<host>"
+
+[[Snippets]]
+  Description = "SSH tunnel (local)"
+  Tag = ["ssh", "tunnel"]
+  command = "ssh -L <local_port>:localhost:<remote_port> <user>@<host>"
+
+[[Snippets]]
+  Description = "SSH tunnel (remote)"
+  Tag = ["ssh", "tunnel"]
+  command = "ssh -R <remote_port>:localhost:<local_port> <user>@<host>"
+
+[[Snippets]]
+  Description = "SSH keepalive"
+  Tag = ["ssh", "config"]
+  command = "ssh -o ServerAliveInterval=60 <user>@<host>"
+
+[[Snippets]]
+  Description = "SCP local to remote"
+  Tag = ["ssh", "copy"]
+  command = "scp <local_file> <user>@<host>:/path/"
+
+[[Snippets]]
+  Description = "SCP remote to local"
+  Tag = ["ssh", "copy"]
+  command = "scp <user>@<host>:/path/<file> ."
+
+[[Snippets]]
+  Description = "Rsync over SSH"
+  Tag = ["ssh", "sync"]
+  command = "rsync -avz -e ssh <source>/ <user>@<host>:/path/"
+
+[[Snippets]]
+  Description = "SSH config file"
+  Tag = ["ssh", "config"]
+  command = "cat ~/.ssh/config"
+
+[[Snippets]]
+  Description = "Check SSH key fingerprint"
+  Tag = ["ssh", "key"]
+  command = "ssh-keygen -lf ~/.ssh/id_ed25519.pub"
+
+[[Snippets]]
+  Description = "Check SSH agent"
+  Tag = ["ssh", "agent"]
+  command = "ssh-add -l"
+
+[[Snippets]]
+  Description = "Add key to SSH agent"
+  Tag = ["ssh", "agent"]
+  command = "ssh-add ~/.ssh/id_ed25519"
+
+[[Snippets]]
+  Description = "Start SSH agent"
+  Tag = ["ssh", "agent"]
+  command = "eval \"$(ssh-agent -s)\""
+
+[[Snippets]]
+  Description = "Generate random password"
+  Tag = ["security", "password"]
+  command = "openssl rand -base64 32"
+
+[[Snippets]]
+  Description = "Generate strong password"
+  Tag = ["security", "password"]
+  command = "pwgen -s 32 -y"
+
+[[Snippets]]
+  Description = "Check open ports"
+  Tag = ["security", "ports"]
+  command = "nmap -sT localhost"
+
+[[Snippets]]
+  Description = "Scan for open ports (external)"
+  Tag = ["security", "ports"]
+  command = "nmap -sV <host>"
+
+[[Snippets]]
+  Description = "Check SSL certificate"
+  Tag = ["security", "ssl"]
+  command = "echo | openssl s_client -connect <host>:443 -servername <domain> | openssl x509 -noout -dates"
+
+[[Snippets]]
+  Description = "Firewall status (ufw)"
+  Tag = ["security", "firewall"]
+  command = "sudo ufw status"
+
+[[Snippets]]
+  Description = "Allow port (ufw)"
+  Tag = ["security", "firewall"]
+  command = "sudo ufw allow <port>/tcp"
+
+[[Snippets]]
+  Description = "Deny port (ufw)"
+  Tag = ["security", "firewall"]
+  command = "sudo ufw deny <port>/tcp"

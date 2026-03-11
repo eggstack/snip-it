@@ -1,0 +1,147 @@
+# Permissions - File permissions and ownership
+Description = "Commands for managing file permissions, ownership, and access control."
+
+[[Snippets]]
+  Description = "Show permissions (numeric)"
+  Tag = ["perm", "view"]
+  command = "stat -c '%a %n' <filepath>"
+
+[[Snippets]]
+  Description = "Show permissions (symbolic)"
+  Tag = ["perm", "view"]
+  command = "ls -ld <filepath>"
+
+[[Snippets]]
+  Description = "Chmod add execute"
+  Tag = ["perm", "chmod"]
+  command = "chmod +x <filename>"
+
+[[Snippets]]
+  Description = "Chmod read only"
+  Tag = ["perm", "chmod"]
+  command = "chmod 444 <filepath>"
+
+[[Snippets]]
+  Description = "Chmod read write"
+  Tag = ["perm", "chmod"]
+  command = "chmod 644 <filepath>"
+
+[[Snippets]]
+  Description = "Chmod execute for user"
+  Tag = ["perm", "chmod"]
+  command = "chmod u+x <filepath>"
+
+[[Snippets]]
+  Description = "Chmod recursive"
+  Tag = ["perm", "chmod"]
+  command = "chmod -R 755 <directory>/"
+
+[[Snippets]]
+  Description = "Chmod recursive (files only)"
+  Tag = ["perm", "chmod"]
+  command = "find <directory>/ -type f -exec chmod 644 {} \\;"
+
+[[Snippets]]
+  Description = "Chmod recursive (dirs only)"
+  Tag = ["perm", "chmod"]
+  command = "find <directory>/ -type d -exec chmod 755 {} \\;"
+
+[[Snippets]]
+  Description = "Make script executable"
+  Tag = ["perm", "chmod"]
+  command = "chmod +x <script.sh>"
+
+[[Snippets]]
+  Description = "Chown user"
+  Tag = ["perm", "chown"]
+  command = "sudo chown <user> <filepath>"
+
+[[Snippets]]
+  Description = "Chown user:group"
+  Tag = ["perm", "chown"]
+  command = "sudo chown <user>:<group> <filepath>"
+
+[[Snippets]]
+  Description = "Chown recursive"
+  Tag = ["perm", "chown"]
+  command = "sudo chown -R <user>:<group> <directory>/"
+
+[[Snippets]]
+  Description = "Chgrp group"
+  Tag = ["perm", "chgrp"]
+  command = "chgrp <group> <filepath>"
+
+[[Snippets]]
+  Description = "Set default ACL"
+  Tag = ["perm", "acl"]
+  command = "setfacl -m d:u:<user>:rw <directory>/"
+
+[[Snippets]]
+  Description = "Get ACL"
+  Tag = ["perm", "acl"]
+  command = "getfacl <filepath>"
+
+[[Snippets]]
+  Description = "Set ACL"
+  Tag = ["perm", "acl"]
+  command = "setfacl -m u:<user>:rw <filepath>"
+
+[[Snippets]]
+  Description = "Remove ACL"
+  Tag = ["perm", "acl"]
+  command = "setfacl -x u:<user> <filepath>"
+
+[[Snippets]]
+  Description = "Make file immutable (chattr)"
+  Tag = ["perm", "special"]
+  command = "sudo chattr +i <filepath>"
+
+[[Snippets]]
+  Description = "Remove immutable"
+  Tag = ["perm", "special"]
+  command = "sudo chattr -i <filepath>"
+
+[[Snippets]]
+  Description = "List file attributes"
+  Tag = ["perm", "special"]
+  command = "lsattr <filepath>"
+
+[[Snippets]]
+  Description = "Set sticky bit"
+  Tag = ["perm", "special"]
+  command = "chmod +t <directory>/"
+
+[[Snippets]]
+  Description = "Set GUID bit"
+  Tag = ["perm", "special"]
+  command = "chmod g+s <directory>/"
+
+[[Snippets]]
+  Description = "Set SUID bit"
+  Tag = ["perm", "special"]
+  command = "chmod u+s <filepath>"
+
+[[Snippets]]
+  Description = "umask (default permissions)"
+  Tag = ["perm", "umask"]
+  command = "umask"
+
+[[Snippets]]
+  Description = "Set umask"
+  Tag = ["perm", "umask"]
+  command = "umask 022"
+
+[[Snippets]]
+  Description = "View capabilities"
+  Tag = ["perm", "capabilities"]
+  command = "getcap -r /usr/bin/"
+
+[[Snippets]]
+  Description = "List sudoers"
+  Tag = ["perm", "sudo"]
+  command = "sudo cat /etc/sudoers"
+
+[[Snippets]]
+  Description = "Check user groups"
+  Tag = ["perm", "groups"]
+  command = "groups <username>"

@@ -1,0 +1,52 @@
+# Docker Essentials - Common Docker commands
+Description = "Essential Docker commands for managing containers, images, and compose services."
+
+[[Snippets]]
+  Description = "List running containers"
+  Tag = ["docker", "containers"]
+  command = "docker ps"
+
+[[Snippets]]
+  Description = "List all containers (including stopped)"
+  Tag = ["docker", "containers"]
+  command = "docker ps -a"
+
+[[Snippets]]
+  Description = "Start containers in detached mode"
+  Tag = ["docker", "compose"]
+  command = "docker compose up -d"
+
+[[Snippets]]
+  Description = "Stop all running containers"
+  Tag = ["docker", "containers"]
+  command = "docker stop $(docker ps -q)"
+
+[[Snippets]]
+  Description = "Remove all stopped containers"
+  Tag = ["docker", "containers"]
+  command = "docker container prune -f"
+
+[[Snippets]]
+  Description = "View container logs"
+  Tag = ["docker", "logs"]
+  command = "docker logs -f <container_name>"
+
+[[Snippets]]
+  Description = "Execute command in running container"
+  Tag = ["docker", "containers"]
+  command = "docker exec -it <container_name> sh"
+
+[[Snippets]]
+  Description = "Pull Docker image"
+  Tag = ["docker", "images"]
+  command = "docker pull <image_name>"
+
+[[Snippets]]
+  Description = "List Docker images"
+  Tag = ["docker", "images"]
+  command = "docker images"
+
+[[Snippets]]
+  Description = "Remove unused Docker images"
+  Tag = ["docker", "images"]
+  command = "docker image prune -a -f"

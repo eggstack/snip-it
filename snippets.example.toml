@@ -1,0 +1,62 @@
+# Sample snippets for snp
+# Copy this file to ~/.config/snp/snippets.toml and customize
+
+[[Snippets]]
+  Description = "git commit with message"
+  Output = ""
+  Tag = ["git", "version-control"]
+  command = "git commit -m \"<message>\""
+
+[[Snippets]]
+  Description = "git push to origin"
+  Output = ""
+  Tag = ["git", "version-control"]
+  command = "git push origin <branch=main>"
+
+[[Snippets]]
+  Description = "docker ps running containers"
+  Output = ""
+  Tag = ["docker", "containers"]
+  command = "docker ps"
+
+[[Snippets]]
+  Description = "docker compose up detached"
+  Output = ""
+  Tag = ["docker", "compose"]
+  command = "docker compose up -d"
+
+[[Snippets]]
+  Description = "kill process on port"
+  Output = ""
+  Tag = ["system", "port"]
+  command = "lsof -ti :<port> | xargs kill -9"
+
+[[Snippets]]
+  Description = "find file by name"
+  Output = ""
+  Tag = ["find", "filesystem"]
+  command = "find . -name \"<pattern>\""
+
+[[Snippets]]
+  Description = "grep recursive with context"
+  Output = ""
+  Tag = ["grep", "search"]
+  command = "grep -rn \"<pattern>\" ."
+
+[[Snippets]]
+  Description = "curl with headers"
+  Output = ""
+  Tag = ["http", "curl"]
+  command = "curl -H \"<header>\" <url>"
+
+[[Snippets]]
+  Description = "tar compress directory"
+  Output = ""
+  Tag = ["archive", "tar"]
+  command = "tar -czvf <archive.tar.gz> <directory>/"
+
+[[Snippets]]
+  Description = "rsync sync directories"
+  Output = ""
+  Tag = ["sync", "rsync"]
+  command = "rsync -avz <source>/ <destination>/"

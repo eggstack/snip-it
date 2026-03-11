@@ -1,0 +1,137 @@
+# Networking - Network diagnostics and configuration
+Description = "Network diagnostics, testing, and configuration commands."
+
+[[Snippets]]
+  Description = "Show all network interfaces"
+  Tag = ["network", "info"]
+  command = "ip addr"
+
+[[Snippets]]
+  Description = "Show interface details"
+  Tag = ["network", "info"]
+  command = "ip link show <interface>"
+
+[[Snippets]]
+  Description = "Show routing table"
+  Tag = ["network", "routing"]
+  command = "ip route"
+
+[[Snippets]]
+  Description = "Add IP address to interface"
+  Tag = ["network", "config"]
+  command = "sudo ip addr add <ip>/<cidr> dev <interface>"
+
+[[Snippets]]
+  Description = "Ping host"
+  Tag = ["network", "test"]
+  command = "ping -c 4 <host>"
+
+[[Snippets]]
+  Description = "Continuous ping"
+  Tag = ["network", "test"]
+  command = "ping <host>"
+
+[[Snippets]]
+  Description = "Trace route to host"
+  Tag = ["network", "test"]
+  command = "traceroute <host>"
+
+[[Snippets]]
+  Description = "Trace route (modern)"
+  Tag = ["network", "test"]
+  command = "mtr <host>"
+
+[[Snippets]]
+  Description = "DNS lookup"
+  Tag = ["network", "dns"]
+  command = "dig <domain>"
+
+[[Snippets]]
+  Description = "Quick DNS lookup"
+  Tag = ["network", "dns"]
+  command = "nslookup <domain>"
+
+[[Snippets]]
+  Description = "Reverse DNS lookup"
+  Tag = ["network", "dns"]
+  command = "dig -x <ip>"
+
+[[Snippets]]
+  Description = "Show listening ports"
+  Tag = ["network", "ports"]
+  command = "ss -tulpn"
+
+[[Snippets]]
+  Description = "Show port connections"
+  Tag = ["network", "ports"]
+  command = "ss -tnp"
+
+[[Snippets]]
+  Description = "Check if port is open"
+  Tag = ["network", "test"]
+  command = "nc -zv <host> <port>"
+
+[[Snippets]]
+  Description = "Scan ports range"
+  Tag = ["network", "scan"]
+  command = "nc -zv <host> <start_port>-<end_port>"
+
+[[Snippets]]
+  Description = "Download file"
+  Tag = ["network", "download"]
+  command = "wget <url>"
+
+[[Snippets]]
+  Description = "Download with resume"
+  Tag = ["network", "download"]
+  command = "wget -c <url>"
+
+[[Snippets]]
+  Description = "Download file (curl)"
+  Tag = ["network", "download"]
+  command = "curl -LO <url>"
+
+[[Snippets]]
+  Description = "Download to filename"
+  Tag = ["network", "download"]
+  command = "curl -o <filename> <url>"
+
+[[Snippets]]
+  Description = "HTTP request"
+  Tag = ["network", "http"]
+  command = "curl -X GET <url>"
+
+[[Snippets]]
+  Description = "HTTP request with headers"
+  Tag = ["network", "http"]
+  command = "curl -H 'Header: value' <url>"
+
+[[Snippets]]
+  Description = "POST form data"
+  Tag = ["network", "http"]
+  command = "curl -X POST -d 'key=value' <url>"
+
+[[Snippets]]
+  Description = "Check website headers"
+  Tag = ["network", "http"]
+  command = "curl -I <url>"
+
+[[Snippets]]
+  Description = "Show ARP table"
+  Tag = ["network", "arp"]
+  command = "ip neigh"
+
+[[Snippets]]
+  Description = "Flush DNS cache (systemd)"
+  Tag = ["network", "dns"]
+  command = "sudo systemd-resolve --flush-caches"
+
+[[Snippets]]
+  Description = "Get public IP"
+  Tag = ["network", "info"]
+  command = "curl ifconfig.me"
+
+[[Snippets]]
+  Description = "Bandwidth test (speedtest)"
+  Tag = ["network", "test"]
+  command = "speedtest-cli"

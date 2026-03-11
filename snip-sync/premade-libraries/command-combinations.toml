@@ -1,0 +1,177 @@
+# Command Combinations - Useful command pipelines and one-liners
+Description = "Powerful command combinations and pipelines for common tasks."
+
+[[Snippets]]
+  Description = "Kill process by name"
+  Tag = ["process", "kill"]
+  command = "pkill -f '<process_name>'"
+
+[[Snippets]]
+  Description = "Kill process forcefully"
+  Tag = ["process", "kill"]
+  command = "pkill -9 -f '<process_name>'"
+
+[[Snippets]]
+  Description = "Find and kill (alternative)"
+  Tag = ["process", "kill"]
+  command = "ps aux | grep '<name>' | grep -v grep | awk '{print $2}' | xargs kill"
+
+[[Snippets]]
+  Description = "List processes sorted by memory"
+  Tag = ["process", "monitor"]
+  command = "ps aux --sort=-%mem | head -n 10"
+
+[[Snippets]]
+  Description = "List processes sorted by CPU"
+  Tag = ["process", "monitor"]
+  command = "ps aux --sort=-%cpu | head -n 10"
+
+[[Snippets]]
+  Description = "Find open files by process"
+  Tag = ["process", "files"]
+  command = "lsof -p <pid>"
+
+[[Snippets]]
+  Description = "Find who is using a file"
+  Tag = ["process", "files"]
+  command = "lsof <filepath>"
+
+[[Snippets]]
+  Description = "Find process using port"
+  Tag = ["process", "network"]
+  command = "lsof -i :<port>"
+
+[[Snippets]]
+  Description = "Disk usage by directory (sorted)"
+  Tag = ["disk", "usage"]
+  command = "du -h <directory>/ | sort -h | tail -n 10"
+
+[[Snippets]]
+  Description = "Total disk usage"
+  Tag = ["disk", "usage"]
+  command = "df -h"
+
+[[Snippets]]
+  Description = "Inode usage"
+  Tag = ["disk", "usage"]
+  command = "df -i"
+
+[[Snippets]]
+  Description = "Largest directories"
+  Tag = ["disk", "usage"]
+  command = "du -ah <directory>/ | sort -rh | head -n 10"
+
+[[Snippets]]
+  Description = "Count files in directory"
+  Tag = ["files", "count"]
+  command = "find <directory>/ -type f | wc -l"
+
+[[Snippets]]
+  Description = "Count lines in all files"
+  Tag = ["files", "count"]
+  command = "find . -name '*.txt' -exec wc -l {} + | tail -n 1"
+
+[[Snippets]]
+  Description = "Copy with progress"
+  Tag = ["files", "copy"]
+  command = "rsync -avz --progress <source>/ <destination>/"
+
+[[Snippets]]
+  Description = "Sync directories (delete extra)"
+  Tag = ["files", "sync"]
+  command = "rsync -avz --delete <source>/ <destination>/"
+
+[[Snippets]]
+  Description = "Backup with timestamp"
+  Tag = ["files", "backup"]
+  command = "tar -czvf backup_$(date +%Y%m%d).tar.gz <directory>/"
+
+[[Snippets]]
+  Description = "Extract any archive"
+  Tag = ["files", "archive"]
+  command = "tar -xvf <file>.tar"
+
+[[Snippets]]
+  Description = "Extract gzipped tar"
+  Tag = ["files", "archive"]
+  command = "tar -xzvf <file>.tar.gz"
+
+[[Snippets]]
+  Description = "Create tar.gz"
+  Tag = ["files", "archive"]
+  command = "tar -czvf <file>.tar.gz <directory>/"
+
+[[Snippets]]
+  Description = "Zip directory"
+  Tag = ["files", "archive"]
+  command = "zip -r <name>.zip <directory>/"
+
+[[Snippets]]
+  Description = "Unzip"
+  Tag = ["files", "archive"]
+  command = "unzip <file>.zip"
+
+[[Snippets]]
+  Description = "List zip contents"
+  Tag = ["files", "archive"]
+  command = "unzip -l <file>.zip"
+
+[[Snippets]]
+  Description = "Recent files (last modified)"
+  Tag = ["files", "recent"]
+  command = "find . -type f -mmin -60"
+
+[[Snippets]]
+  Description = "Recently modified today"
+  Tag = ["files", "recent"]
+  command = "find . -type f -mtime 0"
+
+[[Snippets]]
+  Description = "Show duplicate lines"
+  Tag = ["text", "unique"]
+  command = "sort <file> | uniq -d"
+
+[[Snippets]]
+  Description = "Show unique lines only"
+  Tag = ["text", "unique"]
+  command = "sort <file> | uniq -u"
+
+[[Snippets]]
+  Description = "Count unique lines"
+  Tag = ["text", "unique"]
+  command = "sort <file> | uniq | wc -l"
+
+[[Snippets]]
+  Description = "Random line from file"
+  Tag = ["text", "random"]
+  command = "shuf -n 1 <filepath>"
+
+[[Snippets]]
+  Description = "Take random sample"
+  Tag = ["text", "random"]
+  command = "shuf -n <count> <filepath>"
+
+[[Snippets]]
+  Description = "Repeat command every N seconds"
+  Tag = ["monitor", "repeat"]
+  command = "watch -n <seconds> '<command>'"
+
+[[Snippets]]
+  Description = "Loop command N times"
+  Tag = ["loop", "bash"]
+  command = "for i in {1..<N>}; do <command>; done"
+
+[[Snippets]]
+  Description = "Loop through files"
+  Tag = ["loop", "bash"]
+  command = "for f in *.txt; do echo \"$f\"; done"
+
+[[Snippets]]
+  Description = "Parallel execution (GNU parallel)"
+  Tag = ["parallel", "bash"]
+  command = "cat file.txt | parallel -j+0 '<command>' {}"
+
+[[Snippets]]
+  Description = "Xargs with parallel"
+  Tag = ["parallel", "bash"]
+  command = "find . -name '*.log' | parallel -j+0 'gzip {}'"

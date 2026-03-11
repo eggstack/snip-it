@@ -1,0 +1,122 @@
+# File & Text - File and text manipulation commands
+Description = "Essential file and text manipulation commands for working with files and content."
+
+[[Snippets]]
+  Description = "View file contents"
+  Tag = ["file", "view"]
+  command = "cat <filepath>"
+
+[[Snippets]]
+  Description = "View file with line numbers"
+  Tag = ["file", "view"]
+  command = "cat -n <filepath>"
+
+[[Snippets]]
+  Description = "View file (paginated)"
+  Tag = ["file", "view"]
+  command = "less <filepath>"
+
+[[Snippets]]
+  Description = "View first N lines"
+  Tag = ["file", "view"]
+  command = "head -n <lines> <filepath>"
+
+[[Snippets]]
+  Description = "View last N lines"
+  Tag = ["file", "view"]
+  command = "tail -n <lines> <filepath>"
+
+[[Snippets]]
+  Description = "Follow file tail (live logs)"
+  Tag = ["file", "view"]
+  command = "tail -f /var/log/<logfile>"
+
+[[Snippets]]
+  Description = "Count lines, words, chars"
+  Tag = ["file", "text"]
+  command = "wc -lwc <filepath>"
+
+[[Snippets]]
+  Description = "Search in file"
+  Tag = ["file", "search"]
+  command = "grep -n '<pattern>' <filepath>"
+
+[[Snippets]]
+  Description = "Search case-insensitive"
+  Tag = ["file", "search"]
+  command = "grep -ni '<pattern>' <filepath>"
+
+[[Snippets]]
+  Description = "Search recursively"
+  Tag = ["file", "search"]
+  command = "grep -rn '<pattern>' <directory>/"
+
+[[Snippets]]
+  Description = "Find and replace in file (sed)"
+  Tag = ["file", "edit"]
+  command = "sed -i 's/<old>/<new>/g' <filepath>"
+
+[[Snippets]]
+  Description = "Sort file"
+  Tag = ["file", "text"]
+  command = "sort <filepath>"
+
+[[Snippets]]
+  Description = "Sort unique lines"
+  Tag = ["file", "text"]
+  command = "sort -u <filepath>"
+
+[[Snippets]]
+  Description = "Show duplicate lines"
+  Tag = ["file", "text"]
+  command = "sort <filepath> | uniq -d"
+
+[[Snippets]]
+  Description = "Split file into N lines each"
+  Tag = ["file", "split"]
+  command = "split -l <lines> <filepath>"
+
+[[Snippets]]
+  Description = "Extract column (awk)"
+  Tag = ["file", "text"]
+  command = "awk '{print $1}' <filepath>"
+
+[[Snippets]]
+  Description = "Extract column (cut)"
+  Tag = ["file", "text"]
+  command = "cut -d'<delimiter>' -f<column> <filepath>"
+
+[[Snippets]]
+  Description = "Compare two files"
+  Tag = ["file", "diff"]
+  command = "diff <file1> <file2>"
+
+[[Snippets]]
+  Description = "Side-by-side diff"
+  Tag = ["file", "diff"]
+  command = "diff -y <file1> <file2>"
+
+[[Snippets]]
+  Description = "Hexdump file"
+  Tag = ["file", "binary"]
+  command = "hexdump -C <filepath>"
+
+[[Snippets]]
+  Description = "File type info"
+  Tag = ["file", "info"]
+  command = "file <filepath>"
+
+[[Snippets]]
+  Description = "Create empty file or update timestamp"
+  Tag = ["file", "create"]
+  command = "touch <filename>"
+
+[[Snippets]]
+  Description = "Append to file"
+  Tag = ["file", "create"]
+  command = "echo '<content>' >> <filepath>"
+
+[[Snippets]]
+  Description = "Write to file (overwrite)"
+  Tag = ["file", "create"]
+  command = "echo '<content>' > <filepath>"

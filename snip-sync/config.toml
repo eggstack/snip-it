@@ -1,0 +1,53 @@
+# Snip-Sync Server Configuration
+# 
+# Configuration priority (highest to lowest):
+# 1. Environment variables override all settings
+# 2. This config file
+# 3. Hardcoded defaults
+#
+# Config file location: ./config.toml (working directory)
+# Or set via CONFIG_PATH environment variable
+
+[server]
+# gRPC server host and port
+grpc_host = "127.0.0.1"
+grpc_port = 50051
+
+# HTTP server host and port (for metrics)
+http_host = "127.0.0.1"
+http_port = 50050
+
+[server.database]
+# Path to SQLite database (relative to working directory)
+path = "snippets.db"
+
+[server.premade]
+# Directory containing premade snippet libraries
+directory = "premade-libraries"
+
+[server.limits]
+# Maximum length of command field in snippets
+max_command_length = 1024
+# Maximum length of description field in snippets  
+max_description_length = 1024
+# Maximum number of tags per snippet
+max_tags = 50
+# Maximum length of each tag
+max_tag_length = 100
+# Request timeout in seconds
+request_timeout_secs = 30
+
+[server.rate_limit]
+# Number of requests allowed per minute per API key
+requests_per_minute = 120
+
+[server.metrics]
+# Basic auth username for metrics endpoint
+username = "admin"
+# Basic auth password for metrics endpoint
+password = "metrics"
+
+[server.cors]
+# Comma-separated list of allowed CORS origins
+# Leave empty to allow all origins
+allowed_origins = ""

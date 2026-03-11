@@ -1,0 +1,102 @@
+# System Admin - Common system administration commands
+Description = "System administration commands for process management, disk usage, and networking."
+
+[[Snippets]]
+  Description = "Check disk usage"
+  Tag = ["system", "disk"]
+  command = "df -h"
+
+[[Snippets]]
+  Description = "Check directory size"
+  Tag = ["system", "disk"]
+  command = "du -sh <directory>"
+
+[[Snippets]]
+  Description = "List running processes"
+  Tag = ["system", "processes"]
+  command = "ps aux"
+
+[[Snippets]]
+  Description = "Find process by name"
+  Tag = ["system", "processes"]
+  command = "pgrep -a <process_name>"
+
+[[Snippets]]
+  Description = "Kill process by PID"
+  Tag = ["system", "processes"]
+  command = "kill <pid>"
+
+[[Snippets]]
+  Description = "Force kill process"
+  Tag = ["system", "processes"]
+  command = "kill -9 <pid>"
+
+[[Snippets]]
+  Description = "Check memory usage"
+  Tag = ["system", "memory"]
+  command = "free -h"
+
+[[Snippets]]
+  Description = "Check CPU info"
+  Tag = ["system", "cpu"]
+  command = "lscpu"
+
+[[Snippets]]
+  Description = "Show system uptime"
+  Tag = ["system", "info"]
+  command = "uptime"
+
+[[Snippets]]
+  Description = "Check listening ports"
+  Tag = ["system", "network"]
+  command = "netstat -tulpn"
+
+[[Snippets]]
+  Description = "Kill process on port"
+  Tag = ["system", "network"]
+  command = "lsof -ti :<port> | xargs kill -9"
+
+[[Snippets]]
+  Description = "Check DNS lookup"
+  Tag = ["system", "network"]
+  command = "dig <domain>"
+
+[[Snippets]]
+  Description = "Test network connectivity"
+  Tag = ["system", "network"]
+  command = "ping -c 4 <host>"
+
+[[Snippets]]
+  Description = "Trace network route"
+  Tag = ["system", "network"]
+  command = "traceroute <host>"
+
+[[Snippets]]
+  Description = "Show current IP address"
+  Tag = ["system", "network"]
+  command = "ip addr"
+
+[[Snippets]]
+  Description = "List services (systemd)"
+  Tag = ["system", "services"]
+  command = "systemctl list-units --type=service"
+
+[[Snippets]]
+  Description = "Check service status"
+  Tag = ["system", "services"]
+  command = "systemctl status <service_name>"
+
+[[Snippets]]
+  Description = "Restart service"
+  Tag = ["system", "services"]
+  command = "sudo systemctl restart <service_name>"
+
+[[Snippets]]
+  Description = "View system journal logs"
+  Tag = ["system", "logs"]
+  command = "journalctl -n 50"
+
+[[Snippets]]
+  Description = "Find files modified in last N days"
+  Tag = ["system", "files"]
+  command = "find . -type f -mtime -<days>"

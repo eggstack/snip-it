@@ -1,0 +1,142 @@
+# Search & Find - File searching commands
+Description = "Powerful file searching commands for finding files and content."
+
+[[Snippets]]
+  Description = "Find files by name"
+  Tag = ["search", "find"]
+  command = "find . -name '<filename>'"
+
+[[Snippets]]
+  Description = "Find files (case insensitive)"
+  Tag = ["search", "find"]
+  command = "find . -iname '<filename>'"
+
+[[Snippets]]
+  Description = "Find files by extension"
+  Tag = ["search", "find"]
+  command = "find . -name '*.<extension>'"
+
+[[Snippets]]
+  Description = "Find files modified in N days"
+  Tag = ["search", "find"]
+  command = "find . -type f -mtime -<days>"
+
+[[Snippets]]
+  Description = "Find files accessed in N days"
+  Tag = ["search", "find"]
+  command = "find . -type f -atime -<days>"
+
+[[Snippets]]
+  Description = "Find files modified today"
+  Tag = ["search", "find"]
+  command = "find . -type f -mtime 0"
+
+[[Snippets]]
+  Description = "Find files larger than N MB"
+  Tag = ["search", "find"]
+  command = "find . -type f -size +<size>M"
+
+[[Snippets]]
+  Description = "Find empty files/dirs"
+  Tag = ["search", "find"]
+  command = "find . -empty"
+
+[[Snippets]]
+  Description = "Find by file type (regular file)"
+  Tag = ["search", "find"]
+  command = "find . -type f"
+
+[[Snippets]]
+  Description = "Find by file type (directory)"
+  Tag = ["search", "find"]
+  command = "find . -type d"
+
+[[Snippets]]
+  Description = "Find symbolic links"
+  Tag = ["search", "find"]
+  command = "find . -type l"
+
+[[Snippets]]
+  Description = "Find and execute command"
+  Tag = ["search", "find"]
+  command = "find . -name '*.log' -exec cat {} \\;"
+
+[[Snippets]]
+  Description = "Find and delete"
+  Tag = ["search", "find"]
+  command = "find . -name '<filename>' -delete"
+
+[[Snippets]]
+  Description = "Find by permission"
+  Tag = ["search", "find"]
+  command = "find . -perm <octal>"
+
+[[Snippets]]
+  Description = "Find by owner"
+  Tag = ["search", "find"]
+  command = "find . -user <username>"
+
+[[Snippets]]
+  Description = "Find by group"
+  Tag = ["search", "find"]
+  command = "find . -group <groupname>"
+
+[[Snippets]]
+  Description = "Find executable files"
+  Tag = ["search", "find"]
+  command = "find . -type f -executable"
+
+[[Snippets]]
+  Description = "Find largest files (top 10)"
+  Tag = ["search", "find"]
+  command = "find . -type f -exec ls -lh {} \\; | sort -k5 -h | tail -n 10"
+
+[[Snippets]]
+  Description = "Find duplicate files (by checksum)"
+  Tag = ["search", "find"]
+  command = "find . -type f -exec md5sum {} \\; | sort | uniq -D -w 32"
+
+[[Snippets]]
+  Description = "Quick file search (updatedb first)"
+  Tag = ["search", "locate"]
+  command = "locate <filename>"
+
+[[Snippets]]
+  Description = "Update locate database"
+  Tag = ["search", "locate"]
+  command = "sudo updatedb"
+
+[[Snippets]]
+  Description = "Rip grep recursive"
+  Tag = ["search", "grep"]
+  command = "rg '<pattern>'"
+
+[[Snippets]]
+  Description = "Rip grep with context"
+  Tag = ["search", "grep"]
+  command = "rg -C 3 '<pattern>'"
+
+[[Snippets]]
+  Description = "Rip grep case insensitive"
+  Tag = ["search", "grep"]
+  command = "rg -i '<pattern>'"
+
+[[Snippets]]
+  Description = "Rip grep file types"
+  Tag = ["search", "grep"]
+  command = "rg -t<type> '<pattern>'"
+
+[[Snippets]]
+  Description = "Rip grep files with match"
+  Tag = ["search", "grep"]
+  command = "rg -l '<pattern>'"
+
+[[Snippets]]
+  Description = "FZF fuzzy finder (interactive)"
+  Tag = ["search", "fuzzy"]
+  command = "fzf"
+
+[[Snippets]]
+  Description = "Find and open with fzf"
+  Tag = ["search", "fuzzy"]
+  command = "vim $(fzf)"

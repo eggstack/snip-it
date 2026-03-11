@@ -1,0 +1,16 @@
+[package]
+name = "snip-proto"
+version = "0.1.0"
+edition = "2021"
+description = "gRPC protocol definitions for snip-it sync"
+
+[dependencies]
+tonic = "0.14"
+prost = "0.14"
+tonic-prost = "0.14"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[lib]
+path = "src/lib.rs"
