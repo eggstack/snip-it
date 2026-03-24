@@ -1,3 +1,4 @@
+use crate::commands::init_library_manager;
 use crate::config::{load_sync_settings, save_sync_settings, SyncSettings};
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
@@ -15,18 +16,13 @@ pub fn run(server: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> 
         }
     }
 
-    let _config_path = match LibraryManager::new() {
-        Ok(mut mgr) => {
-            if let Err(e) = mgr.ensure_library_mode() {
-                eprintln!("Warning: Failed to ensure library mode: {}", e);
-            }
-            match mgr.get_primary_library() {
-                Some(primary) => mgr
-                    .get_libraries_dir()
-                    .join(format!("{}.toml", primary.filename)),
-                None => LibraryManager::get_default_snippets_path(),
-            }
-        }
+    let _config_path = match init_library_manager() {
+        Ok(mgr) => match mgr.get_primary_library() {
+            Some(primary) => mgr
+                .get_libraries_dir()
+                .join(format!("{}.toml", primary.filename)),
+            None => LibraryManager::get_default_snippets_path(),
+        },
         Err(_) => LibraryManager::get_default_snippets_path(),
     };
 
@@ -54,7 +50,7 @@ pub fn run(server: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> 
 
             if let Err(e) = save_sync_settings(&sync_settings) {
                 eprintln!("Failed to save sync settings: {}", e);
-                return Ok(());
+                return Err(e);
             }
 
             println!("Registration successful!");

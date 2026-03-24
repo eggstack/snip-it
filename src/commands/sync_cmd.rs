@@ -64,7 +64,7 @@ fn link_server_library(
             }
         }
 
-        if existing_lib_id.as_ref().map_or(true, |id| id.is_empty()) {
+        if existing_id.is_empty() {
             if let Err(e) = mgr.update_library_id(&filename, &lib.id) {
                 eprintln!("  Failed to link '{}': {}", lib.name, e);
                 return false;
@@ -234,7 +234,7 @@ pub fn run(
         Err(e) => eprintln!("Failed to pull libraries: {}", e),
     }
 
-    if !sync_settings.api_key.is_empty() || !sync_settings.device_id.is_empty() {
+    if !sync_settings.api_key.is_empty() && !sync_settings.device_id.is_empty() {
         let linked = list_and_link_server_libraries(runtime, &sync_settings, non_interactive)?;
         if linked {
             println!("\nSyncing libraries...");

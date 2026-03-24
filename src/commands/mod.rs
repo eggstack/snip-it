@@ -20,7 +20,15 @@ use crate::error::{SnipError, SnipResult};
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
 use std::path::PathBuf;
 
-type ExpandedCommand = Option<Option<String>>;
+/// Result of expanding a snippet command with variables.
+pub enum ExpandedCommand {
+    /// User cancelled the operation.
+    Cancel,
+    /// User chose to skip (continue to next snippet).
+    Skip,
+    /// Command was expanded successfully.
+    Expanded(String),
+}
 
 /// Resolves the config path from CLI argument or default location.
 pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
@@ -113,10 +121,18 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         Ok(s) => s,
         Err(e) => {
             crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
-            eprintln!(
-                "Warning: Failed to parse config file, using defaults: {}",
-                e
-            );
+            let backup_path = path.with_extension("toml.bak");
+            if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
+                eprintln!(
+                    "Warning: Failed to parse config and could not create backup: {} (backup error: {})",
+                    e, backup_err
+                );
+            } else {
+                eprintln!(
+                    "Warning: Failed to parse config file. Backup saved to {}. Using empty defaults.",
+                    backup_path.display()
+                );
+            }
             crate::library::Snippets::default()
         }
     };
@@ -177,16 +193,18 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
 
     let vars = parse_variables(&snippet.command);
     if vars.is_empty() {
-        return Ok(Some(Some(strip_escape_sequences(&snippet.command))));
+        return Ok(ExpandedCommand::Expanded(strip_escape_sequences(
+            &snippet.command,
+        )));
     }
 
     match ui::prompt_variables(vars)? {
-        None => Ok(None),
-        Some(None) => Ok(Some(None)),
-        Some(Some(values)) => Ok(Some(Some(crate::utils::expand_command(
+        None => Ok(ExpandedCommand::Cancel),
+        Some(None) => Ok(ExpandedCommand::Skip),
+        Some(Some(values)) => Ok(ExpandedCommand::Expanded(crate::utils::expand_command(
             &snippet.command,
             &values,
-        )))),
+        ))),
     }
 }
 

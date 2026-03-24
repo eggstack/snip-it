@@ -44,27 +44,14 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"));
 
 fn setup_signal_handler() {
-    use signal_hook::low_level;
+    use signal_hook::flag;
 
     let terminate = ui::get_terminate();
-    let terminate_for_int = terminate.clone();
-    let terminate_for_term = terminate.clone();
 
-    unsafe {
-        low_level::register(signal_hook::consts::signal::SIGINT, move || {
-            terminate_for_int.store(true, std::sync::atomic::Ordering::SeqCst);
-            log_shutdown_info();
-            std::process::exit(0);
-        })
+    flag::register(signal_hook::consts::signal::SIGINT, terminate.clone())
         .expect("Failed to set Ctrl+C handler");
-
-        low_level::register(signal_hook::consts::signal::SIGTERM, move || {
-            terminate_for_term.store(true, std::sync::atomic::Ordering::SeqCst);
-            log_shutdown_info();
-            std::process::exit(0);
-        })
+    flag::register(signal_hook::consts::signal::SIGTERM, terminate)
         .expect("Failed to set SIGTERM handler");
-    }
 }
 
 #[derive(Debug, Parser)]
