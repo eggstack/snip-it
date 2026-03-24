@@ -53,6 +53,7 @@ use ratatui::{
 use crate::clipboard;
 use crate::utils::extract_variables_for_display;
 use crate::utils::shell_keywords::SHELL_KEYWORDS_SET;
+use crate::utils::strip_escape_sequences;
 
 type Candidate = (usize, String, Vec<String>);
 type PluginHandler = fn(&mut Vec<Candidate>, &[String], &[Vec<String>]) -> Option<Vec<usize>>;
@@ -73,6 +74,13 @@ pub fn get_terminate() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
 
 static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
 
+fn is_ctrl_key(key: &crossterm::event::KeyEvent, c: char) -> bool {
+    key.code == crossterm::event::KeyCode::Char(c)
+        && key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+}
+
 static PLUGINS: LazyLock<Mutex<Vec<Plugin>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Clone, Default)]
@@ -82,6 +90,34 @@ struct FilterState {
     sort_alpha: bool,
     sort_alpha_rev: bool,
     tag_filter_text: String,
+}
+
+impl FilterState {
+    fn toggle_field(field: &mut bool) -> bool {
+        *field = !*field;
+        *field
+    }
+
+    fn toggle_sort_new(&mut self) {
+        if Self::toggle_field(&mut self.sort_new) {
+            self.sort_old = false;
+        }
+    }
+    fn toggle_sort_old(&mut self) {
+        if Self::toggle_field(&mut self.sort_old) {
+            self.sort_new = false;
+        }
+    }
+    fn toggle_sort_alpha(&mut self) {
+        if Self::toggle_field(&mut self.sort_alpha) {
+            self.sort_alpha_rev = false;
+        }
+    }
+    fn toggle_sort_alpha_rev(&mut self) {
+        if Self::toggle_field(&mut self.sort_alpha_rev) {
+            self.sort_alpha = false;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -125,34 +161,8 @@ const BRIGHT_THEME: Theme = Theme {
     muted: ratatui::style::Color::Gray,
 };
 
-static ACTIVE_THEME: LazyLock<std::sync::Mutex<Theme>> = LazyLock::new(|| {
-    std::sync::Mutex::new({
-        let theme_name = std::env::var("SNP_THEME").unwrap_or_else(|_| "auto".to_string());
-        match theme_name.as_str() {
-            "bright" | "light" => BRIGHT_THEME,
-            "dark" => DARK_THEME,
-            "auto" => {
-                if std::env::var("COLORFGBG")
-                    .map(|v| v.starts_with("15;") || v.starts_with("7;"))
-                    .unwrap_or(false)
-                {
-                    BRIGHT_THEME
-                } else {
-                    DARK_THEME
-                }
-            }
-            _ => DARK_THEME,
-        }
-    })
-});
-
-pub fn get_theme() -> std::sync::MutexGuard<'static, Theme> {
-    ACTIVE_THEME.lock().unwrap()
-}
-
-#[allow(dead_code)]
-pub fn set_theme(theme_name: &str) {
-    let new_theme = match theme_name {
+fn resolve_theme(theme_name: &str) -> Theme {
+    match theme_name {
         "bright" | "light" => BRIGHT_THEME,
         "dark" => DARK_THEME,
         "auto" => {
@@ -166,7 +176,31 @@ pub fn set_theme(theme_name: &str) {
             }
         }
         _ => DARK_THEME,
-    };
+    }
+}
+
+static ACTIVE_THEME: LazyLock<std::sync::Mutex<Theme>> = LazyLock::new(|| {
+    std::sync::Mutex::new({
+        let theme_name = std::env::var("SNP_THEME").unwrap_or_else(|_| "auto".to_string());
+        resolve_theme(&theme_name)
+    })
+});
+
+fn style_fg(fg: ratatui::style::Color) -> TuiStyle {
+    TuiStyle::default().fg(fg)
+}
+
+fn style_fg_bg(fg: ratatui::style::Color, bg: ratatui::style::Color) -> TuiStyle {
+    TuiStyle::default().fg(fg).bg(bg)
+}
+
+pub fn get_theme() -> std::sync::MutexGuard<'static, Theme> {
+    ACTIVE_THEME.lock().unwrap()
+}
+
+#[allow(dead_code)]
+pub fn set_theme(theme_name: &str) {
+    let new_theme = resolve_theme(theme_name);
     if let Ok(mut theme) = ACTIVE_THEME.lock() {
         *theme = new_theme;
     }
@@ -213,61 +247,6 @@ pub fn apply_plugins(
     }
 }
 
-pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
-    let mut result = String::with_capacity(command.len());
-    let mut chars = command.chars().peekable();
-
-    let mut usage_count: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-
-    while let Some(c) = chars.next() {
-        if c == '<' {
-            let mut var_content = String::new();
-            while let Some(&next) = chars.peek() {
-                if next == '>' {
-                    chars.next();
-                    break;
-                }
-                var_content.push(chars.next().unwrap());
-            }
-
-            let eq_pos = var_content.find('=');
-            if let Some(eq_pos) = eq_pos {
-                let name = var_content[..eq_pos].trim().to_string();
-                let default = var_content[eq_pos + 1..].trim();
-
-                let count = usage_count.entry(name.clone()).or_insert(0);
-                let replacement = values
-                    .iter()
-                    .filter(|(n, _)| n.trim() == name.trim())
-                    .nth(*count)
-                    .map(|(_, v)| v.trim());
-
-                *count += 1;
-
-                let replacement = replacement.unwrap_or(default);
-                result.push_str(replacement);
-            } else {
-                let name = var_content.trim().to_string();
-                let count = usage_count.entry(name.clone()).or_insert(0);
-                let replacement = values
-                    .iter()
-                    .filter(|(n, _)| n.trim() == name.trim())
-                    .nth(*count)
-                    .map(|(_, v)| v.trim());
-
-                *count += 1;
-
-                let replacement = replacement.unwrap_or(&name);
-                result.push_str(replacement);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
 fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
 }
@@ -278,20 +257,24 @@ fn highlight_command(command: &str) -> Line<'static> {
     let mut prev_was_backslash = false;
 
     let theme = get_theme();
-    let color_default = TuiStyle::default().fg(theme.text);
-    let color_variable = TuiStyle::default().fg(theme.accent);
-    let color_keyword = TuiStyle::default().fg(theme.primary);
-    let color_string = TuiStyle::default().fg(ratatui::style::Color::Green);
-    let color_flag = TuiStyle::default().fg(theme.secondary);
-    let color_comment = TuiStyle::default().fg(theme.muted);
-    let color_escape = TuiStyle::default().fg(ratatui::style::Color::Magenta);
+    let color_default = style_fg(theme.text);
+    let color_variable = style_fg(theme.accent);
+    let color_keyword = style_fg(theme.primary);
+    let color_string = style_fg(ratatui::style::Color::Green);
+    let color_flag = style_fg(theme.secondary);
+    let color_comment = style_fg(theme.muted);
+    let color_escape = style_fg(ratatui::style::Color::Magenta);
 
     let shell_keywords = &*SHELL_KEYWORDS_SET;
 
     while let Some(c) = chars.next() {
         if prev_was_backslash {
             prev_was_backslash = false;
-            spans.push(Span::styled(format!("\\{}", c), color_escape));
+            if c == '<' || c == '>' {
+                spans.push(Span::styled(c.to_string(), color_default));
+            } else {
+                spans.push(Span::styled(format!("\\{}", c), color_escape));
+            }
             continue;
         }
 
@@ -404,7 +387,7 @@ fn select_snippet_inner(
     tags: &[Vec<String>],
     is_search: bool,
     initial_filter: Option<&str>,
-    folders: &[Vec<String>],
+    _folders: &[Vec<String>],
     favorites: &[bool],
 ) -> io::Result<Option<(usize, Option<String>)>> {
     // Enable mouse capture before initializing terminal
@@ -426,6 +409,7 @@ fn select_snippet_inner(
     let mut filtered: Vec<(usize, String, Vec<String>)> = Vec::new();
     let mut insert_mode = true;
     let mut tag_filter_mode = false;
+    let mut list_display_mode = 0;
     let mut scrollbar_state = ScrollbarState::default();
     let mut should_copy: Option<String> = None;
     let mut copied_message: Option<(String, std::time::Instant)> = None;
@@ -450,21 +434,26 @@ fn select_snippet_inner(
         .collect();
 
     let all_tags = tags.to_vec();
-    let _all_folders = folders.to_vec();
-    let _all_favorites = favorites.to_vec();
 
     state.select(Some(0));
 
     loop {
         // Debounce: only recompute filtered list if enough time has passed since last filter change
-        let should_recompute = !filter_dirty
-            || last_filter_update.map_or(true, |t| {
-                t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128
-            });
-
-        if filter_dirty && should_recompute {
-            filter_dirty = false;
-        }
+        let debounce_elapsed = last_filter_update.map_or(true, |t| {
+            t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128
+        });
+        let should_recompute = if filter_dirty {
+            if debounce_elapsed {
+                filter_dirty = false;
+                true
+            } else {
+                // Filter changed but debounce window not elapsed, skip this frame
+                false
+            }
+        } else {
+            // No filter change, use previous results
+            false
+        };
 
         let has_incremental_search = !incremental_search.is_empty();
         let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
@@ -474,17 +463,30 @@ fn select_snippet_inner(
             filter.clone()
         };
 
-        let mut candidates: Vec<(usize, String, Vec<String>, Option<i64>)> = if should_recompute {
+        // should_recompute = false means either: no change, or debounce window not elapsed yet
+        // In both cases, reuse previous filtered results. Only build fresh from all_display
+        // when we actually need to recompute (should_recompute = true).
+        let mut candidates: Vec<(usize, String, Vec<String>, Option<i64>)> = if !should_recompute {
+            if filtered.is_empty() {
+                // First frame or no previous results
+                all_display
+                    .iter()
+                    .enumerate()
+                    .zip(all_tags.iter())
+                    .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
+                    .collect()
+            } else {
+                filtered
+                    .iter()
+                    .map(|(i, d, t)| (*i, d.clone(), t.clone(), None))
+                    .collect()
+            }
+        } else {
             all_display
                 .iter()
                 .enumerate()
                 .zip(all_tags.iter())
                 .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
-                .collect()
-        } else {
-            filtered
-                .iter()
-                .map(|(i, d, t)| (*i, d.clone(), t.clone(), None))
                 .collect()
         };
 
@@ -636,7 +638,7 @@ fn select_snippet_inner(
             let block = Block::default()
                 .title(format!("{title_part} {separator}"))
                 .borders(Borders::ALL)
-                .border_style(TuiStyle::default().fg(theme.border))
+                .border_style(style_fg(theme.border))
                 .style(TuiStyle::default().bg(theme.background));
             let input_block_title = if tag_filter_mode {
                 "Tag Filter"
@@ -646,7 +648,7 @@ fn select_snippet_inner(
             let input_block = Block::default()
                 .title(input_block_title)
                 .borders(Borders::ALL)
-                .border_style(TuiStyle::default().fg(theme.border))
+                .border_style(style_fg(theme.border))
                 .style(TuiStyle::default().bg(theme.background));
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -664,15 +666,30 @@ fn select_snippet_inner(
                     let is_fav = *favorites.get(*idx).unwrap_or(&false);
                     let fav_indicator = if is_fav { "★ " } else { "  " };
 
-                    // Get the pre-computed highlighted command
-                    let highlighted = highlighted_commands.get(*idx).cloned().unwrap_or_else(|| Line::from(""));
+                    let line = if list_display_mode == 1 {
+                        let desc = &descriptions[*idx];
+                        let cmd_spans = highlighted_commands
+                            .get(*idx)
+                            .cloned()
+                            .map(|line| line.spans)
+                            .unwrap_or_default();
 
-                    // Combine favorite indicator with highlighted content
+                        let mut combined: Vec<Span<'static>> =
+                            vec![Span::styled(format!("[{}] ", desc), style_fg(theme.text))];
+                        combined.extend(cmd_spans);
+                        Line::from(combined)
+                    } else {
+                        highlighted_commands
+                            .get(*idx)
+                            .cloned()
+                            .unwrap_or_else(|| Line::from(""))
+                    };
+
                     let mut spans = vec![Span::raw(fav_indicator)];
-                    spans.extend(highlighted.spans);
-                    let line = Line::from(spans);
+                    spans.extend(line.spans);
+                    let final_line = Line::from(spans);
 
-                    ListItem::new(line)
+                    ListItem::new(final_line)
                 })
                 .collect();
             let list = List::new(items)
@@ -703,14 +720,14 @@ fn select_snippet_inner(
                 &filter
             };
             let filter_widget = Paragraph::new(filter_text)
-                .style(TuiStyle::default().fg(theme.text).bg(theme.background));
+                .style(style_fg_bg(theme.text, theme.background));
             f.render_widget(
                 filter_widget,
                 ratatui::layout::Rect::new(
                     chunks[0].x + 1,
                     chunks[0].y + 1,
                     chunks[0].width - 2,
-                    chunks[0].y + 1,
+                    1,
                 ),
             );
 
@@ -740,18 +757,18 @@ fn select_snippet_inner(
                 let preview_block = Block::default()
                     .title(preview_title)
                     .borders(Borders::ALL)
-                    .border_style(TuiStyle::default().fg(theme.border))
+                    .border_style(style_fg(theme.border))
                     .style(TuiStyle::default().bg(theme.background));
 
                 let preview_content = if has_vars {
-                    format!("{}\n\nVars: {}", snippet_cmd, vars.join(", "))
+                    format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "))
                 } else {
-                    snippet_cmd.clone()
+                    strip_escape_sequences(snippet_cmd)
                 };
 
                 let preview_widget = Paragraph::new(preview_content)
                     .block(preview_block)
-                    .style(TuiStyle::default().fg(theme.text).bg(theme.background));
+                    .style(style_fg_bg(theme.text, theme.background));
                 f.render_widget(preview_widget, chunks[2]);
             }
 
@@ -764,33 +781,33 @@ fn select_snippet_inner(
             } else if is_search {
                 if insert_mode {
                     format!(
-                        "[{}]{} | esc: normal | /: search | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear",
+                        "[{}]{} | esc: normal | /: search | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode",
                         mode_str, tag_mode_str
                     )
                 } else {
                     format!(
-                        "[{}]{} | i: insert | y/ctrl+c: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear",
+                        "[{}]{} | i: insert | y/ctrl+c: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode",
                         mode_str, tag_mode_str
                     )
                 }
             } else if insert_mode {
                 format!(
-                    "[{}]{} | esc: normal | enter: run | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear",
+                    "[{}]{} | esc: normal | enter: run | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode",
                     mode_str, tag_mode_str
                 )
             } else {
                 format!(
-                    "[{}]{} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear",
+                    "[{}]{} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode",
                     mode_str, tag_mode_str
                 )
             };
             let status_widget = Paragraph::new(status_text)
-                .style(TuiStyle::default().fg(theme.muted));
+                .style(style_fg(theme.muted));
             let status_area = ratatui::layout::Rect::new(
                 chunks[3].x + 1,
                 chunks[3].y,
-                chunks[3].x + chunks[3].width - 1,
-                chunks[3].y + 1,
+                chunks[3].width - 2,
+                1,
             );
             f.render_widget(status_widget, status_area);
         });
@@ -870,15 +887,10 @@ fn select_snippet_inner(
                             }
                         }
 
-                        if key.code == KeyCode::Char('c')
-                            && key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                            && selected < filtered.len()
-                        {
+                        if is_ctrl_key(&key, 'c') && selected < filtered.len() {
                             let idx = filtered[selected].0;
-                            let cmd = &commands[idx];
-                            let _ = clipboard::copy_to_clipboard(cmd);
+                            let cmd = strip_escape_sequences(&commands[idx]);
+                            let _ = clipboard::copy_to_clipboard_auto(&cmd);
                             should_copy = Some(descriptions[idx].clone());
                             if !is_search {
                                 break;
@@ -934,9 +946,13 @@ fn select_snippet_inner(
                                         .map(|(_, desc, _)| desc.as_str())
                                         .collect();
                                     let copy_text = selected_items.join("\n");
-                                    let _ = clipboard::copy_to_clipboard(&copy_text);
+                                    let _ = clipboard::copy_to_clipboard_auto(&copy_text);
+                                    should_copy =
+                                        Some(format!("{} snippets copied", end - start + 1));
                                     visual_mode = false;
-                                    continue;
+                                    if !is_search {
+                                        break;
+                                    }
                                 }
                                 _ => {}
                             }
@@ -944,35 +960,19 @@ fn select_snippet_inner(
                             continue;
                         }
 
-                        if key.code == KeyCode::Char('f')
-                            && key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
+                        if is_ctrl_key(&key, 'f') {
                             selected = (selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
-                        if key.code == KeyCode::Char('d')
-                            && key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
+                        if is_ctrl_key(&key, 'd') {
                             selected = (selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
-                        if key.code == KeyCode::Char('b')
-                            && key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
+                        if is_ctrl_key(&key, 'b') {
                             selected = selected.saturating_sub(10);
                         }
 
-                        if key.code == KeyCode::Char('u')
-                            && key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
+                        if is_ctrl_key(&key, 'u') {
                             selected = selected.saturating_sub(10);
                         }
 
@@ -1064,6 +1064,9 @@ fn select_snippet_inner(
                                         selected = 0;
                                     }
                                 }
+                                KeyCode::Tab => {
+                                    list_display_mode = (list_display_mode + 1) % 2;
+                                }
                                 _ => {}
                             }
                         } else {
@@ -1084,19 +1087,18 @@ fn select_snippet_inner(
                                 KeyCode::Char('y') => {
                                     if selected < filtered.len() {
                                         let idx = filtered[selected].0;
-                                        let cmd = &commands[idx];
-                                        let _ = clipboard::copy_to_clipboard(cmd);
+                                        let cmd = strip_escape_sequences(&commands[idx]);
+                                        let _ = clipboard::copy_to_clipboard_auto(&cmd);
                                         should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;
                                         }
                                     }
                                 }
-                                KeyCode::Char('g')
-                                    if key
-                                        .modifiers
-                                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                                {
+                                KeyCode::Tab => {
+                                    list_display_mode = (list_display_mode + 1) % 2;
+                                }
+                                KeyCode::Char('g') if is_ctrl_key(&key, 'g') => {
                                     selected = 0;
                                 }
                                 KeyCode::Char('G') => selected = filtered.len().saturating_sub(1),
@@ -1112,30 +1114,10 @@ fn select_snippet_inner(
                                 {
                                     selected += 1
                                 }
-                                KeyCode::Char('n') => {
-                                    filter_state.sort_new = !filter_state.sort_new;
-                                    if filter_state.sort_new {
-                                        filter_state.sort_old = false;
-                                    }
-                                }
-                                KeyCode::Char('o') => {
-                                    filter_state.sort_old = !filter_state.sort_old;
-                                    if filter_state.sort_old {
-                                        filter_state.sort_new = false;
-                                    }
-                                }
-                                KeyCode::Char('a') => {
-                                    filter_state.sort_alpha = !filter_state.sort_alpha;
-                                    if filter_state.sort_alpha {
-                                        filter_state.sort_alpha_rev = false;
-                                    }
-                                }
-                                KeyCode::Char('z') => {
-                                    filter_state.sort_alpha_rev = !filter_state.sort_alpha_rev;
-                                    if filter_state.sort_alpha_rev {
-                                        filter_state.sort_alpha = false;
-                                    }
-                                }
+                                KeyCode::Char('n') => filter_state.toggle_sort_new(),
+                                KeyCode::Char('o') => filter_state.toggle_sort_old(),
+                                KeyCode::Char('a') => filter_state.toggle_sort_alpha(),
+                                KeyCode::Char('z') => filter_state.toggle_sort_alpha_rev(),
                                 KeyCode::Char('x') | KeyCode::Char('c') => {
                                     filter.clear();
                                     incremental_search.clear();
@@ -1218,7 +1200,7 @@ fn prompt_variables_inner(
             let block = Block::default()
                 .title("Enter variables")
                 .borders(Borders::ALL)
-                .style(TuiStyle::default().fg(theme.border));
+                .style(style_fg(theme.border));
 
             let num_vars = values.len().min(10);
             let var_height = num_vars * 3;
@@ -1257,7 +1239,7 @@ fn prompt_variables_inner(
 
                 let p = Paragraph::new(text)
                     .block(var_block)
-                    .style(TuiStyle::default().fg(theme.text));
+                    .style(style_fg(theme.text));
 
                 let var_chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -1281,8 +1263,7 @@ fn prompt_variables_inner(
 
             let status_text =
                 "↑/↓/ j/k: move | tab: next | enter: save | esc: back | q: cancel | d: defaults";
-            let status_widget =
-                Paragraph::new(status_text).style(TuiStyle::default().fg(theme.muted));
+            let status_widget = Paragraph::new(status_text).style(style_fg(theme.muted));
             f.render_widget(status_widget, chunks[1]);
         })?;
 
@@ -1355,21 +1336,143 @@ fn prompt_variables_inner(
     Ok(Some(Some(result)))
 }
 
-#[allow(clippy::ptr_arg)]
-#[allow(dead_code)]
-pub fn folder_filter_plugin(
-    candidates: &mut Vec<Candidate>,
-    _descriptions: &[String],
-    _tags: &[Vec<String>],
-) -> Option<Vec<usize>> {
-    let mut filtered_indices = Vec::new();
-    for (i, _) in candidates.iter().enumerate() {
-        filtered_indices.push(i);
-    }
-    Some(filtered_indices)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[allow(dead_code)]
-pub fn init_plugins() {
-    register_plugin("folder_filter", folder_filter_plugin);
+    #[test]
+    fn test_highlight_command_empty() {
+        let result = highlight_command("");
+        assert_eq!(result.spans.len(), 0);
+    }
+
+    #[test]
+    fn test_highlight_command_simple() {
+        let result = highlight_command("echo hello");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_command_with_variable() {
+        let result = highlight_command("ssh <user@host>");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_command_with_quotes() {
+        let result = highlight_command("echo 'hello world'");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_command_with_flags() {
+        let result = highlight_command("ls -la /home");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_command_with_comment() {
+        let result = highlight_command("# this is a comment");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_command_with_escaped_char() {
+        let result = highlight_command("\\<escaped");
+        assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_theme_dark() {
+        let theme = resolve_theme("dark");
+        assert_eq!(theme.background, ratatui::style::Color::Black);
+    }
+
+    #[test]
+    fn test_resolve_theme_bright() {
+        let theme = resolve_theme("bright");
+        assert_eq!(theme.background, ratatui::style::Color::White);
+    }
+
+    #[test]
+    fn test_resolve_theme_light() {
+        let theme = resolve_theme("light");
+        assert_eq!(theme.background, ratatui::style::Color::White);
+    }
+
+    #[test]
+    fn test_resolve_theme_unknown() {
+        let theme = resolve_theme("unknown");
+        assert_eq!(theme.background, ratatui::style::Color::Black);
+    }
+
+    #[test]
+    fn test_filter_state_toggle_sort_new() {
+        let mut state = FilterState::default();
+        assert!(!state.sort_new);
+
+        state.toggle_sort_new();
+        assert!(state.sort_new);
+
+        state.toggle_sort_new();
+        assert!(!state.sort_new);
+    }
+
+    #[test]
+    fn test_filter_state_toggle_sort_alpha() {
+        let mut state = FilterState::default();
+        assert!(!state.sort_alpha);
+        assert!(!state.sort_alpha_rev);
+
+        state.toggle_sort_alpha();
+        assert!(state.sort_alpha);
+        assert!(!state.sort_alpha_rev);
+
+        state.toggle_sort_alpha_rev();
+        assert!(!state.sort_alpha);
+        assert!(state.sort_alpha_rev);
+    }
+
+    #[test]
+    fn test_is_ctrl_key_true() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('c'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert!(is_ctrl_key(&key, 'c'));
+    }
+
+    #[test]
+    fn test_is_ctrl_key_false_no_modifier() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('c'),
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert!(!is_ctrl_key(&key, 'c'));
+    }
+
+    #[test]
+    fn test_is_ctrl_key_false_different_char() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('a'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert!(!is_ctrl_key(&key, 'c'));
+    }
+
+    #[test]
+    fn test_terminate_functionality() {
+        let terminate = get_terminate();
+        terminate.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!terminate.load(std::sync::atomic::Ordering::SeqCst));
+
+        terminate.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(terminate.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }

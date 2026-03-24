@@ -1,3 +1,4 @@
+use crate::error::SnipResult;
 use std::io::{self, Write};
 
 pub fn run(interval: u32) -> SnipResult<()> {
@@ -51,7 +52,6 @@ pub fn run(interval: u32) -> SnipResult<()> {
             let mut child = std::process::Command::new("pbcopy")
                 .spawn()
                 .expect("Failed to spawn pbcopy");
-            use std::io::Write;
             child
                 .stdin
                 .as_ref()
@@ -62,7 +62,6 @@ pub fn run(interval: u32) -> SnipResult<()> {
         }
         #[cfg(target_os = "linux")]
         {
-            use std::io::Write;
             let mut child = std::process::Command::new("xclip")
                 .args(["-selection", "clipboard"])
                 .spawn()
@@ -75,9 +74,21 @@ pub fn run(interval: u32) -> SnipResult<()> {
                 .ok();
             child.wait().ok();
         }
+        #[cfg(target_os = "windows")]
+        {
+            let mut child = std::process::Command::new("cmd")
+                .args(["/C", "clip"])
+                .spawn()
+                .expect("Failed to spawn clip");
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(cron_entry.as_bytes())
+                .ok();
+            child.wait().ok();
+        }
         println!("Copied to clipboard!");
     }
     Ok(())
 }
-
-type SnipResult<T> = Result<T, crate::error::SnipError>;

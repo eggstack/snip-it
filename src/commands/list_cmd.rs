@@ -1,4 +1,4 @@
-use crate::commands::get_library_path;
+use crate::commands::{get_library_path, load_snippets};
 use crate::error::SnipResult;
 use crossterm::style::{style, Color, Stylize};
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -7,17 +7,22 @@ use std::path::PathBuf;
 
 pub fn run(
     filter: Option<String>,
-    _config: Option<PathBuf>,
-    _library: Option<String>,
+    config: Option<PathBuf>,
+    library: Option<String>,
 ) -> SnipResult<()> {
-    let lib_path = match get_library_path(None)? {
-        Some(p) => p,
-        None => {
-            eprintln!("No library found. Create one with 'snp library create <name>'");
-            return Ok(());
-        }
+    let snippets = if config.is_some() {
+        load_snippets(&config)?
+    } else {
+        let lib_path = match get_library_path(library)? {
+            Some(p) => p,
+            None => {
+                eprintln!("No library found. Create one with 'snp library create <name>'");
+                return Ok(());
+            }
+        };
+        crate::library::load_library(&lib_path)?
     };
-    let snippets = crate::library::load_library(&lib_path)?;
+
     let matcher = SkimMatcherV2::default();
 
     let filtered: Vec<_> = if let Some(ref filter_str) = filter {

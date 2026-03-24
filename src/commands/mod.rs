@@ -1,3 +1,8 @@
+//! CLI command implementations.
+//!
+//! Each subcommand in the CLI has its own module with a `run()` function.
+//! This module also provides shared utilities for loading and saving snippets.
+
 pub mod clip_cmd;
 pub mod cron_cmd;
 pub mod edit_cmd;
@@ -12,8 +17,12 @@ pub mod search_cmd;
 pub mod sync_cmd;
 
 use crate::error::{SnipError, SnipResult};
+use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
 use std::path::PathBuf;
 
+type ExpandedCommand = Option<Option<String>>;
+
+/// Resolves the config path from CLI argument or default location.
 pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
     use std::fs::{self, File};
 
@@ -35,6 +44,7 @@ pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
     }
 }
 
+/// Resolves the path to a named library or returns the primary library path.
 pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathBuf>> {
     use crate::library::LibraryManager;
 
@@ -44,28 +54,37 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
         eprintln!("Warning: Failed to ensure library mode: {}", e);
     }
 
-    let path = if let Some(name) = library_name {
-        if let Some(lib) = mgr.get_library_by_filename(&name) {
+    let path = match library_name {
+        Some(name) => {
+            let lib = mgr.get_library_by_filename(&name)
+                .ok_or_else(|| SnipError::runtime_error(
+                    "Library not found",
+                    Some(&format!("Library '{}' does not exist. Use 'snp library list' to see available libraries.", name)),
+                ))?;
             Some(
                 mgr.get_libraries_dir()
                     .join(format!("{}.toml", lib.filename)),
             )
-        } else {
-            return Err(SnipError::runtime_error(
-                "Library not found",
-                Some(&format!("Library '{}' does not exist. Use 'snp library list' to see available libraries.", name)),
-            ));
         }
-    } else {
-        mgr.get_primary_library().map(|primary| {
+        None => mgr.get_primary_library().map(|primary| {
             mgr.get_libraries_dir()
                 .join(format!("{}.toml", primary.filename))
-        })
+        }),
     };
 
     Ok(path)
 }
 
+/// Initializes a LibraryManager with library mode enabled, handling errors gracefully.
+pub fn init_library_manager() -> SnipResult<crate::library::LibraryManager> {
+    let mut mgr = crate::library::LibraryManager::new()?;
+    if let Err(e) = mgr.ensure_library_mode() {
+        eprintln!("Warning: Failed to ensure library mode: {}", e);
+    }
+    Ok(mgr)
+}
+
+/// Loads snippets from a TOML file, returning an empty collection if the file doesn't exist.
 pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Snippets> {
     use std::fs;
 
@@ -88,7 +107,9 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         return Ok(crate::library::Snippets::default());
     }
 
-    let snippets: crate::library::Snippets = match toml::from_str(&content) {
+    let fixed_content = fix_invalid_toml_escapes(&content);
+
+    let snippets: crate::library::Snippets = match toml::from_str(&fixed_content) {
         Ok(s) => s,
         Err(e) => {
             crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
@@ -103,6 +124,7 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
     Ok(snippets)
 }
 
+/// Saves snippets to a TOML file, creating directories as needed.
 pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> SnipResult<()> {
     use std::fs;
 
@@ -116,6 +138,8 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
     let toml_str =
         toml::to_string_pretty(s).map_err(|e| SnipError::toml_error("serialize config", e))?;
 
+    let toml_str = quote_strings_containing_backslashes(&toml_str);
+
     fs::write(&path, toml_str)
         .map_err(|e| SnipError::io_error("write config file", path.clone(), e))?;
 
@@ -123,6 +147,9 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
     Ok(())
 }
 
+/// Extracts snippet data arrays for TUI display.
+///
+/// Returns parallel arrays of descriptions, commands, tags, folders, and favorites.
 pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetData {
     let descriptions: Vec<String> = snippets
         .snippets
@@ -142,4 +169,80 @@ pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetDa
         .collect();
     let favorites: Vec<bool> = snippets.snippets.iter().map(|s| s.favorite).collect();
     (descriptions, commands, tags, folders, favorites)
+}
+
+pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<ExpandedCommand> {
+    use crate::ui;
+    use crate::utils::{parse_variables, strip_escape_sequences};
+
+    let vars = parse_variables(&snippet.command);
+    if vars.is_empty() {
+        return Ok(Some(Some(strip_escape_sequences(&snippet.command))));
+    }
+
+    match ui::prompt_variables(vars)? {
+        None => Ok(None),
+        Some(None) => Ok(Some(None)),
+        Some(Some(values)) => Ok(Some(Some(crate::utils::expand_command(
+            &snippet.command,
+            &values,
+        )))),
+    }
+}
+
+pub fn run_snippet_selection<F>(
+    filter: Option<String>,
+    library: Option<String>,
+    do_sync: bool,
+    runtime: &tokio::runtime::Runtime,
+    mut process_fn: F,
+) -> crate::error::SnipResult<()>
+where
+    F: FnMut(
+        &crate::library::Snippet,
+        Option<String>,
+    ) -> crate::error::SnipResult<crate::ProcessResult>,
+{
+    let lib_path = match get_library_path(library)? {
+        Some(p) => p,
+        None => {
+            eprintln!("No library found. Create one with 'snp library create <name>'");
+            return Ok(());
+        }
+    };
+    let snippets = crate::library::load_library(&lib_path)?;
+    let (descriptions, commands, tags, folders, favorites) = get_snippet_data(&snippets);
+
+    loop {
+        let result = crate::ui::select_snippet(
+            &descriptions,
+            &commands,
+            &tags,
+            false,
+            filter.as_deref(),
+            &folders,
+            &favorites,
+        )?;
+        if let Some((idx, copy_flag)) = result {
+            let snippet = &snippets.snippets[idx];
+            match process_fn(snippet, copy_flag)? {
+                crate::ProcessResult::Cancel => {
+                    if do_sync {
+                        crate::sync_commands::run_default_sync(runtime);
+                    }
+                    return Ok(());
+                }
+                crate::ProcessResult::Continue => continue,
+                crate::ProcessResult::Done(_msg) => {
+                    break;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    if do_sync {
+        crate::sync_commands::run_default_sync(runtime);
+    }
+    Ok(())
 }

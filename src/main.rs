@@ -1,3 +1,8 @@
+//! snp - A fast, terminal-based snippet manager.
+//!
+//! Features include fuzzy search, clipboard support, variable expansion,
+//! TUI interface, and cloud sync with end-to-end encryption.
+
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -17,6 +22,7 @@ mod utils;
 
 use error::SnipResult;
 use logging::{init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler};
+use utils::config::get_snippets_path;
 
 pub type SnippetData = (
     Vec<String>,
@@ -32,12 +38,7 @@ pub enum ProcessResult {
     Done(String),
 }
 
-static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
-    let cfg_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".config")));
-    cfg_dir.join("snp/snippets.toml")
-});
+static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(get_snippets_path);
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"));
@@ -148,14 +149,9 @@ enum Commands {
         #[arg(short, long)]
         library: Option<String>,
     },
-    /// Custom keybindings configuration
+    /// Show keybindings
     #[command(alias = "k")]
-    Keybindings {
-        #[arg(long)]
-        show: bool,
-        #[arg(long)]
-        set: Option<String>,
-    },
+    Keybindings,
     /// Sync snippets with server
     #[command(alias = "y")]
     Sync {
@@ -232,15 +228,8 @@ enum PremadeCommands {
     Sync,
 }
 
-fn main() -> SnipResult<()> {
-    setup_panic_handler();
-    setup_signal_handler();
-    init_default_logging();
-    log_startup_info();
-
-    let cli = Cli::parse();
-
-    match cli.command {
+fn dispatch_command(cli: Commands) -> SnipResult<()> {
+    match cli {
         Commands::Version => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
         }
@@ -287,8 +276,8 @@ fn main() -> SnipResult<()> {
         Commands::Edit { config, library } => {
             commands::edit_cmd::run(library, config)?;
         }
-        Commands::Keybindings { show, set } => {
-            commands::keybindings_cmd::run(show, set)?;
+        Commands::Keybindings => {
+            commands::keybindings_cmd::run()?;
         }
         Commands::Sync {
             config,
@@ -315,35 +304,34 @@ fn main() -> SnipResult<()> {
             commands::register_cmd::run(server, &RUNTIME)?;
         }
         Commands::Library { command } => match command {
-            LibraryCommands::List => {
-                commands::library_cmd::run_list()?;
-            }
-            LibraryCommands::Create { name } => {
-                commands::library_cmd::run_create(name)?;
-            }
+            LibraryCommands::List => commands::library_cmd::run_list()?,
+            LibraryCommands::Create { name } => commands::library_cmd::run_create(name)?,
             LibraryCommands::Delete { name, force } => {
-                commands::library_cmd::run_delete(name, force)?;
+                commands::library_cmd::run_delete(name, force)?
             }
-            LibraryCommands::SetPrimary { name } => {
-                commands::library_cmd::run_set_primary(name)?;
-            }
-            LibraryCommands::Show { name } => {
-                commands::library_cmd::run_show(name)?;
-            }
+            LibraryCommands::SetPrimary { name } => commands::library_cmd::run_set_primary(name)?,
+            LibraryCommands::Show { name } => commands::library_cmd::run_show(name)?,
         },
         Commands::Premade { command } => match command {
-            PremadeCommands::List => {
-                commands::premade_cmd::run_list(&RUNTIME)?;
-            }
+            PremadeCommands::List => commands::premade_cmd::run_list(&RUNTIME)?,
             PremadeCommands::Get { name } => {
                 let all = name.as_ref().is_some_and(|n| n == "all");
                 commands::premade_cmd::run_get(name, all, &RUNTIME)?;
             }
-            PremadeCommands::Sync => {
-                commands::premade_cmd::run_sync(&RUNTIME)?;
-            }
+            PremadeCommands::Sync => commands::premade_cmd::run_sync(&RUNTIME)?,
         },
     }
+    Ok(())
+}
+
+fn main() -> SnipResult<()> {
+    setup_panic_handler();
+    setup_signal_handler();
+    init_default_logging();
+    log_startup_info();
+
+    let cli = Cli::parse();
+    dispatch_command(cli.command)?;
 
     log_shutdown_info();
     Ok(())

@@ -1,2 +1,2 @@
-cargo install --path /Users/davidbowman/projects/snip-it
-
+#!/bin/bash
+cargo install --path "$(dirname "$0")"
