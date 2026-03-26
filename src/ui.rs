@@ -1,4 +1,4 @@
-//! TUI module for the snip-it snippet manager.
+//! TUI module for the snp snippet manager.
 //!
 //! ## Critical Implementation Notes
 //!
@@ -34,7 +34,6 @@
 
 use std::io;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
@@ -55,18 +54,8 @@ use crate::utils::extract_variables_for_display;
 use crate::utils::shell_keywords::SHELL_KEYWORDS_SET;
 use crate::utils::strip_escape_sequences;
 
-type Candidate = (usize, String, Vec<String>);
-type PluginHandler = fn(&mut Vec<Candidate>, &[String], &[Vec<String>]) -> Option<Vec<usize>>;
-type BoxedPluginHandler =
-    Box<dyn Fn(&mut Vec<Candidate>, &[String], &[Vec<String>]) -> Option<Vec<usize>> + Send + Sync>;
-
 static TERMINATE: LazyLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
     LazyLock::new(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
-
-#[allow(dead_code)]
-pub fn set_terminate() {
-    TERMINATE.store(true, std::sync::atomic::Ordering::SeqCst);
-}
 
 pub fn get_terminate() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
     TERMINATE.clone()
@@ -81,42 +70,50 @@ fn is_ctrl_key(key: &crossterm::event::KeyEvent, c: char) -> bool {
             .contains(crossterm::event::KeyModifiers::CONTROL)
 }
 
-static PLUGINS: LazyLock<Mutex<Vec<Plugin>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+#[derive(Clone, Debug, Default, PartialEq)]
+enum SortMode {
+    #[default]
+    None,
+    Newest,
+    Oldest,
+    AlphaAsc,
+    AlphaDesc,
+}
 
 #[derive(Clone, Default)]
 struct FilterState {
-    sort_new: bool,
-    sort_old: bool,
-    sort_alpha: bool,
-    sort_alpha_rev: bool,
+    sort_mode: SortMode,
     tag_filter_text: String,
 }
 
 impl FilterState {
-    fn toggle_field(field: &mut bool) -> bool {
-        *field = !*field;
-        *field
-    }
-
     fn toggle_sort_new(&mut self) {
-        if Self::toggle_field(&mut self.sort_new) {
-            self.sort_old = false;
-        }
+        self.sort_mode = if self.sort_mode == SortMode::Newest {
+            SortMode::None
+        } else {
+            SortMode::Newest
+        };
     }
     fn toggle_sort_old(&mut self) {
-        if Self::toggle_field(&mut self.sort_old) {
-            self.sort_new = false;
-        }
+        self.sort_mode = if self.sort_mode == SortMode::Oldest {
+            SortMode::None
+        } else {
+            SortMode::Oldest
+        };
     }
     fn toggle_sort_alpha(&mut self) {
-        if Self::toggle_field(&mut self.sort_alpha) {
-            self.sort_alpha_rev = false;
-        }
+        self.sort_mode = if self.sort_mode == SortMode::AlphaAsc {
+            SortMode::None
+        } else {
+            SortMode::AlphaAsc
+        };
     }
     fn toggle_sort_alpha_rev(&mut self) {
-        if Self::toggle_field(&mut self.sort_alpha_rev) {
-            self.sort_alpha = false;
-        }
+        self.sort_mode = if self.sort_mode == SortMode::AlphaDesc {
+            SortMode::None
+        } else {
+            SortMode::AlphaDesc
+        };
     }
 }
 
@@ -126,7 +123,16 @@ pub struct Variable {
     pub default: Option<String>,
 }
 
-#[allow(dead_code)]
+/// Result of prompting the user for variable values.
+pub enum VariablePromptResult {
+    /// User cancelled the operation (pressed q).
+    Cancel,
+    /// User chose to skip (pressed enter with defaults).
+    Skip,
+    /// User provided variable values.
+    Values(Vec<(String, String)>),
+}
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub primary: ratatui::style::Color,
@@ -196,55 +202,6 @@ fn style_fg_bg(fg: ratatui::style::Color, bg: ratatui::style::Color) -> TuiStyle
 
 pub fn get_theme() -> std::sync::MutexGuard<'static, Theme> {
     ACTIVE_THEME.lock().unwrap()
-}
-
-#[allow(dead_code)]
-pub fn set_theme(theme_name: &str) {
-    let new_theme = resolve_theme(theme_name);
-    if let Ok(mut theme) = ACTIVE_THEME.lock() {
-        *theme = new_theme;
-    }
-}
-
-pub struct Plugin {
-    #[allow(dead_code)]
-    name: String,
-    handler: BoxedPluginHandler,
-}
-
-#[allow(dead_code)]
-pub fn register_plugin(name: &str, handler: PluginHandler) {
-    PLUGINS.lock().unwrap().push(Plugin {
-        name: name.to_string(),
-        handler: Box::new(
-            move |candidates: &mut Vec<Candidate>,
-                  descriptions: &[String],
-                  tags: &[Vec<String>]| { handler(candidates, descriptions, tags) },
-        ),
-    });
-}
-
-pub fn apply_plugins(
-    candidates: &mut Vec<(usize, String, Vec<String>, Option<i64>)>,
-    descriptions: &[String],
-    tags: &[Vec<String>],
-) {
-    let scores: Vec<Option<i64>> = candidates.iter().map(|c| c.3).collect();
-    for plugin in PLUGINS.lock().unwrap().iter() {
-        let mut legacy_candidates: Vec<(usize, String, Vec<String>)> = candidates
-            .iter()
-            .map(|(i, d, t, _)| (*i, d.clone(), t.clone()))
-            .collect();
-        if let Some(filtered) = (plugin.handler)(&mut legacy_candidates, descriptions, tags) {
-            *candidates = filtered
-                .into_iter()
-                .map(|old_idx| {
-                    let (i, d, t) = legacy_candidates[old_idx].clone();
-                    (i, d, t, scores.get(old_idx).copied().flatten())
-                })
-                .collect();
-        }
-    }
 }
 
 fn extract_variables(command: &str) -> Vec<String> {
@@ -443,7 +400,10 @@ fn select_snippet_inner(
             t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128
         });
         let should_recompute = if filter_dirty {
-            if debounce_elapsed {
+            // Always recompute immediately when filter becomes empty (backspace cleared filter)
+            // to avoid 150ms delay showing stale filtered results
+            let filter_is_empty = filter.is_empty() && filter_state.tag_filter_text.is_empty();
+            if filter_is_empty || debounce_elapsed {
                 filter_dirty = false;
                 true
             } else {
@@ -536,8 +496,6 @@ fn select_snippet_inner(
                 .collect();
         }
 
-        apply_plugins(&mut candidates, descriptions, tags);
-
         let has_filter = has_incremental_search || has_main_filter;
         candidates.sort_by(|a, b| {
             let score_cmp = match (a.3, b.3) {
@@ -548,20 +506,16 @@ fn select_snippet_inner(
             };
 
             if score_cmp != std::cmp::Ordering::Equal || !has_filter {
-                let explicit_sort = if filter_state.sort_new {
-                    Some(b.0.cmp(&a.0))
-                } else if filter_state.sort_old {
-                    Some(a.0.cmp(&b.0))
-                } else {
-                    None
+                let explicit_sort = match filter_state.sort_mode {
+                    SortMode::Newest => Some(b.0.cmp(&a.0)),
+                    SortMode::Oldest => Some(a.0.cmp(&b.0)),
+                    _ => None,
                 };
 
-                let secondary = if filter_state.sort_alpha {
-                    Some(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-                } else if filter_state.sort_alpha_rev {
-                    Some(b.1.to_lowercase().cmp(&a.1.to_lowercase()))
-                } else {
-                    None
+                let secondary = match filter_state.sort_mode {
+                    SortMode::AlphaAsc => Some(a.1.to_lowercase().cmp(&b.1.to_lowercase())),
+                    SortMode::AlphaDesc => Some(b.1.to_lowercase().cmp(&a.1.to_lowercase())),
+                    _ => None,
                 };
 
                 match explicit_sort {
@@ -599,26 +553,12 @@ fn select_snippet_inner(
             String::new()
         };
 
-        let sort_indicators: Vec<&str> = {
-            let mut ind = Vec::new();
-            if filter_state.sort_new {
-                ind.push("new");
-            }
-            if filter_state.sort_old {
-                ind.push("old");
-            }
-            if filter_state.sort_alpha {
-                ind.push("a-z");
-            }
-            if filter_state.sort_alpha_rev {
-                ind.push("z-a");
-            }
-            ind
-        };
-        let sort_indicator = if sort_indicators.is_empty() {
-            String::new()
-        } else {
-            format!("[{}]", sort_indicators.join(","))
+        let sort_indicator = match filter_state.sort_mode {
+            SortMode::None => String::new(),
+            SortMode::Newest => "[new]".to_string(),
+            SortMode::Oldest => "[old]".to_string(),
+            SortMode::AlphaAsc => "[a-z]".to_string(),
+            SortMode::AlphaDesc => "[z-a]".to_string(),
         };
 
         let _ = terminal.draw(|f| {
@@ -1159,19 +1099,15 @@ fn select_snippet_inner(
     })
 }
 
-#[allow(clippy::type_complexity)]
-pub fn prompt_variables(vars: Vec<Variable>) -> io::Result<Option<Option<Vec<(String, String)>>>> {
+pub fn prompt_variables(vars: Vec<Variable>) -> io::Result<VariablePromptResult> {
     if vars.is_empty() {
-        return Ok(None);
+        return Ok(VariablePromptResult::Skip);
     }
 
     prompt_variables_inner(vars)
 }
 
-#[allow(clippy::type_complexity)]
-fn prompt_variables_inner(
-    vars: Vec<Variable>,
-) -> io::Result<Option<Option<Vec<(String, String)>>>> {
+fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResult> {
     let mut terminal = ratatui::init();
 
     let defaults: Vec<String> = vars
@@ -1263,7 +1199,12 @@ fn prompt_variables_inner(
 
             let status_text =
                 "↑/↓/ j/k: move | tab: next | enter: save | esc: back | q: cancel | d: defaults";
-            let status_widget = Paragraph::new(status_text).style(style_fg(theme.muted));
+            let warning_text = "Values are interpolated directly into shell commands. Do not enter untrusted input.";
+            let status_widget = Paragraph::new(Line::from(vec![
+                Span::styled(status_text, style_fg(theme.muted)),
+                Span::raw("  "),
+                Span::styled(warning_text, style_fg(ratatui::style::Color::Yellow)),
+            ]));
             f.render_widget(status_widget, chunks[1]);
         })?;
 
@@ -1277,7 +1218,7 @@ fn prompt_variables_inner(
                                 crossterm::event::DisableMouseCapture
                             );
                             ratatui::restore();
-                            return Ok(None);
+                            return Ok(VariablePromptResult::Cancel);
                         }
                         KeyCode::Esc => {
                             // Esc no longer quits - use q instead
@@ -1333,7 +1274,7 @@ fn prompt_variables_inner(
         .zip(values.iter())
         .map(|(v, val)| (v.name.clone(), val.trim().to_string()))
         .collect();
-    Ok(Some(Some(result)))
+    Ok(VariablePromptResult::Values(result))
 }
 
 #[cfg(test)]
@@ -1409,28 +1350,25 @@ mod tests {
     #[test]
     fn test_filter_state_toggle_sort_new() {
         let mut state = FilterState::default();
-        assert!(!state.sort_new);
+        assert_eq!(state.sort_mode, SortMode::None);
 
         state.toggle_sort_new();
-        assert!(state.sort_new);
+        assert_eq!(state.sort_mode, SortMode::Newest);
 
         state.toggle_sort_new();
-        assert!(!state.sort_new);
+        assert_eq!(state.sort_mode, SortMode::None);
     }
 
     #[test]
     fn test_filter_state_toggle_sort_alpha() {
         let mut state = FilterState::default();
-        assert!(!state.sort_alpha);
-        assert!(!state.sort_alpha_rev);
+        assert_eq!(state.sort_mode, SortMode::None);
 
         state.toggle_sort_alpha();
-        assert!(state.sort_alpha);
-        assert!(!state.sort_alpha_rev);
+        assert_eq!(state.sort_mode, SortMode::AlphaAsc);
 
         state.toggle_sort_alpha_rev();
-        assert!(!state.sort_alpha);
-        assert!(state.sort_alpha_rev);
+        assert_eq!(state.sort_mode, SortMode::AlphaDesc);
     }
 
     #[test]
