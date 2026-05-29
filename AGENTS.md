@@ -43,7 +43,11 @@ snip-it/
 │   ├── logging.rs      # Tracing-based logging, audit log
 │   ├── sync.rs         # gRPC client for snip-sync server
 │   ├── sync_commands.rs# Sync orchestration, merge logic
-│   ├── ui.rs           # TUI (ratatui), fuzzy search, themes
+│   ├── ui/              # TUI (ratatui), fuzzy search, themes
+│   │   ├── mod.rs       # Main TUI loop, re-exports
+│   │   ├── theme.rs     # Theme system, dark/bright themes
+│   │   ├── highlight.rs # Syntax highlighting for commands
+│   │   └── variables.rs # Variable prompting UI
 │   ├── commands/       # One module per CLI subcommand
 │   │   ├── mod.rs      # Shared helpers: expand_snippet_command, get_library_path
 │   │   ├── run_cmd.rs  # Snippet execution via shell
@@ -105,16 +109,15 @@ snip-it/
 - `\<` and `\>` are literal angle brackets (escape sequences)
 - Parsed by `utils/variables.rs::parse_variables()` and `extract_variable_tokens()`
 - Expanded by `utils/variables.rs::expand_command()`
-- UI prompt in `ui.rs::prompt_variables_inner()`
+- UI prompt in `ui/variables.rs::prompt_variables_inner()`
 - **Known edge case:** Unmatched `<` without `>` creates phantom variable and drops the `<` character
 
 ### TUI Architecture
-- Single-loop event-driven TUI in `ui.rs::select_snippet_inner()`
+- Single-loop event-driven TUI in `ui/mod.rs::select_snippet_inner()`
 - Syntax highlighting is pre-computed once at startup (not in draw loop)
 - Fuzzy matching via `fuzzy-matcher` (skim algorithm)
 - Debounced filter updates (150ms)
 - Theme: dark (default) or bright, controlled by `SNP_THEME` env var
-- **Note:** `ACTIVE_THEME` uses `Mutex<Theme>` but `Theme` is `Copy` — `LazyLock` would be simpler
 
 ### Sync Merge Strategy
 - Last-write-wins based on `updated_at` timestamp
@@ -143,26 +146,26 @@ snip-it/
 
 The consolidated remediation plan is in `plan.md`. It contains all items from the architecture reviews, organized into parallel implementation waves.
 
-**Current status:** Plan generated and verified. Implementation not yet started.
+**Current status:** All remediation plan items completed. See plan.md for details.
 
 ## Known Issues (Quick Reference)
 
 For full details and fix instructions, see `plan.md`.
 
-| Severity | Issue | Location |
-|----------|-------|----------|
-| P0 | Argon2 memory cost 64 KiB (OWASP min: 19 MiB) | `encryption.rs:32`, `db.rs:12` |
-| P0 | API key stored as plaintext in `sync.toml` | `config.rs:19` |
-| P0 | CORS `CORS_ALLOW_ALL` env var referenced but never read | `snip-sync/src/main.rs` |
-| P0 | Registration rate limit bypassable via client-controlled `device_id` | `snip-sync/src/main.rs:333` |
-| P1 | Sync fall-through: `list_libraries` failure doesn't stop sync | `sync_cmd.rs:224-251` |
-| P1 | Encryption failures cause permanent snippet loss (last_sync advances) | `sync.rs:96-107`, `sync_commands.rs:300` |
-| P1 | `set_primary()` silently succeeds on nonexistent filename | `library.rs:346-352` |
-| P1 | `add_server_library()` creates duplicate metadata entries | `library.rs:387-413` |
-| P1 | `load_snippets()` returns empty on parse error (data loss risk) | `commands/mod.rs:102-141` |
-| P1 | Clipboard auto-clear race condition clears new content | `clipboard.rs:30-42` |
-| P1 | `shutdown_logging` logs after dropping file writer guard | `logging.rs:93-98` |
-| P2 | `ui.rs` is 1416 lines — should be split into submodules | `src/ui.rs` |
+| Severity | Issue | Status |
+|----------|-------|--------|
+| P0 | Argon2 memory cost 64 KiB (OWASP min: 19 MiB) | ✅ Fixed |
+| P0 | API key stored as plaintext in `sync.toml` | ✅ Fixed (keychain) |
+| P0 | CORS `CORS_ALLOW_ALL` env var referenced but never read | ✅ Fixed |
+| P0 | Registration rate limit bypassable via client-controlled `device_id` | ✅ Fixed |
+| P1 | Sync fall-through: `list_libraries` failure doesn't stop sync | ✅ Fixed |
+| P1 | Encryption failures cause permanent snippet loss (last_sync advances) | ✅ Fixed |
+| P1 | `set_primary()` silently succeeds on nonexistent filename | ✅ Fixed |
+| P1 | `add_server_library()` creates duplicate metadata entries | ✅ Fixed |
+| P1 | `load_snippets()` returns empty on parse error (data loss risk) | ✅ Fixed |
+| P1 | Clipboard auto-clear race condition clears new content | ✅ Fixed |
+| P1 | `shutdown_logging` logs after dropping file writer guard | ✅ Fixed |
+| P2 | `ui.rs` is 1416 lines — should be split into submodules | ✅ Fixed |
 
 ## Testing Notes
 
