@@ -54,7 +54,7 @@ snip-it/
 ├── Cargo.toml              # Main crate: binary "snp" (Rust 1.81+)
 ├── src/                    # Client application source
 │   ├── main.rs             # CLI entry, clap command dispatch
-│   ├── commands/           # 12 CLI subcommands (one module each)
+│   ├── commands/           # 13 CLI subcommands (one module each)
 │   ├── utils/              # Shared utilities
 │   ├── clipboard.rs        # Cross-platform clipboard
 │   ├── config.rs           # Sync settings
@@ -64,7 +64,7 @@ snip-it/
 │   ├── logging.rs          # Tracing + audit log
 │   ├── sync.rs             # gRPC client
 │   ├── sync_commands.rs    # Sync orchestration + merge
-│   └── ui.rs               # TUI (ratatui) + fuzzy search
+│   └── ui/                  # TUI (ratatui) + fuzzy search
 ├── snip-proto/             # Protobuf definitions + generated code
 │   ├── proto/sync.proto    # Service + message definitions
 │   ├── build.rs            # tonic-build code generation
@@ -84,8 +84,8 @@ snip-it/
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| [CLI Entry & Commands](cli.md) | `src/main.rs`, `src/commands/` | Clap-based CLI, 12 subcommands, command dispatch |
-| [TUI Module](ui.md) | `src/ui.rs` | ratatui-based terminal UI, fuzzy search, themes, variable prompts |
+| [CLI Entry & Commands](cli.md) | `src/main.rs`, `src/commands/` | Clap-based CLI, 13 subcommands, command dispatch |
+| [TUI Module](ui.md) | `src/ui/` | ratatui-based terminal UI, fuzzy search, themes, variable prompts |
 | [Core Data Model](core.md) | `src/library.rs`, `src/error.rs` | Snippet, Snippets, LibraryManager, SnipError |
 | [Configuration](config.md) | `src/config.rs`, `src/utils/config.rs` | SyncSettings, SyncDirection, config directory resolution |
 | [Sync System](sync.md) | `src/sync.rs`, `src/sync_commands.rs` | gRPC client, merge logic, bidirectional sync |

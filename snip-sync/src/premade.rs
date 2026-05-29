@@ -187,7 +187,6 @@ impl PremadeManager {
     pub fn get(&self, filename: &str) -> Result<String, Status> {
         let path = self.dir.join(format!("{}.toml", filename));
 
-        // Open the file first, then validate the resolved path to avoid TOCTOU race
         let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
@@ -197,15 +196,13 @@ impl PremadeManager {
             ));
         }
 
-        if !path.exists() {
-            return Err(Status::not_found(format!(
-                "Premade library '{}' not found",
-                filename
-            )));
-        }
-
-        fs::read_to_string(&path)
-            .map_err(|e| Status::internal(format!("Failed to read premade library: {}", e)))
+        fs::read_to_string(&path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Status::not_found(format!("Premade library '{}' not found", filename))
+            } else {
+                Status::internal(format!("Failed to read premade library: {}", e))
+            }
+        })
     }
 
     pub fn is_empty(&self) -> bool {
