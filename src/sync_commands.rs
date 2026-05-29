@@ -306,9 +306,9 @@ pub fn run_sync(
                         if direction == SyncDirection::Push {
                             if !has_failures {
                                 let _ = mgr.update_last_sync(lib_name, new_timestamp);
-                            }
-                            completed += 1;
-                            if has_failures {
+                                completed += 1;
+                                results.push((lib_name.clone(), true, String::new()));
+                            } else {
                                 results.push((
                                     lib_name.clone(),
                                     true,
@@ -317,8 +317,6 @@ pub fn run_sync(
                                         response.skipped_count
                                     ),
                                 ));
-                            } else {
-                                results.push((lib_name.clone(), true, String::new()));
                             }
                             continue;
                         }
@@ -426,7 +424,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         }
 
         if let Some(local_snip) = local_by_id.get(&server_snip.id) {
-            if server_snip.updated_at > local_snip.updated_at {
+            if server_snip.updated_at >= local_snip.updated_at {
                 merged_snippets.push(Snippet {
                     id: server_snip.id.clone(),
                     description: server_snip.description.clone(),

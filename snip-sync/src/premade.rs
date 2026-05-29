@@ -196,7 +196,7 @@ impl PremadeManager {
             ));
         }
 
-        fs::read_to_string(&path).map_err(|e| {
+        fs::read_to_string(&canonical_path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Status::not_found(format!("Premade library '{}' not found", filename))
             } else {

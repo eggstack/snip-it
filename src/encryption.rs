@@ -173,8 +173,6 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
         ciphertext,
     };
 
-    drop(key);
-
     Ok(payload.to_base64())
 }
 
@@ -191,8 +189,6 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let plaintext = cipher
         .decrypt(nonce, payload.ciphertext.as_ref())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {}", e)))?;
-
-    drop(key);
 
     String::from_utf8(plaintext)
         .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {}", e)))

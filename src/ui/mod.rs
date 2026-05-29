@@ -665,11 +665,11 @@ fn select_snippet_inner(
                                 KeyCode::Char('y') => {
                                     let start = std::cmp::min(visual_start, visual_end);
                                     let end = std::cmp::max(visual_start, visual_end);
-                                    let selected_items: Vec<&str> = filtered
+                                    let selected_items: Vec<String> = filtered
                                         .iter()
                                         .skip(start)
                                         .take(end - start + 1)
-                                        .map(|(_, desc, _)| desc.as_str())
+                                        .map(|(idx, _, _)| strip_escape_sequences(&commands[*idx]))
                                         .collect();
                                     let copy_text = selected_items.join("\n");
                                     let _ = clipboard::copy_to_clipboard_auto(&copy_text);

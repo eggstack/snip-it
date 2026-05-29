@@ -60,3 +60,9 @@ Output to `plans/<module>_review.md` with:
 4. **Sync timestamp updates**: `last_sync` is NOT updated when encryption failures occur (`has_failures` check in `sync_commands.rs`).
 5. **Dead code**: Look for `#[allow(dead_code)]`, unused variables prefixed with `_`, and unreachable branches.
 6. **TOCTOU races**: File existence checks should use `fs::read_to_string()` error handling instead of `exists()` + `read()` patterns.
+7. **Ineffective `drop(key)` after move**: When a value is moved into a struct/cipher, calling `drop(key)` afterwards is a no-op. The key material is cleaned up when the owning struct is dropped.
+8. **Visual mode copy bug in TUI**: When copying in visual mode (`y`), the code copied descriptions instead of commands. Single-select (`y` in normal mode) correctly copies commands.
+9. **Sync merge equal timestamps**: When `server.updated_at >= local.updated_at`, server wins. Previously used `>` which caused local to win on equal timestamps.
+10. **Push-only counter bug**: `completed` counter was only incremented when `!has_failures`, causing incorrect progress tracking when encryption failures occurred.
+11. **Premade TOCTOU**: `premade.rs::get()` validated `canonical_path` but read from original `path`. Must read from the canonicalized path.
+12. **Health check missing DB ping**: `health` RPC returned `healthy: true` unconditionally without checking database connectivity.

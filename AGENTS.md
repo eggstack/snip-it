@@ -148,6 +148,25 @@ Two optional items remain in `plan.md`:
 - **Command injection warning** (safe mode for snippet execution)
 - **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
 
+## Implementation Notes (2026-05-29)
+
+The following bugs were fixed during architecture review implementation:
+
+### High Priority Fixes
+1. **Encryption ineffective `drop(key)`** (`src/encryption.rs:176,195`): Removed no-op `drop(key)` calls after key was already moved into cipher
+2. **Clipboard debug→warn** (`src/clipboard.rs:37`): Changed `tracing::debug` to `tracing::warn` for auto-clear failures
+3. **Clipboard redundant drop** (`src/clipboard.rs:42`): Removed redundant `std::mem::drop(handle)` - thread continues regardless
+4. **TUI visual mode copy bug** (`src/ui/mod.rs:672`): Visual mode `y` now copies commands (not descriptions) to match single-select behavior
+5. **Sync merge equal timestamps** (`src/sync_commands.rs:429`): Changed `>` to `>=` so server wins on equal timestamps
+6. **Push-only counter bug** (`src/sync_commands.rs:306-323`): `completed` now increments regardless of `has_failures`
+7. **Premade TOCTOU** (`snip-sync/src/premade.rs:199`): Now reads from `canonical_path` instead of original `path`
+8. **Health check DB ping** (`snip-sync/src/main.rs:343-352`): Health RPC now verifies database connectivity via `db.ping()`
+
+### Scope Constraints
+- `output` field not encrypted during sync (proto definition lacks field - cannot add without breaking change)
+- `\<` escape inconsistency in variables.rs is a documented known edge case per AGENTS.md
+- Many CLI documentation discrepancies (e.g., `--clip` behavior, cron intervals) are doc bugs not code bugs
+
 ## Testing Notes
 
 - Integration tests use `TempDir` with `XDG_CONFIG_HOME` env override

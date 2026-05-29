@@ -180,6 +180,13 @@ impl Database {
         Ok(Self { pool })
     }
 
+    pub async fn ping(&self) -> DbResult<()> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn create_user(&self, api_key: &str) -> DbResult<String> {
         let user_id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();

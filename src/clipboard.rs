@@ -29,17 +29,15 @@ pub fn schedule_clipboard_clear(seconds: u32) {
 
     let gen = CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let handle = thread::spawn(move || {
+    let _handle = thread::spawn(move || {
         thread::sleep(Duration::from_secs(seconds as u64));
         // Only clear if no newer schedule has been requested
         if gen == CLIPBOARD_GENERATION.load(Ordering::SeqCst) {
             if let Err(e) = clear_clipboard() {
-                tracing::debug!("Auto-clear clipboard failed: {}", e);
+                tracing::warn!("Auto-clear clipboard failed: {}", e);
             }
         }
     });
-
-    std::mem::drop(handle);
 }
 
 fn clear_clipboard_impl() -> SnipResult<()> {

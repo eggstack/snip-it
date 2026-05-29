@@ -345,8 +345,9 @@ impl SnippetSync for SnipSyncService {
         _request: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
         self.record_request("health");
+        let healthy = self.db.ping().await.is_ok();
         Ok(Response::new(HealthResponse {
-            healthy: true,
+            healthy,
             version: env!("CARGO_PKG_VERSION").to_string(),
         }))
     }
