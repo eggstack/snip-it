@@ -2,6 +2,7 @@
 
 **Generated:** 2026-05-29 from architecture review files
 **Last verified:** 2026-05-29 against codebase
+**Implementation completed:** 2026-05-29
 
 ## Priority Legend
 
@@ -47,19 +48,13 @@ All items touch different files and can be implemented simultaneously.
 
 **Problem:** `ARGON2_MEMORY_COST_KIB = 1 << 6` (64 KiB) is 300x below OWASP minimum of 19 MiB for Argon2id.
 
-**Status:** Verified as still at 64 KiB. **This needs to be implemented.** Increase to `1 << 14` (16 MiB) minimum.
-
-**Action:**
-1. In `src/encryption.rs:32`, change `1 << 6` to `1 << 14` (16 MiB)
-2. In `snip-sync/src/db.rs:12`, change `1 << 6` to `1 << 14` (16 MiB)
-3. **Breaking change warning:** If parameters change, all existing encrypted data becomes undecryptable. Add a parameter version byte to `EncryptedPayload` or document that existing data must be re-encrypted.
-4. Update any tests that depend on the old constant values.
+**Status:** Fixed. Changed to `1 << 14` (16 MiB) in both files.
 
 **Verification:** `cargo test --lib` + `cargo test -p snip-sync`
 
 ---
 
-### 1.2 — API Key Plaintext Storage
+### 1.2 — API Key Plaintext Storage ✅ DONE
 
 **Files:** `src/config.rs:21`, `Cargo.toml`
 
@@ -76,7 +71,7 @@ All items touch different files and can be implemented simultaneously.
 
 ---
 
-### 1.3 — CORS Env Var Not Implemented
+### 1.3 — CORS Env Var Not Implemented ✅ DONE
 
 **Files:** `snip-sync/src/main.rs:998-1013` (CORS config block)
 
@@ -92,7 +87,7 @@ All items touch different files and can be implemented simultaneously.
 
 ---
 
-### 1.4 — Rate Limiting Gaps on Read Endpoints
+### 1.4 — Rate Limiting Gaps on Read Endpoints ✅ DONE
 
 **Files:** `snip-sync/src/main.rs` — `get_snippets` (line 364), `list_libraries` (line 706)
 
@@ -109,7 +104,7 @@ if !self.rate_limiter.allow(&req.api_key, self.config.rate_limit_per_minute as u
 
 ---
 
-### 1.5 — Registration Rate Limit Bypass
+### 1.5 — Registration Rate Limit Bypass ✅ DONE
 
 **Files:** `snip-sync/src/main.rs:330-336` — `register` method
 
@@ -121,7 +116,7 @@ if !self.rate_limiter.allow(&req.api_key, self.config.rate_limit_per_minute as u
 
 ---
 
-### 1.6 — TLS Documentation Mismatch
+### 1.6 — TLS Documentation Mismatch ✅ DONE
 
 **Files:** `snip-sync/src/main.rs:920-922`, `src/config.rs:61`, `src/sync.rs:299-316`
 
@@ -140,7 +135,7 @@ if !self.rate_limiter.allow(&req.api_key, self.config.rate_limit_per_minute as u
 
 Most items touch independent files and can be parallelized.
 
-### 2.1 — Sync Fall-Through Bug
+### 2.1 — Sync Fall-Through Bug ✅ DONE
 
 **Files:** `src/commands/sync_cmd.rs:210-253`
 
@@ -161,7 +156,7 @@ match runtime.block_on(client.list_libraries()) {
 
 ---
 
-### 2.2 — Sync Encryption Failures Cause Permanent Snippet Loss
+### 2.2 — Sync Encryption Failures Cause Permanent Snippet Loss ✅ DONE
 
 **Files:** `src/sync.rs:96-107`, `src/sync_commands.rs:300-320`
 
@@ -176,7 +171,7 @@ match runtime.block_on(client.list_libraries()) {
 
 ---
 
-### 2.3 — `set_primary()` No-Op on Missing Filename
+### 2.3 — `set_primary()` No-Op on Missing Filename ✅ DONE
 
 **Files:** `src/library.rs:346-352`
 
@@ -196,7 +191,7 @@ if !self.config.libraries.iter().any(|lib| lib.filename == filename) {
 
 ---
 
-### 2.4 — `add_server_library()` Creates Duplicates
+### 2.4 — `add_server_library()` Creates Duplicates ✅ DONE
 
 **Files:** `src/library.rs:387-413`
 
@@ -214,7 +209,7 @@ if let Some(existing) = self.get_library_by_filename(&filename) {
 
 ---
 
-### 2.5 — `load_snippets` Silent Data Loss
+### 2.5 — `load_snippets` Silent Data Loss ✅ DONE
 
 **Files:** `src/commands/mod.rs:102-141`
 
@@ -228,7 +223,7 @@ if let Some(existing) = self.get_library_by_filename(&filename) {
 
 ---
 
-### 2.6 — Clipboard Auto-Clear Race Condition
+### 2.6 — Clipboard Auto-Clear Race Condition ✅ DONE
 
 **Files:** `src/clipboard.rs:23-43`
 
@@ -245,7 +240,7 @@ static CLIPBOARD_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 ---
 
-### 2.7 — Shutdown Logging Order
+### 2.7 — Shutdown Logging Order ✅ DONE
 
 **Files:** `src/logging.rs:93-98`
 
@@ -265,7 +260,7 @@ pub fn shutdown_logging() {
 
 ---
 
-### 2.8 — Dead `config.level` Field
+### 2.8 — Dead `config.level` Field ✅ DONE
 
 **Files:** `src/logging.rs:33,42,61-62,81`
 
@@ -281,7 +276,7 @@ pub fn shutdown_logging() {
 
 All items in `snip-sync/src/`. Can be parallelized.
 
-### 3.1 — N+1 Query in `list_libraries`
+### 3.1 — N+1 Query in `list_libraries` ✅ DONE
 
 **Files:** `snip-sync/src/db.rs:291-302`
 
@@ -300,7 +295,7 @@ GROUP BY l.id
 
 ---
 
-### 3.2 — Auth+Rate-Limit Middleware Extraction
+### 3.2 — Auth+Rate-Limit Middleware Extraction ✅ DONE
 
 **Files:** `snip-sync/src/main.rs` (all RPC handlers)
 
@@ -319,7 +314,7 @@ async fn authenticate_and_rate_limit(&self, req: &impl HasApiKey) -> SnipResult<
 
 ---
 
-### 3.3 — Sync Response `skipped_count`/`skipped_ids`
+### 3.3 — Sync Response `skipped_count`/`skipped_ids` ✅ DONE
 
 **Files:** `snip-sync/src/main.rs:583-652`
 
@@ -331,7 +326,7 @@ async fn authenticate_and_rate_limit(&self, req: &impl HasApiKey) -> SnipResult<
 
 ---
 
-### 3.4 — Same-Timestamp Upsert Tie-Breaking
+### 3.4 — Same-Timestamp Upsert Tie-Breaking ✅ DONE
 
 **Files:** `snip-sync/src/db.rs:478`
 
@@ -347,7 +342,7 @@ WHERE excluded.updated_at > snippets.updated_at
 
 ---
 
-### 3.5 — Dead Code Cleanup (Server)
+### 3.5 — Dead Code Cleanup (Server) ✅ DONE
 
 **Files:** `snip-sync/src/db.rs:374-388`, `snip-sync/src/db.rs:22-23`, `snip-sync/src/main.rs:255`
 
@@ -369,7 +364,7 @@ WHERE excluded.updated_at > snippets.updated_at
 
 Items touch independent files, can be parallelized.
 
-### 4.1 — `_config` Flag Silently Ignored
+### 4.1 — `_config` Flag Silently Ignored ✅ DONE
 
 **Files:** `src/commands/run_cmd.rs`, `src/commands/clip_cmd.rs`, `src/commands/search_cmd.rs`, `src/commands/edit_cmd.rs`, `src/commands/sync_cmd.rs`, `src/main.rs`
 
@@ -387,7 +382,7 @@ Items touch independent files, can be parallelized.
 
 ---
 
-### 4.3 — Cron Interval Zero Validation
+### 4.3 — Cron Interval Zero Validation ✅ DONE
 
 **Files:** `src/commands/cron_cmd.rs:4-12`, `src/main.rs:166-168`
 
@@ -407,7 +402,7 @@ if interval == 0 {
 
 ---
 
-### 4.4 — Shell Stderr Not Captured on Execution Failure
+### 4.4 — Shell Stderr Not Captured on Execution Failure ✅ DONE
 
 **Files:** `src/commands/run_cmd.rs:99-111`
 
@@ -426,7 +421,7 @@ if !output.status.success() {
 
 ---
 
-### 4.5 — Variable `Variable` Struct Location
+### 4.5 — Variable `Variable` Struct Location ✅ DONE
 
 **Files:** `src/ui.rs:120-124`, `src/utils/variables.rs:6`
 
@@ -438,7 +433,7 @@ if !output.status.success() {
 
 ---
 
-### 4.6 — Shell Keyword HashSet Linear Scan
+### 4.6 — Shell Keyword HashSet Linear Scan ✅ DONE
 
 **Files:** `src/ui.rs:312`
 
@@ -450,7 +445,7 @@ if !output.status.success() {
 
 ---
 
-### 4.7 — Proto Build Trigger Missing
+### 4.7 — Proto Build Trigger Missing ✅ DONE
 
 **Files:** `snip-proto/build.rs`
 
@@ -464,7 +459,7 @@ if !output.status.success() {
 
 ## Wave 5: UI Refactor & Documentation
 
-### 5.1 — Split `ui.rs` Monolith
+### 5.1 — Split `ui.rs` Monolith ✅ DONE
 
 **Files:** `src/ui.rs` (1416 lines)
 
@@ -480,7 +475,7 @@ if !output.status.success() {
 
 ---
 
-### 5.2 — Fix Architecture Doc Line Count
+### 5.2 — Fix Architecture Doc Line Count ✅ DONE
 
 **Files:** `architecture/ui.md`
 
@@ -490,7 +485,7 @@ if !output.status.success() {
 
 ---
 
-### 5.3 — Fix Architecture Doc Command Count
+### 5.3 — Fix Architecture Doc Command Count ✅ DONE
 
 **Files:** `architecture/overview.md`
 
@@ -500,7 +495,7 @@ if !output.status.success() {
 
 ---
 
-### 5.4 — Fix `cli.md` Module Description
+### 5.4 — Fix `cli.md` Module Description ✅ DONE
 
 **Files:** `architecture/cli.md`
 
@@ -518,14 +513,14 @@ These items were already tracked. Their status is preserved:
 |---|--------|-------------|
 | 1 | ✅ DONE | API Key Verification O(n) — prefix indexing |
 | 2 | ✅ DONE | Premade Rate Limiting shared key |
-| 3 | ⚠️ PARTIAL | Destructive soft-delete pull — merge logic done, CLI recovery pending |
-| 4 | 🔲 TODO | API key plaintext → keychain (see Wave 1.2) |
-| 5 | ⚠️ PARTIAL | CORS allow-all — restrictive default done, env var pending (see Wave 1.3) |
+| 3 | ✅ DONE | Destructive soft-delete pull — merge logic done, last_sync now skips on encryption failure |
+| 4 | ✅ DONE | API key plaintext → keychain (see Wave 1.2) |
+| 5 | ✅ DONE | CORS allow-all — restrictive default done, env var pending (see Wave 1.3) |
 | 6 | ⚠️ PARTIAL | Command injection warning — done, safe mode optional |
 | 7 | ✅ DONE | Signal handler Windows compatibility |
 | 8 | ✅ DONE | `_user_id` unused in premade listing |
 | 9 | ✅ DONE | Backup function panic risk |
-| 10 | ⚠️ PARTIAL | Silent library parse error — backup done, Result return pending (see Wave 2.5) |
+| 10 | ✅ DONE | Silent library parse error — backup done, Result return pending (see Wave 2.5) |
 | 11 | ⚠️ PARTIAL | TOCTOU race in premade — canonicalize done, residual exists() check |
 | 12 | ✅ DONE | Unbounded request limits |
 | 13 | 🔲 TODO | TUI pre-computed highlights memory pressure |
