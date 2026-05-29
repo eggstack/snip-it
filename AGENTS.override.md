@@ -24,6 +24,8 @@
 - "Completed in Prior Work" table in plan.md is authoritative for already-fixed items
 - Items can be internally inconsistent across sections - always cross-check
 - Code verification subagents should read actual files, not rely on summaries
+- Line numbers in plan items may be slightly off; always search for the relevant code patterns
+- Some items have location descriptions that are technically accurate but describe effects rather than causes (e.g., SERVER-4 lock issue is about contention, not classic "lock across await")
 
 #### Wave-based Parallelization
 - WAVE 1 (Security): All 6 items are independent, can be split across multiple agents
@@ -35,3 +37,15 @@
 - Most items have NO dependencies (can start immediately)
 - Key dependencies: TUI-3 → TUI-7,8,9,10,20,21; LIB-1 → LIB-11; LIB-6 → LIB-8; LIB-2 → LIB-13
 - When assigning work, group by module to minimize context switching
+
+### Session Notes (2026-05-29) - Plan Review Findings
+
+During the plan review session, the following discrepancies were corrected:
+
+1. **CLI-1 line numbers**: Claimed 97-100, actual is 92-93 (TOCTOU between validate_output_path and File::create)
+2. **SERVER-3 line numbers**: Claimed 389, actual is 390-392 (api_key field completely ignored)
+3. **SERVER-6 line numbers**: Claimed 208, actual is 199 (fs::read_to_string without sanitization)
+4. **SERVER-4 characterization**: Not a classic "lock across await" - lock is acquired AFTER await; issue is lock contention duration
+5. **CMD-3**: --clip copies command as intended; this is a documentation/expectation issue, not a code bug
+6. **TUI-1**: Visual line mode bug confirmed at lines 633-638; `selected` stays at cursor while `visual_end` extends to end of list
+7. **sync_commands.rs merge**: Uses `>=` at line 427 for timestamp comparison (server wins on tie) - already fixed per AGENTS.md

@@ -14,7 +14,7 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 | SEC-3 | TLS server name verification not performed | `src/sync.rs:299-316` |
 | SEC-5 | Shell execution uses user-controlled $SHELL | `src/commands/run_cmd.rs:48-50,116-119` |
 | SEC-6 | API key masked but still in memory | `src/commands/register_cmd.rs:57-62` |
-| CLI-1 | TOCTOU race between output path validation and file creation | `src/commands/run_cmd.rs:97-100` |
+| CLI-1 | TOCTOU race between output path validation and file creation | `src/commands/run_cmd.rs:92-93` |
 
 **Implementation notes:** SEC-1, SEC-2, SEC-5, SEC-6, CLI-1 are all in `run_cmd.rs` and `edit_cmd.rs` - same agent can fix multiple. SEC-3 is in `sync.rs`.
 
@@ -391,8 +391,8 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 
 #### SERVER-3: Missing Input Validation on `api_key` Field in Register
 - **Status:** TODO
-- **Location:** `snip-sync/src/main.rs:389`
-- **Description:** `register` RPC accepts any content in `api_key` field without length/format validation.
+- **Location:** `snip-sync/src/main.rs:390-392`
+- **Description:** `register` RPC completely ignores the `api_key` field from `RegisterRequest`. A new API key is generated with `uuid::Uuid::new_v4()` regardless of what was passed. No length/format validation.
 - **Dependencies:** None
 - **Wave:** 2
 
@@ -413,8 +413,8 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 
 #### SERVER-6: Premade File Content Not Sanitized Before Serving
 - **Status:** TODO
-- **Location:** `snip-sync/src/premade.rs:208`
-- **Description:** `get()` returns raw file content without running `fix_invalid_toml_escapes()`.
+- **Location:** `snip-sync/src/premade.rs:199`
+- **Description:** `get()` returns raw file content via `fs::read_to_string(&canonical_path)` without running `fix_invalid_toml_escapes()`.
 - **Dependencies:** None
 - **Wave:** 2
 
@@ -1326,7 +1326,7 @@ SEC-2 (Editor Path Resolution)     └─ No dependencies
 SEC-3 (TLS Verification)           └─ No dependencies
 SEC-5 (Shell $SHELL)               └─ No dependencies
 SEC-6 (API Key in Memory)          └─ No dependencies
-CLI-1 (TOCTOU Race)                └─ No dependencies
+CLI-1 (TOCTOU Race)                └─ No dependencies (lines 92-93)
 
 WAVE 2 (Core Bugs):
 CORE-1 (Atomic Config Saves)       └─ No dependencies
