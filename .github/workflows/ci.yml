@@ -30,7 +30,7 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   test:
     name: Test

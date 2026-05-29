@@ -5,10 +5,14 @@ services:
     build: .
     container_name: snip-sync
     ports:
-      - "3000:3000"
+      - "50051:50051"
+      - "50050:50050"
     volumes:
       - ./data:/data
     environment:
       - DATABASE_URL=/data/snippets.db
-      - SERVER_ADDR=0.0.0.0:3000
+      - GRPC_HOST=0.0.0.0
+      - GRPC_PORT=50051
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=50050
     restart: unless-stopped

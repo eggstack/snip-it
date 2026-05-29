@@ -184,7 +184,13 @@ pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetDa
         .map(|s| s.folders.clone())
         .collect();
     let favorites: Vec<bool> = snippets.snippets.iter().map(|s| s.favorite).collect();
-    (descriptions, commands, tags, folders, favorites)
+    crate::SnippetData {
+        descriptions,
+        commands,
+        tags,
+        folders,
+        favorites,
+    }
 }
 
 pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<ExpandedCommand> {
@@ -199,12 +205,11 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
     }
 
     match ui::prompt_variables(vars)? {
-        None => Ok(ExpandedCommand::Cancel),
-        Some(None) => Ok(ExpandedCommand::Skip),
-        Some(Some(values)) => Ok(ExpandedCommand::Expanded(crate::utils::expand_command(
-            &snippet.command,
-            &values,
-        ))),
+        ui::VariablePromptResult::Cancel => Ok(ExpandedCommand::Cancel),
+        ui::VariablePromptResult::Skip => Ok(ExpandedCommand::Skip),
+        ui::VariablePromptResult::Values(values) => Ok(ExpandedCommand::Expanded(
+            crate::utils::expand_command(&snippet.command, &values),
+        )),
     }
 }
 
@@ -229,17 +234,17 @@ where
         }
     };
     let snippets = crate::library::load_library(&lib_path)?;
-    let (descriptions, commands, tags, folders, favorites) = get_snippet_data(&snippets);
+    let snippet_data = get_snippet_data(&snippets);
 
     loop {
         let result = crate::ui::select_snippet(
-            &descriptions,
-            &commands,
-            &tags,
+            &snippet_data.descriptions,
+            &snippet_data.commands,
+            &snippet_data.tags,
             false,
             filter.as_deref(),
-            &folders,
-            &favorites,
+            &snippet_data.folders,
+            &snippet_data.favorites,
         )?;
         if let Some((idx, copy_flag)) = result {
             let snippet = &snippets.snippets[idx];

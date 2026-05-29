@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -14,7 +14,7 @@ fn setup_test_env() -> (TempDir, PathBuf) {
     (tmp, config_dir)
 }
 
-fn snp_in(config_dir: &PathBuf) -> Command {
+fn snp_in(config_dir: &Path) -> Command {
     let mut cmd = snp_cmd();
     cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
     cmd

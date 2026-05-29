@@ -24,13 +24,13 @@ use error::SnipResult;
 use logging::{init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler};
 use utils::config::get_snippets_path;
 
-pub type SnippetData = (
-    Vec<String>,
-    Vec<String>,
-    Vec<Vec<String>>,
-    Vec<Vec<String>>,
-    Vec<bool>,
-);
+pub struct SnippetData {
+    pub descriptions: Vec<String>,
+    pub commands: Vec<String>,
+    pub tags: Vec<Vec<String>>,
+    pub folders: Vec<Vec<String>>,
+    pub favorites: Vec<bool>,
+}
 
 pub enum ProcessResult {
     Cancel,
@@ -43,6 +43,7 @@ static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(get_snippets_path);
 static RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"));
 
+#[cfg(unix)]
 fn setup_signal_handler() {
     use signal_hook::flag;
 
@@ -52,6 +53,11 @@ fn setup_signal_handler() {
         .expect("Failed to set Ctrl+C handler");
     flag::register(signal_hook::consts::signal::SIGTERM, terminate)
         .expect("Failed to set SIGTERM handler");
+}
+
+#[cfg(windows)]
+fn setup_signal_handler() {
+    // Windows: Ctrl+C is handled by crossterm's event loop
 }
 
 #[derive(Debug, Parser)]

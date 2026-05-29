@@ -3,6 +3,68 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tonic::Status;
 
+/// Fixes invalid TOML escape sequences (`\<` and `\>`) in double-quoted strings.
+/// Converts affected strings to single-quoted (raw literal) form, preserving the
+/// backslash content. Only processes double-quoted strings; single-quoted strings
+/// and non-string content are left unchanged.
+fn fix_invalid_toml_escapes(toml_str: &str) -> String {
+    let mut result = String::with_capacity(toml_str.len());
+    let mut chars = toml_str.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            let mut string_content = String::new();
+            let mut needs_fix = false;
+
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == '"' {
+                    break;
+                }
+                if next == '\\' {
+                    if let Some(&after) = chars.peek() {
+                        chars.next();
+                        string_content.push('\\');
+                        string_content.push(after);
+                        if after == '<' || after == '>' {
+                            needs_fix = true;
+                        }
+                    } else {
+                        string_content.push('\\');
+                    }
+                } else {
+                    string_content.push(next);
+                }
+            }
+
+            if needs_fix && !string_content.contains('\'') {
+                result.push('\'');
+                result.push_str(&string_content);
+                result.push('\'');
+            } else if needs_fix {
+                result.push('"');
+                for ch in string_content.chars() {
+                    if ch == '\\' {
+                        result.push('\\');
+                        result.push('\\');
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                result.push('"');
+            } else {
+                result.push('"');
+                result.push_str(&string_content);
+                result.push('"');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[derive(Debug, Clone)]
 pub struct PremadeLibrary {
     pub name: String,
@@ -12,10 +74,9 @@ pub struct PremadeLibrary {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct Snippet {
-    #[serde(rename = "Description", default)]
-    description: Option<String>,
+    #[serde(flatten, default)]
+    _extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +149,8 @@ impl PremadeManager {
                 }
             };
 
+            let content = fix_invalid_toml_escapes(&content);
+
             let snippet_file: SnippetFile = match toml::from_str(&content) {
                 Ok(sf) => sf,
                 Err(e) => {
@@ -124,7 +187,11 @@ impl PremadeManager {
     pub fn get(&self, filename: &str) -> Result<String, Status> {
         let path = self.dir.join(format!("{}.toml", filename));
 
-        if !path.starts_with(&self.dir) {
+        // Open the file first, then validate the resolved path to avoid TOCTOU race
+        let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        if !canonical_path.starts_with(&canonical_dir) {
             return Err(Status::invalid_argument(
                 "Invalid filename: path traversal detected",
             ));

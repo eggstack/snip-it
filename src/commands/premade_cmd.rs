@@ -1,10 +1,10 @@
-use crate::config::{load_sync_settings, SyncSettings};
+use crate::config::get_sync_settings;
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
 use crate::sync::SyncClient;
 
 pub fn run_list(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    let sync_settings = load_sync_settings().unwrap_or_else(|_| SyncSettings::default());
+    let sync_settings = get_sync_settings();
 
     if !sync_settings.enabled {
         eprintln!("Sync is not enabled. Configure sync settings first.");
@@ -45,7 +45,7 @@ pub fn run_get(
     all: bool,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    let sync_settings = load_sync_settings().unwrap_or_else(|_| SyncSettings::default());
+    let sync_settings = get_sync_settings();
 
     if !sync_settings.enabled {
         eprintln!("Sync is not enabled. Configure sync settings first.");
@@ -141,14 +141,14 @@ pub fn run_get(
     Ok(())
 }
 
-pub fn run_sync(_runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    let sync_settings = load_sync_settings().unwrap_or_else(|_| SyncSettings::default());
+pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    let sync_settings = get_sync_settings();
 
     if !sync_settings.enabled {
         eprintln!("Sync is not enabled. Configure sync settings first.");
         return Ok(());
     }
 
-    crate::sync_commands::run_premade_sync(&sync_settings);
+    crate::sync_commands::run_premade_sync(&sync_settings, runtime);
     Ok(())
 }

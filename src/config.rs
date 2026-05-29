@@ -1,26 +1,54 @@
+//! Configuration management for snp sync.
+//!
+//! Handles loading and saving sync settings including server configuration,
+//! API keys, and sync preferences. Settings are stored in `sync.toml`.
+
 use crate::error::{SnipError, SnipResult};
+pub use crate::utils::config::get_sync_config_path;
+use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Sync configuration settings.
+///
+/// These settings control how snippets are synchronized with a remote server,
+/// including server URL, authentication, and sync behavior preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSettings {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_sync_url")]
     pub server_url: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
     pub device_id: String,
-    #[serde(default = "default_sync_interval")]
     pub sync_interval_minutes: u32,
     #[serde(default)]
     pub auto_sync: bool,
     #[serde(default)]
     pub sync_direction: SyncDirection,
+    #[serde(default)]
+    pub clipboard_auto_clear_seconds: Option<u32>,
 }
 
+impl Default for SyncSettings {
+    fn default() -> Self {
+        SyncSettings {
+            enabled: false,
+            server_url: default_sync_url(),
+            api_key: String::new(),
+            device_id: String::new(),
+            sync_interval_minutes: default_sync_interval(),
+            auto_sync: false,
+            sync_direction: SyncDirection::default(),
+            clipboard_auto_clear_seconds: None,
+        }
+    }
+}
+
+/// Sync direction control.
+///
+/// Determines whether snippets are pushed to the server, pulled from it,
+/// or synchronized bidirectionally.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum SyncDirection {
     #[default]
@@ -49,13 +77,6 @@ struct SyncConfigSettings {
     sync: SyncSettings,
 }
 
-pub fn get_sync_config_path() -> PathBuf {
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".config")));
-    config_dir.join("snp").join("sync.toml")
-}
-
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let path = get_sync_config_path();
 
@@ -73,6 +94,8 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let content = toml::to_string_pretty(&config)
         .map_err(|e| SnipError::toml_error("serialize sync config", e))?;
 
+    let content = quote_strings_containing_backslashes(&content);
+
     fs::write(&path, content).map_err(|e| SnipError::io_error("write sync config", path, e))?;
 
     Ok(())
@@ -86,12 +109,18 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     }
 
     let content =
-        fs::read_to_string(&path).map_err(|e| SnipError::io_error("read sync config", path, e))?;
+        fs::read_to_string(&path).map_err(|e| SnipError::io_error("read sync config", &path, e))?;
 
-    let config: SyncConfigFile =
-        toml::from_str(&content).map_err(|e| SnipError::toml_error("parse sync config", e))?;
+    let fixed_content = fix_invalid_toml_escapes(&content);
+
+    let config: SyncConfigFile = toml::from_str(&fixed_content)
+        .map_err(|e| SnipError::toml_error("parse sync config", e))?;
 
     Ok(config.settings.sync)
+}
+
+pub fn get_sync_settings() -> SyncSettings {
+    load_sync_settings().unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -102,11 +131,10 @@ mod tests {
         let settings = SyncSettings::default();
 
         assert!(!settings.enabled);
-        // Note: serde with default = "..." doesn't apply to struct defaults
-        // These fields use default() from Default trait
+        assert_eq!(settings.server_url, "http://localhost:50051");
         assert!(settings.api_key.is_empty());
         assert!(settings.device_id.is_empty());
-        assert_eq!(settings.sync_interval_minutes, 0); // u32 defaults to 0
+        assert_eq!(settings.sync_interval_minutes, 30);
         assert!(!settings.auto_sync);
         assert_eq!(settings.sync_direction, SyncDirection::Push);
     }
@@ -135,6 +163,7 @@ mod tests {
             sync_interval_minutes: 60,
             auto_sync: true,
             sync_direction: SyncDirection::Bidirectional,
+            clipboard_auto_clear_seconds: Some(30),
         };
 
         let toml_str = toml::to_string_pretty(&settings).unwrap();

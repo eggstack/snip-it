@@ -1,8 +1,29 @@
+//! Core data structures and library management.
+//!
+//! This module provides the foundational types for storing and managing snippets:
+//! - [`Snippet`]: Individual snippet with command, description, tags, etc.
+//! - [`Snippets`]: Collection container for multiple snippets
+//! - [`LibraryManager`]: Manages multiple snippet libraries and premade collections
+//!
+//! # Snippet TOML Format
+//!
+//! ```toml
+//! [[Snippets]]
+//! Description = "git commit"
+//! Tag = ["git"]
+//! command = "git commit -m \"<msg>\""
+//! ```
+
 use crate::error::{SnipError, SnipResult};
+use crate::utils::config::{get_config_dir, get_snippets_path};
+use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Container for a collection of snippets.
+///
+/// Wraps a list of [`Snippet`] items and optional folder structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Snippets {
     #[serde(rename = "Snippets", default)]
@@ -11,6 +32,11 @@ pub struct Snippets {
     pub folders: Vec<String>,
 }
 
+/// Individual snippet with metadata.
+///
+/// A snippet contains a command to execute along with optional description,
+/// tags, and sync-related fields. The command may include variables using
+/// `<name>` or `<name=default>` syntax.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Snippet {
     #[serde(rename = "Id", alias = "ID", default)]
@@ -37,12 +63,16 @@ pub struct Snippet {
     pub deleted: bool,
 }
 
+/// Configuration for managing snippet libraries.
+///
+/// Stored in `libraries.toml` and tracks metadata for all libraries.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LibraryConfig {
     #[serde(default)]
     pub libraries: Vec<LibraryMeta>,
 }
 
+/// Metadata for a single snippet library.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibraryMeta {
     pub filename: String,
@@ -65,6 +95,56 @@ impl LibraryMeta {
     }
 }
 
+fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)> {
+    if name.is_empty() {
+        return Err(("Invalid library name", "Library name cannot be empty"));
+    }
+    if name.len() > 50 {
+        return Err((
+            "Invalid library name",
+            "Library name cannot exceed 50 characters",
+        ));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err((
+            "Invalid library name",
+            "Library name cannot contain slashes",
+        ));
+    }
+    if name.contains('\0') {
+        return Err((
+            "Invalid library name",
+            "Library name cannot contain null bytes",
+        ));
+    }
+    Ok(())
+}
+
+impl Snippet {
+    pub fn new(description: String, command: String, tags: Vec<String>) -> Self {
+        Self {
+            id: String::new(),
+            description,
+            command,
+            tags,
+            output: String::new(),
+            folders: Vec::new(),
+            favorite: false,
+            created_at: 0,
+            updated_at: 0,
+            device_id: String::new(),
+            deleted: false,
+        }
+    }
+}
+
+/// Manages snippet libraries and premade collections.
+///
+/// LibraryManager handles:
+/// - Loading and saving the libraries configuration
+/// - Creating, deleting, and managing individual libraries
+/// - Loading premade libraries
+/// - Determining whether to use single-file or library mode
 pub struct LibraryManager {
     config_dir: PathBuf,
     libraries_dir: PathBuf,
@@ -74,10 +154,12 @@ pub struct LibraryManager {
 
 impl LibraryManager {
     pub fn new() -> SnipResult<Self> {
-        let config_dir = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".config")))
-            .join("snp");
+        // Migrate legacy macOS config dir if needed
+        if let Err(e) = crate::utils::config::migrate_macos_config_dir() {
+            eprintln!("Warning: Failed to migrate config directory: {}", e);
+        }
+
+        let config_dir = get_config_dir();
 
         let libraries_dir = config_dir.join("libraries");
         let premade_dir = config_dir.join("premade");
@@ -87,7 +169,31 @@ impl LibraryManager {
             let content = fs::read_to_string(&config_path).map_err(|e| {
                 SnipError::io_error("read libraries config", config_path.clone(), e)
             })?;
-            toml::from_str(&content).unwrap_or_default()
+            let content = fix_invalid_toml_escapes(&content);
+            match toml::from_str(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    // Backup corrupted file so data isn't lost on next save
+                    let backup = config_path.with_extension("toml.corrupt");
+                    if let Err(copy_err) = fs::copy(&config_path, &backup) {
+                        eprintln!(
+                            "Warning: Failed to parse {}: {} (backup also failed: {})",
+                            config_path.display(),
+                            e,
+                            copy_err
+                        );
+                    } else {
+                        eprintln!(
+                            "Warning: Failed to parse {}: {}. \
+                             Corrupted file backed up to {}. Using defaults.",
+                            config_path.display(),
+                            e,
+                            backup.display()
+                        );
+                    }
+                    LibraryConfig::default()
+                }
+            }
         } else {
             LibraryConfig::default()
         };
@@ -101,11 +207,7 @@ impl LibraryManager {
     }
 
     pub fn get_default_snippets_path() -> PathBuf {
-        std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".config")))
-            .join("snp")
-            .join("snippets.toml")
+        get_snippets_path()
     }
 
     pub fn get_libraries_dir(&self) -> &PathBuf {
@@ -185,33 +287,8 @@ impl LibraryManager {
     }
 
     pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> {
-        if filename.is_empty() {
-            return Err(SnipError::runtime_error(
-                "Invalid library name",
-                Some("Library name cannot be empty"),
-            ));
-        }
-
-        if filename.len() > 50 {
-            return Err(SnipError::runtime_error(
-                "Invalid library name",
-                Some("Library name cannot exceed 50 characters"),
-            ));
-        }
-
-        if filename.contains('/') || filename.contains('\\') {
-            return Err(SnipError::runtime_error(
-                "Invalid library name",
-                Some("Library name cannot contain slashes"),
-            ));
-        }
-
-        if filename.contains('\0') {
-            return Err(SnipError::runtime_error(
-                "Invalid library name",
-                Some("Library name cannot contain null bytes"),
-            ));
-        }
+        validate_library_name(filename)
+            .map_err(|(msg, detail)| SnipError::runtime_error(msg, Some(detail)))?;
 
         self.init_libraries_dir()?;
 
@@ -282,7 +359,6 @@ Snippets = []
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()> {
         if self.get_library_by_filename(filename).is_some() {
             return Ok(());
@@ -365,6 +441,8 @@ Snippets = []
         let toml_str = toml::to_string_pretty(&self.config)
             .map_err(|e| SnipError::toml_error("serialize libraries config", e))?;
 
+        let toml_str = quote_strings_containing_backslashes(&toml_str);
+
         fs::write(&config_path, toml_str)
             .map_err(|e| SnipError::io_error("write libraries config", config_path, e))?;
 
@@ -382,7 +460,9 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
         return Ok(Snippets::default());
     }
 
-    let snippets: Snippets = match toml::from_str(&content) {
+    let fixed_content = fix_invalid_toml_escapes(&content);
+
+    let snippets: Snippets = match toml::from_str(&fixed_content) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
@@ -390,6 +470,19 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
                 path.display(),
                 e
             );
+            // Create backup of corrupted file before returning defaults
+            let backup_path = path.with_extension("toml.corrupt.bak");
+            if let Err(backup_err) = fs::copy(path, &backup_path) {
+                eprintln!(
+                    "Warning: Could not create backup of corrupted file: {}",
+                    backup_err
+                );
+            } else {
+                eprintln!(
+                    "Backup of corrupted file saved to {}",
+                    backup_path.display()
+                );
+            }
             Snippets::default()
         }
     };
@@ -406,6 +499,8 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     let toml_str = toml::to_string_pretty(snippets)
         .map_err(|e| SnipError::toml_error("serialize snippets", e))?;
 
+    let toml_str = quote_strings_containing_backslashes(&toml_str);
+
     fs::write(path, toml_str).map_err(|e| SnipError::io_error("write snippets file", path, e))?;
 
     Ok(())
@@ -416,16 +511,26 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
         return Ok(None);
     }
 
-    let backup_dir = path.parent().unwrap().join("backups");
+    let backup_dir = path
+        .parent()
+        .ok_or_else(|| {
+            SnipError::runtime_error(
+                "backup path has no parent",
+                Some(&path.display().to_string()),
+            )
+        })?
+        .join("backups");
     fs::create_dir_all(&backup_dir)
         .map_err(|e| SnipError::io_error("create backup directory", backup_dir.clone(), e))?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup_name = format!(
-        "{}.{}.toml.bak",
-        path.file_stem().unwrap().to_string_lossy(),
-        timestamp
-    );
+    let file_stem = path.file_stem().ok_or_else(|| {
+        SnipError::runtime_error(
+            "backup path has no file stem",
+            Some(&path.display().to_string()),
+        )
+    })?;
+    let backup_name = format!("{}.{}.toml.bak", file_stem.to_string_lossy(), timestamp);
     let backup_path = backup_dir.join(backup_name);
 
     fs::copy(path, &backup_path)
@@ -505,6 +610,61 @@ mod tests {
         assert_eq!(loaded.snippets.len(), 1);
         assert_eq!(loaded.snippets[0].description, "Test snippet");
         assert_eq!(loaded.snippets[0].command, "echo hello");
+    }
+
+    #[test]
+    fn test_library_save_load_roundtrip_with_escaped_brackets() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test_library.toml");
+
+        let snippets = Snippets {
+            snippets: vec![Snippet {
+                id: "test-id-1".to_string(),
+                description: "Test with escaped brackets".to_string(),
+                command: "ping \\<website\\>".to_string(),
+                output: "".to_string(),
+                tags: vec!["test".to_string()],
+                folders: vec![],
+                favorite: false,
+                created_at: 1234567890,
+                updated_at: 1234567890,
+                device_id: "device1".to_string(),
+                deleted: false,
+            }],
+            folders: vec![],
+        };
+
+        save_library(&path, &snippets).unwrap();
+
+        let loaded = load_library(&path).unwrap();
+
+        assert_eq!(loaded.snippets.len(), 1);
+        assert_eq!(loaded.snippets[0].command, "ping \\<website\\>");
+    }
+
+    #[test]
+    fn test_library_load_with_invalid_escapes() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("invalid_escapes.toml");
+
+        std::fs::write(
+            &path,
+            r#"
+[[Snippets]]
+Id = "test-id"
+Description = "Test snippet with invalid escapes"
+Command = "sudo iptables-restore \< /path/to/rules"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+
+        assert_eq!(loaded.snippets.len(), 1);
+        assert_eq!(
+            loaded.snippets[0].command,
+            r"sudo iptables-restore \< /path/to/rules"
+        );
     }
 
     #[test]

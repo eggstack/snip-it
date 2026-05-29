@@ -8,6 +8,13 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn validate_output_path(path: &str) -> SnipResult<()> {
+    if path.is_empty() {
+        return Err(SnipError::runtime_error(
+            "Invalid output path",
+            Some("Output path must not be empty"),
+        ));
+    }
+
     let p = std::path::Path::new(path);
 
     if p.is_absolute() {
@@ -143,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_validate_output_path_empty() {
-        assert!(validate_output_path("").is_ok());
+        assert!(validate_output_path("").is_err());
     }
 
     #[test]

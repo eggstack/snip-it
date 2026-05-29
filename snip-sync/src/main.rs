@@ -31,9 +31,8 @@ const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 const DEFAULT_MAX_TAGS: usize = 50;
 const DEFAULT_MAX_TAG_LENGTH: usize = 100;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_METRICS_USERNAME: &str = "admin";
-const DEFAULT_METRICS_PASSWORD: &str = "metrics";
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
+const MAX_REQUEST_LIMIT: i32 = 1000;
 
 #[derive(Deserialize, Default)]
 struct ConfigFile {
@@ -103,8 +102,8 @@ struct Config {
     max_tag_length: usize,
     request_timeout_secs: u64,
     rate_limit_per_minute: u32,
-    metrics_username: String,
-    metrics_password: String,
+    metrics_username: Option<String>,
+    metrics_password: Option<String>,
     cors_allowed_origins: Vec<String>,
 }
 
@@ -116,7 +115,17 @@ impl Config {
 
         let config_file = if config_path.exists() {
             match std::fs::read_to_string(&config_path) {
-                Ok(content) => toml::from_str(&content).unwrap_or_default(),
+                Ok(content) => match toml::from_str(&content) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse config file {}: {}. Using defaults.",
+                            config_path.display(),
+                            e
+                        );
+                        ConfigFile::default()
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("Failed to read config file: {}", e);
                     ConfigFile::default()
@@ -200,12 +209,10 @@ impl Config {
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
             metrics_username: std::env::var("METRICS_USERNAME")
                 .ok()
-                .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone()))
-                .unwrap_or_else(|| DEFAULT_METRICS_USERNAME.to_string()),
+                .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
             metrics_password: std::env::var("METRICS_PASSWORD")
                 .ok()
-                .or_else(|| server.metrics.as_ref().and_then(|m| m.password.clone()))
-                .unwrap_or_else(|| DEFAULT_METRICS_PASSWORD.to_string()),
+                .or_else(|| server.metrics.as_ref().and_then(|m| m.password.clone())),
             cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS")
                 .ok()
                 .or_else(|| server.cors.as_ref().and_then(|c| c.allowed_origins.clone()))
@@ -231,13 +238,9 @@ impl Config {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct AppState {
-    db: Arc<Database>,
-    rate_limiter: Arc<RateLimiter>,
     config: Config,
     metrics: Metrics,
-    premade_manager: PremadeManager,
 }
 
 struct SnipSyncService {
@@ -324,11 +327,15 @@ impl SnippetSync for SnipSyncService {
         self.record_request("register");
         let req = request.into_inner();
 
-        if !self.rate_limiter.allow(
-            &req.device_id,
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
+        if !self
+            .rate_limiter
+            .allow(
+                &req.device_id,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
             self.record_rate_limit();
             return Err(Status::resource_exhausted(
                 "Rate limit exceeded for registration",
@@ -337,7 +344,7 @@ impl SnippetSync for SnipSyncService {
 
         let api_key = uuid::Uuid::new_v4().to_string();
 
-        match self.db.create_user(&api_key) {
+        match self.db.create_user(&api_key).await {
             Ok(device_id) => {
                 tracing::info!("Created new user with device_id: {}", device_id);
                 Ok(Response::new(RegisterResponse {
@@ -364,6 +371,7 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 tracing::warn!("Invalid API key attempted");
@@ -374,17 +382,36 @@ impl SnippetSync for SnipSyncService {
         let library_id = if req.library_id.is_empty() {
             self.db
                 .get_default_library(&user_id)
+                .await
                 .map_err(|e| Status::internal(e.to_string()))?
         } else {
+            if !self
+                .db
+                .verify_library_ownership(&user_id, &req.library_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+            {
+                tracing::warn!(
+                    "User {} attempted to access library {} without ownership",
+                    user_id,
+                    req.library_id
+                );
+                return Err(Status::not_found("Library not found"));
+            }
             req.library_id
         };
 
-        let limit = if req.limit > 0 { req.limit } else { 100 };
+        let limit = if req.limit > 0 {
+            req.limit.clamp(1, MAX_REQUEST_LIMIT)
+        } else {
+            100
+        };
         let offset = if req.offset > 0 { req.offset } else { 0 };
 
         let (snippets, total) = self
             .db
             .get_snippets(&user_id, &library_id, req.since, limit, offset)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let has_more = (offset + snippets.len() as i32) < total;
@@ -418,11 +445,15 @@ impl SnippetSync for SnipSyncService {
         self.record_request("push_snippets");
         let req = request.into_inner();
 
-        if !self.rate_limiter.allow(
-            &req.api_key,
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
             self.record_rate_limit();
             return Err(Status::resource_exhausted("Rate limit exceeded"));
         }
@@ -430,6 +461,7 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
@@ -439,8 +471,22 @@ impl SnippetSync for SnipSyncService {
         let library_id = if req.library_id.is_empty() {
             self.db
                 .get_default_library(&user_id)
+                .await
                 .map_err(|e| Status::internal(e.to_string()))?
         } else {
+            if !self
+                .db
+                .verify_library_ownership(&user_id, &req.library_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+            {
+                tracing::warn!(
+                    "User {} attempted to push to library {} without ownership",
+                    user_id,
+                    req.library_id
+                );
+                return Err(Status::not_found("Library not found"));
+            }
             req.library_id
         };
 
@@ -466,7 +512,11 @@ impl SnippetSync for SnipSyncService {
                 encrypted: snippet.encrypted,
             };
 
-            match self.db.upsert_snippet(&db_snippet, &user_id, &library_id) {
+            match self
+                .db
+                .upsert_snippet(&db_snippet, &user_id, &library_id)
+                .await
+            {
                 Ok(_) => accepted += 1,
                 Err(_) => rejected += 1,
             }
@@ -485,11 +535,15 @@ impl SnippetSync for SnipSyncService {
         self.record_sync();
         let req = request.into_inner();
 
-        if !self.rate_limiter.allow(
-            &req.api_key,
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
             self.record_rate_limit();
             return Err(Status::resource_exhausted("Rate limit exceeded"));
         }
@@ -497,6 +551,7 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
@@ -506,8 +561,22 @@ impl SnippetSync for SnipSyncService {
         let library_id = if req.library_id.is_empty() {
             self.db
                 .get_default_library(&user_id)
+                .await
                 .map_err(|e| Status::internal(e.to_string()))?
         } else {
+            if !self
+                .db
+                .verify_library_ownership(&user_id, &req.library_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+            {
+                tracing::warn!(
+                    "User {} attempted to sync with library {} without ownership",
+                    user_id,
+                    req.library_id
+                );
+                return Err(Status::not_found("Library not found"));
+            }
             req.library_id
         };
 
@@ -530,22 +599,32 @@ impl SnippetSync for SnipSyncService {
                     encrypted: snippet.encrypted,
                 };
 
-                if let Err(e) = self.db.upsert_snippet(&db_snippet, &user_id, &library_id) {
+                if let Err(e) = self
+                    .db
+                    .upsert_snippet(&db_snippet, &user_id, &library_id)
+                    .await
+                {
                     tracing::warn!("Failed to upsert snippet: {}", e);
                 }
             }
         }
 
-        let limit = if req.limit > 0 { req.limit } else { 1000 };
+        let limit = if req.limit > 0 {
+            req.limit.clamp(1, MAX_REQUEST_LIMIT)
+        } else {
+            1000
+        };
 
         let (snippets, _) = self
             .db
             .get_snippets(&user_id, &library_id, req.last_sync_timestamp, limit, 0)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let timestamp = self
             .db
             .get_latest_timestamp(&user_id, &library_id)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let proto_snippets: Vec<ProtoSnippet> = snippets
@@ -581,11 +660,15 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
-        if !self.rate_limiter.allow(
-            &req.api_key,
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
             self.record_rate_limit();
             return Err(Status::resource_exhausted("Rate limit exceeded"));
         }
@@ -593,13 +676,14 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
             })?;
 
-        match self.db.create_library(&user_id, &req.name) {
+        match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
                 tracing::info!("Created library '{}' for user {}", req.name, user_id);
                 Ok(Response::new(CreateLibraryResponse {
@@ -630,18 +714,24 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
             })?;
 
-        let limit = if req.limit > 0 { req.limit } else { 50 };
+        let limit = if req.limit > 0 {
+            req.limit.clamp(1, MAX_REQUEST_LIMIT)
+        } else {
+            50
+        };
         let offset = if req.offset > 0 { req.offset } else { 0 };
 
         let (libraries, total) = self
             .db
             .list_libraries(&user_id, limit, offset)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let has_more = (offset + libraries.len() as i32) < total;
@@ -671,11 +761,15 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
-        if !self.rate_limiter.allow(
-            &req.api_key,
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
             self.record_rate_limit();
             return Err(Status::resource_exhausted("Rate limit exceeded"));
         }
@@ -683,6 +777,7 @@ impl SnippetSync for SnipSyncService {
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
@@ -694,7 +789,7 @@ impl SnippetSync for SnipSyncService {
             return Err(Status::invalid_argument("Cannot delete default library"));
         }
 
-        match self.db.delete_library(&user_id, &req.library_id) {
+        match self.db.delete_library(&user_id, &req.library_id).await {
             Ok(_) => {
                 tracing::info!("Deleted library {} for user {}", req.library_id, user_id);
                 Ok(Response::new(DeleteLibraryResponse {
@@ -712,25 +807,30 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<ListPremadeLibrariesResponse>, Status> {
         self.record_request("list_premade_libraries");
 
-        if !self.rate_limiter.allow(
-            "premade",
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
         let req = request.into_inner();
 
-        let _user_id = self
+        let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
             })?;
+
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
 
         let libraries = self.premade_manager.list();
 
@@ -744,6 +844,8 @@ impl SnippetSync for SnipSyncService {
             })
             .collect();
 
+        tracing::debug!("User {} listed premade libraries", user_id);
+
         Ok(Response::new(ListPremadeLibrariesResponse {
             libraries: proto_libraries,
         }))
@@ -755,25 +857,30 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<GetPremadeLibraryResponse>, Status> {
         self.record_request("get_premade_library");
 
-        if !self.rate_limiter.allow(
-            "premade",
-            self.config.rate_limit_per_minute as usize,
-            Duration::from_secs(60),
-        ) {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
         let req = request.into_inner();
 
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
             })?;
+
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
 
         if req.filename.is_empty() {
             return Err(Status::invalid_argument("Filename is required"));
@@ -817,8 +924,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Config::ensure_config_file();
     let config = Config::load();
 
-    let db = Arc::new(Database::new(&config.db_path)?);
+    let db = Arc::new(Database::connect(&config.db_path).await?);
     tracing::info!("Database initialized at {}", config.db_path);
+
+    match db.migrate_plaintext_api_keys().await {
+        Ok(count) if count > 0 => tracing::info!("Migrated {} API keys to hashed format", count),
+        Ok(_) => tracing::debug!("No plaintext API keys to migrate"),
+        Err(e) => {
+            tracing::error!(
+                "API key migration failed: {}. Halting startup to prevent auth lockout.",
+                e
+            );
+            return Err(e.into());
+        }
+    }
 
     let grpc_addr = format!("{}:{}", config.grpc_host, config.grpc_port).parse::<SocketAddr>()?;
     let http_addr = format!("{}:{}", config.http_host, config.http_port).parse::<SocketAddr>()?;
@@ -839,11 +958,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeout = Duration::from_secs(config.request_timeout_secs);
 
     let metrics = Metrics::new().expect("Failed to create metrics");
-    let _metrics_for_http = metrics.clone();
-    tracing::info!(
-        "Metrics initialized (username: {})",
-        config.metrics_username
-    );
+
+    if config.metrics_username.is_some() && config.metrics_password.is_some() {
+        tracing::info!("Metrics endpoint enabled with authentication");
+    } else if config.metrics_username.is_some() || config.metrics_password.is_some() {
+        tracing::warn!(
+            "Metrics endpoint disabled: both METRICS_USERNAME and METRICS_PASSWORD must be set (only one provided)"
+        );
+    } else {
+        tracing::warn!("Metrics endpoint disabled: METRICS_USERNAME and METRICS_PASSWORD not set");
+    }
 
     let premade_manager = PremadeManager::new(config.premade_dir.clone());
     if premade_manager.is_empty() {
@@ -859,11 +983,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = AppState {
-        db: db.clone(),
-        rate_limiter: rate_limiter.clone(),
         config: config.clone(),
         metrics: metrics.clone(),
-        premade_manager: premade_manager.clone(),
     };
 
     let grpc_service = SnipSyncService {
@@ -876,12 +997,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cors = if cors_allowed_origins.is_empty() {
         tracing::warn!(
-            "CORS is disabled (no origins configured). Set CORS_ALLOWED_ORIGINS for production."
+            "CORS: no origins configured. Cross-origin requests will be blocked. \
+             Set CORS_ALLOWED_ORIGINS to allow specific origins, or CORS_ALLOW_ALL=true for permissive CORS."
         );
         CorsLayer::new()
-            .allow_origin(axum::http::HeaderValue::from_static("*"))
-            .allow_methods(Any)
-            .allow_headers(Any)
     } else {
         let mut cors = CorsLayer::new();
         for origin in &cors_allowed_origins {
@@ -897,21 +1016,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         State(state): State<AppState>,
         headers: axum::http::HeaderMap,
     ) -> Result<String, (axum::http::StatusCode, String)> {
+        let (username, password) = match (
+            &state.config.metrics_username,
+            &state.config.metrics_password,
+        ) {
+            (Some(u), Some(p)) => (u.as_str(), p.as_str()),
+            _ => {
+                return Err((axum::http::StatusCode::NOT_FOUND, "Not found".to_string()));
+            }
+        };
+
         let auth_header = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Basic "));
 
+        let expected = format!("{}:{}", username, password);
         let valid = if let Some(encoded) = auth_header {
             if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                if let Ok(cred) = std::str::from_utf8(&decoded) {
-                    cred == format!(
-                        "{}:{}",
-                        state.config.metrics_username, state.config.metrics_password
-                    )
-                } else {
-                    false
-                }
+                use subtle::ConstantTimeEq;
+                let expected_bytes = expected.as_bytes();
+                decoded.len() == expected_bytes.len() && bool::from(decoded.ct_eq(expected_bytes))
             } else {
                 false
             }

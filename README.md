@@ -1,6 +1,9 @@
 # snp - Snippet Manager
 
-A fast, terminal-based snippet manager with fuzzy search, clipboard support, and variable expansion.
+![Rust](https://img.shields.io/badge/Rust-1.81+-orange.svg)
+![License](https://img.shields.io/badge/License-MIT-blue.svg)
+
+A fast, terminal-based snippet manager with fuzzy search, clipboard support, variable expansion, and cloud sync.
 
 ## Features
 
@@ -8,6 +11,9 @@ A fast, terminal-based snippet manager with fuzzy search, clipboard support, and
 - **Clipboard Support** - Copy snippets to clipboard with a single keypress
 - **Variable Expansion** - Use `<varname=default>` syntax for dynamic snippets
 - **TUI Interface** - Clean terminal UI with keyboard navigation
+- **Cloud Sync** - End-to-end encrypted sync between devices
+- **Snippet Libraries** - Organize snippets into multiple collections
+- **Premade Libraries** - Download community-built snippet collections
 - **Cross-Platform** - Works on macOS, Linux, and Windows
 
 ## Installation
@@ -23,6 +29,25 @@ cp target/release/snp ~/.local/bin/
 
 ```bash
 brew install snp
+```
+
+## Quick Start
+
+```bash
+# Create a new snippet
+snp new "git commit" -t git
+
+# List all snippets
+snp list
+
+# Run a snippet (opens TUI)
+snp run
+
+# Copy to clipboard
+snp clip
+
+# Search snippets
+snp search
 ```
 
 ## Configuration
@@ -58,6 +83,18 @@ Variables use `<name=default>` or `<name>` syntax:
 - `<name=default>` - Shows default value, user can override
 - `<name>` - Prompts for input with no default
 
+```toml
+# With defaults
+[[Snippets]]
+Description = "SSH with port"
+command = "ssh <user=root>@<host> -p <port=22>"
+
+# Required input
+[[Snippets]]
+Description = "Docker run"
+command = "docker run -it <image> /bin/bash"
+```
+
 ## Usage
 
 ```
@@ -74,52 +111,67 @@ snp --help
 | `snp clip` | `snp c` | Copy snippet to clipboard |
 | `snp search` | `snp s` | Search and view snippet details |
 | `snp edit` | `snp e` | Edit snippets file in $EDITOR |
-| `snp sync` | `snp s` | Sync snippets with server |
+| `snp sync` | `snp y` | Sync snippets with server |
+| `snp cron` | | Setup automatic sync |
+| `snp library` | `snp lib` | Manage snippet libraries |
 | `snp premade` | `snp p` | Browse/download premade libraries |
+| `snp register` | `snp reg` | Register sync account |
 | `snp version` | `snp v` | Show version |
 
-### Sync
+## Libraries
 
-Sync your local snippets with the server:
+Organize snippets into multiple collections:
 
 ```bash
+# Create a new library
+snp library create work-snippets
+
+# List all libraries
+snp library list
+
+# Switch to a library
+snp run --library work-snippets
+
+# Delete a library
+snp library delete work-snippets
+
+# Set primary library
+snp library set-primary work-snippets
+```
+
+## Sync
+
+Sync your local snippets with a server for cross-device access.
+
+### Register and Connect
+
+```bash
+# Register with a sync server
+snp register https://your-sync-server.com
+
+# Or use default local server
+snp register
+```
+
+### Sync Operations
+
+```bash
+# Manual sync
 snp sync
+
+# Push only (upload local changes)
+snp sync --push-only
+
+# Pull only (download remote changes)
+snp sync --pull-only
+
+# List connected servers
+snp sync --servers
 ```
-
-This will push local changes to the server and pull remote changes. Conflicts are handled interactively.
-
-#### Configuration
-
-After first sync, a configuration section is added to your snippets file:
-
-```toml
-[settings.sync]
-enabled = true
-server_url = "https://your-server.com"
-api_key = "your-api-key"
-device_id = "your-device-id"
-```
-
-### Premade Libraries
-
-Browse and download pre-built snippet collections:
-
-```bash
-# List available premade libraries
-snp premade list
-
-# Download a specific library
-snp premade get docker-essentials
-
-# Sync all premade libraries
-snp premade sync
-```
-
-Premade libraries are stored in `~/.config/snp/premade/`.
 
 ### Automated Sync (Cron)
 
-To automatically sync snippets on a schedule, use the built-in cron command:
+Set up automatic periodic sync:
 
 ```bash
 # Set up sync every 15 minutes (default)
@@ -132,13 +184,49 @@ snp cron -i 30
 snp cron -i 60
 ```
 
-The command will display the crontab entry, show platform-specific instructions, and offer to copy it to clipboard.
+The command displays the crontab entry, platform-specific instructions, and offers to copy it to clipboard.
 
-The `--non-interactive` flag (used by cron) skips conflict prompts and keeps local versions.
+Use `--non-interactive` flag for headless sync (skips conflict prompts, keeps local versions).
 
-### TUI Keybindings
+### Sync Configuration
 
-#### Normal Mode
+After first sync, a configuration section is added to your snippets file:
+
+```toml
+[settings.sync]
+enabled = true
+server_url = "https://your-server.com"
+api_key = "your-api-key"
+device_id = "your-device-id"
+sync_interval_minutes = 30
+auto_sync = false
+sync_direction = "Bidirectional"  # Push, Pull, or Bidirectional
+```
+
+## Premade Libraries
+
+Browse and download pre-built snippet collections from the community:
+
+```bash
+# List available premade libraries
+snp premade list
+
+# Download a specific library
+snp premade get docker-essentials
+
+# Download all available libraries
+snp premade get all
+
+# Sync all premade libraries (download missing)
+snp premade sync
+```
+
+Premade libraries are stored in `~/.config/snp/premade/`.
+
+## TUI Keybindings
+
+### Normal Mode
+
 | Key | Action |
 |-----|--------|
 | `↑/↓` or `j/k` | Navigate snippets |
@@ -156,7 +244,8 @@ The `--non-interactive` flag (used by cron) skips conflict prompts and keeps loc
 | `Ctrl+D` | Page down |
 | `Ctrl+U` | Page up |
 
-#### Insert Mode
+### Insert Mode (Filter)
+
 | Key | Action |
 |-----|--------|
 | `Esc` | Return to normal mode |
@@ -164,6 +253,43 @@ The `--non-interactive` flag (used by cron) skips conflict prompts and keeps loc
 | `Enter` | Run selected snippet |
 | `Backspace` | Delete character |
 | `Type` | Filter snippets |
+
+## Troubleshooting
+
+### Snippets not saving
+
+Ensure the config directory exists and is writable:
+
+```bash
+mkdir -p ~/.config/snp
+chmod 755 ~/.config/snp
+```
+
+### Clipboard not working
+
+- **macOS**: Grant Terminal access to Clipboard in System Preferences
+- **Linux**: Install `xclip` or `xsel`
+- **Windows**: Should work automatically
+
+### Sync conflicts
+
+When the same snippet is modified on multiple devices:
+
+- **Interactive mode**: Prompts to choose version
+- **Non-interactive mode**: Keeps local version by default
+
+### Variable expansion issues
+
+If variables aren't expanding correctly, check for:
+
+- Missing `>` closing bracket: `<var` should be `<var>`
+- Escaped characters: `\<` is treated as literal `<`
+
+## Security
+
+- **Sync encryption**: All snippets are encrypted with AES-256-GCM before sync
+- **Key derivation**: API keys are hashed with Argon2
+- **Transport**: gRPC over TLS when server supports it
 
 ## License
 

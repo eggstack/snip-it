@@ -42,10 +42,12 @@ request_timeout_secs = 30
 requests_per_minute = 120
 
 [server.metrics]
-# Basic auth username for metrics endpoint
-username = "admin"
-# Basic auth password for metrics endpoint
-password = "metrics"
+# Basic auth credentials for metrics endpoint
+# REQUIRED: Both must be set to enable the /metrics endpoint
+# If either is unset, the metrics endpoint returns 404
+# WARNING: Do NOT set these to empty strings — that enables the endpoint with blank credentials
+# username = "change-me"
+# password = "change-me"
 
 [server.cors]
 # Comma-separated list of allowed CORS origins

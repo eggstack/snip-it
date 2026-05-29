@@ -1,15 +1,23 @@
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Algorithm, Argon2, Params, Version,
+};
+use base64::Engine;
 use chrono::Utc;
-use rusqlite::{params, Connection};
-use std::path::Path;
-use std::sync::Mutex;
+use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
+
+const ARGON2_MEMORY_KIB: u32 = 1 << 6;
+const ARGON2_ITERATIONS: u32 = 3;
+const ARGON2_PARALLELISM: u32 = 4;
 
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum DbError {
     #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(#[from] sqlx::Error),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Not found: {0}")]
@@ -41,23 +49,88 @@ pub struct Library {
     pub snippet_count: i64,
 }
 
+#[derive(Clone)]
 pub struct Database {
-    conn: Mutex<Connection>,
+    pool: SqlitePool,
 }
 
-impl Database {
-    pub fn new<P: AsRef<Path>>(path: P) -> DbResult<Self> {
-        let conn = Connection::open(path)?;
+fn hash_api_key(api_key: &str) -> DbResult<String> {
+    let mut salt_bytes = [0u8; 16];
+    getrandom::getrandom(&mut salt_bytes)
+        .map_err(|e| DbError::Conflict(format!("Failed to generate salt: {}", e)))?;
+    let salt_b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(salt_bytes);
+    let salt = SaltString::from_b64(&salt_b64)
+        .map_err(|e| DbError::Conflict(format!("Failed to create salt: {}", e)))?;
+    let params = Params::new(
+        ARGON2_MEMORY_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
+        None,
+    )
+    .map_err(|e| DbError::Conflict(format!("Invalid Argon2 params: {}", e)))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let hash = argon2
+        .hash_password(api_key.as_bytes(), &salt)
+        .map_err(|e| DbError::Conflict(format!("Failed to hash API key: {}", e)))?
+        .to_string();
+    Ok(hash)
+}
 
-        conn.execute_batch(
+fn verify_api_key(api_key: &str, hash: &str) -> bool {
+    let parsed = match PasswordHash::new(hash) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let params = match Params::new(
+        ARGON2_MEMORY_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
+        None,
+    ) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon2.verify_password(api_key.as_bytes(), &parsed).is_ok()
+}
+
+/// Computes the first 8 chars of base64(SHA-256(api_key)) for indexed lookup.
+fn compute_api_key_prefix(api_key: &str) -> String {
+    let hash = Sha256::digest(api_key.as_bytes());
+    let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash);
+    encoded.chars().take(8).collect()
+}
+
+fn saturating_i32(v: i64) -> i32 {
+    v.min(i32::MAX as i64) as i32
+}
+
+type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
+
+impl Database {
+    pub async fn connect(url: &str) -> DbResult<Self> {
+        let pool = SqlitePool::connect(url).await?;
+
+        sqlx::query(
             "
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 api_key TEXT UNIQUE NOT NULL,
+                api_key_prefix TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
-            );
-            
+            )
+            ",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_api_key_prefix ON users(api_key_prefix)")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query(
+            "
             CREATE TABLE IF NOT EXISTS libraries (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -66,8 +139,14 @@ impl Database {
                 deleted_at INTEGER,
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 UNIQUE(user_id, name)
-            );
-            
+            )
+            ",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "
             CREATE TABLE IF NOT EXISTS snippets (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -82,36 +161,51 @@ impl Database {
                 encrypted INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (library_id) REFERENCES libraries(id)
-            );
-            
-            CREATE INDEX IF NOT EXISTS idx_snippets_user ON snippets(user_id);
-            CREATE INDEX IF NOT EXISTS idx_snippets_library ON snippets(library_id);
-            CREATE INDEX IF NOT EXISTS idx_snippets_updated ON snippets(updated_at);
-            CREATE INDEX IF NOT EXISTS idx_libraries_user ON libraries(user_id);
+            )
             ",
-        )?;
+        )
+        .execute(&pool)
+        .await?;
 
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snippets_user ON snippets(user_id)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snippets_library ON snippets(library_id)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snippets_updated ON snippets(updated_at)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_libraries_user ON libraries(user_id)")
+            .execute(&pool)
+            .await?;
+
+        Ok(Self { pool })
     }
 
-    pub fn create_user(&self, api_key: &str) -> DbResult<String> {
-        let conn = self.conn.lock().unwrap();
+    pub async fn create_user(&self, api_key: &str) -> DbResult<String> {
         let user_id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
+        let api_key_hash = hash_api_key(api_key)?;
+        let api_key_prefix = compute_api_key_prefix(api_key);
 
-        conn.execute(
-            "INSERT INTO users (id, api_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![user_id, api_key, now, now],
-        )?;
+        sqlx::query("INSERT INTO users (id, api_key, api_key_prefix, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(&user_id)
+            .bind(&api_key_hash)
+            .bind(&api_key_prefix)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
 
-        // Create default library
         let default_lib_id = Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO libraries (id, user_id, name, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![default_lib_id, user_id, "default", now],
-        )?;
+        sqlx::query("INSERT INTO libraries (id, user_id, name, created_at) VALUES (?, ?, ?, ?)")
+            .bind(&default_lib_id)
+            .bind(&user_id)
+            .bind("default")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
 
         tracing::info!(
             "Created user {} with default library {}",
@@ -122,23 +216,27 @@ impl Database {
         Ok(user_id)
     }
 
-    pub fn get_user_by_api_key(&self, api_key: &str) -> DbResult<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+    pub async fn get_user_by_api_key(&self, api_key: &str) -> DbResult<Option<String>> {
+        let prefix = compute_api_key_prefix(api_key);
 
-        let mut stmt = conn.prepare("SELECT id FROM users WHERE api_key = ?1")?;
-        let mut rows = stmt.query(params![api_key])?;
+        // Use prefix to narrow candidate set; prefix may be NULL for legacy rows
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, api_key FROM users WHERE api_key_prefix = ? OR api_key_prefix IS NULL",
+        )
+        .bind(&prefix)
+        .fetch_all(&self.pool)
+        .await?;
 
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
-        } else {
-            Ok(None)
+        for (user_id, stored_hash) in rows {
+            if verify_api_key(api_key, &stored_hash) {
+                return Ok(Some(user_id));
+            }
         }
+
+        Ok(None)
     }
 
-    pub fn create_library(&self, user_id: &str, name: &str) -> DbResult<String> {
-        let conn = self.conn.lock().unwrap();
-
-        // Validate name (alphanumeric, dash, underscore, 1-64 chars)
+    pub async fn create_library(&self, user_id: &str, name: &str) -> DbResult<String> {
         if !name
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -148,22 +246,26 @@ impl Database {
                     .to_string(),
             ));
         }
-        if name.len() > 64 {
+        if name.is_empty() || name.len() > 64 {
             return Err(DbError::Conflict(
-                "Library name too long (max 64 characters)".to_string(),
+                "Library name must be 1-64 characters".to_string(),
             ));
         }
 
         let lib_id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
 
-        // Use INSERT OR IGNORE to check if it already exists
-        let result = conn.execute(
-            "INSERT OR IGNORE INTO libraries (id, user_id, name, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![lib_id, user_id, name, now],
-        )?;
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO libraries (id, user_id, name, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&lib_id)
+        .bind(user_id)
+        .bind(name)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
 
-        if result == 0 {
+        if result.rows_affected() == 0 {
             return Err(DbError::Conflict(format!(
                 "Library '{}' already exists",
                 name
@@ -173,86 +275,119 @@ impl Database {
         Ok(lib_id)
     }
 
-    pub fn list_libraries(
+    pub async fn list_libraries(
         &self,
         user_id: &str,
         limit: i32,
         offset: i32,
     ) -> DbResult<(Vec<Library>, i32)> {
-        let conn = self.conn.lock().unwrap();
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM libraries WHERE user_id = ? AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
 
-        // Get total count
-        let total: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM libraries WHERE user_id = ?1 AND deleted_at IS NULL",
-            params![user_id],
-            |row| row.get(0),
-        )?;
+        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT l.id, l.name, l.created_at, \
+                    (SELECT COUNT(*) FROM snippets s WHERE s.library_id = l.id AND s.deleted = 0) as snippet_count \
+             FROM libraries l \
+             WHERE l.user_id = ? AND l.deleted_at IS NULL \
+             ORDER BY l.name LIMIT ? OFFSET ?",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
 
-        let mut stmt = conn.prepare(
-            "SELECT l.id, l.name, l.created_at, 
-                    (SELECT COUNT(*) FROM snippets WHERE library_id = l.id AND deleted = 0) as count
-             FROM libraries l
-             WHERE l.user_id = ?1 AND l.deleted_at IS NULL
-             ORDER BY l.name
-             LIMIT ?2 OFFSET ?3",
-        )?;
-
-        let rows = stmt.query_map(params![user_id, limit, offset], |row| {
-            Ok(Library {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                created_at: row.get(2)?,
-                snippet_count: row.get(3)?,
+        let libraries = rows
+            .into_iter()
+            .map(|(id, name, created_at, snippet_count)| Library {
+                id,
+                name,
+                created_at,
+                snippet_count,
             })
-        })?;
+            .collect();
 
-        let mut libraries = Vec::new();
-        for row in rows {
-            libraries.push(row?);
-        }
-
-        Ok((libraries, total))
+        Ok((libraries, saturating_i32(total.0)))
     }
 
-    pub fn delete_library(&self, user_id: &str, library_id: &str) -> DbResult<()> {
-        let conn = self.conn.lock().unwrap();
+    pub async fn delete_library(&self, user_id: &str, library_id: &str) -> DbResult<()> {
         let now = Utc::now().timestamp();
 
-        // First, soft delete the library
-        let result = conn.execute(
-            "UPDATE libraries SET deleted_at = ?1 
-             WHERE id = ?2 AND user_id = ?3 AND deleted_at IS NULL",
-            params![now, library_id, user_id],
-        )?;
+        let result = sqlx::query(
+            "UPDATE libraries SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        )
+        .bind(now)
+        .bind(library_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
 
-        if result == 0 {
+        if result.rows_affected() == 0 {
             return Err(DbError::NotFound(
                 "Library not found or already deleted".to_string(),
             ));
         }
 
-        // Cascade delete all snippets in this library
-        conn.execute(
-            "UPDATE snippets SET deleted = 1, updated_at = ?1 WHERE library_id = ?2 AND deleted = 0",
-            params![now, library_id],
-        )?;
+        sqlx::query(
+            "UPDATE snippets SET deleted = 1, updated_at = ? WHERE library_id = ? AND deleted = 0",
+        )
+        .bind(now)
+        .bind(library_id)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
 
-    pub fn get_default_library(&self, user_id: &str) -> DbResult<String> {
-        let conn = self.conn.lock().unwrap();
-
-        let lib_id: String = conn.query_row(
-            "SELECT id FROM libraries WHERE user_id = ?1 AND name = 'default' AND deleted_at IS NULL",
-            params![user_id],
-            |row| row.get(0),
-        ).map_err(|_| DbError::NotFound("Default library not found".to_string()))?;
+    pub async fn get_default_library(&self, user_id: &str) -> DbResult<String> {
+        let (lib_id,): (String,) = sqlx::query_as(
+            "SELECT id FROM libraries WHERE user_id = ? AND name = 'default' AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| DbError::NotFound("Default library not found".to_string()))?;
 
         Ok(lib_id)
     }
 
-    pub fn get_snippets(
+    pub async fn verify_library_ownership(
+        &self,
+        user_id: &str,
+        library_id: &str,
+    ) -> DbResult<bool> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM libraries WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        )
+        .bind(library_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count > 0)
+    }
+
+    #[allow(dead_code)]
+    pub async fn verify_snippet_ownership(
+        &self,
+        user_id: &str,
+        library_id: &str,
+    ) -> DbResult<bool> {
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM snippets WHERE library_id = ? AND user_id = ?")
+                .bind(library_id)
+                .bind(user_id)
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(count > 0)
+    }
+
+    pub async fn get_snippets(
         &self,
         user_id: &str,
         library_id: &str,
@@ -260,60 +395,78 @@ impl Database {
         limit: i32,
         offset: i32,
     ) -> DbResult<(Vec<Snippet>, i32)> {
-        let conn = self.conn.lock().unwrap();
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM snippets \
+             WHERE user_id = ? AND library_id = ? AND updated_at > ? AND deleted = 0",
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
 
-        // Get total count
-        let total: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM snippets WHERE user_id = ?1 AND library_id = ?2 AND updated_at > ?3 AND deleted = 0",
-            params![user_id, library_id, since],
-            |row| row.get(0),
-        )?;
+        let rows: Vec<SnippetRow> =
+            sqlx::query_as(
+                "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
+                 FROM snippets \
+                 WHERE user_id = ? AND library_id = ? AND updated_at > ? AND deleted = 0 \
+                 ORDER BY updated_at DESC \
+                 LIMIT ? OFFSET ?",
+            )
+            .bind(user_id)
+            .bind(library_id)
+            .bind(since)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted 
-             FROM snippets 
-             WHERE user_id = ?1 AND library_id = ?2 AND updated_at > ?3 AND deleted = 0
-             ORDER BY updated_at DESC
-             LIMIT ?4 OFFSET ?5",
-        )?;
+        let snippets = rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    description,
+                    command,
+                    tags_str,
+                    created_at,
+                    updated_at,
+                    device_id,
+                    deleted,
+                    encrypted,
+                )| {
+                    let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                    Snippet {
+                        id,
+                        description,
+                        command,
+                        tags,
+                        created_at,
+                        updated_at,
+                        device_id,
+                        deleted: deleted != 0,
+                        encrypted: encrypted != 0,
+                    }
+                },
+            )
+            .collect();
 
-        let rows = stmt.query_map(params![user_id, library_id, since, limit, offset], |row| {
-            let tags_str: String = row.get(3)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-
-            Ok(Snippet {
-                id: row.get(0)?,
-                description: row.get(1)?,
-                command: row.get(2)?,
-                tags,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                device_id: row.get(6)?,
-                deleted: row.get::<_, i32>(7)? != 0,
-                encrypted: row.get::<_, i32>(8)? != 0,
-            })
-        })?;
-
-        let mut snippets = Vec::new();
-        for row in rows {
-            snippets.push(row?);
-        }
-
-        Ok((snippets, total))
+        Ok((snippets, saturating_i32(total.0)))
     }
 
-    pub fn upsert_snippet(
+    pub async fn upsert_snippet(
         &self,
         snippet: &Snippet,
         user_id: &str,
         library_id: &str,
     ) -> DbResult<()> {
-        let conn = self.conn.lock().unwrap();
         let tags_json = serde_json::to_string(&snippet.tags).unwrap_or_else(|_| "[]".to_string());
+        let deleted = snippet.deleted as i32;
+        let encrypted = snippet.encrypted as i32;
 
-        conn.execute(
+        sqlx::query(
             "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 description = excluded.description,
                 command = excluded.command,
@@ -323,31 +476,527 @@ impl Database {
                 deleted = excluded.deleted,
                 encrypted = excluded.encrypted
              WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id AND excluded.updated_at > snippets.updated_at",
-            params![
-                snippet.id,
-                user_id,
-                library_id,
-                snippet.description,
-                snippet.command,
-                tags_json,
-                snippet.created_at,
-                snippet.updated_at,
-                snippet.device_id,
-                snippet.deleted as i32,
-                snippet.encrypted as i32
-            ],
-        )?;
+        )
+        .bind(&snippet.id)
+        .bind(user_id)
+        .bind(library_id)
+        .bind(&snippet.description)
+        .bind(&snippet.command)
+        .bind(&tags_json)
+        .bind(snippet.created_at)
+        .bind(snippet.updated_at)
+        .bind(&snippet.device_id)
+        .bind(deleted)
+        .bind(encrypted)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
 
-    pub fn get_latest_timestamp(&self, user_id: &str, library_id: &str) -> DbResult<i64> {
-        let conn = self.conn.lock().unwrap();
+    pub async fn get_latest_timestamp(&self, user_id: &str, library_id: &str) -> DbResult<i64> {
+        let (timestamp,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(updated_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .fetch_one(&self.pool)
+        .await?;
 
-        let mut stmt =
-            conn.prepare("SELECT COALESCE(MAX(updated_at), 0) FROM snippets WHERE user_id = ?1 AND library_id = ?2")?;
-
-        let timestamp: i64 = stmt.query_row(params![user_id, library_id], |row| row.get(0))?;
         Ok(timestamp)
+    }
+
+    pub async fn migrate_plaintext_api_keys(&self) -> DbResult<usize> {
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, api_key, api_key_prefix FROM users")
+                .fetch_all(&self.pool)
+                .await?;
+
+        let mut migrated = 0;
+
+        for (user_id, stored, prefix) in rows {
+            let mut needs_update = false;
+            let mut new_hash = stored.clone();
+            let mut new_prefix = prefix.clone();
+
+            // Migrate plaintext to hashed
+            if !stored.starts_with("$argon2") {
+                new_hash = hash_api_key(&stored)?;
+                needs_update = true;
+            }
+
+            // Backfill prefix if missing
+            if prefix.is_none() {
+                // For plaintext keys, prefix from plaintext; for hashed keys, we can't
+                // compute prefix without the original key, so we skip those — they'll
+                // still work via the `IS NULL` fallback in get_user_by_api_key.
+                if !stored.starts_with("$argon2") {
+                    new_prefix = Some(compute_api_key_prefix(&stored));
+                    needs_update = true;
+                }
+            }
+
+            if needs_update {
+                sqlx::query("UPDATE users SET api_key = ?, api_key_prefix = ? WHERE id = ?")
+                    .bind(&new_hash)
+                    .bind(&new_prefix)
+                    .bind(&user_id)
+                    .execute(&self.pool)
+                    .await?;
+                migrated += 1;
+            }
+        }
+
+        if migrated > 0 {
+            tracing::info!("Migrated {} API keys (hash or prefix update)", migrated);
+        }
+
+        Ok(migrated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn setup_db() -> Database {
+        Database::connect("sqlite::memory:").await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_create_and_verify_user() {
+        let db = setup_db().await;
+        let api_key = "test-api-key-12345";
+
+        let user_id = db.create_user(api_key).await.unwrap();
+        assert!(!user_id.is_empty());
+
+        // Should find user with correct API key
+        let found = db.get_user_by_api_key(api_key).await.unwrap();
+        assert_eq!(found, Some(user_id));
+
+        // Should not find user with wrong API key
+        let not_found = db.get_user_by_api_key("wrong-key").await.unwrap();
+        assert_eq!(not_found, None);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_is_hashed() {
+        let db = setup_db().await;
+        let api_key = "plaintext-key-should-be-hashed";
+
+        let _user_id = db.create_user(api_key).await.unwrap();
+
+        // Verify the stored key is an Argon2 hash, not plaintext
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, api_key, api_key_prefix FROM users")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].1.starts_with("$argon2"),
+            "API key should be stored as Argon2 hash"
+        );
+        // Verify prefix is stored
+        assert!(rows[0].2.is_some(), "API key prefix should be stored");
+        assert_eq!(rows[0].2.as_ref().unwrap().len(), 8);
+    }
+
+    #[tokio::test]
+    async fn test_create_default_library() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+        assert!(!lib_id.is_empty());
+
+        let (libraries, total) = db.list_libraries(&user_id, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(libraries[0].name, "default");
+    }
+
+    #[tokio::test]
+    async fn test_create_additional_library() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+
+        let lib_id = db.create_library(&user_id, "work").await.unwrap();
+        assert!(!lib_id.is_empty());
+
+        let (_libraries, total) = db.list_libraries(&user_id, 10, 0).await.unwrap();
+        assert_eq!(total, 2);
+
+        // Duplicate should fail with Conflict
+        let err = db.create_library(&user_id, "work").await.unwrap_err();
+        assert!(matches!(err, DbError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_library_names() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+
+        // Empty name
+        assert!(db.create_library(&user_id, "").await.is_err());
+
+        // Name with slash
+        assert!(db.create_library(&user_id, "my/lib").await.is_err());
+
+        // Name too long
+        assert!(db.create_library(&user_id, &"a".repeat(65)).await.is_err());
+
+        // Valid names
+        assert!(db.create_library(&user_id, "valid-name").await.is_ok());
+        assert!(db.create_library(&user_id, "valid_name").await.is_ok());
+        assert!(db.create_library(&user_id, "ValidName123").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_and_get_snippets() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Test snippet".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec!["test".to_string()],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let (snippets, total) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(snippets[0].description, "Test snippet");
+        assert_eq!(snippets[0].command, "echo hello");
+        assert_eq!(snippets[0].tags, vec!["test"]);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_updates_existing() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Original".to_string(),
+            command: "echo old".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        // Update with newer timestamp
+        let updated = Snippet {
+            id: "snip-1".to_string(),
+            description: "Updated".to_string(),
+            command: "echo new".to_string(),
+            tags: vec!["updated".to_string()],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&updated, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].description, "Updated");
+        assert_eq!(snippets[0].command, "echo new");
+    }
+
+    #[tokio::test]
+    async fn test_upsert_rejects_older_timestamp() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        // Insert snippet at updated_at: 200
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Newer".to_string(),
+            command: "echo newer".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        // Attempt to upsert same ID with older timestamp (should be rejected)
+        let older = Snippet {
+            id: "snip-1".to_string(),
+            description: "Older".to_string(),
+            command: "echo older".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&older, &user_id, &lib_id).await.unwrap();
+
+        // Newer data should be preserved
+        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].description, "Newer");
+        assert_eq!(snippets[0].command, "echo newer");
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_timestamp() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        // Empty library should return 0
+        let ts = db.get_latest_timestamp(&user_id, &lib_id).await.unwrap();
+        assert_eq!(ts, 0);
+
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Test".to_string(),
+            command: "echo".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 500,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let ts = db.get_latest_timestamp(&user_id, &lib_id).await.unwrap();
+        assert_eq!(ts, 500);
+    }
+
+    #[tokio::test]
+    async fn test_delete_library() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.create_library(&user_id, "temp").await.unwrap();
+
+        // Add a snippet
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Test".to_string(),
+            command: "echo".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        // Delete the library
+        db.delete_library(&user_id, &lib_id).await.unwrap();
+
+        // Should fail to delete again
+        assert!(db.delete_library(&user_id, &lib_id).await.is_err());
+
+        // Snippet should be marked deleted
+        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        assert_eq!(snippets.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_migrate_plaintext_api_keys() {
+        let db = setup_db().await;
+        let user_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+
+        // Insert a plaintext API key directly (simulating old schema)
+        sqlx::query("INSERT INTO users (id, api_key, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind(&user_id)
+            .bind("plaintext-api-key")
+            .bind(now)
+            .bind(now)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Run migration
+        let migrated = db.migrate_plaintext_api_keys().await.unwrap();
+        assert_eq!(migrated, 1);
+
+        // Verify the key is now hashed
+        let (stored_hash,): (String,) = sqlx::query_as("SELECT api_key FROM users WHERE id = ?")
+            .bind(&user_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        assert!(stored_hash.starts_with("$argon2"));
+
+        // Verify prefix was backfilled
+        let (prefix,): (Option<String>,) =
+            sqlx::query_as("SELECT api_key_prefix FROM users WHERE id = ?")
+                .bind(&user_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            prefix.is_some(),
+            "API key prefix should be backfilled by migration"
+        );
+
+        // Verify the original key still works
+        let found = db.get_user_by_api_key("plaintext-api-key").await.unwrap();
+        assert_eq!(found, Some(user_id));
+
+        // Running migration again should migrate 0
+        let migrated_again = db.migrate_plaintext_api_keys().await.unwrap();
+        assert_eq!(migrated_again, 0);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_prefix_lookup() {
+        let db = setup_db().await;
+
+        // Create multiple users
+        let user1 = db.create_user("key-one-alpha").await.unwrap();
+        let user2 = db.create_user("key-two-beta").await.unwrap();
+        let user3 = db.create_user("key-three-gamma").await.unwrap();
+
+        // Each user's key should resolve correctly
+        assert_eq!(
+            db.get_user_by_api_key("key-one-alpha").await.unwrap(),
+            Some(user1)
+        );
+        assert_eq!(
+            db.get_user_by_api_key("key-two-beta").await.unwrap(),
+            Some(user2)
+        );
+        assert_eq!(
+            db.get_user_by_api_key("key-three-gamma").await.unwrap(),
+            Some(user3)
+        );
+        assert_eq!(db.get_user_by_api_key("nonexistent").await.unwrap(), None);
+
+        // Verify all rows have prefixes
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT api_key_prefix FROM users WHERE api_key_prefix IS NOT NULL")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_library_ownership_verification() {
+        let db = setup_db().await;
+        let user1_id = db.create_user("user1-api-key").await.unwrap();
+        let user2_id = db.create_user("user2-api-key").await.unwrap();
+        let lib_id = db.create_library(&user1_id, "private").await.unwrap();
+
+        assert!(db
+            .verify_library_ownership(&user1_id, &lib_id)
+            .await
+            .unwrap());
+        assert!(!db
+            .verify_library_ownership(&user2_id, &lib_id)
+            .await
+            .unwrap());
+
+        let nonexistent_lib = Uuid::new_v4().to_string();
+        assert!(!db
+            .verify_library_ownership(&user1_id, &nonexistent_lib)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_library_ownership_prevents_cross_user_access() {
+        let db = setup_db().await;
+        let user1_id = db.create_user("user1-key").await.unwrap();
+        let user2_id = db.create_user("user2-key").await.unwrap();
+        let user1_lib = db.create_library(&user1_id, "my-library").await.unwrap();
+
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "User 1 secret".to_string(),
+            command: "secret command".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        db.upsert_snippet(&snippet, &user1_id, &user1_lib)
+            .await
+            .unwrap();
+
+        assert!(db
+            .verify_snippet_ownership(&user1_id, &user1_lib)
+            .await
+            .unwrap());
+        assert!(!db
+            .verify_snippet_ownership(&user2_id, &user1_lib)
+            .await
+            .unwrap());
+
+        let (snippets, _) = db
+            .get_snippets(&user1_id, &user1_lib, 0, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(snippets.len(), 1);
+
+        let (snippets, _) = db
+            .get_snippets(&user2_id, &user1_lib, 0, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(snippets.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_deleted_library_not_owned() {
+        let db = setup_db().await;
+        let user_id = db.create_user("test-key").await.unwrap();
+        let lib_id = db.create_library(&user_id, "temp-lib").await.unwrap();
+
+        assert!(db
+            .verify_library_ownership(&user_id, &lib_id)
+            .await
+            .unwrap());
+
+        db.delete_library(&user_id, &lib_id).await.unwrap();
+
+        assert!(!db
+            .verify_library_ownership(&user_id, &lib_id)
+            .await
+            .unwrap());
     }
 }

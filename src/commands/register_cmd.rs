@@ -54,7 +54,12 @@ pub fn run(server: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> 
             }
 
             println!("Registration successful!");
-            println!("API key: {}", api_key);
+            let masked_key = if api_key.len() > 8 {
+                format!("{}...{}", &api_key[..4], &api_key[api_key.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            println!("API key: {}", masked_key);
             println!("Device ID: {}", device_id);
             println!(
                 "Saved to: {}",

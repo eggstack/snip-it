@@ -1,3 +1,20 @@
+//! Logging infrastructure using the `tracing` crate.
+//!
+//! Provides structured logging with file rotation and panic handling.
+//!
+//! # Log Levels
+//!
+//! - `trace`: Very detailed diagnostics
+//! - `debug`: Debug information
+//! - `info`: General information (default)
+//! - `warn`: Warning messages
+//! - `error`: Error messages
+//!
+//! # Log Locations
+//!
+//! - All platforms: `~/.config/snp/logs/`
+//!   (or `$XDG_CONFIG_HOME/snp/logs/` if set)
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -9,6 +26,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
 
+/// Configuration for logging behavior.
 pub struct LogConfig {
     pub log_dir: PathBuf,
     pub file_name: String,
@@ -28,16 +46,7 @@ impl Default for LogConfig {
 }
 
 pub fn get_default_log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("snp")
-        .join("logs")
-}
-
-pub fn get_default_config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("snp")
+    crate::utils::config::get_config_dir().join("logs")
 }
 
 pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +97,7 @@ pub fn shutdown_logging() {
     }
 }
 
-pub fn log_panic_info(panic_info: &std::panic::PanicHookInfo) {
+fn extract_panic_info(panic_info: &std::panic::PanicHookInfo) -> (String, String) {
     let location = panic_info
         .location()
         .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
@@ -101,6 +110,12 @@ pub fn log_panic_info(panic_info: &std::panic::PanicHookInfo) {
     } else {
         "Unknown panic".to_string()
     };
+
+    (location, message)
+}
+
+pub fn log_panic_info(panic_info: &std::panic::PanicHookInfo) {
+    let (location, message) = extract_panic_info(panic_info);
 
     tracing::error!(
         target: "panic",
@@ -116,18 +131,7 @@ pub fn setup_panic_handler() {
 
         log_panic_info(panic_info);
 
-        let location = panic_info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic".to_string()
-        };
+        let (location, message) = extract_panic_info(panic_info);
 
         eprintln!("PANIC at {}: {}", location, message);
     }));
@@ -190,11 +194,62 @@ pub fn log_startup_info() {
     tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
     tracing::info!("Platform: {}", std::env::consts::OS);
     tracing::info!("Architecture: {}", std::env::consts::ARCH);
-    tracing::info!("Config directory: {}", get_default_config_dir().display());
+    tracing::info!(
+        "Config directory: {}",
+        crate::utils::config::get_config_dir().display()
+    );
     tracing::info!("Log directory: {}", get_default_log_dir().display());
 }
 
 pub fn log_shutdown_info() {
     tracing::info!("=== SNP Application Shutting Down ===");
     shutdown_logging();
+}
+
+pub fn get_audit_log_path() -> std::io::Result<std::path::PathBuf> {
+    let cfg_dir = crate::utils::config::get_config_dir();
+    std::fs::create_dir_all(&cfg_dir)?;
+    Ok(cfg_dir.join("audit.log"))
+}
+
+pub fn audit_log(action: &str, snippet: &crate::library::Snippet) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Audit logging should not fail - errors are silently ignored by callers
+    // to avoid disrupting the main application flow for a non-critical feature
+    let log_path = match get_audit_log_path() {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    fn escape_pipe(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('|', "\\|")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    }
+
+    let log_entry = format!(
+        "{}|{}|{}|{}|{}\n",
+        timestamp,
+        action,
+        escape_pipe(&snippet.description),
+        escape_pipe(&snippet.command),
+        escape_pipe(&snippet.output)
+    );
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+
+    file.write_all(log_entry.as_bytes())?;
+    Ok(())
 }

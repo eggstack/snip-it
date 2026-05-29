@@ -1,5 +1,6 @@
-use crate::commands::{get_library_path, load_snippets, save_snippets};
+use crate::commands::{get_library_path, init_library_manager, load_snippets, save_snippets};
 use crate::error::SnipResult;
+use crate::library::Snippet;
 use crossterm::style::{style, Color, Stylize};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -30,11 +31,8 @@ pub fn run(
     config: Option<PathBuf>,
     library: Option<String>,
 ) -> SnipResult<()> {
-    let _config_path = config.or_else(|| {
-        let mut mgr = crate::library::LibraryManager::new().ok()?;
-        if let Err(e) = mgr.ensure_library_mode() {
-            eprintln!("Warning: Failed to ensure library mode: {}", e);
-        }
+    let fallback_path = config.or_else(|| {
+        let mgr = init_library_manager().ok()?;
         mgr.get_primary_library()
             .map(|l| mgr.get_libraries_dir().join(format!("{}.toml", l.filename)))
     });
@@ -79,27 +77,17 @@ pub fn run(
     let mut snippets = if let Some(ref p) = lib_path {
         crate::library::load_library(p)?
     } else {
-        load_snippets(&_config_path)?
+        load_snippets(&fallback_path)?
     };
 
-    snippets.snippets.push(crate::library::Snippet {
-        id: String::new(),
-        description,
-        output: String::new(),
-        tags,
-        command,
-        favorite: false,
-        folders: Vec::new(),
-        created_at: 0,
-        updated_at: 0,
-        device_id: String::new(),
-        deleted: false,
-    });
+    snippets
+        .snippets
+        .push(Snippet::new(description, command, tags));
 
     if let Some(ref p) = lib_path {
         crate::library::save_library(p, &snippets)?;
     } else {
-        save_snippets(&snippets, &_config_path)?;
+        save_snippets(&snippets, &fallback_path)?;
     }
     println!("Snippet added");
     Ok(())

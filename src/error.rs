@@ -1,34 +1,64 @@
+//! Error types and handling for snp.
+//!
+//! This module defines the [`SnipError`] enum which categorizes all errors
+//! that can occur during snp operations. Errors are grouped by domain:
+//! I/O operations, TOML parsing, clipboard access, command execution, and runtime errors.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use snp::error::{SnipError, SnipResult};
+//!
+//! fn read_config() -> SnipResult<String> {
+//!     std::fs::read_to_string("config.toml")
+//!         .map_err(|e| SnipError::io_error("read config", "config.toml", e))
+//! }
+//! ```
+
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-#[allow(dead_code)]
+/// All possible errors that can occur in snp.
+///
+/// Errors are categorized by domain to make debugging and handling easier.
+/// Each variant includes context about the operation that failed.
 #[derive(Debug)]
 pub enum SnipError {
-    /// I/O operation failures
+    /// I/O operation failures.
+    ///
+    /// Includes file read/write errors, directory creation failures, etc.
     Io {
         operation: String,
         path: Option<PathBuf>,
         source: io::Error,
     },
 
-    /// TOML parsing/serialization errors
+    /// TOML parsing or serialization errors.
+    ///
+    /// Indicates malformed TOML content or serialization failures.
     Toml {
         operation: String,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// Clipboard operation failures
+    /// Clipboard operation failures.
+    ///
+    /// Includes clipboard access errors and content transfer failures.
     Clipboard { operation: String, message: String },
 
-    /// Command execution failures
+    /// Command execution failures.
+    ///
+    /// Indicates errors when spawning or running external commands.
     Command {
         command: String,
         args: Vec<String>,
         source: io::Error,
     },
 
-    /// Runtime errors during operation
+    /// Runtime errors during operation.
+    ///
+    /// General-purpose errors for sync failures, validation errors, etc.
     Runtime {
         message: String,
         detail: Option<String>,
@@ -144,39 +174,3 @@ impl SnipError {
 
 // Convenient Result type
 pub type SnipResult<T> = Result<T, SnipError>;
-
-// Helper macros for error handling
-#[macro_export]
-macro_rules! snip_err {
-    ($variant:ident $(, $arg:expr)*) => {
-        Err(SnipError::$variant($( $arg ),*))
-    };
-}
-
-#[macro_export]
-macro_rules! snip_io_err {
-    ($op:expr, $path:expr, $source:expr) => {
-        Err(SnipError::io_error($op, $path, $source))
-    };
-}
-
-#[macro_export]
-macro_rules! snip_clipboard_err {
-    ($op:expr, $source:expr) => {
-        Err(SnipError::clipboard_error($op, $source))
-    };
-}
-
-#[macro_export]
-macro_rules! snip_toml_err {
-    ($op:expr, $source:expr) => {
-        Err(SnipError::toml_error($op, $source))
-    };
-}
-
-#[macro_export]
-macro_rules! snip_runtime_err {
-    ($msg:expr $(, $detail:expr)*) => {
-        Err(SnipError::runtime_error($msg, $( Some($detail) ),*))
-    };
-}

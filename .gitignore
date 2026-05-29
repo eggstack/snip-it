@@ -14,3 +14,15 @@
 # macOS artifacts
 .DS_Store
 ._*
+
+# TLS certificates and keys
+*.pem
+
+# Server database
+*.db
+
+# Generated proto code (built from build.rs)
+snip-proto/src/snip_proto.rs
+
+# Server binary
+snip-sync/snip-sync

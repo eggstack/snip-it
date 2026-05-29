@@ -3,18 +3,61 @@ use crate::library::{self, Snippet, Snippets};
 use crate::sync;
 use snip_proto::Snippet as ProtoSnippet;
 
-pub fn run_premade_sync(sync_settings: &SyncSettings) {
+impl From<&Snippet> for ProtoSnippet {
+    fn from(s: &Snippet) -> Self {
+        ProtoSnippet {
+            id: s.id.clone(),
+            description: s.description.clone(),
+            command: s.command.clone(),
+            tags: s.tags.clone(),
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+            device_id: s.device_id.clone(),
+            deleted: s.deleted,
+            encrypted: false,
+        }
+    }
+}
+
+fn ensure_sync_configured(settings: &SyncSettings) -> bool {
+    if !settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return false;
+    }
+    if settings.api_key.is_empty() {
+        eprintln!("Sync is enabled but no API key configured");
+        return false;
+    }
+    true
+}
+
+fn create_sync_client(
+    runtime: &tokio::runtime::Runtime,
+    settings: &SyncSettings,
+) -> Option<sync::SyncClient> {
+    runtime
+        .block_on(sync::SyncClient::create(settings.clone()))
+        .ok()
+}
+
+fn check_server_health(
+    runtime: &tokio::runtime::Runtime,
+    client: &mut sync::SyncClient,
+    server_url: &str,
+) -> bool {
+    match runtime.block_on(client.health_check()) {
+        Ok(true) => true,
+        _ => {
+            eprintln!("Server is not reachable at {}", server_url);
+            false
+        }
+    }
+}
+
+pub fn run_premade_sync(sync_settings: &SyncSettings, runtime: &tokio::runtime::Runtime) {
     if !sync_settings.enabled || sync_settings.api_key.is_empty() {
         return;
     }
-
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to create async runtime: {}", e);
-            return;
-        }
-    };
 
     let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
         Ok(c) => c,
@@ -88,26 +131,19 @@ pub fn run_sync(
         SyncDirection::Bidirectional
     };
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !ensure_sync_configured(sync_settings) {
         return;
     }
 
-    if sync_settings.api_key.is_empty() {
-        eprintln!("Sync is enabled but no API key configured");
-        return;
-    }
-
-    let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to create sync client: {}", e);
+    let mut client = match create_sync_client(runtime, sync_settings) {
+        Some(c) => c,
+        None => {
+            eprintln!("Failed to create sync client");
             return;
         }
     };
 
-    if let Ok(false) = runtime.block_on(client.health_check()) {
-        eprintln!("Server is not reachable at {}", sync_settings.server_url);
+    if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
         return;
     }
 
@@ -247,17 +283,7 @@ pub fn run_sync(
                 .snippets
                 .iter()
                 .filter(|s| s.updated_at >= _last_sync || s.created_at >= _last_sync)
-                .map(|s| ProtoSnippet {
-                    id: s.id.clone(),
-                    description: s.description.clone(),
-                    command: s.command.clone(),
-                    tags: s.tags.clone(),
-                    created_at: s.created_at,
-                    updated_at: s.updated_at,
-                    device_id: s.device_id.clone(),
-                    deleted: s.deleted,
-                    encrypted: false,
-                })
+                .map(ProtoSnippet::from)
                 .collect();
 
             if local_snippets.is_empty() && direction == SyncDirection::Push {
@@ -354,10 +380,31 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for server_snip in server_snippets {
+        seen_ids.insert(server_snip.id.clone());
+
         if server_snip.deleted {
+            // Server deleted this snippet. If a local copy exists, mark it as
+            // deleted (preserving the data) rather than silently removing it.
+            if let Some(local_snip) = local_by_id.get(&server_snip.id) {
+                if !local_snip.deleted {
+                    merged_snippets.push(Snippet {
+                        id: local_snip.id.clone(),
+                        description: local_snip.description.clone(),
+                        command: local_snip.command.clone(),
+                        output: local_snip.output.clone(),
+                        tags: local_snip.tags.clone(),
+                        folders: local_snip.folders.clone(),
+                        favorite: local_snip.favorite,
+                        created_at: local_snip.created_at,
+                        updated_at: server_snip.updated_at,
+                        device_id: local_snip.device_id.clone(),
+                        deleted: true,
+                    });
+                }
+                // If both server and local agree deleted, skip entirely
+            }
             continue;
         }
-        seen_ids.insert(server_snip.id.clone());
 
         if let Some(local_snip) = local_by_id.get(&server_snip.id) {
             if server_snip.updated_at > local_snip.updated_at {
@@ -405,5 +452,229 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     Snippets {
         snippets: merged_snippets,
         folders: local.folders.clone(),
+    }
+}
+
+pub fn run_default_sync(runtime: &tokio::runtime::Runtime) {
+    let settings = crate::config::load_sync_settings().unwrap_or_default();
+    run_sync(&settings, None, false, false, false, runtime);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::{Snippet, Snippets};
+    use snip_proto::Snippet as ProtoSnippet;
+
+    fn make_local_snippet(id: &str, desc: &str, cmd: &str, updated_at: i64) -> Snippet {
+        Snippet {
+            id: id.to_string(),
+            description: desc.to_string(),
+            command: cmd.to_string(),
+            tags: vec!["local".to_string()],
+            folders: vec!["work".to_string()],
+            output: "cached".to_string(),
+            favorite: true,
+            created_at: 100,
+            updated_at,
+            device_id: "device-1".to_string(),
+            deleted: false,
+        }
+    }
+
+    fn make_server_snippet(id: &str, desc: &str, cmd: &str, updated_at: i64) -> ProtoSnippet {
+        ProtoSnippet {
+            id: id.to_string(),
+            description: desc.to_string(),
+            command: cmd.to_string(),
+            tags: vec!["server".to_string()],
+            created_at: 100,
+            updated_at,
+            device_id: "device-2".to_string(),
+            deleted: false,
+            encrypted: false,
+        }
+    }
+
+    #[test]
+    fn test_server_wins_with_newer_timestamp() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local desc", "local cmd", 100)],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("1", "server desc", "server cmd", 200)];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 1);
+        assert_eq!(merged.snippets[0].description, "server desc");
+        assert_eq!(merged.snippets[0].command, "server cmd");
+        assert_eq!(merged.snippets[0].updated_at, 200);
+        // Local-only fields preserved
+        assert_eq!(merged.snippets[0].output, "cached");
+        assert_eq!(merged.snippets[0].folders, vec!["work"]);
+        assert!(merged.snippets[0].favorite);
+    }
+
+    #[test]
+    fn test_local_wins_with_newer_timestamp() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local desc", "local cmd", 300)],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("1", "server desc", "server cmd", 200)];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 1);
+        assert_eq!(merged.snippets[0].description, "local desc");
+        assert_eq!(merged.snippets[0].command, "local cmd");
+    }
+
+    #[test]
+    fn test_new_server_snippet_added() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 100)],
+            folders: vec![],
+        };
+        let server = vec![
+            make_server_snippet("1", "local", "echo 1", 100),
+            make_server_snippet("2", "new server", "echo 2", 150),
+        ];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 2);
+        let ids: Vec<&str> = merged.snippets.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"1"));
+        assert!(ids.contains(&"2"));
+    }
+
+    #[test]
+    fn test_deleted_server_snippet_excluded() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 100)],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "deleted".to_string(),
+            command: "echo deleted".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: true,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        // Server-deleted snippet with existing local copy: local marked deleted, data preserved
+        assert_eq!(merged.snippets.len(), 1);
+        assert!(merged.snippets[0].deleted);
+        assert_eq!(merged.snippets[0].description, "local");
+        assert_eq!(merged.snippets[0].command, "echo 1");
+    }
+
+    #[test]
+    fn test_server_delete_local_already_deleted_excluded() {
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "deleted locally".to_string(),
+                command: "echo 1".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: String::new(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d".to_string(),
+                deleted: true,
+            }],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "deleted".to_string(),
+            command: "echo deleted".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: true,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        // Both agree deleted: excluded entirely
+        assert_eq!(merged.snippets.len(), 0);
+    }
+
+    #[test]
+    fn test_local_only_snippet_preserved() {
+        let local = Snippets {
+            snippets: vec![
+                make_local_snippet("1", "local 1", "echo 1", 100),
+                make_local_snippet("2", "local 2", "echo 2", 100),
+            ],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("1", "server 1", "echo 1", 100)];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 2);
+        assert!(merged.snippets.iter().any(|s| s.id == "2"));
+    }
+
+    #[test]
+    fn test_local_deleted_snippet_not_preserved() {
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "deleted locally".to_string(),
+                command: "echo 1".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: String::new(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d".to_string(),
+                deleted: true,
+            }],
+            folders: vec![],
+        };
+        let server = vec![];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 0);
+    }
+
+    #[test]
+    fn test_merge_preserves_folders() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 100)],
+            folders: vec!["work".to_string(), "personal".to_string()],
+        };
+        let server = vec![];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.folders, vec!["work", "personal"]);
+    }
+
+    #[test]
+    fn test_merge_sorted_by_updated_at_descending() {
+        let local = Snippets {
+            snippets: vec![
+                make_local_snippet("1", "old", "echo 1", 100),
+                make_local_snippet("2", "mid", "echo 2", 200),
+            ],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("3", "new", "echo 3", 300)];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 3);
+        assert_eq!(merged.snippets[0].updated_at, 300);
+        assert_eq!(merged.snippets[1].updated_at, 200);
+        assert_eq!(merged.snippets[2].updated_at, 100);
     }
 }
