@@ -9,6 +9,10 @@ use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_contain
 use serde::{Deserialize, Serialize};
 use std::fs;
 
+const KEYCHAIN_SERVICE: &str = "snp-sync";
+const KEYCHAIN_USER: &str = "api-key";
+const KEYCHAIN_MARKER: &str = "@keychain";
+
 /// Sync configuration settings.
 ///
 /// These settings control how snippets are synchronized with a remote server,
@@ -17,7 +21,11 @@ use std::fs;
 pub struct SyncSettings {
     pub enabled: bool,
     pub server_url: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        serialize_with = "serialize_api_key",
+        deserialize_with = "deserialize_api_key"
+    )]
     pub api_key: String,
     #[serde(default)]
     pub device_id: String,
@@ -28,6 +36,62 @@ pub struct SyncSettings {
     pub sync_direction: SyncDirection,
     #[serde(default)]
     pub clipboard_auto_clear_seconds: Option<u32>,
+}
+
+fn serialize_api_key<S: serde::Serializer>(
+    api_key: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    if api_key.is_empty() {
+        return serializer.serialize_str("");
+    }
+    match keychain_store(api_key) {
+        Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
+        Err(e) => {
+            tracing::warn!("Keychain unavailable, storing API key in config file: {}", e);
+            serializer.serialize_str(api_key)
+        }
+    }
+}
+
+fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let raw: String = Deserialize::deserialize(deserializer)?;
+    if raw == KEYCHAIN_MARKER {
+        match keychain_retrieve() {
+            Ok(key) => Ok(key),
+            Err(e) => {
+                tracing::warn!(
+                    "Keychain unavailable, cannot retrieve API key: {}. \
+                     Re-save sync settings to store key in config file as fallback.",
+                    e
+                );
+                Ok(String::new())
+            }
+        }
+    } else {
+        Ok(raw)
+    }
+}
+
+fn keychain_store(api_key: &str) -> SnipResult<()> {
+    let entry =
+        keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+            .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
+    entry
+        .set_password(api_key)
+        .map_err(|e| SnipError::runtime_error("keychain store", Some(&e.to_string())))?;
+    Ok(())
+}
+
+fn keychain_retrieve() -> SnipResult<String> {
+    let entry =
+        keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+            .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
+    entry
+        .get_password()
+        .map_err(|e| SnipError::runtime_error("keychain retrieve", Some(&e.to_string())))
 }
 
 impl Default for SyncSettings {
@@ -58,6 +122,8 @@ pub enum SyncDirection {
 }
 
 fn default_sync_url() -> String {
+    // NOTE: For production use, the server requires TLS or a reverse proxy.
+    // The default localhost URL uses plaintext HTTP for development only.
     "http://localhost:50051".to_string()
 }
 
@@ -116,7 +182,22 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let config: SyncConfigFile = toml::from_str(&fixed_content)
         .map_err(|e| SnipError::toml_error("parse sync config", e))?;
 
-    Ok(config.settings.sync)
+    let mut settings = config.settings.sync;
+
+    // Migrate existing plaintext API key to keychain on first load
+    if !settings.api_key.is_empty() && settings.api_key != KEYCHAIN_MARKER {
+        if let Err(e) = keychain_store(&settings.api_key) {
+            tracing::warn!("Failed to migrate API key to keychain: {}", e);
+        } else {
+            settings.api_key = KEYCHAIN_MARKER.to_string();
+            // Re-save to persist the marker
+            if let Err(e) = save_sync_settings(&settings) {
+                tracing::warn!("Failed to save keychain marker: {}", e);
+            }
+        }
+    }
+
+    Ok(settings)
 }
 
 pub fn get_sync_settings() -> SyncSettings {
@@ -169,7 +250,11 @@ mod tests {
         let toml_str = toml::to_string_pretty(&settings).unwrap();
         assert!(toml_str.contains("enabled = true"));
         assert!(toml_str.contains("server_url = \"https://sync.example.com\""));
-        assert!(toml_str.contains("api_key = \"test-key-123\""));
+        // API key is stored in keychain if available, otherwise plaintext
+        assert!(
+            toml_str.contains("api_key = \"@keychain\"")
+                || toml_str.contains("api_key = \"test-key-123\"")
+        );
         assert!(toml_str.contains("device_id = \"device-456\""));
         assert!(toml_str.contains("sync_interval_minutes = 60"));
         assert!(toml_str.contains("auto_sync = true"));

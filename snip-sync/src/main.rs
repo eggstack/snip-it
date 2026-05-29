@@ -325,12 +325,25 @@ impl SnippetSync for SnipSyncService {
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
         self.record_request("register");
-        let req = request.into_inner();
+
+        // Use peer IP address for rate limiting (device_id is client-controlled)
+        let rate_limit_key = request
+            .metadata()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                    .map(|info| info.0.ip().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
 
         if !self
             .rate_limiter
             .allow(
-                &req.device_id,
+                &rate_limit_key,
                 self.config.rate_limit_per_minute as usize,
                 Duration::from_secs(60),
             )
@@ -341,6 +354,8 @@ impl SnippetSync for SnipSyncService {
                 "Rate limit exceeded for registration",
             ));
         }
+
+        let _req = request.into_inner();
 
         let api_key = uuid::Uuid::new_v4().to_string();
 
@@ -367,6 +382,19 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<SnippetList>, Status> {
         self.record_request("get_snippets");
         let req = request.into_inner();
+
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
 
         let user_id = self
             .db
@@ -711,6 +739,19 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
+        if !self
+            .rate_limiter
+            .allow(
+                &req.api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
+
         let user_id = self
             .db
             .get_user_by_api_key(&req.api_key)
@@ -995,7 +1036,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         premade_manager,
     };
 
-    let cors = if cors_allowed_origins.is_empty() {
+    let cors_allow_all = std::env::var("CORS_ALLOW_ALL")
+        .ok()
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    let cors = if cors_allow_all {
+        tracing::info!("CORS: allowing all origins (CORS_ALLOW_ALL=true)");
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else if cors_allowed_origins.is_empty() {
         tracing::warn!(
             "CORS: no origins configured. Cross-origin requests will be blocked. \
              Set CORS_ALLOWED_ORIGINS to allow specific origins, or CORS_ALLOW_ALL=true for permissive CORS."

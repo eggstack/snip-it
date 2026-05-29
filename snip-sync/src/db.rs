@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
 
-const ARGON2_MEMORY_KIB: u32 = 1 << 6;
+const ARGON2_MEMORY_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
 const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
 

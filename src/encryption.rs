@@ -29,7 +29,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use thiserror::Error;
 use zeroize::Zeroize;
 
-const ARGON2_MEMORY_COST_KIB: u32 = 1 << 6;
+const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
 const ARGON2_TIME_COST: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
 
