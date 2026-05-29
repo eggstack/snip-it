@@ -1,128 +1,117 @@
-# Sync System
-
-[← Back to Overview](overview.md)
+# Sync Infrastructure (`sync.rs`, `sync_commands.rs`)
 
 ## Overview
 
-The sync system enables bidirectional snippet synchronization between the CLI client and a remote `snip-sync` server. All data is encrypted end-to-end using AES-256-GCM.
+Sync enables bidirectional synchronization of snippets between the local client and the snip-sync server. It uses gRPC for transport and implements end-to-end encryption (AES-256-GCM) for snippet data.
 
-## gRPC Client
+## Sync Client (`sync.rs`)
 
-**File**: `src/sync.rs` (384 lines)
+### SyncClient
 
-### `SyncClient`
-
-Wraps a tonic gRPC client with encryption handling:
+Wraps the tonic gRPC client for the `SnippetSync` service defined in `snip-proto/`.
 
 ```rust
 pub struct SyncClient {
-    client: SnippetSyncClient<Channel>,
-    settings: SyncSettings,
+    channel: Channel,
+    retry_config: RetryConfig,
 }
 ```
 
-### Connection
+### Key Methods
 
-- TLS with native certificate roots
-- 10s connect timeout, 30s request timeout
-- HTTP/2 assumed for gRPC
+- `sync_snippets()` — Full bidirectional sync
+- `get_snippets()` — Pull from server
+- `push_snippets()` — Push to server
+- `register_device()` — Device registration
+- `list_libraries()` / `create_library()` / `delete_library()` — Library management
+- `list_premade()` / `get_premade()` — Premade libraries
 
-### Retry Strategy
+### Retry Logic
 
-Exponential backoff for all gRPC calls:
-- Max 3 retries
-- Initial delay: 100ms
-- Max delay: 5000ms
-- Doubles each attempt
+The `retry_grpc!` macro implements exponential backoff with jitter for transient failures.
 
-### Methods
+## Sync Orchestration (`sync_commands.rs`)
 
-| Method | Description |
-|--------|-------------|
-| `create(settings)` | Connect to server with TLS |
-| `sync_encrypted(local, last_sync, library_id)` | Full bidirectional sync |
-| `health_check()` | Server health probe |
-| `register(server_url)` | Create new account, get API key |
-| `list_libraries()` | List server-side libraries |
-| `create_library(name)` | Create library on server |
-| `list_premade_libraries()` | List available premade libraries |
-| `get_premade_library(filename)` | Download premade library content |
+### run_sync()
 
-### Encryption Flow
+Entry point for sync operations. Handles:
+1. Load local snippets
+2. Connect to server (with retry)
+3. Determine sync direction
+4. Pull → Merge → Push flow
 
-Before sending snippets to server:
-1. Serialize snippet data (description, command, tags) as JSON
-2. Encrypt JSON with user's API key via `encryption::encrypt()`
-3. Send encrypted blob in `command` field with `encrypted: true`
-
-On receipt:
-1. Check `encrypted` flag
-2. If true, decrypt with `encryption::decrypt()`
-3. Deserialize JSON back to snippet fields
-
-## Sync Commands
-
-**File**: `src/sync_commands.rs` (680 lines)
-
-Orchestration layer between CLI commands and the gRPC client.
-
-### `run_sync()`
-
-Main sync entry point:
-
-1. Validate sync is configured (enabled + API key)
-2. Create sync client, check server health
-3. Resolve libraries to sync (single or all)
-4. For each library:
-   - Load local snippets
-   - Generate UUIDs for snippets missing IDs
-   - Push changed local snippets (if Push or Bidirectional)
-   - Pull server snippets (if Pull or Bidirectional)
-   - Merge using last-write-wins strategy
-   - Save merged result
-   - Update last_sync timestamp
-
-### Merge Strategy
+### Sync Direction
 
 ```rust
-fn merge_snippets(local: &Snippets, server: &[ProtoSnippet]) -> Snippets
+pub enum SyncDirection {
+    Push,           // Local → Server only
+    Pull,           // Server → Local only
+    Bidirectional,  // Both ways
+}
 ```
 
-Rules:
-1. **Server-deleted** → Mark local copy as `deleted: true` (preserve data)
-2. **Both deleted** → Exclude entirely
-3. **Server newer** (`updated_at > local.updated_at`) → Server wins, preserve local-only fields (`output`, `folders`, `favorite`)
-4. **Local newer or equal** → Local wins
-5. **Server-only** → Add to local
-6. **Local-only** → Keep in local
-7. **Sort** → By `updated_at` descending
+## Merge Strategy (`merge_snippets()`)
 
-### Local-Only Fields
+**Last-write-wins** based on `updated_at` timestamp:
 
-These fields are never synced to the server and are preserved when server wins the merge:
-- `output` — Output file path
-- `folders` — Folder organization
-- `favorite` — Starred flag
+1. **Server wins** (server `updated_at` > local `updated_at`):
+   - Server snippet replaces local (unless server `deleted: true`)
+   - Local-only fields `output`, `folders`, `favorite` are **preserved**
 
-### Library Linking
+2. **Local wins** (local `updated_at` > server `updated_at`):
+   - Local snippet pushed to server
 
-`sync_cmd.rs` handles linking local libraries to server libraries:
-- Lists server libraries
-- Creates local library files for server libraries
-- Links via `library_id` in `libraries.toml`
-- Conflict resolution: skip, overwrite with server, or rename local
+3. **Server deleted: true**:
+   - Local copy marked `deleted: true` (data preserved, not shown in UI)
+   - Never fully deleted to allow recovery
 
-### Premade Library Sync
+4. **Both deleted** (both have `deleted: true`):
+   - Excluded from merged result
 
-`run_premade_sync()` — Downloads missing premade libraries from server:
-- Lists available premade libraries
-- Skips already-downloaded ones
-- Saves to `~/.config/snp/premade/`
+5. **Local-only** (snippet exists only locally or only server):
+   - Preserved as-is
 
-## Key Files
+### Result
 
-- `src/sync.rs` — gRPC client, TLS setup, retry logic, encrypt/decrypt wrappers
-- `src/sync_commands.rs` — Sync orchestration, merge logic, library linking
-- `src/commands/sync_cmd.rs` — CLI sync command, server library linking
-- `src/commands/premade_cmd.rs` — Premade library browsing/downloading
-- `src/commands/register_cmd.rs` — Account registration
+Merged snippets sorted by `updated_at` descending.
+
+## Encryption
+
+- **Key Derivation**: Argon2id from password/passphrase
+- **Cipher**: AES-256-GCM
+- **Payload**: `EncryptedPayload { salt, nonce, ciphertext }`
+- `encrypt_snippet()` / `decrypt_snippet()` in `sync.rs`
+
+## Protocol Buffers (`snip-proto/`)
+
+Defines `SnippetSync` service:
+
+```protobuf
+service SnippetSync {
+    rpc Sync(SyncRequest) returns (SyncResponse);
+    rpc GetSnippets(GetRequest) returns (GetResponse);
+    rpc PushSnippets(PushRequest) returns (PushResponse);
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    rpc CreateLibrary(CreateLibraryRequest) returns (CreateLibraryResponse);
+    rpc ListLibraries(ListLibrariesRequest) returns (ListLibrariesResponse);
+    rpc DeleteLibrary(DeleteLibraryRequest) returns (DeleteLibraryResponse);
+    rpc ListPremadeLibraries(Empty) returns (ListPremadeLibrariesResponse);
+    rpc GetPremadeLibrary(GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
+    rpc Health(HealthRequest) returns (HealthResponse);
+}
+```
+
+## Settings
+
+`~/.config/snp/sync.toml`:
+- `server_url` — gRPC server address
+- `api_key` — Stored in system keychain via `keyring` crate
+- `direction` — Sync direction
+- `interval` — Periodic sync interval (for cron)
+
+## Error Handling
+
+- `SnipError::Sync` for sync-specific errors
+- `SnipError::Grpc` for gRPC transport errors
+- `SnipError::Encryption` for crypto errors
+- Network failures trigger retry with exponential backoff
