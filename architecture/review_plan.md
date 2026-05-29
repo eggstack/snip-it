@@ -118,6 +118,30 @@ grep -r "src/" architecture/<module>.md
 
 ## Completion Criteria
 
-- [ ] All 12 module reviews written to `plans/`
-- [ ] Stale pruning report written to `plans/stale_pruning_report.md`
-- [ ] All `plans/*.md` files committed
+- [x] All 12 module reviews written to `plans/`
+- [x] Stale pruning report written to `plans/stale_pruning_report.md`
+- [x] All `plans/*.md` files committed
+
+## Completion Status
+
+**Completed:** 2026-05-29
+
+All 13 output files (12 reviews + 1 stale pruning report) have been generated and committed. Each review verifies architecture document claims against actual source code and identifies bugs, design issues, security concerns, and performance issues with priority rankings.
+
+### Output Files
+
+| File | Module | Key Findings |
+|------|--------|--------------|
+| `plans/overview_review.md` | overview | Argon2 memory cost 64 KiB (OWASP min: 19 MiB), rate limiting gaps on 2 endpoints, CORS warning misleading |
+| `plans/cli_review.md` | cli | Sync fall-through bug (critical), `_config` flag silently ignored in 4 commands, 0 tests in 12 of 13 modules |
+| `plans/clipboard_review.md` | clipboard | Auto-clear race condition, `copypasta` compiled without default features |
+| `plans/config_review.md` | config | Migration silently loses data, API key in plaintext, dead test |
+| `plans/core_review.md` | core | `set_primary()` no-ops on missing filename, duplicate metadata on repeated imports, zero timestamps in `Snippet::new()` |
+| `plans/encryption_review.md` | encryption | Argon2 64 KiB (P0), `hash_password` API misuse, no parameter versioning |
+| `plans/logging_review.md` | logging | `config.level` dead field, shutdown logs after guard drop, audit log no file locking |
+| `plans/proto_review.md` | proto | Missing `cargo:rerun-if-changed`, generated code drift risk, no proto versioning |
+| `plans/server_review.md` | server | CORS blocks instead of allows, registration rate limit bypassable, no TLS, Argon2 64 KiB |
+| `plans/sync_review.md` | sync | Encryption failures cause permanent snippet loss, Argon2 per-snippet redundant, API key for both auth+encryption |
+| `plans/ui_review.md` | ui | HashSet linear scan instead of `contains()`, 1416-line monolith, `Mutex<Theme>` unnecessary for `Copy` type |
+| `plans/utils_review.md` | utils | Unmatched `<` silently drops character, angle-bracket parsing duplicated 3x, `once_cell` vs `LazyLock` inconsistency |
+| `plans/stale_pruning_report.md` | all | No orphaned docs, no stale references, 3 minor claim updates needed |
