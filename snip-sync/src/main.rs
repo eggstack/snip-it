@@ -252,8 +252,9 @@ struct SnipSyncService {
 }
 
 impl SnipSyncService {
-    fn record_request(&self, _method: &str) {
+    fn record_request(&self, method: &str) {
         self.metrics.requests_total.inc();
+        tracing::debug!("Request: {}", method);
     }
 
     fn record_rate_limit(&self) {
@@ -270,6 +271,36 @@ impl SnipSyncService {
 
     fn record_library_op(&self) {
         self.metrics.library_operations_total.inc();
+    }
+
+    async fn authenticate_and_rate_limit(
+        &self,
+        api_key: &str,
+    ) -> Result<String, Status> {
+        if !self
+            .rate_limiter
+            .allow(
+                api_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
+
+        let user_id = self
+            .db
+            .get_user_by_api_key(api_key)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| {
+                self.record_auth_failure();
+                Status::unauthenticated("Invalid API key")
+            })?;
+
+        Ok(user_id)
     }
 
     fn validate_snippet(&self, snippet: &ProtoSnippet) -> Result<(), Status> {
@@ -383,29 +414,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("get_snippets");
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                tracing::warn!("Invalid API key attempted");
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db
@@ -473,28 +482,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("push_snippets");
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db
@@ -563,28 +551,7 @@ impl SnippetSync for SnipSyncService {
         self.record_sync();
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db
@@ -608,10 +575,13 @@ impl SnippetSync for SnipSyncService {
             req.library_id
         };
 
+        let mut skipped_ids = Vec::new();
+
         for snippet in &req.local_snippets {
             if snippet.updated_at > req.last_sync_timestamp {
                 if let Err(e) = self.validate_snippet(snippet) {
                     tracing::warn!("Snippet validation failed: {}", e);
+                    skipped_ids.push(snippet.id.clone());
                     continue;
                 }
 
@@ -633,6 +603,7 @@ impl SnippetSync for SnipSyncService {
                     .await
                 {
                     tracing::warn!("Failed to upsert snippet: {}", e);
+                    skipped_ids.push(snippet.id.clone());
                 }
             }
         }
@@ -670,13 +641,15 @@ impl SnippetSync for SnipSyncService {
             })
             .collect();
 
+        let skipped_count = skipped_ids.len() as i32;
+
         Ok(Response::new(SyncResponse {
             success: true,
             message: "Sync completed".to_string(),
             snippets: proto_snippets,
             server_timestamp: timestamp,
-            skipped_count: 0,
-            skipped_ids: vec![],
+            skipped_count,
+            skipped_ids,
         }))
     }
 
@@ -688,28 +661,7 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
@@ -739,28 +691,7 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)
@@ -802,28 +733,7 @@ impl SnippetSync for SnipSyncService {
         self.record_library_op();
         let req = request.into_inner();
 
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
-
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         // Prevent deleting default library
         if req.library_id.is_empty() || req.library_id == "default" {
@@ -850,28 +760,7 @@ impl SnippetSync for SnipSyncService {
 
         let req = request.into_inner();
 
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
-
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let libraries = self.premade_manager.list();
 
@@ -900,28 +789,7 @@ impl SnippetSync for SnipSyncService {
 
         let req = request.into_inner();
 
-        let user_id = self
-            .db
-            .get_user_by_api_key(&req.api_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                self.record_auth_failure();
-                Status::unauthenticated("Invalid API key")
-            })?;
-
-        if !self
-            .rate_limiter
-            .allow(
-                &req.api_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
-            .await
-        {
-            self.record_rate_limit();
-            return Err(Status::resource_exhausted("Rate limit exceeded"));
-        }
+        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         if req.filename.is_empty() {
             return Err(Status::invalid_argument("Filename is required"));

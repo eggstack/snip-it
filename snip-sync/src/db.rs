@@ -14,12 +14,9 @@ const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
 
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum DbError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Not found: {0}")]
     NotFound(String),
     #[error("Conflict: {0}")]
@@ -289,10 +286,11 @@ impl Database {
         .await?;
 
         let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
-            "SELECT l.id, l.name, l.created_at, \
-                    (SELECT COUNT(*) FROM snippets s WHERE s.library_id = l.id AND s.deleted = 0) as snippet_count \
+            "SELECT l.id, l.name, l.created_at, COUNT(s.id) as snippet_count \
              FROM libraries l \
+             LEFT JOIN snippets s ON s.library_id = l.id AND s.deleted = 0 \
              WHERE l.user_id = ? AND l.deleted_at IS NULL \
+             GROUP BY l.id \
              ORDER BY l.name LIMIT ? OFFSET ?",
         )
         .bind(user_id)
@@ -367,22 +365,6 @@ impl Database {
         .bind(user_id)
         .fetch_one(&self.pool)
         .await?;
-
-        Ok(count > 0)
-    }
-
-    #[allow(dead_code)]
-    pub async fn verify_snippet_ownership(
-        &self,
-        user_id: &str,
-        library_id: &str,
-    ) -> DbResult<bool> {
-        let (count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM snippets WHERE library_id = ? AND user_id = ?")
-                .bind(library_id)
-                .bind(user_id)
-                .fetch_one(&self.pool)
-                .await?;
 
         Ok(count > 0)
     }
@@ -475,7 +457,9 @@ impl Database {
                 device_id = excluded.device_id,
                 deleted = excluded.deleted,
                 encrypted = excluded.encrypted
-             WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id AND excluded.updated_at > snippets.updated_at",
+             WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
+           AND (excluded.updated_at > snippets.updated_at \
+                OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id))",
         )
         .bind(&snippet.id)
         .bind(user_id)
@@ -958,15 +942,6 @@ mod tests {
         db.upsert_snippet(&snippet, &user1_id, &user1_lib)
             .await
             .unwrap();
-
-        assert!(db
-            .verify_snippet_ownership(&user1_id, &user1_lib)
-            .await
-            .unwrap());
-        assert!(!db
-            .verify_snippet_ownership(&user2_id, &user1_lib)
-            .await
-            .unwrap());
 
         let (snippets, _) = db
             .get_snippets(&user1_id, &user1_lib, 0, 10, 0)
