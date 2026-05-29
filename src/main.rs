@@ -103,8 +103,6 @@ enum Commands {
     Run {
         #[arg(short, long)]
         filter: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync: bool,
         #[arg(short, long)]
@@ -115,8 +113,6 @@ enum Commands {
     Clip {
         #[arg(short, long)]
         filter: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync: bool,
         #[arg(short, long)]
@@ -127,8 +123,6 @@ enum Commands {
     Search {
         #[arg(short, long)]
         filter: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync: bool,
         #[arg(short, long)]
@@ -138,8 +132,6 @@ enum Commands {
     #[command(alias = "e")]
     Edit {
         #[arg(short, long)]
-        config: Option<PathBuf>,
-        #[arg(short, long)]
         library: Option<String>,
     },
     /// Show keybindings
@@ -148,8 +140,6 @@ enum Commands {
     /// Sync snippets with server
     #[command(alias = "y")]
     Sync {
-        #[arg(short, long)]
-        config: Option<PathBuf>,
         #[arg(short, long)]
         library: Option<String>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -246,34 +236,30 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             filter,
             sync,
             library,
-            config,
         } => {
-            commands::run_cmd::run(filter, sync, library, config, &RUNTIME)?;
+            commands::run_cmd::run(filter, sync, library, None, &RUNTIME)?;
         }
         Commands::Clip {
             filter,
             sync,
             library,
-            config,
         } => {
-            commands::clip_cmd::run(filter, sync, library, config, &RUNTIME)?;
+            commands::clip_cmd::run(filter, sync, library, None, &RUNTIME)?;
         }
         Commands::Search {
             filter,
             sync,
             library,
-            config,
         } => {
-            commands::search_cmd::run(filter, sync, library, config, &RUNTIME)?;
+            commands::search_cmd::run(filter, sync, library, None, &RUNTIME)?;
         }
-        Commands::Edit { config, library } => {
-            commands::edit_cmd::run(library, config)?;
+        Commands::Edit { library } => {
+            commands::edit_cmd::run(library, None)?;
         }
         Commands::Keybindings => {
             commands::keybindings_cmd::run()?;
         }
         Commands::Sync {
-            config,
             library,
             servers,
             non_interactive,
@@ -281,7 +267,7 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             pull_only,
         } => {
             commands::sync_cmd::run(
-                config,
+                None,
                 library,
                 servers,
                 non_interactive,

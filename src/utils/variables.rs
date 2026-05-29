@@ -3,7 +3,12 @@
 //! Handles parsing and expansion of `<variable>` and `<variable=default>` syntax
 //! in snippet commands. Supports escaped angle brackets (`\<` and `\>`).
 
-use crate::ui::Variable;
+/// A parsed variable from a snippet command.
+#[derive(Clone)]
+pub struct Variable {
+    pub name: String,
+    pub default: Option<String>,
+}
 
 /// Strips escape sequences from a command string.
 /// Converts `\<` to `<` and `\>` to `>` for shell execution.

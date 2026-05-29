@@ -117,11 +117,7 @@ impl FilterState {
     }
 }
 
-#[derive(Clone)]
-pub struct Variable {
-    pub name: String,
-    pub default: Option<String>,
-}
+pub use crate::utils::variables::Variable;
 
 /// Result of prompting the user for variable values.
 pub enum VariablePromptResult {
@@ -309,7 +305,7 @@ fn highlight_command(command: &str) -> Line<'static> {
                 }
             }
 
-            let is_kw = shell_keywords.iter().any(|kw| word == *kw);
+            let is_kw = shell_keywords.contains(word.as_str());
             let style = if is_kw { color_keyword } else { color_default };
             spans.push(Span::styled(word, style));
         }

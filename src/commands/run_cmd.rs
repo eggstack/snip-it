@@ -96,21 +96,35 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
 
         let shell = get_shell();
-        let status = Command::new(&shell)
+        let output = Command::new(&shell)
             .arg("-c")
             .arg(&final_command)
             .stdout(output_file)
-            .status()?;
+            .output()?;
 
-        Ok(handle_command_result(&final_command, status, snippet))
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                eprintln!("Error: {}", stderr);
+            }
+        }
+
+        Ok(handle_command_result(&final_command, output.status, snippet))
     } else {
         let shell = get_shell();
-        let status = Command::new(&shell)
+        let output = Command::new(&shell)
             .arg("-c")
             .arg(&final_command)
-            .status()?;
+            .output()?;
 
-        Ok(handle_command_result(&final_command, status, snippet))
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                eprintln!("Error: {}", stderr);
+            }
+        }
+
+        Ok(handle_command_result(&final_command, output.status, snippet))
     }
 }
 

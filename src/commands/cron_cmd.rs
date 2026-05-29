@@ -1,7 +1,14 @@
-use crate::error::SnipResult;
+use crate::error::{SnipError, SnipResult};
 use std::io::{self, Write};
 
 pub fn run(interval: u32) -> SnipResult<()> {
+    if interval == 0 {
+        return Err(SnipError::runtime_error(
+            "Invalid interval",
+            Some("Interval must be at least 1 minute"),
+        ));
+    }
+
     let binary_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "snp".to_string());
