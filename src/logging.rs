@@ -58,8 +58,16 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("snp=info,warn"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        let level = match config.level {
+            Level::ERROR => "error",
+            Level::WARN => "warn",
+            Level::INFO => "info",
+            Level::DEBUG => "debug",
+            Level::TRACE => "trace",
+        };
+        EnvFilter::new(format!("snp={}", level))
+    });
 
     let file_layer = fmt::layer()
         .with_writer(non_blocking)
@@ -92,8 +100,8 @@ pub fn init_default_logging() {
 
 pub fn shutdown_logging() {
     if let Some(guard) = LOG_GUARD.lock().unwrap().take() {
-        drop(guard);
         tracing::info!("Logging shutdown complete");
+        drop(guard);
     }
 }
 

@@ -7,7 +7,7 @@
 //! - **Windows**: Uses `clipboard-win` crate
 //! - **macOS/Linux**: Uses `copypasta` crate
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -20,23 +20,23 @@ use copypasta::{ClipboardContext, ClipboardProvider};
 use crate::error::{SnipError, SnipResult};
 use crate::logging::log_clipboard_operation;
 
-static CLIPBOARD_CLEAR_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static CLIPBOARD_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn schedule_clipboard_clear(seconds: u32) {
     if seconds == 0 {
         return;
     }
 
-    if CLIPBOARD_CLEAR_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
+    let gen = CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
     let handle = thread::spawn(move || {
         thread::sleep(Duration::from_secs(seconds as u64));
-        if let Err(e) = clear_clipboard() {
-            tracing::debug!("Auto-clear clipboard failed: {}", e);
+        // Only clear if no newer schedule has been requested
+        if gen == CLIPBOARD_GENERATION.load(Ordering::SeqCst) {
+            if let Err(e) = clear_clipboard() {
+                tracing::debug!("Auto-clear clipboard failed: {}", e);
+            }
         }
-        CLIPBOARD_CLEAR_SCHEDULED.store(false, Ordering::SeqCst);
     });
 
     std::mem::drop(handle);

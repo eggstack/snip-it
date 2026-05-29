@@ -299,10 +299,24 @@ pub fn run_sync(
                     if response.success {
                         let new_timestamp = response.server_timestamp;
 
+                        // Don't advance last_sync when encryption failures occurred,
+                        // so failed snippets are retried on next sync.
+                        let has_failures = response.skipped_count > 0;
+
                         if direction == SyncDirection::Push {
-                            let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                            if !has_failures {
+                                let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                            }
                             completed += 1;
-                            results.push((lib_name.clone(), true, String::new()));
+                            if has_failures {
+                                results.push((
+                                    lib_name.clone(),
+                                    true,
+                                    format!("{} snippets skipped (will retry)", response.skipped_count),
+                                ));
+                            } else {
+                                results.push((lib_name.clone(), true, String::new()));
+                            }
                             continue;
                         }
 
@@ -316,13 +330,15 @@ pub fn run_sync(
                             continue;
                         }
 
-                        let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                        if !has_failures {
+                            let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                        }
 
-                        if response.skipped_count > 0 {
+                        if has_failures {
                             results.push((
                                 lib_name.clone(),
                                 true,
-                                format!("{} skipped", response.skipped_count),
+                                format!("{} snippets skipped (will retry)", response.skipped_count),
                             ));
                         } else {
                             results.push((lib_name.clone(), true, String::new()));

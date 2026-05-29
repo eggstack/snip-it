@@ -344,6 +344,12 @@ Snippets = []
     }
 
     pub fn set_primary(&mut self, filename: &str) -> SnipResult<()> {
+        if !self.config.libraries.iter().any(|lib| lib.filename == filename) {
+            return Err(SnipError::runtime_error(
+                "Library not found",
+                Some(&format!("No library with filename '{}'", filename)),
+            ));
+        }
         for lib in &mut self.config.libraries {
             lib.is_primary = lib.filename == filename;
         }
@@ -399,6 +405,13 @@ Snippets = []
             let default_content = "# Imported from server\n\nSnippets = []\n";
             fs::write(&path, default_content)
                 .map_err(|e| SnipError::io_error("create imported library", path.clone(), e))?;
+        }
+
+        // Update existing entry if one with the same filename already exists
+        if let Some(existing) = self.get_library_by_filename_mut(&filename) {
+            existing.library_id = server_id.to_string();
+            self.save_config()?;
+            return Ok(path);
         }
 
         let is_first = self.config.libraries.is_empty();

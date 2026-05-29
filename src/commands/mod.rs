@@ -103,13 +103,10 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         return Ok(crate::library::Snippets::default());
     }
 
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            crate::logging::log_config_operation("load", &path, &Err(&e.to_string()));
-            return Ok(crate::library::Snippets::default());
-        }
-    };
+    let content = fs::read_to_string(&path).map_err(|e| {
+        crate::logging::log_config_operation("load", &path, &Err(&e.to_string()));
+        SnipError::io_error("read snippets file", path.clone(), e)
+    })?;
 
     if content.is_empty() || content.trim().is_empty() {
         return Ok(crate::library::Snippets::default());
@@ -117,25 +114,22 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
 
     let fixed_content = fix_invalid_toml_escapes(&content);
 
-    let snippets: crate::library::Snippets = match toml::from_str(&fixed_content) {
-        Ok(s) => s,
-        Err(e) => {
-            crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
-            let backup_path = path.with_extension("toml.bak");
-            if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
-                eprintln!(
-                    "Warning: Failed to parse config and could not create backup: {} (backup error: {})",
-                    e, backup_err
-                );
-            } else {
-                eprintln!(
-                    "Warning: Failed to parse config file. Backup saved to {}. Using empty defaults.",
-                    backup_path.display()
-                );
-            }
-            crate::library::Snippets::default()
+    let snippets: crate::library::Snippets = toml::from_str(&fixed_content).map_err(|e| {
+        crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
+        let backup_path = path.with_extension("toml.bak");
+        if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
+            eprintln!(
+                "Warning: Failed to parse config and could not create backup: {} (backup error: {})",
+                e, backup_err
+            );
+        } else {
+            eprintln!(
+                "Warning: Failed to parse config file. Backup saved to {}.",
+                backup_path.display()
+            );
         }
-    };
+        SnipError::toml_error("parse snippets file", e)
+    })?;
 
     Ok(snippets)
 }

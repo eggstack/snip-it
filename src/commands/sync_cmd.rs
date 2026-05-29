@@ -223,31 +223,17 @@ pub fn run(
             println!("\nPulling snippets from server...");
             crate::sync_commands::run_sync(
                 &sync_settings,
-                None,
+                library.as_deref(),
                 non_interactive,
                 push_only,
                 pull_only,
                 runtime,
             );
-            return Ok(());
+            Ok(())
         }
-        Err(e) => eprintln!("Failed to pull libraries: {}", e),
-    }
-
-    if !sync_settings.api_key.is_empty() && !sync_settings.device_id.is_empty() {
-        let linked = list_and_link_server_libraries(runtime, &sync_settings, non_interactive)?;
-        if linked {
-            println!("\nSyncing libraries...");
+        Err(e) => {
+            eprintln!("Failed to pull libraries: {}", e);
+            Ok(())
         }
     }
-
-    crate::sync_commands::run_sync(
-        &sync_settings,
-        library.as_deref(),
-        non_interactive,
-        push_only,
-        pull_only,
-        runtime,
-    );
-    Ok(())
 }
