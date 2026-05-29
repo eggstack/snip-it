@@ -49,13 +49,14 @@ Output to `plans/<module>_review.md` with:
 | proto | `snip-proto/` |
 | server | `snip-sync/src/` |
 | sync | `src/sync.rs`, `src/sync_commands.rs` |
-| ui | `src/ui.rs` |
+| ui | `src/ui/` |
 | utils | `src/utils/` |
 
 ## Common Issues Found
 
-1. **Argon2 memory cost**: Check `encryption.rs` for `ARGON2_MEMORY_COST_KIB`. OWASP minimum is 19 MiB (19456 KiB).
-2. **Rate limiting gaps**: Check all gRPC endpoints in `snip-sync/src/main.rs` for `self.rate_limiter.allow()` calls.
-3. **CORS configuration**: Check `snip-sync/src/main.rs` for `CorsLayer` construction when origins list is empty.
-4. **Sync timestamp updates**: Check if `last_sync` is updated even when snippets fail encryption/decryption.
+1. **Argon2 memory cost**: Check `encryption.rs` for `ARGON2_MEMORY_COST_KIB`. Currently `1 << 14` (16 MiB). OWASP minimum is 19 MiB.
+2. **Rate limiting gaps**: All endpoints should use `authenticate_and_rate_limit()`. Check `snip-sync/src/main.rs`.
+3. **CORS configuration**: `CORS_ALLOW_ALL` env var enables permissive mode. When not set and no origins configured, cross-origin requests are blocked.
+4. **Sync timestamp updates**: `last_sync` is NOT updated when encryption failures occur (`has_failures` check in `sync_commands.rs`).
 5. **Dead code**: Look for `#[allow(dead_code)]`, unused variables prefixed with `_`, and unreachable branches.
+6. **TOCTOU races**: File existence checks should use `fs::read_to_string()` error handling instead of `exists()` + `read()` patterns.

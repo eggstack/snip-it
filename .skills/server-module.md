@@ -3,31 +3,12 @@
 ## Purpose
 Guide agents through working with the snip-sync server (`snip-sync/src/`).
 
-## Critical Security Issues
+## Security Notes
 
-### 1. CORS Misconfiguration
-**Location**: `snip-sync/src/main.rs:998-1003`
-
-When `cors_allowed_origins` is empty (default), `CorsLayer::new()` is used with NO allow-origin rules, which **blocks all cross-origin requests**. The config comment says "Leave empty to allow all origins" — this is wrong.
-
-**Fix**: Either use `CorsLayer::very_permissive()` when origins is empty, or update the config comment to reflect deny-all behavior.
-
-### 2. Registration Rate Limit Bypassable
-**Location**: `snip-sync/src/main.rs:330-337`
-
-Rate limiting uses `req.device_id` which is client-controlled. A client can rotate `device_id` to bypass rate limiting entirely.
-
-**Fix**: Rate limit by IP address or a server-generated token, not client-provided `device_id`.
-
-### 3. No TLS
-**Location**: `snip-sync/src/main.rs:920-922`
-
-API keys are transmitted in plaintext over gRPC. Production deployments must use a reverse proxy with TLS.
-
-### 4. Argon2 Memory Cost Too Low
-**Location**: `snip-sync/src/db.rs:12`
-
-`ARGON2_MEMORY_KIB = 1 << 6 = 64 KiB`. OWASP minimum is 19 MiB (19456 KiB). Makes API keys easier to brute-force if database is compromised.
+- **TLS**: Server defaults to HTTP. Production deployments must use a reverse proxy with TLS. Documentation at startup and in `config.rs` notes this requirement.
+- **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS. When not set and no origins configured, cross-origin requests are blocked.
+- **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. Registration rate limits use IP address (not client-controlled device_id).
+- **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs:12`.
 
 ## Server Architecture
 
@@ -54,6 +35,7 @@ snip-sync/
 | `HTTP_ADDR` | `0.0.0.0:50050` | HTTP listen address |
 | `DATABASE_URL` | `snip_sync.db` | SQLite database path |
 | `CORS_ALLOWED_ORIGINS` | empty (deny-all) | Comma-separated origins |
+| `CORS_ALLOW_ALL` | `false` | Set to `true` or `1` to allow all origins |
 | `METRICS_USERNAME` | empty | Basic auth for /metrics |
 | `METRICS_PASSWORD` | empty | Basic auth for /metrics |
 | `RUST_LOG` | `info` | Log level |
@@ -63,21 +45,15 @@ snip-sync/
 | RPC | Auth | Rate Limited | Description |
 |-----|------|-------------|-------------|
 | Health | No | No | Server health check |
-| Register | No | Yes (by device_id — bypassable) | Create user + API key |
-| GetSnippets | Yes | No | Fetch snippets for library |
+| Register | No | Yes (by IP address) | Create user + API key |
+| GetSnippets | Yes | Yes | Fetch snippets for library |
 | PushSnippets | Yes | Yes | Upload snippets to server |
 | Sync | Yes | Yes | Full bidirectional sync |
 | CreateLibrary | Yes | Yes | Create new library |
-| ListLibraries | Yes | No | List user's libraries |
+| ListLibraries | Yes | Yes | List user's libraries |
 | DeleteLibrary | Yes | Yes | Soft-delete library |
 | ListPremadeLibraries | Yes | Yes | Browse premade catalog |
 | GetPremadeLibrary | Yes | Yes | Download premade library |
-
-## Dead Code
-
-- `verify_snippet_ownership` in `db.rs:374-388` — unused
-- `DbError::Unauthorized` in `db.rs:22-23` — never constructed
-- `record_request` `_method` parameter in `main.rs:255` — ignored
 
 ## Testing
 

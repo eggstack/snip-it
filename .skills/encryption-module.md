@@ -3,22 +3,16 @@
 ## Purpose
 Guide agents through working with the encryption module (`src/encryption.rs`).
 
-## Critical Issue: Argon2 Memory Cost
+## Argon2 Memory Cost
 
 **Location**: `src/encryption.rs:32`
 ```rust
-const ARGON2_MEMORY_COST_KIB: u32 = 1 << 6;  // 64 KiB
+const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
 ```
 
-OWASP recommends a **minimum of 19 MiB (19,456 KiB)** for Argon2id. The current value is 300x below the minimum.
+Memory cost is set to `1 << 14` (16 MiB). OWASP recommends a minimum of 19 MiB (19,456 KiB).
 
-**IMPORTANT**: Changing this is a **breaking change**. All existing encrypted snippets will fail to decrypt because the same salt + different parameters produces a different derived key.
-
-**Fix approach**:
-1. Add parameter versioning to `EncryptedPayload` (1-byte version header)
-2. Increase memory cost to `1 << 14` (16 MiB) minimum
-3. Support decrypting with old parameters for backward compatibility
-4. Re-encrypt on next sync after upgrade
+**WARNING**: Changing Argon2 parameters is a **breaking change**. All existing encrypted snippets will fail to decrypt because the same salt + different parameters produces a different derived key. If changing, add parameter versioning to `EncryptedPayload` (1-byte version header) and support decrypting with old parameters for backward compatibility.
 
 ## Key Derivation
 

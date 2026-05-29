@@ -3,17 +3,7 @@
 ## Purpose
 Guide agents through working with the sync module (`src/sync.rs`, `src/sync_commands.rs`, `src/commands/sync_cmd.rs`).
 
-## Critical Known Issues
-
-### BUG-4/5: Encryption Failures Cause Permanent Snippet Loss
-**Location**: `src/sync.rs:96-107`, `src/sync_commands.rs:319`
-
-When encryption fails for snippets, they are silently excluded from the sync request. The `last_sync` timestamp is still updated, meaning those snippets will never be retried on subsequent syncs.
-
-**Fix approach**: When encryption fails, either:
-- (a) Abort the sync and don't update `last_sync`, OR
-- (b) Track failed snippet IDs and exclude them from the `last_sync` update, OR
-- (c) Write failed snippet IDs to a retry queue file
+## Known Issues
 
 ### PERF-3: Argon2 Key Derivation Per-Snippet
 **Location**: `src/sync.rs:331`, `src/encryption.rs:117`
@@ -34,8 +24,10 @@ run_sync() flow:
    - Pull: fetch server snippets, decrypt, merge locally
    - Bidirectional: both directions
 7. Save merged snippets
-8. Update last_sync timestamp
+8. Update last_sync timestamp (only if no encryption failures)
 ```
+
+**Note:** Encryption failures are tracked via `skipped_count`/`skipped_ids` in the response. `last_sync` is NOT updated when there are failures, preventing permanent snippet loss.
 
 ## Merge Strategy
 
