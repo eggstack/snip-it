@@ -24,7 +24,7 @@ The binary `snp` is built with `clap` for argument parsing. On startup:
 fn dispatch_command(cli: Commands) -> SnipResult<()>
 ```
 
-All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `run()` function.
+All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `run()` function, except `premade_cmd` and `library_cmd` which use subcommand-dispatched functions (`run_list`, `run_get`, etc.).
 
 ## Subcommands
 
