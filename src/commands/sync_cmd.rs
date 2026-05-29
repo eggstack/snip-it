@@ -121,45 +121,6 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
     }
 }
 
-fn list_and_link_server_libraries(
-    runtime: &tokio::runtime::Runtime,
-    sync_settings: &SyncSettings,
-    non_interactive: bool,
-) -> SnipResult<bool> {
-    use crate::sync::SyncClient;
-
-    let mut client = runtime
-        .block_on(SyncClient::create(sync_settings.clone()))
-        .map_err(|e| {
-            SnipError::runtime_error("Failed to create sync client", Some(&e.to_string()))
-        })?;
-
-    match runtime.block_on(client.list_libraries()) {
-        Ok(libs) => {
-            let mut mgr = init_library_manager().map_err(|e| {
-                SnipError::runtime_error(
-                    "Failed to initialize library manager",
-                    Some(&e.to_string()),
-                )
-            })?;
-
-            let mut linked_any = false;
-
-            for lib in libs {
-                if link_server_library(&lib, &mut mgr, non_interactive, false) {
-                    linked_any = true;
-                }
-            }
-
-            Ok(linked_any)
-        }
-        Err(e) => Err(SnipError::runtime_error(
-            "Failed to fetch server libraries",
-            Some(&e.to_string()),
-        )),
-    }
-}
-
 pub fn run(
     _config: Option<PathBuf>,
     library: Option<String>,

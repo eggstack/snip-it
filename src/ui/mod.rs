@@ -120,6 +120,7 @@ pub fn select_snippet(
     )
 }
 
+#[allow(clippy::collapsible_match)]
 fn select_snippet_inner(
     descriptions: &[String],
     commands: &[String],

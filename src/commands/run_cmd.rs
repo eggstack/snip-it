@@ -32,13 +32,11 @@ fn validate_output_path(path: &str) -> SnipResult<()> {
                     Some("Output path must not contain '..'"),
                 ));
             }
-            std::path::Component::Normal(c) => {
-                if c.to_string_lossy().contains("..") {
-                    return Err(SnipError::runtime_error(
-                        "Invalid output path",
-                        Some("Output path must not contain '..'"),
-                    ));
-                }
+            std::path::Component::Normal(c) if c.to_string_lossy().contains("..") => {
+                return Err(SnipError::runtime_error(
+                    "Invalid output path",
+                    Some("Output path must not contain '..'"),
+                ));
             }
             _ => {}
         }
@@ -109,7 +107,11 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             }
         }
 
-        Ok(handle_command_result(&final_command, output.status, snippet))
+        Ok(handle_command_result(
+            &final_command,
+            output.status,
+            snippet,
+        ))
     } else {
         let shell = get_shell();
         let output = Command::new(&shell)
@@ -124,7 +126,11 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             }
         }
 
-        Ok(handle_command_result(&final_command, output.status, snippet))
+        Ok(handle_command_result(
+            &final_command,
+            output.status,
+            snippet,
+        ))
     }
 }
 

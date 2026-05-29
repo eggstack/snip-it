@@ -48,7 +48,10 @@ fn serialize_api_key<S: serde::Serializer>(
     match keychain_store(api_key) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
         Err(e) => {
-            tracing::warn!("Keychain unavailable, storing API key in config file: {}", e);
+            tracing::warn!(
+                "Keychain unavailable, storing API key in config file: {}",
+                e
+            );
             serializer.serialize_str(api_key)
         }
     }
@@ -76,9 +79,8 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
 }
 
 fn keychain_store(api_key: &str) -> SnipResult<()> {
-    let entry =
-        keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
-            .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+        .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry
         .set_password(api_key)
         .map_err(|e| SnipError::runtime_error("keychain store", Some(&e.to_string())))?;
@@ -86,9 +88,8 @@ fn keychain_store(api_key: &str) -> SnipResult<()> {
 }
 
 fn keychain_retrieve() -> SnipResult<String> {
-    let entry =
-        keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
-            .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+        .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry
         .get_password()
         .map_err(|e| SnipError::runtime_error("keychain retrieve", Some(&e.to_string())))

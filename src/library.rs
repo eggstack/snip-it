@@ -344,7 +344,12 @@ Snippets = []
     }
 
     pub fn set_primary(&mut self, filename: &str) -> SnipResult<()> {
-        if !self.config.libraries.iter().any(|lib| lib.filename == filename) {
+        if !self
+            .config
+            .libraries
+            .iter()
+            .any(|lib| lib.filename == filename)
+        {
             return Err(SnipError::runtime_error(
                 "Library not found",
                 Some(&format!("No library with filename '{}'", filename)),

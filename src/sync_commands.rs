@@ -312,7 +312,10 @@ pub fn run_sync(
                                 results.push((
                                     lib_name.clone(),
                                     true,
-                                    format!("{} snippets skipped (will retry)", response.skipped_count),
+                                    format!(
+                                        "{} snippets skipped (will retry)",
+                                        response.skipped_count
+                                    ),
                                 ));
                             } else {
                                 results.push((lib_name.clone(), true, String::new()));
@@ -463,7 +466,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         }
     }
 
-    merged_snippets.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    merged_snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
 
     Snippets {
         snippets: merged_snippets,
