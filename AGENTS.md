@@ -141,7 +141,7 @@ snip-it/
 
 ## Remediation Plan
 
-The consolidated remediation plan is in `plan.md`. It contains all items from the architecture reviews in `plans/`, organized into parallel implementation waves.
+The consolidated remediation plan is in `plan.md`. It contains all items from the architecture reviews, organized into parallel implementation waves.
 
 **Current status:** Plan generated and verified. Implementation not yet started.
 
