@@ -142,30 +142,11 @@ snip-it/
 - `~/.config/snp/logs/` — Rolling log files (daily rotation)
 - `~/.config/snp/audit.log` — Audit log for snippet operations
 
-## Remediation Plan
+## Deferred Items
 
-The consolidated remediation plan is in `plan.md`. It contains all items from the architecture reviews, organized into parallel implementation waves.
-
-**Current status:** All remediation plan items completed. See plan.md for details.
-
-## Known Issues (Quick Reference)
-
-For full details and fix instructions, see `plan.md`.
-
-| Severity | Issue | Status |
-|----------|-------|--------|
-| P0 | Argon2 memory cost 64 KiB (OWASP min: 19 MiB) | ✅ Fixed |
-| P0 | API key stored as plaintext in `sync.toml` | ✅ Fixed (keychain) |
-| P0 | CORS `CORS_ALLOW_ALL` env var referenced but never read | ✅ Fixed |
-| P0 | Registration rate limit bypassable via client-controlled `device_id` | ✅ Fixed |
-| P1 | Sync fall-through: `list_libraries` failure doesn't stop sync | ✅ Fixed |
-| P1 | Encryption failures cause permanent snippet loss (last_sync advances) | ✅ Fixed |
-| P1 | `set_primary()` silently succeeds on nonexistent filename | ✅ Fixed |
-| P1 | `add_server_library()` creates duplicate metadata entries | ✅ Fixed |
-| P1 | `load_snippets()` returns empty on parse error (data loss risk) | ✅ Fixed |
-| P1 | Clipboard auto-clear race condition clears new content | ✅ Fixed |
-| P1 | `shutdown_logging` logs after dropping file writer guard | ✅ Fixed |
-| P2 | `ui.rs` is 1416 lines — should be split into submodules | ✅ Fixed |
+Two optional items remain in `plan.md`:
+- **Command injection warning** (safe mode for snippet execution)
+- **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
 
 ## Testing Notes
 
