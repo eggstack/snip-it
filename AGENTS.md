@@ -98,6 +98,7 @@ snip-it/
 - `fix_invalid_toml_escapes()` converts double-quoted to single-quoted (raw literals)
 - `quote_strings_containing_backslashes()` does the reverse on save
 - Both live in `src/utils/toml_helpers.rs`
+- **Important:** These only handle single-line strings. Triple-quoted (`"""`) TOML strings are not processed (acceptable since snippet commands are single-line)
 
 ### Snippet Variables
 - Syntax: `<name>` or `<name=default>` in command strings
@@ -105,6 +106,7 @@ snip-it/
 - Parsed by `utils/variables.rs::parse_variables()` and `extract_variable_tokens()`
 - Expanded by `utils/variables.rs::expand_command()`
 - UI prompt in `ui.rs::prompt_variables_inner()`
+- **Known edge case:** Unmatched `<` without `>` creates phantom variable and drops the `<` character
 
 ### TUI Architecture
 - Single-loop event-driven TUI in `ui.rs::select_snippet_inner()`
@@ -112,6 +114,7 @@ snip-it/
 - Fuzzy matching via `fuzzy-matcher` (skim algorithm)
 - Debounced filter updates (150ms)
 - Theme: dark (default) or bright, controlled by `SNP_THEME` env var
+- **Note:** `ACTIVE_THEME` uses `Mutex<Theme>` but `Theme` is `Copy` — `LazyLock` would be simpler
 
 ### Sync Merge Strategy
 - Last-write-wins based on `updated_at` timestamp
@@ -136,28 +139,30 @@ snip-it/
 - `~/.config/snp/logs/` — Rolling log files (daily rotation)
 - `~/.config/snp/audit.log` — Audit log for snippet operations
 
-## Architecture Reviews
+## Remediation Plan
 
-Completed architecture reviews are in `plans/`:
+The consolidated remediation plan is in `plan.md`. It contains all items from the architecture reviews in `plans/`, organized into parallel implementation waves.
 
-```
-plans/
-├── overview_review.md     # System-wide findings (Argon2 64 KiB, rate limiting gaps)
-├── cli_review.md          # Sync fall-through bug, _config flag ignored
-├── clipboard_review.md    # Auto-clear race condition
-├── config_review.md       # Migration data loss, API key plaintext
-├── core_review.md         # set_primary() no-op, duplicate metadata
-├── encryption_review.md   # Argon2 64 KiB (OWASP min: 19 MiB), hash_password misuse
-├── logging_review.md      # Dead config.level, shutdown log after guard drop
-├── proto_review.md        # Missing rerun-if-changed, generated code drift
-├── server_review.md       # CORS misconfiguration, rate limit bypass, no TLS
-├── sync_review.md         # Encryption failures cause permanent snippet loss
-├── ui_review.md           # HashSet linear scan, 1416-line monolith
-├── utils_review.md        # Unmatched < edge case, duplicated parsing
-└── stale_pruning_report.md # All docs current, no orphaned references
-```
+**Current status:** Plan generated and verified. Implementation not yet started.
 
-The remediation plan for code-level fixes is in `plan.md`.
+## Known Issues (Quick Reference)
+
+For full details and fix instructions, see `plan.md`.
+
+| Severity | Issue | Location |
+|----------|-------|----------|
+| P0 | Argon2 memory cost 64 KiB (OWASP min: 19 MiB) | `encryption.rs:32`, `db.rs:12` |
+| P0 | API key stored as plaintext in `sync.toml` | `config.rs:19` |
+| P0 | CORS `CORS_ALLOW_ALL` env var referenced but never read | `snip-sync/src/main.rs` |
+| P0 | Registration rate limit bypassable via client-controlled `device_id` | `snip-sync/src/main.rs:333` |
+| P1 | Sync fall-through: `list_libraries` failure doesn't stop sync | `sync_cmd.rs:224-251` |
+| P1 | Encryption failures cause permanent snippet loss (last_sync advances) | `sync.rs:96-107`, `sync_commands.rs:300` |
+| P1 | `set_primary()` silently succeeds on nonexistent filename | `library.rs:346-352` |
+| P1 | `add_server_library()` creates duplicate metadata entries | `library.rs:387-413` |
+| P1 | `load_snippets()` returns empty on parse error (data loss risk) | `commands/mod.rs:102-141` |
+| P1 | Clipboard auto-clear race condition clears new content | `clipboard.rs:30-42` |
+| P1 | `shutdown_logging` logs after dropping file writer guard | `logging.rs:93-98` |
+| P2 | `ui.rs` is 1416 lines — should be split into submodules | `src/ui.rs` |
 
 ## Testing Notes
 
