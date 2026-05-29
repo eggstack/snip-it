@@ -1,0 +1,112 @@
+# TUI Module
+
+[← Back to Overview](overview.md)
+
+## File
+
+**`src/ui.rs`** (~1250 lines)
+
+The largest single file in the codebase. Implements the terminal user interface using `ratatui` with `crossterm` as the backend.
+
+## Architecture
+
+### Main Loop
+
+`select_snippet_inner()` is a single-loop event-driven TUI:
+
+1. Initialize terminal with mouse capture
+2. Pre-compute syntax-highlighted commands (once, outside draw loop)
+3. Enter event loop:
+   - Compute filtered candidates (debounced at 150ms)
+   - Draw UI (filter input, list, preview, status bar)
+   - Poll for events (keyboard, mouse)
+   - Handle input in insert or normal mode
+4. Return selected index on exit
+
+### Mode System
+
+Two primary modes, vim-inspired:
+
+| Mode | Behavior |
+|------|----------|
+| **Insert** | Characters type into filter, Enter selects, Esc transitions to normal |
+| **Normal** | Keystrokes trigger actions (y=copy, q=quit, j/k=navigate) |
+
+Additional states:
+- **Visual mode** (`v`/`V`) — Select multiple items, batch copy
+- **Tag filter mode** (`t`) — Filter by tag instead of description
+
+### Rendering Layout
+
+```
+┌─────────────────────────────────────┐
+│ Filter Input Box (3 lines)          │
+├─────────────────────────────────────┤
+│ Snippet List (scrollable)           │  ← Pre-computed highlighted items
+│ ▶ [description] command...          │
+│   [description] command...          │
+├─────────────────────────────────────┤
+│ Preview Panel (6 lines)             │  ← Shows selected snippet + variables
+│ Description: ...                    │
+│ Command: ...                        │
+│ Vars: name, host                    │
+├─────────────────────────────────────┤
+│ Status Bar (1 line)                 │  ← Mode, keybindings, messages
+│ [INS] | i: insert | y: copy | ...  │
+└─────────────────────────────────────┘
+```
+
+### Syntax Highlighting
+
+`highlight_command()` tokenizes shell commands into styled spans:
+
+| Token Type | Color | Examples |
+|------------|-------|----------|
+| Shell keywords | Primary (blue) | `git`, `docker`, `curl`, `ssh` |
+| Variables | Accent (yellow) | `<name>`, `<host=default>` |
+| Strings | Green | `'hello'`, `"world"` |
+| Flags | Secondary (cyan) | `--verbose`, `-f` |
+| Escape sequences | Magenta | `\n`, `\t` |
+| Comments | Muted (gray) | `# comment` |
+| Default | Text (white) | Everything else |
+
+Keywords are defined in `src/utils/shell_keywords.rs` — a `HashSet` of ~190 common CLI tools.
+
+### Theme System
+
+Two built-in themes, selectable via `SNP_THEME` env var:
+
+| Theme | Background | Text | Border | Selected |
+|-------|-----------|------|--------|----------|
+| `dark` (default) | Black | White | Cyan | Blue |
+| `bright`/`light` | White | Black | Blue | LightBlue |
+| `auto` | Detects via `COLORFGBG` | — | — | — |
+
+### Fuzzy Matching
+
+Uses `fuzzy-matcher` crate (skim algorithm) via lazy-static `MATCHER`. Filtering is debounced at 150ms to avoid excessive computation on every keystroke.
+
+### Mouse Support
+
+- Scroll wheel: Navigate up/down
+- Single click: Select item
+- Double-click: Run/execute selected snippet (500ms window)
+
+### Variable Prompting
+
+`prompt_variables_inner()` renders a separate TUI for entering variable values when a snippet contains `<name>` or `<name=default>` syntax. Variables are filled one at a time with Tab navigation.
+
+## Key Behaviors
+
+- **Debounced filtering** — Filter updates are delayed 150ms to batch rapid keystrokes
+- **Pre-computed highlights** — Syntax highlighting computed once at startup, not per frame
+- **Double-buffered filter** — `input_text` (what user types) vs `filter` (applied filter) are separate
+- **Mouse capture** — Enabled on init, disabled on exit
+- **Terminal size check** — Shows error if terminal < 10x10
+
+## Integration Points
+
+- `src/clipboard.rs` — Copies selected snippet to clipboard
+- `src/utils/variables.rs` — Parses `<var>` syntax for display and expansion
+- `src/utils/shell_keywords.rs` — Keyword list for syntax highlighting
+- `src/commands/mod.rs` — `expand_snippet_command()` calls `prompt_variables()`
