@@ -12,3 +12,26 @@
 6. **Keychain testing.** The `keyring` crate behaves differently on macOS, Linux, and Windows. Test on all platforms or add a fallback path.
 7. **Sync encryption failure flow.** Changes to sync flow logic affect the `last_sync` timestamp update. Test with: (a) normal sync, (b) sync with intentionally corrupted snippets, (c) partial failure.
 8. **Removing CLI flags is a breaking change.** If users have scripts using removed flags, they will break. Consider deprecation warning first.
+
+### Session Notes (2026-05-29)
+
+#### Plan Consolidation Process
+- When reviewing multiple plan files, use subagents to batch read (4-5 files per agent) to preserve context window
+- Always verify plan item status against actual code - discrepancies can exist (e.g., CLIP-4 was marked TODO in plan but was actually FIXED per AGENTS.md)
+- Consolidate batch summaries into intermediate files before merging into final plan
+
+#### Plan Accuracy Tips
+- "Completed in Prior Work" table in plan.md is authoritative for already-fixed items
+- Items can be internally inconsistent across sections - always cross-check
+- Code verification subagents should read actual files, not rely on summaries
+
+#### Wave-based Parallelization
+- WAVE 1 (Security): All 6 items are independent, can be split across multiple agents
+- WAVE 2 (Core Bugs): 17 items organized by module (library, commands, clipboard, config)
+- WAVE 3 (Improvements): 24 items with sub-waves by module (Security, Commands, Library, Logging, Server, UI)
+- WAVE 4 (Low Priority): 40+ items - fully parallel, any agent can pick any item
+
+#### Dependency Tracking
+- Most items have NO dependencies (can start immediately)
+- Key dependencies: TUI-3 → TUI-7,8,9,10,20,21; LIB-1 → LIB-11; LIB-6 → LIB-8; LIB-2 → LIB-13
+- When assigning work, group by module to minimize context switching

@@ -144,15 +144,26 @@ snip-it/
 
 ## Deferred Items
 
-Two optional items remain in `plan.md`:
+Optional items remaining in `plan.md` (see plan.md for full details):
 - **Command injection warning** (safe mode for snippet execution)
 - **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
 
+## Architecture Review Summary
+
+During the 2026-05-29 architecture review, 8 bugs were fixed and 80+ items were identified for future improvement. See `plan.md` for the full consolidated remediation plan organized into 4 implementation waves:
+
+- **WAVE 1 (Security-Critical):** 6 items - SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, CLI-1
+- **WAVE 2 (Core Bugs):** 17 items - CORE-1 through CORE-11, CLIP-1 through CLIP-3, CONFIG-1, CONFIG-2, CONFIG-4
+- **WAVE 3 (Improvements):** 24 items - SEC-7, SEC-8, SEC-9, CMD-3, CMD-10, CMD-11, LIB-1 through LIB-6, LOG-2, LOG-3, LOG-5, LOG-6, LOG-7, SERVER-3, SERVER-4, SERVER-5, SERVER-6, SERVER-8, PROTO-1, PROTO-2, TUI-1
+- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items
+
+Each wave can be implemented in parallel by separate agents. Within a wave, items are organized by module (UI, Commands, Library, Config, etc.) to minimize context switching.
+
 ## Implementation Notes (2026-05-29)
 
-The following bugs were fixed during architecture review implementation:
+The following bugs were fixed during the architecture review. For detailed fixes, see `plan.md` "Completed in Prior Work" section.
 
-### High Priority Fixes
+### High Priority Fixes (Historical)
 1. **Encryption ineffective `drop(key)`** (`src/encryption.rs:176,195`): Removed no-op `drop(key)` calls after key was already moved into cipher
 2. **Clipboard debug→warn** (`src/clipboard.rs:37`): Changed `tracing::debug` to `tracing::warn` for auto-clear failures
 3. **Clipboard redundant drop** (`src/clipboard.rs:42`): Removed redundant `std::mem::drop(handle)` - thread continues regardless
@@ -162,7 +173,7 @@ The following bugs were fixed during architecture review implementation:
 7. **Premade TOCTOU** (`snip-sync/src/premade.rs:199`): Now reads from `canonical_path` instead of original `path`
 8. **Health check DB ping** (`snip-sync/src/main.rs:343-352`): Health RPC now verifies database connectivity via `db.ping()`
 
-### Scope Constraints
+### Known Scope Constraints
 - `output` field not encrypted during sync (proto definition lacks field - cannot add without breaking change)
 - `\<` escape inconsistency in variables.rs is a documented known edge case per AGENTS.md
 - Many CLI documentation discrepancies (e.g., `--clip` behavior, cron intervals) are doc bugs not code bugs
