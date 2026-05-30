@@ -30,9 +30,12 @@ const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
 const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 const DEFAULT_MAX_TAGS: usize = 50;
 const DEFAULT_MAX_TAG_LENGTH: usize = 100;
+const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 const MAX_REQUEST_LIMIT: i32 = 1000;
+const API_KEY_MIN_LENGTH: usize = 16;
+const API_KEY_MAX_LENGTH: usize = 128;
 
 #[derive(Deserialize, Default)]
 struct ConfigFile {
@@ -75,6 +78,7 @@ struct LimitsConfig {
 #[derive(Deserialize, Default)]
 struct RateLimitConfig {
     requests_per_minute: Option<u32>,
+    trusted_proxies: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -102,6 +106,7 @@ struct Config {
     max_tag_length: usize,
     request_timeout_secs: u64,
     rate_limit_per_minute: u32,
+    trusted_proxies: Vec<String>,
     metrics_username: Option<String>,
     metrics_password: Option<String>,
     cors_allowed_origins: Vec<String>,
@@ -207,6 +212,11 @@ impl Config {
                     .as_ref()
                     .and_then(|r| r.requests_per_minute))
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
+            trusted_proxies: std::env::var("TRUSTED_PROXIES")
+                .ok()
+                .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+                .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
+                .unwrap_or_default(),
             metrics_username: std::env::var("METRICS_USERNAME")
                 .ok()
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
@@ -359,18 +369,27 @@ impl SnippetSync for SnipSyncService {
         self.record_request("register");
 
         // Use peer IP address for rate limiting (device_id is client-controlled)
-        let rate_limit_key = request
-            .metadata()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                    .map(|info| info.0.ip().to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
+        // Only trust x-forwarded-for if it comes from a trusted proxy
+        let rate_limit_key = if let Some(proxy_ip) = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|info| info.0.ip().to_string())
+            .filter(|ip| self.config.trusted_proxies.contains(ip))
+        {
+            request
+                .metadata()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|header| header.split(',').next())
+                .map(|s| s.trim().to_string())
+                .unwrap_or(proxy_ip)
+        } else {
+            request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                .map(|info| info.0.ip().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        };
 
         if !self
             .rate_limiter
@@ -387,9 +406,24 @@ impl SnippetSync for SnipSyncService {
             ));
         }
 
-        let _req = request.into_inner();
+        let req = request.into_inner();
 
-        let api_key = uuid::Uuid::new_v4().to_string();
+        let api_key = if !req.api_key.is_empty() {
+            if req.api_key.len() < API_KEY_MIN_LENGTH || req.api_key.len() > API_KEY_MAX_LENGTH {
+                return Err(Status::invalid_argument(format!(
+                    "API key must be between {} and {} characters",
+                    API_KEY_MIN_LENGTH, API_KEY_MAX_LENGTH
+                )));
+            }
+            if !req.api_key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return Err(Status::invalid_argument(
+                    "API key must only contain alphanumeric characters, hyphens, and underscores",
+                ));
+            }
+            req.api_key
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
 
         match self.db.create_user(&api_key).await {
             Ok(device_id) => {
@@ -551,6 +585,14 @@ impl SnippetSync for SnipSyncService {
         self.record_request("sync");
         self.record_sync();
         let req = request.into_inner();
+
+        if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
+            return Err(Status::invalid_argument(format!(
+                "Too many snippets in sync request (max {}), got {}",
+                DEFAULT_MAX_SYNC_SNIPPETS,
+                req.local_snippets.len()
+            )));
+        }
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
@@ -796,10 +838,14 @@ impl SnippetSync for SnipSyncService {
             return Err(Status::invalid_argument("Filename is required"));
         }
 
+        if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\') {
+            return Err(Status::invalid_argument("Invalid filename"));
+        }
+
         let sanitized: String = req
             .filename
             .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
             .collect();
 
         if sanitized.is_empty() || sanitized.len() > 64 {

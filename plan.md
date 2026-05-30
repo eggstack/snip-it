@@ -440,19 +440,20 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### PROTO-1: Premade Library Filename Sanitization Too Restrictive
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:798-806`
 - **Description:** Filters out dots (`.`), which are valid in filenames. `devops.tools` becomes `devopstools`.
-- **Fix:** Allow dots, add path traversal protection instead.
+- **Fix:** Allow dots, add path traversal protection instead (checking for `..`, `/`, `\`).
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### PROTO-2: Rate Limiting Bypass on Register Endpoint
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:360-387`
 - **Description:** `register` uses `x-forwarded-for` header for rate limiting without validation. Clients can spoof.
+- **Fix:** Only trust x-forwarded-for from trusted proxies (configurable via `TRUSTED_PROXIES` env var or `rate_limit.trusted_proxies` config).
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### PROTO-3: Missing Pagination on Premade Library Endpoints
 - **Status:** TODO
@@ -666,11 +667,12 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 3
 
 #### TUI-1: Visual Line Mode (`V`) Bug
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/ui/mod.rs:633-638`
 - **Description:** When pressing `V`, `visual_end` is set but `selected` stays at current position. Confusing visual state.
+- **Fix:** Set `selected = visual_end` when `V` is pressed.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### UTILS-1: Escape Sequence Handling Inconsistency
 - **Status:** TODO

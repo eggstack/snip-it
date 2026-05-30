@@ -634,6 +634,7 @@ fn select_snippet_inner(
                             visual_mode = true;
                             visual_start = selected;
                             visual_end = filtered.len().saturating_sub(1);
+                            selected = visual_end;
                             continue;
                         }
 
