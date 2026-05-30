@@ -34,8 +34,6 @@ const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 const MAX_REQUEST_LIMIT: i32 = 1000;
-const API_KEY_MIN_LENGTH: usize = 16;
-const API_KEY_MAX_LENGTH: usize = 128;
 
 #[derive(Deserialize, Default)]
 struct ConfigFile {
@@ -406,24 +404,9 @@ impl SnippetSync for SnipSyncService {
             ));
         }
 
-        let req = request.into_inner();
+        let _req = request.into_inner();
 
-        let api_key = if !req.api_key.is_empty() {
-            if req.api_key.len() < API_KEY_MIN_LENGTH || req.api_key.len() > API_KEY_MAX_LENGTH {
-                return Err(Status::invalid_argument(format!(
-                    "API key must be between {} and {} characters",
-                    API_KEY_MIN_LENGTH, API_KEY_MAX_LENGTH
-                )));
-            }
-            if !req.api_key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-                return Err(Status::invalid_argument(
-                    "API key must only contain alphanumeric characters, hyphens, and underscores",
-                ));
-            }
-            req.api_key
-        } else {
-            uuid::Uuid::new_v4().to_string()
-        };
+        let api_key = uuid::Uuid::new_v4().to_string();
 
         match self.db.create_user(&api_key).await {
             Ok(device_id) => {

@@ -390,11 +390,40 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2
 
 #### SERVER-3: Missing Input Validation on `api_key` Field in Register
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `snip-sync/src/main.rs:390-392`
 - **Description:** `register` RPC completely ignores the `api_key` field from `RegisterRequest`. A new API key is generated with `uuid::Uuid::new_v4()` regardless of what was passed. No length/format validation.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
+
+#### SERVER-4: Race Condition in Rate Limiter Cleanup Task
+- **Status:** DONE
+- **Location:** `snip-sync/src/rate_limiter.rs:17-27`
+- **Description:** Cleanup task holds lock across `await` point. If task panics, lock is poisoned.
+- **Fix:** Use a separate channel to trigger shutdown.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-5: No Limits on `local_snippets` Array in Sync
+- **Status:** DONE
+- **Location:** `snip-sync/src/main.rs:580`
+- **Description:** `SyncRequest.local_snippets` has no size limit. Client could send millions of snippets causing memory exhaustion.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-6: Premade File Content Not Sanitized Before Serving
+- **Status:** DONE
+- **Location:** `snip-sync/src/premade.rs:199`
+- **Description:** `get()` returns raw file content via `fs::read_to_string(&canonical_path)` without running `fix_invalid_toml_escapes()`.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-8: Add Batch Size Limit for Sync local_snippets
+- **Status:** DONE
+- **Location:** `snip-sync/src/main.rs:580`
+- **Description:** Validate `req.local_snippets.len()` against reasonable limit.
+- **Dependencies:** None
+- **Wave:** 3
 
 #### SERVER-4: Race Condition in Rate Limiter Cleanup Task
 - **Status:** TODO
