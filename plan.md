@@ -35,9 +35,9 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 | CLIP-1 | Race condition in `schedule_clipboard_clear` | `src/clipboard.rs:30-39` |
 | CLIP-2 | Visual mode clipboard copy missing audit log | `src/ui/mod.rs:675` |
 | CLIP-3 | UI clipboard operations suppress errors | `src/ui/mod.rs:619,675,817` |
-| CONFIG-1 | Keychain migration silent failure | `src/config.rs:188-199` |
-| CONFIG-2 | Keychain unavailable returns empty key | `src/config.rs:73` |
-| CONFIG-4 | Race condition in macOS migration | `src/utils/config.rs:68-84` |
+| CONFIG-1 | Keychain migration silent failure | `src/config.rs:188-199` | DONE |
+| CONFIG-2 | Keychain unavailable returns empty key | `src/config.rs:73` | DONE |
+| CONFIG-4 | Race condition in macOS migration | `src/utils/config.rs:68-84` | DONE |
 
 **Implementation notes:** CORE-* items in `src/library.rs` can be done together. CLI-3, CORE-3, CORE-9 are in `src/commands/mod.rs`. CLIP-* items in UI and clipboard can be done together.
 
@@ -362,18 +362,20 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2 (completed)
 
 #### CONFIG-1: Keychain Migration Silent Failure
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/config.rs:188-199`
 - **Description:** When migrating plaintext API key to keychain, failures are logged but not propagated. API key may remain in plaintext if keychain unavailable.
+- **Fix Applied:** Changed `tracing::warn` to `tracing::error` for keychain migration failures to ensure they are properly surfaced.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### CONFIG-2: Keychain Unavailable Returns Empty Key
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/config.rs:73`
 - **Description:** When keychain unavailable and `KEYCHAIN_MARKER` encountered, deserialization returns `Ok(String::new())`. User sees no indication API key failed to load.
+- **Fix Applied:** Changed to return `Err(serde::de::Error::custom(...))` instead of `Ok(String::new())` when keychain is unavailable, ensuring the failure propagates properly.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### CONFIG-3: No Atomic Write for sync.toml
 - **Status:** TODO
@@ -383,11 +385,12 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### CONFIG-4: Race Condition in macOS Migration
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/utils/config.rs:68-84`
 - **Description:** Multiple processes could race during migration. `dst.exists()` check is TOCTOU.
+- **Fix Applied:** Removed the `dst.exists()` check before rename. If rename succeeds, the file was moved. If it fails (file already exists from race), the continue skips it properly. Original TOCTOU race window eliminated.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### SERVER-3: Missing Input Validation on `api_key` Field in Register
 - **Status:** TODO
