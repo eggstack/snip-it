@@ -618,45 +618,48 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 ### Improvements
 
 #### SEC-7: Add TLS/HTTPS Enforcement for Production
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:829-831`
 - **Severity:** High
 - **Description:** Server warns "TLS is not enabled" but doesn't enforce. Client should also validate TLS certificates.
+- **Fix:** Server now requires `TLS_ENABLED=true` or fails to start. Set `SNIP_SYNC_ALLOW_HTTP=true` to allow plaintext for development.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### SEC-8: Make Default Server URL HTTPS
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/config.rs:125-129`
 - **Severity:** Medium
 - **Description:** Default `http://localhost:50051` is dangerous. Should default to HTTPS.
+- **Fix:** Changed default URL from `http://localhost:50051` to `https://localhost:50051`.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### SEC-9: Keychain Failure Should Not Silently Fall Back to Plaintext
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/config.rs:48-56`
 - **Severity:** Medium
 - **Description:** When keychain storage fails, API key is stored in plaintext. Should fail explicitly or require confirmation.
+- **Fix:** Refuses to store plaintext API key unless `SNP_ALLOW_PLAINTEXT_API_KEY=true` is explicitly set.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-3: run_cmd --clip Copies Command, Not Output
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/run_cmd.rs:81-90`
 - **Description:** `--clip` copies the expanded command, not the output. User expectation mismatch.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-10: sync_cmd::run Doesn't Propagate Sync Errors
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/sync_cmd.rs:185-192`
 - **Description:** `run_sync()` errors silently ignored. Always returns `Ok(())`.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-11: premade_cmd::run_sync Ignores Return Value
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/premade_cmd.rs:144-153`
 - **Description:** `run_sync()` always returns `Ok(())` regardless of actual sync result.
 - **Dependencies:** None

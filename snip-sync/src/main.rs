@@ -826,10 +826,26 @@ impl SnippetSync for SnipSyncService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_target(false).init();
 
+    let tls_enabled = std::env::var("TLS_ENABLED")
+        .ok()
+        .is_some_and(|v| v == "true" || v == "1");
+
     tracing::info!("Starting snip-sync server v{}", env!("CARGO_PKG_VERSION"));
-    tracing::warn!(
-        "TLS is not enabled. For production, use a reverse proxy with TLS (nginx, traefik, etc.)"
-    );
+
+    if !tls_enabled {
+        if std::env::var_os("SNIP_SYNC_ALLOW_HTTP").is_some_and(|v| v == "true") {
+            tracing::warn!(
+                "TLS is not enabled. For production, use a reverse proxy with TLS (nginx, traefik, etc.) \
+                 (explicitly allowed via SNIP_SYNC_ALLOW_HTTP=true)"
+            );
+        } else {
+            tracing::error!(
+                "TLS is not enabled. For production, set TLS_ENABLED=true or use a reverse proxy with TLS. \
+                 Set SNIP_SYNC_ALLOW_HTTP=true to allow plaintext HTTP."
+            );
+            return Err("TLS is required for production. Set TLS_ENABLED=true or SNIP_SYNC_ALLOW_HTTP=true".into());
+        }
+    }
 
     Config::ensure_config_file();
     let config = Config::load();
