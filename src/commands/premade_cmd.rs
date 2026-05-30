@@ -149,6 +149,6 @@ pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
         return Ok(());
     }
 
-    crate::sync_commands::run_premade_sync(&sync_settings, runtime);
+    crate::sync_commands::run_premade_sync(&sync_settings, runtime)?;
     Ok(())
 }

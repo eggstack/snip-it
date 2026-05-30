@@ -182,14 +182,16 @@ pub fn run(
             }
 
             println!("\nPulling snippets from server...");
-            crate::sync_commands::run_sync(
+            if let Err(e) = crate::sync_commands::run_sync(
                 &sync_settings,
                 library.as_deref(),
                 non_interactive,
                 push_only,
                 pull_only,
                 runtime,
-            );
+            ) {
+                eprintln!("Sync failed: {}", e);
+            }
             Ok(())
         }
         Err(e) => {

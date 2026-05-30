@@ -129,6 +129,15 @@ impl From<io::Error> for SnipError {
     }
 }
 
+impl From<String> for SnipError {
+    fn from(error: String) -> Self {
+        SnipError::Runtime {
+            message: error,
+            detail: None,
+        }
+    }
+}
+
 // Convenient error constructors
 impl SnipError {
     pub fn io_error(operation: &str, path: impl Into<PathBuf>, source: io::Error) -> Self {

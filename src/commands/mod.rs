@@ -157,23 +157,12 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 ///
 /// Returns parallel arrays of descriptions, commands, tags, folders, and favorites.
 pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetData {
-    let descriptions: Vec<String> = snippets
-        .snippets
-        .iter()
-        .map(|s| s.description.clone())
-        .collect();
-    let commands: Vec<String> = snippets
-        .snippets
-        .iter()
-        .map(|s| s.command.clone())
-        .collect();
-    let tags: Vec<Vec<String>> = snippets.snippets.iter().map(|s| s.tags.clone()).collect();
-    let folders: Vec<Vec<String>> = snippets
-        .snippets
-        .iter()
-        .map(|s| s.folders.clone())
-        .collect();
-    let favorites: Vec<bool> = snippets.snippets.iter().map(|s| s.favorite).collect();
+    let filtered: Vec<_> = snippets.snippets.iter().filter(|s| !s.deleted).collect();
+    let descriptions: Vec<String> = filtered.iter().map(|s| s.description.clone()).collect();
+    let commands: Vec<String> = filtered.iter().map(|s| s.command.clone()).collect();
+    let tags: Vec<Vec<String>> = filtered.iter().map(|s| s.tags.clone()).collect();
+    let folders: Vec<Vec<String>> = filtered.iter().map(|s| s.folders.clone()).collect();
+    let favorites: Vec<bool> = filtered.iter().map(|s| s.favorite).collect();
     crate::SnippetData {
         descriptions,
         commands,
@@ -255,7 +244,9 @@ where
         }
     }
     if do_sync && selected_and_processed {
-        crate::sync_commands::run_default_sync(runtime);
+        if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
+            tracing::warn!("Background sync failed: {}", e);
+        }
     }
     Ok(())
 }

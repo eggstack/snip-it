@@ -54,29 +54,27 @@ fn check_server_health(
     }
 }
 
-pub fn run_premade_sync(sync_settings: &SyncSettings, runtime: &tokio::runtime::Runtime) {
+pub fn run_premade_sync(sync_settings: &SyncSettings, runtime: &tokio::runtime::Runtime) -> Result<(), String> {
     if !sync_settings.enabled || sync_settings.api_key.is_empty() {
-        return;
+        return Ok(());
     }
 
     let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to create sync client: {}", e);
-            return;
+            return Err(format!("Failed to create sync client: {}", e));
         }
     };
 
     if let Ok(libs) = runtime.block_on(client.list_premade_libraries()) {
         if libs.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mgr = match library::LibraryManager::new() {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Failed to initialize library manager: {}", e);
-                return;
+                return Err(format!("Failed to initialize library manager: {}", e));
             }
         };
 
@@ -104,15 +102,21 @@ pub fn run_premade_sync(sync_settings: &SyncSettings, runtime: &tokio::runtime::
 
         if !premade_results.is_empty() {
             println!("\nPremade libraries:");
-            for (name, success, msg) in premade_results {
-                if success {
+            for (name, success, msg) in &premade_results {
+                if *success {
                     println!("  + {} → {}", name, msg);
                 } else {
                     println!("  ✗ {}: {}", name, msg);
                 }
             }
+
+            if premade_results.iter().any(|(_, success, _)| !success) {
+                return Err("Some premade libraries failed to sync".to_string());
+            }
         }
     }
+
+    Ok(())
 }
 
 pub fn run_sync(
@@ -122,7 +126,7 @@ pub fn run_sync(
     push_only: bool,
     pull_only: bool,
     runtime: &tokio::runtime::Runtime,
-) {
+) -> Result<(), String> {
     let direction = if push_only {
         SyncDirection::Push
     } else if pull_only {
@@ -132,32 +136,29 @@ pub fn run_sync(
     };
 
     if !ensure_sync_configured(sync_settings) {
-        return;
+        return Err("Sync not configured".to_string());
     }
 
     let mut client = match create_sync_client(runtime, sync_settings) {
         Some(c) => c,
         None => {
-            eprintln!("Failed to create sync client");
-            return;
+            return Err("Failed to create sync client".to_string());
         }
     };
 
     if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
-        return;
+        return Err("Server health check failed".to_string());
     }
 
     let mut mgr = match library::LibraryManager::new() {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("Failed to initialize library manager: {}", e);
-            return;
+            return Err(format!("Failed to initialize library manager: {}", e));
         }
     };
 
     if let Err(e) = mgr.ensure_library_mode() {
-        eprintln!("Failed to initialize library mode: {}", e);
-        return;
+        return Err(format!("Failed to initialize library mode: {}", e));
     }
 
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
@@ -180,7 +181,7 @@ pub fn run_sync(
 
     if libraries_to_sync.is_empty() {
         eprintln!("No libraries to sync.");
-        return;
+        return Err("No libraries to sync".to_string());
     }
 
     for lib_name in &libraries_to_sync {
@@ -386,10 +387,16 @@ pub fn run_sync(
         completed += 1;
     }
 
-    for (name, _success, msg) in results {
+    for (name, _success, msg) in &results {
         if !msg.is_empty() {
             println!("  {} - {}", name, msg);
         }
+    }
+
+    if results.iter().any(|(_, success, _)| !success) {
+        Err("Some libraries failed to sync".to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -476,9 +483,9 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     }
 }
 
-pub fn run_default_sync(runtime: &tokio::runtime::Runtime) {
+pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> Result<(), String> {
     let settings = crate::config::load_sync_settings().unwrap_or_default();
-    run_sync(&settings, None, false, false, false, runtime);
+    run_sync(&settings, None, false, false, false, runtime)
 }
 
 #[cfg(test)]
