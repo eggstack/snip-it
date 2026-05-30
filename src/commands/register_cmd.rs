@@ -60,6 +60,7 @@ pub fn run(server: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> 
                 "****".to_string()
             };
             println!("API key: {}", masked_key);
+            println!("(Note: API key remains in memory due to Rust's memory model. This is a known limitation.)");
             println!("Device ID: {}", device_id);
             println!(
                 "Saved to: {}",

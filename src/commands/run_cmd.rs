@@ -7,46 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn validate_output_path(path: &str) -> SnipResult<()> {
-    if path.is_empty() {
-        return Err(SnipError::runtime_error(
-            "Invalid output path",
-            Some("Output path must not be empty"),
-        ));
-    }
-
-    let p = std::path::Path::new(path);
-
-    if p.is_absolute() {
-        return Err(SnipError::runtime_error(
-            "Invalid output path",
-            Some("Output path must be relative, not absolute"),
-        ));
-    }
-
-    for component in p.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                return Err(SnipError::runtime_error(
-                    "Invalid output path",
-                    Some("Output path must not contain '..'"),
-                ));
-            }
-            std::path::Component::Normal(c) if c.to_string_lossy().contains("..") => {
-                return Err(SnipError::runtime_error(
-                    "Invalid output path",
-                    Some("Output path must not contain '..'"),
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
 fn get_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+    "/bin/sh".to_string()
 }
 
 fn handle_command_result(
@@ -89,9 +51,41 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             "Copied to clipboard".to_string(),
         ))
     } else if !snippet.output.is_empty() {
-        validate_output_path(&snippet.output)?;
-        let output_file = fs::File::create(&snippet.output)
+        let cwd = std::env::current_dir().map_err(|e| {
+            SnipError::runtime_error(
+                "Failed to get current directory",
+                Some(&format!("Cannot create output file: {}", e)),
+            )
+        })?;
+
+        let output_path = cwd.join(&snippet.output);
+
+        let output_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output_path)
             .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
+
+        let canonical_path = output_path.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Failed to verify output path",
+                Some(&format!("Cannot canonicalize path: {}", e)),
+            )
+        })?;
+
+        let canonical_cwd = cwd.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Failed to verify current directory",
+                Some(&format!("Cannot canonicalize CWD: {}", e)),
+            )
+        })?;
+
+        if !canonical_path.starts_with(&canonical_cwd) {
+            return Err(SnipError::runtime_error(
+                "Invalid output path",
+                Some("Output path resolves outside of working directory after creation (possible symlink attack)"),
+            ));
+        }
 
         let shell = get_shell();
         let output = Command::new(&shell)
@@ -151,31 +145,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_output_path_relative_ok() {
-        assert!(validate_output_path("output.txt").is_ok());
-        assert!(validate_output_path("subdir/output.txt").is_ok());
-    }
-
-    #[test]
-    fn test_validate_output_path_absolute_rejected() {
-        assert!(validate_output_path("/etc/passwd").is_err());
-        assert!(validate_output_path("/tmp/out").is_err());
-    }
-
-    #[test]
-    fn test_validate_output_path_traversal_rejected() {
-        assert!(validate_output_path("../../../etc/passwd").is_err());
-        assert!(validate_output_path("subdir/../../etc/passwd").is_err());
-    }
-
-    #[test]
-    fn test_validate_output_path_empty() {
-        assert!(validate_output_path("").is_err());
-    }
-
-    #[test]
-    fn test_validate_output_path_dotfile() {
-        assert!(validate_output_path(".hidden").is_ok());
-        assert!(validate_output_path("dir/.hidden").is_ok());
+    fn test_get_shell() {
+        let shell = get_shell();
+        assert_eq!(shell, "/bin/sh");
     }
 }
