@@ -54,7 +54,10 @@ fn check_server_health(
     }
 }
 
-pub fn run_premade_sync(sync_settings: &SyncSettings, runtime: &tokio::runtime::Runtime) -> Result<(), String> {
+pub fn run_premade_sync(
+    sync_settings: &SyncSettings,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<(), String> {
     if !sync_settings.enabled || sync_settings.api_key.is_empty() {
         return Ok(());
     }

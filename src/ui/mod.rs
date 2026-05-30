@@ -161,6 +161,9 @@ fn select_snippet_inner(
     let mut visual_mode = false;
     let mut visual_start = 0usize;
     let mut visual_end = 0usize;
+    let mut pending_gg = false;
+    let mut pending_gg_time: Option<std::time::Instant> = None;
+    const GG_TIMEOUT_MS: u64 = 500;
 
     // Debounce filter updates to avoid fuzzy matching on every keystroke
     let mut filter_dirty = false;
@@ -528,7 +531,7 @@ fn select_snippet_inner(
                 )
             } else {
                 format!(
-                    "[{}]{} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode",
+                    "[{}]{} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run",
                     mode_str, tag_mode_str
                 )
             };
@@ -579,7 +582,8 @@ fn select_snippet_inner(
                     {
                         if mouse_event.row >= list_area.y
                             && mouse_event.row < list_area.y + list_area.height
-                            && mouse_event.row < list_area.y + filtered.len() as u16
+                            && mouse_event.row
+                                < list_area.y + filtered.len().min(list_area.height as usize) as u16
                         {
                             let clicked_row = (mouse_event.row - list_area.y) as usize;
 
@@ -685,7 +689,7 @@ fn select_snippet_inner(
                                     }
                                     if let Some((idx, _, _)) = filtered.get(start) {
                                         if let Err(e) =
-                                            crate::logging::audit_log("copy", &snippets[*idx])
+                                            crate::logging::audit_log("copy", &snippets[*idx], None)
                                         {
                                             tracing::debug!("Audit log write failed: {}", e);
                                         }
@@ -757,9 +761,7 @@ fn select_snippet_inner(
                                 KeyCode::Down if selected + 1 < filtered.len() => selected += 1,
                                 KeyCode::Up if selected > 0 => selected -= 1,
                                 KeyCode::Enter => {
-                                    if !is_search {
-                                        break;
-                                    }
+                                    break;
                                 }
                                 KeyCode::Backspace => {
                                     if tag_filter_mode {
@@ -813,6 +815,9 @@ fn select_snippet_inner(
                                 _ => {}
                             }
                         } else {
+                            if key.code != KeyCode::Char('g') && !is_ctrl_key(&key, 'g') {
+                                pending_gg = false;
+                            }
                             match key.code {
                                 KeyCode::Char('q') => {
                                     selected = filtered.len();
@@ -845,6 +850,27 @@ fn select_snippet_inner(
                                 }
                                 KeyCode::Char('g') if is_ctrl_key(&key, 'g') => {
                                     selected = 0;
+                                    pending_gg = false;
+                                }
+                                KeyCode::Char('g') if pending_gg => {
+                                    let now = std::time::Instant::now();
+                                    let timed_out = pending_gg_time
+                                        .map(|t| {
+                                            now.duration_since(t).as_millis()
+                                                > GG_TIMEOUT_MS as u128
+                                        })
+                                        .unwrap_or(true);
+                                    if timed_out {
+                                        pending_gg = true;
+                                        pending_gg_time = Some(now);
+                                    } else {
+                                        selected = 0;
+                                        pending_gg = false;
+                                    }
+                                }
+                                KeyCode::Char('g') => {
+                                    pending_gg = true;
+                                    pending_gg_time = Some(std::time::Instant::now());
                                 }
                                 KeyCode::Char('G') => selected = filtered.len().saturating_sub(1),
                                 KeyCode::Char('h') | KeyCode::Left if selected > 0 => selected -= 1,
@@ -891,7 +917,10 @@ fn select_snippet_inner(
                         }
                     }
                 }
-                _ => {}
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Event read error: {}", e);
+                }
             }
         }
     }

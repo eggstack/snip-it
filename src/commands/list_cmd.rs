@@ -5,10 +5,18 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListFormat {
+    Default,
+    Json,
+    Csv,
+}
+
 pub fn run(
     filter: Option<String>,
     config: Option<PathBuf>,
     library: Option<String>,
+    format: ListFormat,
 ) -> SnipResult<()> {
     let snippets = if config.is_some() {
         load_snippets(&config)?
@@ -39,23 +47,75 @@ pub fn run(
         snippets.snippets.iter().enumerate().collect()
     };
 
-    for (_, s) in filtered {
-        println!("{}", style("-----").with(Color::Blue));
-        println!(
-            "{}: {}",
-            style(&s.description).with(Color::Green),
-            style(&s.command).with(Color::White)
-        );
-        println!(
-            "{}: {}",
-            style("Output").with(Color::Yellow),
-            style(&s.output).with(Color::White)
-        );
-        println!(
-            "{}: {}",
-            style("Tags").with(Color::Cyan),
-            style(s.tags.join(", ")).with(Color::White)
-        );
+    match format {
+        ListFormat::Json => {
+            let items: Vec<_> = filtered
+                .iter()
+                .map(|(_, s)| {
+                    serde_json::json!({
+                        "description": s.description,
+                        "command": s.command,
+                        "output": s.output,
+                        "tags": s.tags,
+                        "folders": s.folders,
+                        "favorite": s.favorite,
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&items).map_err(|e| {
+                    crate::error::SnipError::runtime_error(
+                        "JSON serialization failed",
+                        Some(&e.to_string()),
+                    )
+                })?
+            );
+        }
+        ListFormat::Csv => {
+            println!("description,command,output,tags,folders,favorite");
+            for (_, s) in filtered {
+                let tags = s.tags.join(";");
+                let folders = s.folders.join(";");
+                println!(
+                    "{},{},{},{},{},{}",
+                    csv_escape(&s.description),
+                    csv_escape(&s.command),
+                    csv_escape(&s.output),
+                    csv_escape(&tags),
+                    csv_escape(&folders),
+                    s.favorite
+                );
+            }
+        }
+        ListFormat::Default => {
+            for (_, s) in filtered {
+                println!("{}", style("-----").with(Color::Blue));
+                println!(
+                    "{}: {}",
+                    style(&s.description).with(Color::Green),
+                    style(&s.command).with(Color::White)
+                );
+                println!(
+                    "{}: {}",
+                    style("Output").with(Color::Yellow),
+                    style(&s.output).with(Color::White)
+                );
+                println!(
+                    "{}: {}",
+                    style("Tags").with(Color::Cyan),
+                    style(s.tags.join(", ")).with(Color::White)
+                );
+            }
+        }
     }
     Ok(())
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }

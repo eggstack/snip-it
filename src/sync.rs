@@ -17,39 +17,77 @@ use crate::error::{SnipError, SnipResult};
 use snip_proto::snippet_sync_client::SnippetSyncClient;
 use snip_proto::PremadeLibrary;
 use snip_proto::{
-    CreateLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library, ListLibrariesRequest,
-    ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
+    CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library,
+    ListLibrariesRequest, ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
 };
 use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
+use tonic::Code;
 
-const MAX_RETRIES: u32 = 3;
-const INITIAL_DELAY_MS: u64 = 100;
-const MAX_DELAY_MS: u64 = 5000;
+const DEFAULT_MAX_RETRIES: u32 = 3;
+const DEFAULT_INITIAL_DELAY_MS: u64 = 100;
+const DEFAULT_MAX_DELAY_MS: u64 = 5000;
+
+#[derive(Debug, Clone)]
+pub struct SyncRetryConfig {
+    pub max_retries: u32,
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
+}
+
+impl Default for SyncRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: DEFAULT_MAX_RETRIES,
+            initial_delay_ms: DEFAULT_INITIAL_DELAY_MS,
+            max_delay_ms: DEFAULT_MAX_DELAY_MS,
+        }
+    }
+}
+
+impl SyncRetryConfig {
+    pub fn is_retryable_grpc_error(status: &tonic::Status) -> bool {
+        !matches!(
+            status.code(),
+            Code::InvalidArgument
+                | Code::NotFound
+                | Code::AlreadyExists
+                | Code::PermissionDenied
+                | Code::Unauthenticated
+        )
+    }
+}
+
+fn default_retry_config() -> SyncRetryConfig {
+    SyncRetryConfig::default()
+}
 
 /// Retry an async gRPC operation with exponential backoff.
 macro_rules! retry_grpc {
     ($op:expr, $name:expr) => {{
-        let mut delay_ms = INITIAL_DELAY_MS;
+        let config = default_retry_config();
+        let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0u32;
         loop {
             match $op.await {
                 Ok(val) => break Ok(val),
-                Err(e) if attempt < MAX_RETRIES => {
+                Err(e) => {
+                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
+                        || attempt >= config.max_retries
+                    {
+                        break Err(SnipError::runtime_error($name, Some(&e.to_string())));
+                    }
                     tracing::warn!(
                         "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
                         $name,
                         attempt + 1,
-                        MAX_RETRIES + 1,
+                        config.max_retries + 1,
                         e,
                         delay_ms
                     );
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
+                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
                     attempt += 1;
-                }
-                Err(e) => {
-                    break Err(SnipError::runtime_error($name, Some(&e.to_string())));
                 }
             }
         }
@@ -111,7 +149,7 @@ impl SyncClient {
             local_snippets: encrypted_snippets,
             last_sync_timestamp: last_sync,
             library_id: library_id.to_string(),
-            limit: 1000,
+            limit: self.settings.sync_limit_value(),
         };
 
         let response = self.sync_with_retry(request).await?;
@@ -150,8 +188,9 @@ impl SyncClient {
         &mut self,
         request: SyncRequest,
     ) -> SnipResult<snip_proto::SyncResponse> {
-        let mut delay_ms = INITIAL_DELAY_MS;
-        for attempt in 0..=MAX_RETRIES {
+        let config = default_retry_config();
+        let mut delay_ms = config.initial_delay_ms;
+        for attempt in 0..=config.max_retries {
             let req = SyncRequest {
                 api_key: request.api_key.clone(),
                 local_snippets: request.local_snippets.clone(),
@@ -161,22 +200,24 @@ impl SyncClient {
             };
             match self.client.sync(tonic::Request::new(req)).await {
                 Ok(response) => return Ok(response.into_inner()),
-                Err(e) if attempt < MAX_RETRIES => {
+                Err(e) => {
+                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
+                        || attempt >= config.max_retries
+                    {
+                        return Err(SnipError::runtime_error(
+                            "Sync request",
+                            Some(&e.to_string()),
+                        ));
+                    }
                     tracing::warn!(
                         "Sync request failed (attempt {}/{}): {}. Retrying in {}ms...",
                         attempt + 1,
-                        MAX_RETRIES + 1,
+                        config.max_retries + 1,
                         e,
                         delay_ms
                     );
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
-                }
-                Err(e) => {
-                    return Err(SnipError::runtime_error(
-                        "Sync request",
-                        Some(&e.to_string()),
-                    ));
+                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
                 }
             }
         }
@@ -255,6 +296,30 @@ impl SyncClient {
         } else {
             Err(SnipError::runtime_error(
                 "Failed to create library",
+                Some(&response.message),
+            ))
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn delete_library(&mut self, library_id: &str) -> SnipResult<()> {
+        let api_key = self.settings.api_key.clone();
+        let library_id_str = library_id.to_string();
+        let response = retry_grpc!(
+            self.client
+                .delete_library(tonic::Request::new(DeleteLibraryRequest {
+                    api_key: api_key.clone(),
+                    library_id: library_id_str.clone(),
+                })),
+            "Delete library"
+        )?;
+
+        let response = response.into_inner();
+        if response.success {
+            Ok(())
+        } else {
+            Err(SnipError::runtime_error(
+                "Failed to delete library",
                 Some(&response.message),
             ))
         }
@@ -379,9 +444,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constants() {
-        assert_eq!(MAX_RETRIES, 3);
-        assert_eq!(INITIAL_DELAY_MS, 100);
-        assert_eq!(MAX_DELAY_MS, 5000);
+    fn test_default_retry_config() {
+        let config = SyncRetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.initial_delay_ms, 100);
+        assert_eq!(config.max_delay_ms, 5000);
+    }
+
+    #[test]
+    fn test_non_retryable_errors() {
+        let non_retryable = [
+            tonic::Status::invalid_argument("test"),
+            tonic::Status::not_found("test"),
+            tonic::Status::already_exists("test"),
+            tonic::Status::permission_denied("test"),
+            tonic::Status::unauthenticated("test"),
+        ];
+        for status in &non_retryable {
+            assert!(
+                !SyncRetryConfig::is_retryable_grpc_error(status),
+                "Expected {:?} to be non-retryable",
+                status.code()
+            );
+        }
+
+        let retryable = [
+            tonic::Status::internal("test"),
+            tonic::Status::unavailable("test"),
+            tonic::Status::deadline_exceeded("test"),
+        ];
+        for status in &retryable {
+            assert!(
+                SyncRetryConfig::is_retryable_grpc_error(status),
+                "Expected {:?} to be retryable",
+                status.code()
+            );
+        }
     }
 }

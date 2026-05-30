@@ -3,16 +3,18 @@ use crate::config::{load_sync_settings, save_sync_settings, SyncSettings};
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
 
-pub fn run(server: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    if let Ok(settings) = load_sync_settings() {
-        if !settings.device_id.is_empty() {
-            eprintln!("Already registered! Device ID: {}", settings.device_id);
-            eprintln!(
-                "Config file: {}",
-                crate::config::get_sync_config_path().display()
-            );
-            eprintln!("If you want to re-register, remove this file.");
-            return Ok(());
+pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    if !force {
+        if let Ok(settings) = load_sync_settings() {
+            if !settings.device_id.is_empty() {
+                eprintln!("Already registered! Device ID: {}", settings.device_id);
+                eprintln!(
+                    "Config file: {}",
+                    crate::config::get_sync_config_path().display()
+                );
+                eprintln!("Use --force to re-register.");
+                return Ok(());
+            }
         }
     }
 

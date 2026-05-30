@@ -20,6 +20,7 @@ pub fn run() -> SnipResult<()> {
     println!("  p     : preview command");
     println!("  i     : insert mode");
     println!("  q     : quit");
+    println!("  Esc   : no-op (use q to quit)");
     println!("  /     : search");
     println!("  t     : toggle tag filter");
     println!("  n     : sort by newest");

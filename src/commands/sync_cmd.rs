@@ -121,15 +121,18 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
     }
 }
 
-pub fn run(
-    _config: Option<PathBuf>,
-    library: Option<String>,
-    servers: bool,
-    non_interactive: bool,
-    push_only: bool,
-    pull_only: bool,
-    runtime: &tokio::runtime::Runtime,
-) -> SnipResult<()> {
+pub struct SyncOptions {
+    #[allow(dead_code)]
+    pub config: Option<PathBuf>,
+    pub library: Option<String>,
+    pub servers: bool,
+    pub non_interactive: bool,
+    pub push_only: bool,
+    pub pull_only: bool,
+    pub dry_run: bool,
+}
+
+pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = match load_sync_settings() {
         Ok(settings) => settings,
         Err(e) => {
@@ -138,7 +141,7 @@ pub fn run(
         }
     };
 
-    if servers {
+    if options.servers {
         if !sync_settings.enabled {
             eprintln!("Sync is not enabled. Configure sync settings first.");
             return Ok(());
@@ -178,16 +181,43 @@ pub fn run(
             })?;
 
             for lib in libs {
-                link_server_library(&lib, &mut mgr, non_interactive, true);
+                link_server_library(&lib, &mut mgr, options.non_interactive, true);
+            }
+
+            if options.dry_run {
+                println!("\n[DRY RUN] Would sync snippets:");
+                let lib_path = match crate::commands::get_library_path(options.library)? {
+                    Some(p) => p,
+                    None => {
+                        println!("  No library selected");
+                        return Ok(());
+                    }
+                };
+                let snippets = crate::library::load_library(&lib_path)?;
+                let direction = if options.push_only {
+                    "push to server"
+                } else if options.pull_only {
+                    "pull from server"
+                } else {
+                    "bidirectional"
+                };
+                println!("  Direction: {}", direction);
+                println!("  Snippets in library: {}", snippets.snippets.len());
+                for s in &snippets.snippets {
+                    if !s.deleted {
+                        println!("  - {} ({})", s.description, &s.id[..8.min(s.id.len())]);
+                    }
+                }
+                return Ok(());
             }
 
             println!("\nPulling snippets from server...");
             if let Err(e) = crate::sync_commands::run_sync(
                 &sync_settings,
-                library.as_deref(),
-                non_interactive,
-                push_only,
-                pull_only,
+                options.library.as_deref(),
+                options.non_interactive,
+                options.push_only,
+                options.pull_only,
                 runtime,
             ) {
                 eprintln!("Sync failed: {}", e);

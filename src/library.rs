@@ -131,6 +131,12 @@ impl Snippet {
                 Some("Snippet command cannot be empty"),
             ));
         }
+        if description.trim().is_empty() {
+            return Err(SnipError::runtime_error(
+                "Empty description",
+                Some("Snippet description cannot be empty"),
+            ));
+        }
         Ok(Self {
             id: String::new(),
             description,

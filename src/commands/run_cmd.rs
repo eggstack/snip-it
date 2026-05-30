@@ -6,6 +6,73 @@ use crate::logging::{audit_log, log_command_execution};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+
+const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
+
+fn get_timeout() -> Duration {
+    let secs = std::env::var("SNP_COMMAND_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+    Duration::from_secs(secs)
+}
+
+fn run_command_with_timeout(
+    shell: &str,
+    command: &str,
+    timeout: Duration,
+) -> SnipResult<std::process::Output> {
+    let mut child = Command::new(shell)
+        .arg("-c")
+        .arg(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))?;
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                use std::io::Read;
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(ref mut out) = child.stdout {
+                    let _ = out.read_to_end(&mut stdout);
+                }
+                if let Some(ref mut err) = child.stderr {
+                    let _ = err.read_to_end(&mut stderr);
+                }
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(SnipError::runtime_error(
+                        "Command timed out",
+                        Some(&format!(
+                            "Command exceeded timeout of {} seconds",
+                            timeout.as_secs()
+                        )),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(SnipError::runtime_error(
+                    "Failed to check command status",
+                    Some(&e.to_string()),
+                ));
+            }
+        }
+    }
+}
 
 fn get_shell() -> String {
     "/bin/sh".to_string()
@@ -15,16 +82,17 @@ fn handle_command_result(
     command: &str,
     result: std::process::ExitStatus,
     snippet: &Snippet,
+    working_dir: Option<&std::path::Path>,
 ) -> crate::ProcessResult {
     let result_str: Result<(), String> = if result.success() {
-        if let Err(e) = audit_log("execute", snippet) {
+        if let Err(e) = audit_log("execute", snippet, None) {
             tracing::debug!("Audit log write failed: {}", e);
         }
         Ok(())
     } else {
         Err(format!("exit code: {}", result))
     };
-    log_command_execution(command, &[], &result_str);
+    log_command_execution(command, &[], &result_str, working_dir);
 
     if result.success() {
         crate::ProcessResult::Done("Executed".to_string())
@@ -42,11 +110,11 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
 
     if copy {
         crate::clipboard::copy_to_clipboard_auto(&final_command)?;
-        if let Err(e) = audit_log("copy", snippet) {
+        if let Err(e) = audit_log("copy", snippet, None) {
             tracing::debug!("Audit log write failed: {}", e);
         }
         let ok_result: std::result::Result<(), String> = Ok(());
-        log_command_execution(&final_command, &[], &ok_result);
+        log_command_execution(&final_command, &[], &ok_result, None);
         Ok(crate::ProcessResult::Done(
             "Copied to clipboard".to_string(),
         ))
@@ -88,30 +156,51 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         }
 
         let shell = get_shell();
-        let output = Command::new(&shell)
+        let timeout = get_timeout();
+        let mut child = Command::new(&shell)
             .arg("-c")
             .arg(&final_command)
             .stdout(output_file)
-            .output()?;
+            .spawn()
+            .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.is_empty() {
-                eprintln!("Error: {}", stderr);
+        let start = std::time::Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(SnipError::runtime_error(
+                            "Command timed out",
+                            Some(&format!(
+                                "Command exceeded timeout of {} seconds",
+                                timeout.as_secs()
+                            )),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    return Err(SnipError::runtime_error(
+                        "Failed to check command status",
+                        Some(&e.to_string()),
+                    ));
+                }
             }
-        }
+        };
 
         Ok(handle_command_result(
             &final_command,
-            output.status,
+            status,
             snippet,
+            Some(&cwd),
         ))
     } else {
         let shell = get_shell();
-        let output = Command::new(&shell)
-            .arg("-c")
-            .arg(&final_command)
-            .output()?;
+        let timeout = get_timeout();
+        let output = run_command_with_timeout(&shell, &final_command, timeout)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -124,6 +213,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             &final_command,
             output.status,
             snippet,
+            None,
         ))
     }
 }

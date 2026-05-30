@@ -62,7 +62,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 .borders(Borders::ALL)
                 .style(style_fg(theme.border));
 
-            let num_vars = values.len().min(10);
+            let num_vars = values.len();
             let var_height = num_vars * 3;
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -73,10 +73,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             f.render_widget(block, size);
 
             for (i, var) in vars.iter().enumerate() {
-                if i >= num_vars {
-                    break;
-                }
-
                 let var_block = Block::default()
                     .title(var.name.as_str())
                     .borders(Borders::ALL)
@@ -137,11 +133,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => {
-                            let _ = crossterm::execute!(
-                                std::io::stdout(),
-                                crossterm::event::DisableMouseCapture
-                            );
-
                             ratatui::restore();
                             return Ok(VariablePromptResult::Cancel);
                         }

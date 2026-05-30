@@ -36,6 +36,15 @@ pub struct SyncSettings {
     pub sync_direction: SyncDirection,
     #[serde(default)]
     pub clipboard_auto_clear_seconds: Option<u32>,
+    #[serde(default)]
+    pub sync_limit: Option<i32>,
+}
+
+impl SyncSettings {
+    #[allow(dead_code)]
+    pub fn sync_limit_value(&self) -> i32 {
+        self.sync_limit.unwrap_or(1000)
+    }
 }
 
 fn serialize_api_key<S: serde::Serializer>(
@@ -116,6 +125,7 @@ impl Default for SyncSettings {
             auto_sync: false,
             sync_direction: SyncDirection::default(),
             clipboard_auto_clear_seconds: None,
+            sync_limit: None,
         }
     }
 }
@@ -171,7 +181,14 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     let content = quote_strings_containing_backslashes(&content);
 
-    fs::write(&path, content).map_err(|e| SnipError::io_error("write sync config", path, e))?;
+    let tmp_path = path.with_extension("toml.tmp");
+    fs::write(&tmp_path, &content)
+        .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
+
+    fs::rename(&tmp_path, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        SnipError::io_error("atomic rename sync config", path, e)
+    })?;
 
     Ok(())
 }
@@ -230,6 +247,7 @@ mod tests {
         assert_eq!(settings.sync_interval_minutes, 30);
         assert!(!settings.auto_sync);
         assert_eq!(settings.sync_direction, SyncDirection::Push);
+        assert_eq!(settings.sync_limit, None);
     }
 
     #[test]
@@ -257,6 +275,7 @@ mod tests {
             auto_sync: true,
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
+            sync_limit: Some(2000),
         };
 
         let toml_str = toml::to_string_pretty(&settings).unwrap();

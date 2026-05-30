@@ -27,12 +27,13 @@ use aes_gcm::{
 use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
 const ARGON2_TIME_COST: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
 
+#[derive(Zeroize, ZeroizeOnDrop)]
 struct DerivedKey([u8; 32]);
 
 impl DerivedKey {
@@ -42,18 +43,6 @@ impl DerivedKey {
 
     fn as_slice(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl Zeroize for DerivedKey {
-    fn zeroize(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-impl Drop for DerivedKey {
-    fn drop(&mut self) {
-        self.zeroize();
     }
 }
 

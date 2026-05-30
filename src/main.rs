@@ -97,6 +97,10 @@ enum Commands {
         config: Option<PathBuf>,
         #[arg(short, long)]
         library: Option<String>,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        csv: bool,
     },
     /// Run a snippet via TUI selection (r)
     #[command(alias = "r")]
@@ -150,6 +154,8 @@ enum Commands {
         push_only: bool,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         pull_only: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        dry_run: bool,
     },
     /// Setup automatic sync with cron
     Cron {
@@ -161,6 +167,8 @@ enum Commands {
     Register {
         #[arg(long, default_value = "http://localhost:50051")]
         server: String,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        force: bool,
     },
     /// Manage snippet libraries
     #[command(alias = "lib")]
@@ -229,8 +237,17 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             filter,
             config,
             library,
+            json,
+            csv,
         } => {
-            commands::list_cmd::run(filter, config, library)?;
+            let format = if json {
+                commands::list_cmd::ListFormat::Json
+            } else if csv {
+                commands::list_cmd::ListFormat::Csv
+            } else {
+                commands::list_cmd::ListFormat::Default
+            };
+            commands::list_cmd::run(filter, config, library, format)?;
         }
         Commands::Run {
             filter,
@@ -265,22 +282,24 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             non_interactive,
             push_only,
             pull_only,
+            dry_run,
         } => {
-            commands::sync_cmd::run(
-                None,
+            let options = commands::sync_cmd::SyncOptions {
+                config: None,
                 library,
                 servers,
                 non_interactive,
                 push_only,
                 pull_only,
-                &RUNTIME,
-            )?;
+                dry_run,
+            };
+            commands::sync_cmd::run(options, &RUNTIME)?;
         }
         Commands::Cron { interval } => {
             commands::cron_cmd::run(interval)?;
         }
-        Commands::Register { server } => {
-            commands::register_cmd::run(server, &RUNTIME)?;
+        Commands::Register { server, force } => {
+            commands::register_cmd::run(server, force, &RUNTIME)?;
         }
         Commands::Library { command } => match command {
             LibraryCommands::List => commands::library_cmd::run_list()?,

@@ -281,10 +281,7 @@ impl SnipSyncService {
         self.metrics.library_operations_total.inc();
     }
 
-    async fn authenticate_and_rate_limit(
-        &self,
-        api_key: &str,
-    ) -> Result<String, Status> {
+    async fn authenticate_and_rate_limit(&self, api_key: &str) -> Result<String, Status> {
         if !self
             .rate_limiter
             .allow(
@@ -821,7 +818,8 @@ impl SnippetSync for SnipSyncService {
             return Err(Status::invalid_argument("Filename is required"));
         }
 
-        if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\') {
+        if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\')
+        {
             return Err(Status::invalid_argument("Invalid filename"));
         }
 
@@ -872,7 +870,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "TLS is not enabled. For production, set TLS_ENABLED=true or use a reverse proxy with TLS. \
                  Set SNIP_SYNC_ALLOW_HTTP=true to allow plaintext HTTP."
             );
-            return Err("TLS is required for production. Set TLS_ENABLED=true or SNIP_SYNC_ALLOW_HTTP=true".into());
+            return Err(
+                "TLS is required for production. Set TLS_ENABLED=true or SNIP_SYNC_ALLOW_HTTP=true"
+                    .into(),
+            );
         }
     }
 

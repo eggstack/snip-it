@@ -31,11 +31,14 @@ static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Configuration for logging behavior.
+#[allow(dead_code)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
     pub file_name: String,
     pub level: Level,
     pub include_target: bool,
+    pub audit_max_size_bytes: u64,
+    pub audit_retention_days: u64,
 }
 
 impl Default for LogConfig {
@@ -45,6 +48,8 @@ impl Default for LogConfig {
             file_name: "snp.log".to_string(),
             level: Level::INFO,
             include_target: true,
+            audit_max_size_bytes: AUDIT_LOG_MAX_SIZE_BYTES,
+            audit_retention_days: AUDIT_LOG_RETENTION_DAYS,
         }
     }
 }
@@ -53,6 +58,7 @@ pub fn get_default_log_dir() -> PathBuf {
     crate::utils::config::get_config_dir().join("logs")
 }
 
+#[tracing::instrument(level = "info", skip(config))]
 pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>> {
     let log_dir = &config.log_dir;
 
@@ -94,7 +100,7 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     subscriber.init();
 
-    *LOG_GUARD.lock().unwrap() = Some(guard);
+    *LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
 
     tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
     tracing::info!("Log level: {:?}", config.level);
@@ -107,11 +113,55 @@ pub fn init_default_logging() {
     if let Err(e) = init_logging(&config) {
         eprintln!("Warning: Failed to initialize logging: {}", e);
     }
+    self_check();
+}
+
+fn self_check() {
+    let log_dir = get_default_log_dir();
+    if !log_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&log_dir) {
+            eprintln!(
+                "Warning: Failed to create log directory {}: {}",
+                log_dir.display(),
+                e
+            );
+            return;
+        }
+    }
+
+    match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join(".self_check"))
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(log_dir.join(".self_check"));
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: Log directory {} is not writable: {}",
+                log_dir.display(),
+                e
+            );
+        }
+    }
+
+    let config_dir = crate::utils::config::get_config_dir();
+    if !config_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&config_dir) {
+            eprintln!(
+                "Warning: Failed to create config directory {}: {}",
+                config_dir.display(),
+                e
+            );
+        }
+    }
 }
 
 pub fn shutdown_logging() {
-    if let Some(guard) = LOG_GUARD.lock().unwrap().take() {
+    if let Some(guard) = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take() {
         tracing::info!("Logging shutdown complete");
+        std::thread::sleep(std::time::Duration::from_millis(100));
         drop(guard);
     }
 }
@@ -156,24 +206,26 @@ pub fn setup_panic_handler() {
     }));
 }
 
+#[tracing::instrument(level = "info", skip(result), fields(command = %command))]
 pub fn log_command_execution(
     command: &str,
     args: &[String],
     result: &std::result::Result<(), String>,
+    working_dir: Option<&std::path::Path>,
 ) {
     match result {
         Ok(()) => {
             tracing::info!(
-                command = %command,
                 args = ?args,
+                working_dir = ?working_dir,
                 "Command executed successfully"
             );
         }
         Err(e) => {
             tracing::error!(
-                command = %command,
                 args = ?args,
                 error = %e,
+                working_dir = ?working_dir,
                 "Command execution failed"
             );
         }
@@ -231,7 +283,12 @@ pub fn get_audit_log_path() -> std::io::Result<std::path::PathBuf> {
     Ok(cfg_dir.join("audit.log"))
 }
 
-pub fn audit_log(action: &str, snippet: &crate::library::Snippet) -> std::io::Result<()> {
+#[tracing::instrument(level = "info", skip(snippet), fields(action = %action, snippet_id = %snippet.id))]
+pub fn audit_log(
+    action: &str,
+    snippet: &crate::library::Snippet,
+    library_id: Option<&str>,
+) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -243,7 +300,11 @@ pub fn audit_log(action: &str, snippet: &crate::library::Snippet) -> std::io::Re
         }
     };
 
-    if let Err(e) = rotate_audit_log_if_needed(&log_path) {
+    if let Err(e) = rotate_audit_log_if_needed(
+        &log_path,
+        AUDIT_LOG_MAX_SIZE_BYTES,
+        AUDIT_LOG_RETENTION_DAYS,
+    ) {
         tracing::warn!(error = %e, "Failed to rotate audit log");
     }
 
@@ -253,11 +314,13 @@ pub fn audit_log(action: &str, snippet: &crate::library::Snippet) -> std::io::Re
         .as_secs();
 
     let log_entry = format!(
-        "{}|{}|{}|{}\n",
+        "{}|{}|{}|{}|{}|{}\n",
         timestamp,
         action,
         escape_pipe(&snippet.id),
-        escape_pipe(&snippet.description)
+        escape_pipe(&snippet.description),
+        escape_pipe(library_id.unwrap_or("")),
+        escape_pipe(&snippet.device_id)
     );
 
     let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
@@ -282,11 +345,15 @@ fn escape_pipe(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-fn rotate_audit_log_if_needed(log_path: &Path) -> std::io::Result<()> {
+fn rotate_audit_log_if_needed(
+    log_path: &Path,
+    max_size_bytes: u64,
+    retention_days: u64,
+) -> std::io::Result<()> {
     let metadata = fs::metadata(log_path)?;
     let size = metadata.len();
 
-    if size > AUDIT_LOG_MAX_SIZE_BYTES {
+    if size > max_size_bytes {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -297,7 +364,7 @@ fn rotate_audit_log_if_needed(log_path: &Path) -> std::io::Result<()> {
 
     let log_dir = log_path.parent().unwrap_or(log_path);
     if let Ok(entries) = fs::read_dir(log_dir) {
-        let retention_secs = AUDIT_LOG_RETENTION_DAYS * 86400;
+        let retention_secs = retention_days * 86400;
 
         for entry in entries.flatten() {
             let path = entry.path();

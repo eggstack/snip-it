@@ -18,11 +18,11 @@ fn process_snippet(
     };
 
     crate::clipboard::copy_to_clipboard_auto(&final_command)?;
-    if let Err(e) = audit_log("copy", snippet) {
+    if let Err(e) = audit_log("copy", snippet, None) {
         tracing::debug!("Audit log write failed: {}", e);
     }
     let ok_result: std::result::Result<(), String> = Ok(());
-    log_command_execution(&final_command, &[], &ok_result);
+    log_command_execution(&final_command, &[], &ok_result, None);
     Ok(crate::ProcessResult::Done(
         "Copied to clipboard".to_string(),
     ))
