@@ -48,11 +48,19 @@ fn serialize_api_key<S: serde::Serializer>(
     match keychain_store(api_key) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
         Err(e) => {
-            tracing::warn!(
-                "Keychain unavailable, storing API key in config file: {}",
-                e
-            );
-            serializer.serialize_str(api_key)
+            if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
+                tracing::warn!(
+                    "Keychain unavailable, storing API key in config file (explicitly allowed): {}",
+                    e
+                );
+                serializer.serialize_str(api_key)
+            } else {
+                tracing::error!(
+                    "Keychain unavailable, refusing to store API key in plaintext. \
+                     Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow."
+                );
+                serializer.serialize_str("")
+            }
         }
     }
 }
@@ -125,9 +133,7 @@ pub enum SyncDirection {
 }
 
 fn default_sync_url() -> String {
-    // NOTE: For production use, the server requires TLS or a reverse proxy.
-    // The default localhost URL uses plaintext HTTP for development only.
-    "http://localhost:50051".to_string()
+    "https://localhost:50051".to_string()
 }
 
 fn default_sync_interval() -> u32 {
@@ -218,7 +224,7 @@ mod tests {
         let settings = SyncSettings::default();
 
         assert!(!settings.enabled);
-        assert_eq!(settings.server_url, "http://localhost:50051");
+        assert_eq!(settings.server_url, "https://localhost:50051");
         assert!(settings.api_key.is_empty());
         assert!(settings.device_id.is_empty());
         assert_eq!(settings.sync_interval_minutes, 30);

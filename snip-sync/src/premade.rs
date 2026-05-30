@@ -196,13 +196,15 @@ impl PremadeManager {
             ));
         }
 
-        fs::read_to_string(&canonical_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Status::not_found(format!("Premade library '{}' not found", filename))
-            } else {
-                Status::internal(format!("Failed to read premade library: {}", e))
-            }
-        })
+        fs::read_to_string(&canonical_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Status::not_found(format!("Premade library '{}' not found", filename))
+                } else {
+                    Status::internal(format!("Failed to read premade library: {}", e))
+                }
+            })
+            .map(|content| fix_invalid_toml_escapes(&content))
     }
 
     pub fn is_empty(&self) -> bool {

@@ -30,6 +30,7 @@ const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
 const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 const DEFAULT_MAX_TAGS: usize = 50;
 const DEFAULT_MAX_TAG_LENGTH: usize = 100;
+const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 const MAX_REQUEST_LIMIT: i32 = 1000;
@@ -75,6 +76,7 @@ struct LimitsConfig {
 #[derive(Deserialize, Default)]
 struct RateLimitConfig {
     requests_per_minute: Option<u32>,
+    trusted_proxies: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -102,6 +104,7 @@ struct Config {
     max_tag_length: usize,
     request_timeout_secs: u64,
     rate_limit_per_minute: u32,
+    trusted_proxies: Vec<String>,
     metrics_username: Option<String>,
     metrics_password: Option<String>,
     cors_allowed_origins: Vec<String>,
@@ -207,6 +210,11 @@ impl Config {
                     .as_ref()
                     .and_then(|r| r.requests_per_minute))
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
+            trusted_proxies: std::env::var("TRUSTED_PROXIES")
+                .ok()
+                .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+                .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
+                .unwrap_or_default(),
             metrics_username: std::env::var("METRICS_USERNAME")
                 .ok()
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
@@ -359,18 +367,27 @@ impl SnippetSync for SnipSyncService {
         self.record_request("register");
 
         // Use peer IP address for rate limiting (device_id is client-controlled)
-        let rate_limit_key = request
-            .metadata()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                    .map(|info| info.0.ip().to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
+        // Only trust x-forwarded-for if it comes from a trusted proxy
+        let rate_limit_key = if let Some(proxy_ip) = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|info| info.0.ip().to_string())
+            .filter(|ip| self.config.trusted_proxies.contains(ip))
+        {
+            request
+                .metadata()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|header| header.split(',').next())
+                .map(|s| s.trim().to_string())
+                .unwrap_or(proxy_ip)
+        } else {
+            request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                .map(|info| info.0.ip().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        };
 
         if !self
             .rate_limiter
@@ -551,6 +568,14 @@ impl SnippetSync for SnipSyncService {
         self.record_request("sync");
         self.record_sync();
         let req = request.into_inner();
+
+        if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
+            return Err(Status::invalid_argument(format!(
+                "Too many snippets in sync request (max {}), got {}",
+                DEFAULT_MAX_SYNC_SNIPPETS,
+                req.local_snippets.len()
+            )));
+        }
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
@@ -796,10 +821,14 @@ impl SnippetSync for SnipSyncService {
             return Err(Status::invalid_argument("Filename is required"));
         }
 
+        if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\') {
+            return Err(Status::invalid_argument("Invalid filename"));
+        }
+
         let sanitized: String = req
             .filename
             .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
             .collect();
 
         if sanitized.is_empty() || sanitized.len() > 64 {
@@ -826,10 +855,26 @@ impl SnippetSync for SnipSyncService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_target(false).init();
 
+    let tls_enabled = std::env::var("TLS_ENABLED")
+        .ok()
+        .is_some_and(|v| v == "true" || v == "1");
+
     tracing::info!("Starting snip-sync server v{}", env!("CARGO_PKG_VERSION"));
-    tracing::warn!(
-        "TLS is not enabled. For production, use a reverse proxy with TLS (nginx, traefik, etc.)"
-    );
+
+    if !tls_enabled {
+        if std::env::var_os("SNIP_SYNC_ALLOW_HTTP").is_some_and(|v| v == "true") {
+            tracing::warn!(
+                "TLS is not enabled. For production, use a reverse proxy with TLS (nginx, traefik, etc.) \
+                 (explicitly allowed via SNIP_SYNC_ALLOW_HTTP=true)"
+            );
+        } else {
+            tracing::error!(
+                "TLS is not enabled. For production, set TLS_ENABLED=true or use a reverse proxy with TLS. \
+                 Set SNIP_SYNC_ALLOW_HTTP=true to allow plaintext HTTP."
+            );
+            return Err("TLS is required for production. Set TLS_ENABLED=true or SNIP_SYNC_ALLOW_HTTP=true".into());
+        }
+    }
 
     Config::ensure_config_file();
     let config = Config::load();

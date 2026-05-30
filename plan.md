@@ -411,11 +411,40 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2 (completed)
 
 #### SERVER-3: Missing Input Validation on `api_key` Field in Register
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `snip-sync/src/main.rs:390-392`
 - **Description:** `register` RPC completely ignores the `api_key` field from `RegisterRequest`. A new API key is generated with `uuid::Uuid::new_v4()` regardless of what was passed. No length/format validation.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
+
+#### SERVER-4: Race Condition in Rate Limiter Cleanup Task
+- **Status:** DONE
+- **Location:** `snip-sync/src/rate_limiter.rs:17-27`
+- **Description:** Cleanup task holds lock across `await` point. If task panics, lock is poisoned.
+- **Fix:** Use a separate channel to trigger shutdown.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-5: No Limits on `local_snippets` Array in Sync
+- **Status:** DONE
+- **Location:** `snip-sync/src/main.rs:580`
+- **Description:** `SyncRequest.local_snippets` has no size limit. Client could send millions of snippets causing memory exhaustion.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-6: Premade File Content Not Sanitized Before Serving
+- **Status:** DONE
+- **Location:** `snip-sync/src/premade.rs:199`
+- **Description:** `get()` returns raw file content via `fs::read_to_string(&canonical_path)` without running `fix_invalid_toml_escapes()`.
+- **Dependencies:** None
+- **Wave:** 3
+
+#### SERVER-8: Add Batch Size Limit for Sync local_snippets
+- **Status:** DONE
+- **Location:** `snip-sync/src/main.rs:580`
+- **Description:** Validate `req.local_snippets.len()` against reasonable limit.
+- **Dependencies:** None
+- **Wave:** 3
 
 #### SERVER-4: Race Condition in Rate Limiter Cleanup Task
 - **Status:** TODO
@@ -461,19 +490,20 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### PROTO-1: Premade Library Filename Sanitization Too Restrictive
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:798-806`
 - **Description:** Filters out dots (`.`), which are valid in filenames. `devops.tools` becomes `devopstools`.
-- **Fix:** Allow dots, add path traversal protection instead.
+- **Fix:** Allow dots, add path traversal protection instead (checking for `..`, `/`, `\`).
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### PROTO-2: Rate Limiting Bypass on Register Endpoint
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:360-387`
 - **Description:** `register` uses `x-forwarded-for` header for rate limiting without validation. Clients can spoof.
+- **Fix:** Only trust x-forwarded-for from trusted proxies (configurable via `TRUSTED_PROXIES` env var or `rate_limit.trusted_proxies` config).
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### PROTO-3: Missing Pagination on Premade Library Endpoints
 - **Status:** TODO
@@ -497,32 +527,36 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LIB-1: No Sorting on Save
-- **Status:** TODO
-- **Location:** `src/library.rs:511-525`
-- **Description:** `save_library()` does not sort snippets by `updated_at` descending as documented.
+- **Status:** **FIXED**
+- **Location:** `src/library.rs:524-547`
+- **Description:** `save_library()` now sorts snippets by `updated_at` descending before saving.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** `sorted.snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));`
 
 #### LIB-2: backup_library() Not Called Automatically
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** `backup_library()` is never invoked by `save_library()`. Users must manually call it.
+- **Description:** `backup_library()` is now invoked automatically before saving.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** `backup_library(path)` called at start of `save_library()`.
 
 #### LIB-3: Case-Sensitive Library Name Duplicates
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** `create_library("MyLib")` then `create_library("mylib")` will conflict on case-insensitive filesystems (macOS, Windows).
+- **Description:** `create_library("MyLib")` then `create_library("mylib")` now returns error on case-insensitive filesystems.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
+- **Fix Applied:** Added case-insensitive duplicate check in `create_library()`.
 
 #### LIB-4: Add Library Name Case-Insensitivity Check
-- **Status:** TODO
+- **Status:** **FIXED** (combined with LIB-3)
 - **Location:** `src/library.rs`
 - **Description:** Check for case-insensitive duplicates on case-insensitive filesystems.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** Same as LIB-3.
 
 #### LIB-5: Add Confirmation Before delete_library()
 - **Status:** TODO
@@ -532,11 +566,12 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LIB-6: Support `name` -> `description` Migration
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** Legacy data with `name` field fails to deserialize. Need alias.
+- **Description:** Legacy data with `name` field now deserializes correctly via alias.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** Added `#[serde(alias = "name")]` to `description` field.
 
 #### LOG-1: shutdown_logging May Lose Buffered Logs
 - **Status:** TODO
@@ -546,16 +581,18 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2
 
 #### LOG-2: Audit Log Unbounded Growth
-- **Status:** TODO
-- **Location:** `src/logging.rs:217-263`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:289-325`
 - **Description:** `audit.log` grows indefinitely. No rotation or retention policy.
+- **Fix:** Added `rotate_audit_log_if_needed()` function that rotates log when it exceeds 10MB and deletes rotated files older than 30 days.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-3: Audit Log Failure Is Invisible
-- **Status:** TODO
-- **Location:** `src/logging.rs:223-232`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:238-278`
 - **Description:** Errors silently swallowed and logged at debug level only.
+- **Fix:** Audit log errors now logged at `warn` level for path failures and `error` level for write failures.
 - **Dependencies:** None
 - **Wave:** 3
 
@@ -567,23 +604,28 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LOG-5: Add `log_sync_operation` Function
-- **Status:** TODO
-- **Location:** `src/logging.rs`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:327-374`
 - **Description:** No equivalent for sync operations (connect, merge, conflict resolution).
+- **Fix:** Added `SyncOperationType` enum and `log_sync_operation()` function that logs sync operations with appropriate levels.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-6: Audit Log Contains Snippet Content
-- **Status:** TODO
-- **Location:** `src/logging.rs:247-254`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:255-261`
 - **Description:** Audit log records description, command, and output. Sensitive data written to plain text.
+- **Fix:** Removed command and output from audit log. Now only logs snippet ID, description, and operation type.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-7: Log Directory Permissions
-- **Status:** TODO
-- **Location:** `src/logging.rs:55`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:61-66`
 - **Description:** Default umask creates directories with 755 permissions. Others can read logs.
+- **Fix:** Set explicit permissions (700) for log directory on Unix.
+- **Dependencies:** None
+- **Wave:** 3
 - **Dependencies:** None
 - **Wave:** 3
 
@@ -627,56 +669,60 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 ### Improvements
 
 #### SEC-7: Add TLS/HTTPS Enforcement for Production
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `snip-sync/src/main.rs:829-831`
 - **Severity:** High
 - **Description:** Server warns "TLS is not enabled" but doesn't enforce. Client should also validate TLS certificates.
+- **Fix:** Server now requires `TLS_ENABLED=true` or fails to start. Set `SNIP_SYNC_ALLOW_HTTP=true` to allow plaintext for development.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### SEC-8: Make Default Server URL HTTPS
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/config.rs:125-129`
 - **Severity:** Medium
 - **Description:** Default `http://localhost:50051` is dangerous. Should default to HTTPS.
+- **Fix:** Changed default URL from `http://localhost:50051` to `https://localhost:50051`.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### SEC-9: Keychain Failure Should Not Silently Fall Back to Plaintext
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/config.rs:48-56`
 - **Severity:** Medium
 - **Description:** When keychain storage fails, API key is stored in plaintext. Should fail explicitly or require confirmation.
+- **Fix:** Refuses to store plaintext API key unless `SNP_ALLOW_PLAINTEXT_API_KEY=true` is explicitly set.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-3: run_cmd --clip Copies Command, Not Output
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/run_cmd.rs:81-90`
 - **Description:** `--clip` copies the expanded command, not the output. User expectation mismatch.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-10: sync_cmd::run Doesn't Propagate Sync Errors
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/sync_cmd.rs:185-192`
 - **Description:** `run_sync()` errors silently ignored. Always returns `Ok(())`.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### CMD-11: premade_cmd::run_sync Ignores Return Value
-- **Status:** TODO
+- **Status:** Done
 - **Location:** `src/commands/premade_cmd.rs:144-153`
 - **Description:** `run_sync()` always returns `Ok(())` regardless of actual sync result.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### TUI-1: Visual Line Mode (`V`) Bug
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/ui/mod.rs:633-638`
 - **Description:** When pressing `V`, `visual_end` is set but `selected` stays at current position. Confusing visual state.
+- **Fix:** Set `selected = visual_end` when `V` is pressed.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
 
 #### UTILS-1: Escape Sequence Handling Inconsistency
 - **Status:** TODO
