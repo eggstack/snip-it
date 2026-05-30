@@ -111,3 +111,26 @@ impl StringExt for String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_if_empty_returns_fallback_when_empty() {
+        let s = String::new();
+        assert_eq!(s.if_empty("default"), "default");
+    }
+
+    #[test]
+    fn test_if_empty_returns_self_when_not_empty() {
+        let s = "hello".to_string();
+        assert_eq!(s.if_empty("default"), "hello");
+    }
+
+    #[test]
+    fn test_if_empty_with_empty_fallback() {
+        let s = String::new();
+        assert_eq!(s.if_empty(""), "");
+    }
+}

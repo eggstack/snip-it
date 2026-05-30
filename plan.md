@@ -13,6 +13,82 @@
 
 ---
 
+## TESTING IMPROVEMENTS
+
+### TEST-1: Code Coverage with cargo-llvm-cov
+- **Status:** Completed
+- **Files:** `.github/workflows/ci.yml`
+- **Description:** Add code coverage tracking using `cargo-llvm-cov` with codecov integration
+- **Tasks:**
+  - [x] Add `cargo-llvm-cov` to CI workflow
+  - [x] Configure coverage job with lcov output
+  - [x] Integrate with codecov (optional)
+
+### TEST-2: Sync Integration Tests
+- **Status:** Deferred (requires significant infrastructure)
+- **Files:** `tests/sync_integration.rs` (new)
+- **Description:** Add integration tests for gRPC client/server sync operations
+- **Tasks:**
+  - [ ] Create `tests/sync_integration.rs`
+  - [ ] Add fixture for starting local snip-sync server
+  - [ ] Add tests for full sync cycle (register, push, pull, merge)
+  - [ ] Add tests for conflict detection (device ID mismatch)
+  - [ ] Add tests for error handling (server unavailable, auth failures)
+- **Blocked by:** Requires PTY/process management for server lifecycle
+
+### TEST-3: TUI Integration Tests
+- **Status:** Deferred (requires PTY/terminal emulation)
+- **Files:** `tests/tui_integration.rs` (new)
+- **Description:** Add integration tests for the TUI workflow
+- **Tasks:**
+  - [ ] Create `tests/tui_integration.rs`
+  - [ ] Add tests for snippet selection flow
+  - [ ] Add tests for fuzzy filtering
+  - [ ] Add tests for visual mode operations
+  - [ ] Add tests for variable prompts
+- **Blocked by:** Requires terminal emulation library (vterm, pty-process)
+
+### TEST-4: Additional CLI Integration Tests
+- **Status:** Completed
+- **Files:** `tests/integration.rs`, `src/commands/edit_cmd.rs`, `src/commands/cron_cmd.rs`, `src/commands/library_cmd.rs`, `src/error.rs`
+- **Description:** Add integration tests for untested CLI commands
+- **Tasks:**
+  - [x] Add test for `list --json` output format
+  - [x] Add test for `list --csv` output format
+  - [x] Add test for CSV escape of special characters
+  - [x] Add unit tests for `edit_cmd` (resolve_editor, has_directory_component)
+  - [x] Add unit tests for `cron_cmd` (interval validation)
+  - [x] Add unit tests for `library_cmd` (StringExt trait)
+  - [x] Add unit tests for `error.rs` (error constructors, Display, source)
+  - [ ] Add test for `clip` command (requires TUI or mock)
+  - [ ] Add test for `search` command (requires TUI)
+  - [ ] Add test for `premade list` command (requires server)
+  - [ ] Add test for `premade sync` command (requires server)
+
+### TEST-6: Add Mockall for Sync Tests
+- **Status:** Deferred (not practical)
+- **Files:** `Cargo.toml`, `src/sync.rs`, `src/sync_commands.rs`
+- **Description:** Add mockall for testing gRPC client without server
+- **Tasks:**
+  - [ ] Add `mockall` to dependencies
+  - [ ] Create `SyncClient` trait for mockability
+  - [ ] Rewrite sync unit tests to use mocks
+  - [ ] Keep integration tests with real server
+- **Note:** SyncClient has tight coupling to gRPC; unit tests for merge logic (sync_commands.rs) are more practical
+
+### TEST-5: Workspace Restructure for `cargo test --lib` (Deferred)
+- **Status:** Deferred (requires significant refactoring)
+- **Files:** `Cargo.toml`, `src/lib.rs` (new), workspace configuration
+- **Description:** Restructure as workspace with lib crate to enable `cargo test --lib`
+- **Tasks:**
+  - [ ] Convert snip crate to workspace with lib target
+  - [ ] Move core logic (not CLI) to library crate
+  - [ ] Keep main.rs as thin binary wrapper
+  - [ ] Update AGENTS.md with correct commands
+- **Note:** This is a large refactoring task with risk of introducing bugs; documented in AGENTS.md instead
+
+---
+
 ## KNOWN / ACCEPTED LIMITATIONS
 
 ### Scope Constraints (Cannot Fix Without Breaking Change)

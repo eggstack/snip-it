@@ -53,3 +53,24 @@ pub fn run(interval: u32) -> SnipResult<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_interval_zero_invalid() {
+        let result = run(0);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Interval must be at least 1 minute"));
+    }
+
+    #[test]
+    fn test_run_interval_valid() {
+        let result = run(30);
+        assert!(result.is_ok());
+    }
+}

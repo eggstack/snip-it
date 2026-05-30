@@ -183,3 +183,94 @@ impl SnipError {
 
 // Convenient Result type
 pub type SnipResult<T> = Result<T, SnipError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn test_io_error_display() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
+        let err = SnipError::io_error("read config", "/etc/config.toml", io_err);
+        let msg = err.to_string();
+        assert!(msg.contains("read config"));
+        assert!(msg.contains("/etc/config.toml"));
+    }
+
+    #[test]
+    fn test_toml_error_display() {
+        let toml_err = toml::from_str::<toml::Value>("invalid = [toml").unwrap_err();
+        let err = SnipError::toml_error("parse config", toml_err);
+        let msg = err.to_string();
+        assert!(msg.contains("parse config"));
+    }
+
+    #[test]
+    fn test_clipboard_error_display() {
+        let err = SnipError::clipboard_error("copy to clipboard", "no clipboard available");
+        let msg = err.to_string();
+        assert!(msg.contains("copy to clipboard"));
+        assert!(msg.contains("no clipboard available"));
+    }
+
+    #[test]
+    fn test_command_error_display() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "command not found");
+        let err = SnipError::command_error("git", vec!["status".to_string()], io_err);
+        let msg = err.to_string();
+        assert!(msg.contains("git"));
+        assert!(msg.contains("status"));
+    }
+
+    #[test]
+    fn test_runtime_error_display_with_detail() {
+        let err = SnipError::runtime_error("sync failed", Some("server unavailable"));
+        let msg = err.to_string();
+        assert!(msg.contains("sync failed"));
+        assert!(msg.contains("server unavailable"));
+    }
+
+    #[test]
+    fn test_runtime_error_display_without_detail() {
+        let err = SnipError::runtime_error("sync failed", None);
+        let msg = err.to_string();
+        assert!(msg.contains("sync failed"));
+        assert!(!msg.contains("server unavailable"));
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "access denied");
+        let err: SnipError = io_err.into();
+        let msg = err.to_string();
+        assert!(msg.contains("I/O operation"));
+    }
+
+    #[test]
+    fn test_from_string() {
+        let err: SnipError = "something went wrong".to_string().into();
+        let msg = err.to_string();
+        assert!(msg.contains("something went wrong"));
+    }
+
+    #[test]
+    fn test_error_source_io() {
+        let io_err = io::Error::other("test");
+        let err = SnipError::io_error("op", "path", io_err);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn test_error_source_toml() {
+        let toml_err = toml::from_str::<toml::Value>("invalid = [toml").unwrap_err();
+        let err = SnipError::toml_error("op", toml_err);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn test_error_source_runtime() {
+        let err = SnipError::runtime_error("msg", None);
+        assert!(err.source().is_none());
+    }
+}

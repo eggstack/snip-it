@@ -157,3 +157,60 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
         )),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_directory_component_slash() {
+        assert!(has_directory_component("/usr/bin/vim"));
+        assert!(has_directory_component("./vim"));
+        assert!(has_directory_component("../vim"));
+        assert!(has_directory_component("path/to/vim"));
+    }
+
+    #[test]
+    fn test_has_directory_component_bare_name() {
+        assert!(!has_directory_component("vim"));
+        assert!(!has_directory_component("nano"));
+    }
+
+    #[test]
+    fn test_resolve_editor_absolute_path_exists() {
+        let result = resolve_editor("/bin/sh");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/bin/sh");
+    }
+
+    #[test]
+    fn test_resolve_editor_absolute_path_not_exists() {
+        let result = resolve_editor("/nonexistent/editor");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_resolve_editor_absolute_path_is_directory() {
+        let result = resolve_editor("/usr/bin");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("is not a file"));
+    }
+
+    #[test]
+    fn test_resolve_editor_bare_name_in_path() {
+        let result = resolve_editor("sh");
+        assert!(result.is_ok());
+        assert!(result.unwrap().ends_with("sh"));
+    }
+
+    #[test]
+    fn test_resolve_editor_bare_name_not_in_path() {
+        let result = resolve_editor("nonexistent-editor-xyz");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("could not be found in PATH"));
+    }
+}

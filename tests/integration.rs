@@ -305,6 +305,159 @@ favorite = false
     );
 }
 
+// --- List --json ---
+
+#[test]
+fn test_list_json_format() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "test-json"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("test-json.toml");
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+description = "list files"
+command = "ls -la"
+tags = ["files"]
+output = ""
+folders = []
+favorite = true
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "test-json"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0]["description"], "list files");
+    assert_eq!(parsed[0]["command"], "ls -la");
+    assert_eq!(parsed[0]["favorite"], true);
+}
+
+#[test]
+fn test_list_json_empty() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "test-json-empty"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "test-json-empty"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert!(parsed.is_empty());
+}
+
+// --- List --csv ---
+
+#[test]
+fn test_list_csv_format() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "test-csv"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("test-csv.toml");
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+description = "list files"
+command = "ls -la"
+tags = ["files", "basic"]
+output = ""
+folders = ["work"]
+favorite = true
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "test-csv"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "description,command,output,tags,folders,favorite");
+    assert!(lines[1].contains("list files"));
+    assert!(lines[1].contains("ls -la"));
+    assert!(lines[1].contains("files;basic"));
+    assert!(lines[1].contains("work"));
+}
+
+#[test]
+fn test_list_csv_escape_special_chars() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "test-csv-escape"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("test-csv-escape.toml");
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+description = "desc with, comma"
+command = "echo \"quoted\""
+tags = []
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "test-csv-escape"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("\"desc with, comma\""));
+    assert!(stdout.contains("\"echo \"\"quoted\"\"\""));
+}
+
 // --- Cron command ---
 
 #[test]

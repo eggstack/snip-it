@@ -6,11 +6,8 @@
 # Build release binary
 cargo build --release
 
-# Run all tests (library, integration, server)
+# Run all tests (unit + integration)
 cargo test
-
-# Run only unit tests
-cargo test --lib
 
 # Run only integration tests
 cargo test --test integration
@@ -26,7 +23,14 @@ cargo fmt --check
 
 # Auto-format
 cargo fmt
+
+# Code coverage (requires cargo-llvm-cov)
+cargo llvm-cov --workspace --html
 ```
+
+**Note:** `cargo test --lib` does not work because this is a binary-only crate.
+To run unit tests without integration tests, the project would need to be restructured
+as a workspace with a library crate.
 
 ## Project Structure
 
