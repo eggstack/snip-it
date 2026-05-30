@@ -18,9 +18,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+const AUDIT_LOG_RETENTION_DAYS: u64 = 30;
 
 #[allow(dead_code)]
 static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
@@ -53,6 +57,13 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
     let log_dir = &config.log_dir;
 
     fs::create_dir_all(log_dir)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o700);
+        fs::set_permissions(log_dir, perms)?;
+    }
 
     let file_appender = tracing_appender::rolling::daily(log_dir, &config.file_name);
 
@@ -223,41 +234,137 @@ pub fn get_audit_log_path() -> std::io::Result<std::path::PathBuf> {
 pub fn audit_log(action: &str, snippet: &crate::library::Snippet) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Audit logging should not fail - errors are silently ignored by callers
-    // to avoid disrupting the main application flow for a non-critical feature
     let log_path = match get_audit_log_path() {
         Ok(p) => p,
-        Err(_) => return Ok(()),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to get audit log path");
+            return Err(e);
+        }
     };
+
+    if let Err(e) = rotate_audit_log_if_needed(&log_path) {
+        tracing::warn!(error = %e, "Failed to rotate audit log");
+    }
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    fn escape_pipe(s: &str) -> String {
-        s.replace('\\', "\\\\")
-            .replace('|', "\\|")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-    }
-
     let log_entry = format!(
-        "{}|{}|{}|{}|{}\n",
+        "{}|{}|{}|{}\n",
         timestamp,
         action,
-        escape_pipe(&snippet.description),
-        escape_pipe(&snippet.command),
-        escape_pipe(&snippet.output)
+        escape_pipe(&snippet.id),
+        escape_pipe(&snippet.description)
     );
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
+    let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!(error = %e, path = %log_path.display(), "Failed to open audit log for writing");
+            return Err(e);
+        }
+    };
 
-    file.write_all(log_entry.as_bytes())?;
+    if let Err(e) = file.write_all(log_entry.as_bytes()) {
+        tracing::error!(error = %e, path = %log_path.display(), "Failed to write to audit log");
+        return Err(e);
+    }
     Ok(())
+}
+
+fn escape_pipe(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn rotate_audit_log_if_needed(log_path: &Path) -> std::io::Result<()> {
+    let metadata = fs::metadata(log_path)?;
+    let size = metadata.len();
+
+    if size > AUDIT_LOG_MAX_SIZE_BYTES {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let rotated_path = log_path.with_extension(format!("{}.rotated", timestamp));
+        fs::rename(log_path, rotated_path)?;
+    }
+
+    let log_dir = log_path.parent().unwrap_or(log_path);
+    if let Ok(entries) = fs::read_dir(log_dir) {
+        let retention_secs = AUDIT_LOG_RETENTION_DAYS * 86400;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("rotated") {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        let age = SystemTime::now()
+                            .duration_since(modified)
+                            .unwrap()
+                            .as_secs();
+                        if age > retention_secs {
+                            let _ = fs::remove_file(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncOperationType {
+    Connect,
+    Disconnect,
+    Merge,
+    Push,
+    Pull,
+    ConflictResolved,
+    SyncFailed,
+}
+
+impl std::fmt::Display for SyncOperationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncOperationType::Connect => write!(f, "connect"),
+            SyncOperationType::Disconnect => write!(f, "disconnect"),
+            SyncOperationType::Merge => write!(f, "merge"),
+            SyncOperationType::Push => write!(f, "push"),
+            SyncOperationType::Pull => write!(f, "pull"),
+            SyncOperationType::ConflictResolved => write!(f, "conflict_resolved"),
+            SyncOperationType::SyncFailed => write!(f, "sync_failed"),
+        }
+    }
+}
+
+pub fn log_sync_operation(
+    operation: SyncOperationType,
+    library_id: Option<&str>,
+    result: &Result<(), String>,
+) {
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                operation = %operation,
+                library_id = ?library_id,
+                "Sync operation completed"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                operation = %operation,
+                library_id = ?library_id,
+                error = %e,
+                "Sync operation failed"
+            );
+        }
+    }
 }

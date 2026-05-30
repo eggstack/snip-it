@@ -525,16 +525,18 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2
 
 #### LOG-2: Audit Log Unbounded Growth
-- **Status:** TODO
-- **Location:** `src/logging.rs:217-263`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:289-325`
 - **Description:** `audit.log` grows indefinitely. No rotation or retention policy.
+- **Fix:** Added `rotate_audit_log_if_needed()` function that rotates log when it exceeds 10MB and deletes rotated files older than 30 days.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-3: Audit Log Failure Is Invisible
-- **Status:** TODO
-- **Location:** `src/logging.rs:223-232`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:238-278`
 - **Description:** Errors silently swallowed and logged at debug level only.
+- **Fix:** Audit log errors now logged at `warn` level for path failures and `error` level for write failures.
 - **Dependencies:** None
 - **Wave:** 3
 
@@ -546,23 +548,28 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LOG-5: Add `log_sync_operation` Function
-- **Status:** TODO
-- **Location:** `src/logging.rs`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:327-374`
 - **Description:** No equivalent for sync operations (connect, merge, conflict resolution).
+- **Fix:** Added `SyncOperationType` enum and `log_sync_operation()` function that logs sync operations with appropriate levels.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-6: Audit Log Contains Snippet Content
-- **Status:** TODO
-- **Location:** `src/logging.rs:247-254`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:255-261`
 - **Description:** Audit log records description, command, and output. Sensitive data written to plain text.
+- **Fix:** Removed command and output from audit log. Now only logs snippet ID, description, and operation type.
 - **Dependencies:** None
 - **Wave:** 3
 
 #### LOG-7: Log Directory Permissions
-- **Status:** TODO
-- **Location:** `src/logging.rs:55`
+- **Status:** **DONE**
+- **Location:** `src/logging.rs:61-66`
 - **Description:** Default umask creates directories with 755 permissions. Others can read logs.
+- **Fix:** Set explicit permissions (700) for log directory on Unix.
+- **Dependencies:** None
+- **Wave:** 3
 - **Dependencies:** None
 - **Wave:** 3
 
