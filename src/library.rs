@@ -82,6 +82,8 @@ pub struct LibraryMeta {
     pub is_primary: bool,
     #[serde(default)]
     pub last_sync: Option<i64>,
+    #[serde(default)]
+    pub server_id: Option<String>,
 }
 
 impl LibraryMeta {
@@ -91,6 +93,7 @@ impl LibraryMeta {
             library_id: String::new(),
             is_primary: false,
             last_sync: None,
+            server_id: None,
         }
     }
 }
@@ -121,8 +124,14 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
 }
 
 impl Snippet {
-    pub fn new(description: String, command: String, tags: Vec<String>) -> Self {
-        Self {
+    pub fn new(description: String, command: String, tags: Vec<String>) -> SnipResult<Self> {
+        if command.trim().is_empty() {
+            return Err(SnipError::runtime_error(
+                "Empty command",
+                Some("Snippet command cannot be empty"),
+            ));
+        }
+        Ok(Self {
             id: String::new(),
             description,
             command,
@@ -134,7 +143,7 @@ impl Snippet {
             updated_at: 0,
             device_id: String::new(),
             deleted: false,
-        }
+        })
     }
 }
 
@@ -150,6 +159,7 @@ pub struct LibraryManager {
     libraries_dir: PathBuf,
     premade_dir: PathBuf,
     config: LibraryConfig,
+    unsaved_changes: bool,
 }
 
 impl LibraryManager {
@@ -203,6 +213,7 @@ impl LibraryManager {
             libraries_dir,
             premade_dir,
             config,
+            unsaved_changes: false,
         })
     }
 
@@ -259,6 +270,7 @@ impl LibraryManager {
         let mut meta = LibraryMeta::new("snippets");
         meta.is_primary = true;
         self.config.libraries.push(meta);
+        self.unsaved_changes = true;
         self.save_config()?;
 
         Ok(())
@@ -315,6 +327,7 @@ Snippets = []
         let mut meta = LibraryMeta::new(filename);
         meta.is_primary = is_first;
         self.config.libraries.push(meta);
+        self.unsaved_changes = true;
         self.save_config()?;
 
         Ok(path)
@@ -326,6 +339,11 @@ Snippets = []
             .map(|l| l.is_primary)
             .ok_or_else(|| SnipError::runtime_error("Library not found", Some(filename)))?;
 
+        let deleted_was_server = self
+            .get_library_by_filename(filename)
+            .map(|l| l.server_id.is_some())
+            .unwrap_or(false);
+
         let path = self.libraries_dir.join(format!("{}.toml", filename));
 
         if path.exists() {
@@ -336,7 +354,26 @@ Snippets = []
         self.config.libraries.retain(|l| l.filename != filename);
 
         if was_primary && !self.config.libraries.is_empty() {
-            self.config.libraries[0].is_primary = true;
+            let promoted = if deleted_was_server {
+                self.config
+                    .libraries
+                    .iter()
+                    .find(|l| l.server_id.is_some())
+                    .or_else(|| self.config.libraries.first())
+            } else {
+                self.config.libraries.first()
+            };
+            if let Some(promoted_lib) = promoted {
+                if let Some(idx) = self
+                    .config
+                    .libraries
+                    .iter()
+                    .position(|l| l.filename == promoted_lib.filename)
+                {
+                    self.config.libraries[idx].is_primary = true;
+                }
+            }
+            self.unsaved_changes = true;
         }
 
         self.save_config()?;
@@ -358,6 +395,7 @@ Snippets = []
         for lib in &mut self.config.libraries {
             lib.is_primary = lib.filename == filename;
         }
+        self.unsaved_changes = true;
         self.save_config()?;
         Ok(())
     }
@@ -365,6 +403,7 @@ Snippets = []
     pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = library_id.to_string();
+            self.unsaved_changes = true;
             self.save_config()?;
         }
         Ok(())
@@ -380,9 +419,11 @@ Snippets = []
             library_id: String::new(),
             is_primary: false,
             last_sync: None,
+            server_id: None,
         };
 
         self.config.libraries.push(meta);
+        self.unsaved_changes = true;
         self.save_config()?;
         Ok(())
     }
@@ -390,6 +431,7 @@ Snippets = []
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.last_sync = Some(timestamp);
+            self.unsaved_changes = true;
             self.save_config()?;
         }
         Ok(())
@@ -415,6 +457,8 @@ Snippets = []
         // Update existing entry if one with the same filename already exists
         if let Some(existing) = self.get_library_by_filename_mut(&filename) {
             existing.library_id = server_id.to_string();
+            existing.server_id = Some(server_id.to_string());
+            self.unsaved_changes = true;
             self.save_config()?;
             return Ok(path);
         }
@@ -422,9 +466,11 @@ Snippets = []
         let is_first = self.config.libraries.is_empty();
         let mut meta = LibraryMeta::new(&filename);
         meta.library_id = server_id.to_string();
+        meta.server_id = Some(server_id.to_string());
         meta.is_primary = is_first;
 
         self.config.libraries.push(meta);
+        self.unsaved_changes = true;
         self.save_config()?;
 
         Ok(path)
@@ -453,7 +499,7 @@ Snippets = []
         Ok(path)
     }
 
-    fn save_config(&self) -> SnipResult<()> {
+    fn save_config(&mut self) -> SnipResult<()> {
         let config_path = self.config_dir.join("libraries.toml");
 
         let toml_str = toml::to_string_pretty(&self.config)
@@ -461,9 +507,22 @@ Snippets = []
 
         let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-        fs::write(&config_path, toml_str)
-            .map_err(|e| SnipError::io_error("write libraries config", config_path, e))?;
+        let parent_dir = config_path
+            .parent()
+            .ok_or_else(|| SnipError::runtime_error("config path has no parent", None))?;
+        if !parent_dir.exists() {
+            fs::create_dir_all(parent_dir)
+                .map_err(|e| SnipError::io_error("create config directory", parent_dir, e))?;
+        }
 
+        let tmp_path = parent_dir.join("libraries.toml.tmp");
+        fs::write(&tmp_path, &toml_str)
+            .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
+
+        std::fs::rename(&tmp_path, &config_path)
+            .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
+
+        self.unsaved_changes = false;
         Ok(())
     }
 }
@@ -505,7 +564,23 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
         }
     };
 
-    Ok(snippets)
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut deduplicated: Vec<Snippet> = Vec::new();
+    for mut snippet in snippets.snippets {
+        if snippet.id.is_empty() {
+            snippet.id = uuid::Uuid::new_v4().to_string();
+        }
+        if seen_ids.contains(&snippet.id) {
+            snippet.id = uuid::Uuid::new_v4().to_string();
+        }
+        seen_ids.insert(snippet.id.clone());
+        deduplicated.push(snippet);
+    }
+
+    Ok(Snippets {
+        snippets: deduplicated,
+        folders: snippets.folders,
+    })
 }
 
 pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {

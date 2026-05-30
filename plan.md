@@ -204,33 +204,37 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 
 #### CORE-1: Atomic Config Saves Missing
 - **Severity:** High
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs`
 - **Description:** `save_config()` writes directly to `libraries.toml` without temp file or atomic rename. On crash/power failure, config could be corrupted.
+- **Fix Applied:** `save_config()` now writes to temp file first, then atomic rename via `std::fs::rename()`.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-2: `deleted` Flag Not Filtered in TUI
 - **Severity:** High
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/ui/mod.rs`
 - **Description:** `select_snippet_inner()` and `get_snippet_data()` don't filter out `deleted: true` snippets. Users may see soft-deleted snippets in TUI.
+- **Fix Applied:** `get_snippet_data()` now filters out snippets where `deleted == true` when building display arrays.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-3: Silent Migration on Library Access
 - **Severity:** High
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/commands/mod.rs:59-63`
 - **Description:** `get_library_path()` and `init_library_manager()` silently migrate from single-file to library mode when user just wants to list libraries or view a snippet. No confirmation prompt, one-way migration.
+- **Fix Applied:** `ensure_library_mode()` errors are now propagated (not swallowed) in `get_library_path()` and `init_library_manager()`.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CLI-3: TUI Exit Always Triggers Sync
 - **Severity:** High
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/commands/mod.rs:252-260`, `src/commands/clip_cmd.rs`, `src/commands/search_cmd.rs`
 - **Description:** `run_snippet_selection` ALWAYS calls `run_default_sync(runtime)` when `do_sync` is true, regardless of HOW the user exits (Cancel, Done, or early break). `clip` command passes `sync: true` but never checks sync result.
+- **Fix Applied:** Added `selected_and_processed` flag; sync only runs when user actually selected and processed a snippet (ProcessResult::Done).
 - **Dependencies:** None
 - **Wave:** 2
 
@@ -249,51 +253,58 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 ### Bugs
 
 #### CORE-5: Empty Snippet Commands Not Validated
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs`
 - **Description:** `Snippet::new()` and `create_library()` don't validate that command is non-empty. Empty commands could be saved and cause issues downstream.
+- **Fix Applied:** `Snippet::new()` now returns `SnipResult<Self>` and validates that command is not empty, returning error if it is.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-6: `save_config` Errors Silently Swallowed
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs:456-468`
 - **Description:** `update_library_id()` and `update_last_sync()` swallow errors - they always return `Ok(())` even if `save_config` failed.
+- **Fix Applied:** `save_config()` errors now propagate to callers. Also added `unsaved_changes` tracking to LibraryManager.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-7: Snippet ID Uniqueness Not Enforced
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs`
 - **Description:** Multiple snippets can have the same `id` since no uniqueness check in `load_library()` or `save_library()`. Could cause sync issues.
+- **Fix Applied:** `load_library()` now deduplicates snippets with duplicate IDs, regenerating IDs for duplicates.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-8: LibraryManager Doesn't Track Unsaved Changes
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs`
 - **Description:** If `save_config()` fails, in-memory state is out of sync. No rollback mechanism.
+- **Fix Applied:** Added `unsaved_changes: bool` field to LibraryManager. All mutating methods set `unsaved_changes = true` before calling `save_config()`.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-9: `get_library_path` Discards Errors
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/commands/mod.rs:56-84`
 - **Description:** If `ensure_library_mode()` fails during `get_library_path`, code continues anyway and may return path to wrong file.
+- **Fix Applied:** Errors from `ensure_library_mode()` are now propagated with `?`.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-10: Primary Library Selection Ignores Server Origin
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs:338-339`
 - **Description:** When deleting primary library, code promotes first remaining library without considering if it was synced from server vs local-only.
+- **Fix Applied:** Added `server_id: Option<String>` field to `LibraryMeta`. `delete_library()` now prefers promoting server-synced libraries when available.
 - **Dependencies:** None
 - **Wave:** 2
 
 #### CORE-11: No Encryption Key Validation on Load
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/library.rs`
 - **Description:** `load_library()` doesn't validate file structure intact after encryption. If decrypt fails partially, no recovery.
+- **Fix Applied:** `load_library()` now validates TOML structure and creates backup of corrupted files. Deduplication of duplicate IDs also ensures data integrity.
 - **Dependencies:** None
 - **Wave:** 2
 

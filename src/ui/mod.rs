@@ -672,7 +672,9 @@ fn select_snippet_inner(
                                         .map(|(idx, _, _)| strip_escape_sequences(&commands[*idx]))
                                         .collect();
                                     let copy_text = selected_items.join("\n");
-                                    let _ = clipboard::copy_to_clipboard_auto(&copy_text);
+                                    if let Err(e) = clipboard::copy_to_clipboard_auto(&copy_text) {
+                                        tracing::warn!("Clipboard copy failed: {}", e);
+                                    }
                                     should_copy =
                                         Some(format!("{} snippets copied", end - start + 1));
                                     visual_mode = false;
@@ -814,7 +816,9 @@ fn select_snippet_inner(
                                     if selected < filtered.len() {
                                         let idx = filtered[selected].0;
                                         let cmd = strip_escape_sequences(&commands[idx]);
-                                        let _ = clipboard::copy_to_clipboard_auto(&cmd);
+                                        if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
+                                            tracing::warn!("Clipboard copy failed: {}", e);
+                                        }
                                         should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;
