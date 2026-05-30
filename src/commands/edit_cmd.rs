@@ -94,6 +94,35 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
                 )),
             ));
         }
+
+        let canonical = candidate.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Editor path resolution failed",
+                Some(&format!(
+                    "Cannot resolve editor path '{}': {}",
+                    candidate.display(),
+                    e
+                )),
+            )
+        })?;
+
+        let canonical_cwd = cwd.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Current directory resolution failed",
+                Some(&format!("Cannot canonicalize CWD: {}", e)),
+            )
+        })?;
+
+        if !canonical.starts_with(&canonical_cwd) {
+            return Err(SnipError::runtime_error(
+                "Editor path unsafe",
+                Some(&format!(
+                    "EDITOR '{}' resolves outside of current directory (possible symlink attack). Use an absolute path.",
+                    editor
+                )),
+            ));
+        }
+
         return Ok(candidate.to_string_lossy().into_owned());
     }
 

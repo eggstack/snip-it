@@ -301,8 +301,11 @@ async fn create_tls_channel(
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let uri: Uri = server_url.parse()?;
 
+    let host = uri.host().ok_or("No host in URI")?;
+
     let tls_config = ClientTlsConfig::new()
         .with_enabled_roots()
+        .domain_name(host)
         .assume_http2(true);
 
     let channel = Endpoint::new(uri)?
