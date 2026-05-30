@@ -41,7 +41,7 @@ pub struct Snippets {
 pub struct Snippet {
     #[serde(rename = "Id", alias = "ID", default)]
     pub id: String,
-    #[serde(alias = "Description", default)]
+    #[serde(alias = "Description", alias = "name", default)]
     pub description: String,
     #[serde(rename = "Output", alias = "output", default)]
     pub output: String,
@@ -292,6 +292,7 @@ impl LibraryManager {
 
         self.init_libraries_dir()?;
 
+        let filename_lower = filename.to_lowercase();
         let path = self.libraries_dir.join(format!("{}.toml", filename));
 
         if path.exists() {
@@ -299,6 +300,18 @@ impl LibraryManager {
                 "Library already exists",
                 Some(&format!("File {} already exists", path.display())),
             ));
+        }
+
+        for lib in &self.config.libraries {
+            if lib.filename.to_lowercase() == filename_lower {
+                return Err(SnipError::runtime_error(
+                    "Library already exists",
+                    Some(&format!(
+                        "A library with name '{}' already exists (case-insensitive duplicate)",
+                        filename
+                    )),
+                ));
+            }
         }
 
         let default_content = r#"# Snippet library
@@ -514,7 +527,14 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
             .map_err(|e| SnipError::io_error("create directory", parent, e))?;
     }
 
-    let toml_str = toml::to_string_pretty(snippets)
+    if let Err(e) = backup_library(path) {
+        tracing::warn!(error = %e, "Failed to create backup before save");
+    }
+
+    let mut sorted = snippets.clone();
+    sorted.snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+
+    let toml_str = toml::to_string_pretty(&sorted)
         .map_err(|e| SnipError::toml_error("serialize snippets", e))?;
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);

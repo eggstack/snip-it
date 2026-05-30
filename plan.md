@@ -476,32 +476,36 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LIB-1: No Sorting on Save
-- **Status:** TODO
-- **Location:** `src/library.rs:511-525`
-- **Description:** `save_library()` does not sort snippets by `updated_at` descending as documented.
+- **Status:** **FIXED**
+- **Location:** `src/library.rs:524-547`
+- **Description:** `save_library()` now sorts snippets by `updated_at` descending before saving.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** `sorted.snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));`
 
 #### LIB-2: backup_library() Not Called Automatically
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** `backup_library()` is never invoked by `save_library()`. Users must manually call it.
+- **Description:** `backup_library()` is now invoked automatically before saving.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** `backup_library(path)` called at start of `save_library()`.
 
 #### LIB-3: Case-Sensitive Library Name Duplicates
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** `create_library("MyLib")` then `create_library("mylib")` will conflict on case-insensitive filesystems (macOS, Windows).
+- **Description:** `create_library("MyLib")` then `create_library("mylib")` now returns error on case-insensitive filesystems.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 3
+- **Fix Applied:** Added case-insensitive duplicate check in `create_library()`.
 
 #### LIB-4: Add Library Name Case-Insensitivity Check
-- **Status:** TODO
+- **Status:** **FIXED** (combined with LIB-3)
 - **Location:** `src/library.rs`
 - **Description:** Check for case-insensitive duplicates on case-insensitive filesystems.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** Same as LIB-3.
 
 #### LIB-5: Add Confirmation Before delete_library()
 - **Status:** TODO
@@ -511,11 +515,12 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 4
 
 #### LIB-6: Support `name` -> `description` Migration
-- **Status:** TODO
+- **Status:** **FIXED**
 - **Location:** `src/library.rs`
-- **Description:** Legacy data with `name` field fails to deserialize. Need alias.
+- **Description:** Legacy data with `name` field now deserializes correctly via alias.
 - **Dependencies:** None
 - **Wave:** 3
+- **Fix Applied:** Added `#[serde(alias = "name")]` to `description` field.
 
 #### LOG-1: shutdown_logging May Lose Buffered Logs
 - **Status:** TODO
