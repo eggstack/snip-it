@@ -29,11 +29,14 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(test)]
+use subtle::ConstantTimeEq;
+
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
 const ARGON2_TIME_COST: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
 
-#[derive(Zeroize, ZeroizeOnDrop)]
+#[derive(Zeroize, ZeroizeOnDrop, Default)]
 struct DerivedKey([u8; 32]);
 
 impl DerivedKey {
@@ -62,6 +65,11 @@ pub type CryptoResult<T> = Result<T, CryptoError>;
 
 const NONCE_SIZE: usize = 12;
 const SALT_SIZE: usize = 16;
+
+#[cfg(test)]
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.ct_eq(b).into()
+}
 
 /// Encrypted data container with salt, nonce, and ciphertext.
 ///
@@ -143,7 +151,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
     let mut salt = [0u8; SALT_SIZE];
     OsRng.fill_bytes(&mut salt);
 
-    let key = derive_key(api_key, &salt)?;
+    let mut key = derive_key(api_key, &salt)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {}", e)))?;
@@ -155,6 +163,8 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {}", e)))?;
+
+    drop(std::mem::take(&mut key));
 
     let payload = EncryptedPayload {
         salt: salt.to_vec(),
@@ -168,7 +178,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
 pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let payload = EncryptedPayload::from_base64(encrypted_data)?;
 
-    let key = derive_key(api_key, &payload.salt)?;
+    let mut key = derive_key(api_key, &payload.salt)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Key init failed: {}", e)))?;
@@ -178,6 +188,8 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let plaintext = cipher
         .decrypt(nonce, payload.ciphertext.as_ref())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {}", e)))?;
+
+    drop(std::mem::take(&mut key));
 
     String::from_utf8(plaintext)
         .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {}", e)))
@@ -306,5 +318,15 @@ mod tests {
         let tampered = payload.to_base64();
         let result = decrypt(api_key, &tampered);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ct_eq() {
+        let a = b"hello world";
+        let b = b"hello world";
+        let c = b"hello worlx";
+        assert!(ct_eq(a, b));
+        assert!(!ct_eq(a, c));
+        assert!(!ct_eq(a, b""));
     }
 }

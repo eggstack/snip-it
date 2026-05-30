@@ -1,32 +1,53 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
+struct WindowEntry {
+    window_start: u64,
+    count: usize,
+}
+
 pub struct RateLimiter {
-    requests: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
+    windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
+    window_secs: u64,
     #[allow(dead_code)]
     shutdown_tx: Arc<tokio::sync::oneshot::Sender<()>>,
+    db_pool: Option<sqlx::SqlitePool>,
+    persist: bool,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
-        let requests: Arc<Mutex<HashMap<String, Vec<Instant>>>> =
+        Self::new_inner(None, false)
+    }
+
+    pub fn new_with_db(pool: sqlx::SqlitePool, persist: bool) -> Self {
+        Self::new_inner(Some(pool), persist)
+    }
+
+    fn new_inner(db_pool: Option<sqlx::SqlitePool>, persist: bool) -> Self {
+        let windows: Arc<Mutex<HashMap<String, WindowEntry>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let requests_clone = requests.clone();
+        let windows_clone = windows.clone();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(60)) => {
-                        let mut requests = requests_clone.lock().await;
-                        let now = Instant::now();
-                        requests.retain(|_, times| {
-                            times.retain(|&t| now.duration_since(t) < Duration::from_secs(60));
-                            !times.is_empty()
-                        });
+                        let mut windows = windows_clone.lock().await;
+                        let now = now_secs();
+                        windows.retain(|_, entry| now.saturating_sub(entry.window_start) < 60);
                     }
                     _ = &mut shutdown_rx => {
                         tracing::debug!("Rate limiter cleanup task shutting down");
@@ -37,24 +58,126 @@ impl RateLimiter {
         });
 
         Self {
-            requests,
+            windows,
             shutdown_tx: Arc::new(shutdown_tx),
+            db_pool,
+            persist,
+            window_secs: 60,
         }
     }
 
+    pub async fn load_state(&self) {
+        let pool = match &self.db_pool {
+            Some(p) => p,
+            None => return,
+        };
+        if !self.persist {
+            return;
+        }
+
+        let rows: Vec<(String, i64, i64)> = match sqlx::query_as(
+            "SELECT peer_ip, window_start, request_count FROM rate_limits",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to load rate limit state: {}", e);
+                return;
+            }
+        };
+
+        let now = now_secs();
+        let mut windows = self.windows.lock().await;
+        let mut loaded = 0u32;
+
+        for (peer_ip, window_start, request_count) in rows {
+            let ws = window_start as u64;
+            if now.saturating_sub(ws) >= 60 {
+                continue;
+            }
+            windows.insert(
+                peer_ip,
+                WindowEntry {
+                    window_start: ws,
+                    count: request_count as usize,
+                },
+            );
+            loaded += 1;
+        }
+
+        tracing::info!("Loaded rate limit state for {} peers", loaded);
+    }
+
+    pub async fn save_state(&self) {
+        let pool = match &self.db_pool {
+            Some(p) => p,
+            None => return,
+        };
+        if !self.persist {
+            return;
+        }
+
+        let windows = self.windows.lock().await;
+
+        if let Err(e) = sqlx::query("DELETE FROM rate_limits").execute(pool).await {
+            tracing::warn!("Failed to clear rate limit state: {}", e);
+            return;
+        }
+
+        for (key, entry) in windows.iter() {
+            if entry.count == 0 {
+                continue;
+            }
+            if let Err(e) = sqlx::query(
+                "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)",
+            )
+            .bind(key)
+            .bind(entry.window_start as i64)
+            .bind(entry.count as i64)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("Failed to save rate limit entry for {}: {}", key, e);
+            }
+        }
+    }
+
+    pub fn start_persistence_task(self: &Arc<Self>) {
+        if !self.persist || self.db_pool.is_none() {
+            return;
+        }
+
+        let limiter = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                limiter.save_state().await;
+            }
+        });
+    }
+
     pub async fn allow(&self, key: &str, max_requests: usize, window: Duration) -> bool {
-        let now = Instant::now();
-        let mut requests = self.requests.lock().await;
+        let now = now_secs();
+        let window_secs = window.as_secs();
+        let mut windows = self.windows.lock().await;
 
-        let entry = requests.entry(key.to_string()).or_default();
+        let entry = windows.entry(key.to_string()).or_insert_with(|| WindowEntry {
+            window_start: now,
+            count: 0,
+        });
 
-        entry.retain(|&t| now.duration_since(t) < window);
+        if now.saturating_sub(entry.window_start) >= window_secs {
+            entry.window_start = now;
+            entry.count = 0;
+        }
 
-        if entry.len() >= max_requests {
+        if entry.count >= max_requests {
             return false;
         }
 
-        entry.push(now);
+        entry.count += 1;
         true
     }
 }

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub fn get_config_dir() -> PathBuf {
-    std::env::var("XDG_CONFIG_HOME")
+    let dir = std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
@@ -10,7 +10,18 @@ pub fn get_config_dir() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".config")
         })
-        .join("snp")
+        .join("snp");
+
+    #[cfg(unix)]
+    {
+        if !dir.exists() {
+            let _ = std::fs::create_dir_all(&dir);
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    dir
 }
 
 /// Returns the old macOS platform-specific config directory

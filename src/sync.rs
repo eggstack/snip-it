@@ -17,8 +17,9 @@ use crate::error::{SnipError, SnipResult};
 use snip_proto::snippet_sync_client::SnippetSyncClient;
 use snip_proto::PremadeLibrary;
 use snip_proto::{
-    CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library,
-    ListLibrariesRequest, ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
+    CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, GetSnippetsRequest,
+    HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest, PushSnippetsRequest,
+    PushSnippetsResponse, RegisterRequest, SnippetList, SyncRequest,
 };
 use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
@@ -325,6 +326,49 @@ impl SyncClient {
         }
     }
 
+    #[allow(dead_code)]
+    pub async fn get_snippets(
+        &mut self,
+        library_id: &str,
+        limit: i32,
+        offset: i32,
+    ) -> SnipResult<SnippetList> {
+        let api_key = self.settings.api_key.clone();
+        let library_id_str = library_id.to_string();
+        let response = retry_grpc!(
+            self.client
+                .get_snippets(tonic::Request::new(GetSnippetsRequest {
+                    api_key: api_key.clone(),
+                    since: 0,
+                    library_id: library_id_str.clone(),
+                    limit,
+                    offset,
+                })),
+            "Get snippets"
+        )?;
+        Ok(response.into_inner())
+    }
+
+    #[allow(dead_code)]
+    pub async fn push_snippets(
+        &mut self,
+        snippets: &[snip_proto::Snippet],
+        library_id: &str,
+    ) -> SnipResult<PushSnippetsResponse> {
+        let api_key = self.settings.api_key.clone();
+        let library_id_str = library_id.to_string();
+        let response = retry_grpc!(
+            self.client
+                .push_snippets(tonic::Request::new(PushSnippetsRequest {
+                    api_key: api_key.clone(),
+                    snippets: snippets.to_vec(),
+                    library_id: library_id_str.clone(),
+                })),
+            "Push snippets"
+        )?;
+        Ok(response.into_inner())
+    }
+
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
         let api_key = self.settings.api_key.clone();
         let response = retry_grpc!(
@@ -439,6 +483,30 @@ pub fn decrypt_snippet(
     })
 }
 
+/// Detects if any server snippets have a device_id that doesn't match the
+/// expected local device_id, indicating a potential conflict from another device.
+pub fn detect_device_conflict(
+    server_snippets: &[snip_proto::Snippet],
+    expected_device_id: &str,
+) -> Vec<String> {
+    if expected_device_id.is_empty() {
+        return Vec::new();
+    }
+    let mut conflicting_ids = Vec::new();
+    for s in server_snippets {
+        if !s.device_id.is_empty() && s.device_id != expected_device_id {
+            tracing::warn!(
+                "Device conflict detected: snippet {} has device_id '{}', expected '{}'",
+                s.id,
+                s.device_id,
+                expected_device_id
+            );
+            conflicting_ids.push(s.id.clone());
+        }
+    }
+    conflicting_ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,5 +548,54 @@ mod tests {
                 status.code()
             );
         }
+    }
+
+    #[test]
+    fn test_detect_device_conflict_empty_device_id() {
+        let snippets = vec![snip_proto::Snippet {
+            id: "1".to_string(),
+            description: String::new(),
+            command: String::new(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "other-device".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+        assert!(detect_device_conflict(&snippets, "").is_empty());
+    }
+
+    #[test]
+    fn test_detect_device_conflict_no_conflict() {
+        let snippets = vec![snip_proto::Snippet {
+            id: "1".to_string(),
+            description: String::new(),
+            command: String::new(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device-a".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+        assert!(detect_device_conflict(&snippets, "device-a").is_empty());
+    }
+
+    #[test]
+    fn test_detect_device_conflict_with_mismatch() {
+        let snippets = vec![snip_proto::Snippet {
+            id: "1".to_string(),
+            description: String::new(),
+            command: String::new(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device-b".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+        let conflicts = detect_device_conflict(&snippets, "device-a");
+        assert_eq!(conflicts, vec!["1".to_string()]);
     }
 }

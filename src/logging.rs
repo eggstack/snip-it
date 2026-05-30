@@ -17,6 +17,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
@@ -25,6 +26,19 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 const AUDIT_LOG_RETENTION_DAYS: u64 = 30;
+const AUDIT_LOG_CHANNEL_SIZE: usize = 1024;
+
+struct AuditLogEntry {
+    timestamp: u64,
+    action: String,
+    snippet_id: String,
+    description: String,
+    library_id: String,
+    device_id: String,
+}
+
+static AUDIT_TX: LazyLock<std::sync::Mutex<Option<mpsc::SyncSender<AuditLogEntry>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[allow(dead_code)]
 static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
@@ -58,6 +72,16 @@ pub fn get_default_log_dir() -> PathBuf {
     crate::utils::config::get_config_dir().join("logs")
 }
 
+fn level_str(level: Level) -> &'static str {
+    match level {
+        Level::ERROR => "error",
+        Level::WARN => "warn",
+        Level::INFO => "info",
+        Level::DEBUG => "debug",
+        Level::TRACE => "trace",
+    }
+}
+
 #[tracing::instrument(level = "info", skip(config))]
 pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>> {
     let log_dir = &config.log_dir;
@@ -75,16 +99,15 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        let level = match config.level {
-            Level::ERROR => "error",
-            Level::WARN => "warn",
-            Level::INFO => "info",
-            Level::DEBUG => "debug",
-            Level::TRACE => "trace",
-        };
-        EnvFilter::new(format!("snp={}", level))
-    });
+    let env_filter = if let Ok(filter_str) = std::env::var("SNP_LOG") {
+        EnvFilter::try_new(&filter_str).unwrap_or_else(|e| {
+            eprintln!("Warning: Invalid SNP_LOG filter '{}': {}", filter_str, e);
+            EnvFilter::new(format!("snp={}", level_str(config.level)))
+        })
+    } else {
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(format!("snp={}", level_str(config.level))))
+    };
 
     let file_layer = fmt::layer()
         .with_writer(non_blocking)
@@ -102,6 +125,8 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     *LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
 
+    init_async_audit_log();
+
     tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
     tracing::info!("Log level: {:?}", config.level);
 
@@ -114,6 +139,16 @@ pub fn init_default_logging() {
         eprintln!("Warning: Failed to initialize logging: {}", e);
     }
     self_check();
+}
+
+#[allow(dead_code)]
+pub fn log_any_error(context: &str, error: &dyn std::error::Error) {
+    tracing::error!(error = %error, context = %context, "Error occurred");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        tracing::debug!(error = %cause, context = %context, "Caused by");
+        source = cause.source();
+    }
 }
 
 fn self_check() {
@@ -158,7 +193,69 @@ fn self_check() {
     }
 }
 
+fn init_async_audit_log() {
+    let (tx, rx) = mpsc::sync_channel(AUDIT_LOG_CHANNEL_SIZE);
+
+    std::thread::spawn(move || {
+        let mut writer = AuditLogWriter { rx };
+        writer.run();
+    });
+
+    *AUDIT_TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+}
+
+struct AuditLogWriter {
+    rx: mpsc::Receiver<AuditLogEntry>,
+}
+
+impl AuditLogWriter {
+    fn run(&mut self) {
+        while let Ok(entry) = self.rx.recv() {
+            if let Err(e) = self.write_entry(&entry) {
+                tracing::error!(error = %e, "Failed to write audit log entry");
+            }
+        }
+    }
+
+    fn write_entry(&self, entry: &AuditLogEntry) -> std::io::Result<()> {
+        let log_path = match get_audit_log_path() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to get audit log path");
+                return Err(e);
+            }
+        };
+
+        let _ = rotate_audit_log_if_needed(
+            &log_path,
+            AUDIT_LOG_MAX_SIZE_BYTES,
+            AUDIT_LOG_RETENTION_DAYS,
+        );
+
+        let log_entry = format!(
+            "{}|{}|{}|{}|{}|{}\n",
+            entry.timestamp,
+            entry.action,
+            escape_pipe(&entry.snippet_id),
+            escape_pipe(&entry.description),
+            entry.library_id,
+            escape_pipe(&entry.device_id),
+        );
+
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+
+        file.write_all(log_entry.as_bytes())
+    }
+}
+
 pub fn shutdown_logging() {
+    if let Some(tx) = AUDIT_TX.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        drop(tx);
+    }
     if let Some(guard) = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take() {
         tracing::info!("Logging shutdown complete");
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -289,9 +386,38 @@ pub fn audit_log(
     snippet: &crate::library::Snippet,
     library_id: Option<&str>,
 ) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
+    let entry = AuditLogEntry {
+        timestamp,
+        action: action.to_string(),
+        snippet_id: snippet.id.clone(),
+        description: snippet.description.clone(),
+        library_id: library_id.unwrap_or("").to_string(),
+        device_id: snippet.device_id.clone(),
+    };
+
+    let tx = AUDIT_TX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .cloned();
+
+    match tx {
+        Some(tx) => tx
+            .try_send(entry)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e.to_string())),
+        None => {
+            tracing::warn!("Audit log channel not initialized, writing synchronously");
+            write_audit_log_entry_sync(&entry)
+        }
+    }
+}
+
+fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {
     let log_path = match get_audit_log_path() {
         Ok(p) => p,
         Err(e) => {
@@ -300,30 +426,28 @@ pub fn audit_log(
         }
     };
 
-    if let Err(e) = rotate_audit_log_if_needed(
+    let _ = rotate_audit_log_if_needed(
         &log_path,
         AUDIT_LOG_MAX_SIZE_BYTES,
         AUDIT_LOG_RETENTION_DAYS,
-    ) {
-        tracing::warn!(error = %e, "Failed to rotate audit log");
-    }
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    );
 
     let log_entry = format!(
         "{}|{}|{}|{}|{}|{}\n",
-        timestamp,
-        action,
-        escape_pipe(&snippet.id),
-        escape_pipe(&snippet.description),
-        escape_pipe(library_id.unwrap_or("")),
-        escape_pipe(&snippet.device_id)
+        entry.timestamp,
+        entry.action,
+        escape_pipe(&entry.snippet_id),
+        escape_pipe(&entry.description),
+        entry.library_id,
+        escape_pipe(&entry.device_id),
     );
 
-    let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
+    use std::io::Write;
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         Ok(f) => f,
         Err(e) => {
             tracing::error!(error = %e, path = %log_path.display(), "Failed to open audit log for writing");

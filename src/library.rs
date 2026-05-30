@@ -14,6 +14,7 @@
 //! command = "git commit -m \"<msg>\""
 //! ```
 
+use crate::config::cached_read_toml;
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::{get_config_dir, get_snippets_path};
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
@@ -28,7 +29,7 @@ use std::path::{Path, PathBuf};
 pub struct Snippets {
     #[serde(rename = "Snippets", default)]
     pub snippets: Vec<Snippet>,
-    #[serde(default = "Vec::new")]
+    #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<String>,
 }
 
@@ -45,11 +46,16 @@ pub struct Snippet {
     pub description: String,
     #[serde(rename = "Output", alias = "output", default)]
     pub output: String,
-    #[serde(alias = "Tag", alias = "Tags", default)]
+    #[serde(
+        alias = "Tag",
+        alias = "Tags",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub tags: Vec<String>,
-    #[serde(alias = "Command", default)]
+    #[serde(alias = "Command", alias = "cmd", default)]
     pub command: String,
-    #[serde(default = "Vec::new")]
+    #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<String>,
     #[serde(default)]
     pub favorite: bool,
@@ -182,9 +188,7 @@ impl LibraryManager {
         let config_path = config_dir.join("libraries.toml");
 
         let config = if config_path.exists() {
-            let content = fs::read_to_string(&config_path).map_err(|e| {
-                SnipError::io_error("read libraries config", config_path.clone(), e)
-            })?;
+            let content = cached_read_toml(&config_path)?;
             let content = fix_invalid_toml_escapes(&content);
             match toml::from_str(&content) {
                 Ok(c) => c,
@@ -264,7 +268,7 @@ impl LibraryManager {
 
         self.init_libraries_dir()?;
 
-        let content = fs::read_to_string(&legacy_path)?;
+        let content = cached_read_toml(&legacy_path)?;
         if content.trim().is_empty() {
             return Ok(());
         }
@@ -551,7 +555,7 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
         return Ok(Snippets::default());
     }
 
-    let content = fs::read_to_string(path)?;
+    let content = cached_read_toml(path)?;
     if content.is_empty() || content.trim().is_empty() {
         return Ok(Snippets::default());
     }

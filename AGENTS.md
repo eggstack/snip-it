@@ -155,7 +155,7 @@ During the 2026-05-29 architecture review, 8 bugs were fixed and 80+ items were 
 - **WAVE 1 (Security-Critical):** 6 items - SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, CLI-1 - **COMPLETED**
 - **WAVE 2 (Core Bugs):** 17 items - CORE-1 through CORE-11, CLIP-1 through CLIP-3, CONFIG-1, CONFIG-2, CONFIG-4 - **COMPLETED**
 - **WAVE 3 (Improvements):** 24 items - SEC-7, SEC-8, SEC-9, CMD-3, CMD-10, CMD-11, LIB-1 through LIB-6, LOG-2, LOG-3, LOG-5, LOG-6, LOG-7, SERVER-3, SERVER-4, SERVER-5, SERVER-6, SERVER-8, PROTO-1, PROTO-2, TUI-1 - **COMPLETED**
-- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items - **DEFERRED**
+- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items - **COMPLETED**
 
 Each wave can be implemented in parallel by separate agents. Within a wave, items are organized by module (UI, Commands, Library, Config, etc.) to minimize context switching.
 
@@ -179,9 +179,22 @@ The following bugs were fixed during architecture review and subsequent work. Fo
 11. **CMD-11: premade sync return value** (`src/commands/premade_cmd.rs:144-153`): `run_premade_sync()` now returns error on failure instead of always `Ok(())`
 12. **Added `From<String>` for SnipError** (`src/error.rs`): Enables error conversion from String to SnipError for sync operations
 
+### WAVE 4 Final (2026-05-30)
+All previously deferred items implemented:
+- **TUI**: SelectState struct, visual mode fixes, variable warnings, resize handling
+- **Commands**: Cached LibraryManager, editor timeout
+- **Config**: File permissions, CRC32 integrity, TOML caching
+- **Logging**: log_any_error helper, per-module log levels, async audit writer
+- **Library**: Delete confirmation, field aliases, empty vec serialization
+- **Sync**: get_snippets/push_snippets API, device conflict detection, merge failure backup
+- **Server**: Request tracing (UUID), batch API key verification, premade validation
+- **Encryption**: std::mem::take for key cleanup, constant-time comparison
+- **Clipboard**: Generation counter verified, timeout support
+- **Utils**: Escape sequence consistency, nested angle brackets, chained backslashes
+- **Other**: Rate limiter persistence, snippet ID collision logging
+
 ### Known Scope Constraints
 - `output` field not encrypted during sync (proto definition lacks field - cannot add without breaking change)
-- `\<` escape inconsistency in variables.rs is a documented known edge case per AGENTS.md
 - Many CLI documentation discrepancies (e.g., `--clip` behavior, cron intervals) are doc bugs not code bugs
 
 ## Testing Notes
@@ -190,3 +203,6 @@ The following bugs were fixed during architecture review and subsequent work. Fo
 - Server tests use `sqlite::memory:` for isolation
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
+- Utils tests cover escape sequences, nested brackets, chained backslashes (28 new tests added)
+- Sync tests cover device conflict detection (3 new tests added)
+- Total: 124 unit tests + 16 integration tests + 15 server tests = 155 tests passing

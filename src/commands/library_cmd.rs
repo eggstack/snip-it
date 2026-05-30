@@ -1,5 +1,6 @@
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
+use std::io::IsTerminal;
 
 pub fn run_list() -> SnipResult<()> {
     let mgr = LibraryManager::new()?;
@@ -29,13 +30,22 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
 
     if !force {
-        println!(
+        if !std::io::stdin().is_terminal() {
+            eprintln!(
+                "Refusing to delete library '{}' in non-interactive mode. Use --force to override.",
+                name
+            );
+            return Err(crate::error::SnipError::runtime_error(
+                "Non-interactive delete",
+                Some("Use --force to delete libraries in non-interactive mode"),
+            ));
+        }
+        eprint!(
             "Are you sure you want to delete library '{}'? [y/N]: ",
             name
         );
-        use std::io::{self};
         let mut input = String::new();
-        io::stdin().read_line(&mut input).ok();
+        std::io::stdin().read_line(&mut input).ok();
         if input.trim().to_lowercase() != "y" {
             println!("Cancelled.");
             return Ok(());

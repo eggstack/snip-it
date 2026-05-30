@@ -77,6 +77,7 @@ struct LimitsConfig {
 struct RateLimitConfig {
     requests_per_minute: Option<u32>,
     trusted_proxies: Option<Vec<String>>,
+    persist: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -105,6 +106,7 @@ struct Config {
     request_timeout_secs: u64,
     rate_limit_per_minute: u32,
     trusted_proxies: Vec<String>,
+    persist_rate_limits: bool,
     metrics_username: Option<String>,
     metrics_password: Option<String>,
     cors_allowed_origins: Vec<String>,
@@ -215,6 +217,11 @@ impl Config {
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
                 .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
                 .unwrap_or_default(),
+            persist_rate_limits: std::env::var("PERSIST_RATE_LIMITS")
+                .ok()
+                .map(|v| v == "true" || v == "1")
+                .or(server.rate_limit.as_ref().and_then(|r| r.persist))
+                .unwrap_or(false),
             metrics_username: std::env::var("METRICS_USERNAME")
                 .ok()
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
@@ -349,7 +356,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         _request: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("health");
+        tracing::debug!(request_id = %request_id, "Health check");
         let healthy = self.db.ping().await.is_ok();
         Ok(Response::new(HealthResponse {
             healthy,
@@ -361,7 +370,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("register");
+        tracing::info!(request_id = %request_id, "Register request");
 
         // Use peer IP address for rate limiting (device_id is client-controlled)
         // Only trust x-forwarded-for if it comes from a trusted proxy
@@ -407,7 +418,19 @@ impl SnippetSync for SnipSyncService {
 
         match self.db.create_user(&api_key).await {
             Ok(device_id) => {
-                tracing::info!("Created new user with device_id: {}", device_id);
+                if uuid::Uuid::parse_str(&device_id).is_err() {
+                    tracing::error!(
+                        request_id = %request_id,
+                        "Generated device_id is not a valid UUID: {}",
+                        device_id
+                    );
+                    return Err(Status::internal("Internal error: invalid device ID generated"));
+                }
+                tracing::info!(
+                    request_id = %request_id,
+                    device_id = %device_id,
+                    "Created new user"
+                );
                 Ok(Response::new(RegisterResponse {
                     success: true,
                     api_key,
@@ -416,7 +439,7 @@ impl SnippetSync for SnipSyncService {
                 }))
             }
             Err(e) => {
-                tracing::error!("Failed to create user: {}", e);
+                tracing::error!(request_id = %request_id, "Failed to create user: {}", e);
                 Err(Status::internal(format!("Failed to create user: {}", e)))
             }
         }
@@ -426,7 +449,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<GetSnippetsRequest>,
     ) -> Result<Response<SnippetList>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("get_snippets");
+        tracing::info!(request_id = %request_id, "GetSnippets request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -494,7 +519,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<PushSnippetsRequest>,
     ) -> Result<Response<PushSnippetsResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("push_snippets");
+        tracing::info!(request_id = %request_id, "PushSnippets request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -562,8 +589,10 @@ impl SnippetSync for SnipSyncService {
     }
 
     async fn sync(&self, request: Request<SyncRequest>) -> Result<Response<SyncResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("sync");
         self.record_sync();
+        tracing::info!(request_id = %request_id, "Sync request");
         let req = request.into_inner();
 
         if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
@@ -603,7 +632,12 @@ impl SnippetSync for SnipSyncService {
         for snippet in &req.local_snippets {
             if snippet.updated_at > req.last_sync_timestamp {
                 if let Err(e) = self.validate_snippet(snippet) {
-                    tracing::warn!("Snippet validation failed: {}", e);
+                    tracing::warn!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        reason = %e,
+                        "Snippet skipped: validation failed"
+                    );
                     skipped_ids.push(snippet.id.clone());
                     continue;
                 }
@@ -625,7 +659,12 @@ impl SnippetSync for SnipSyncService {
                     .upsert_snippet(&db_snippet, &user_id, &library_id)
                     .await
                 {
-                    tracing::warn!("Failed to upsert snippet: {}", e);
+                    tracing::warn!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        reason = %e,
+                        "Snippet skipped: upsert failed"
+                    );
                     skipped_ids.push(snippet.id.clone());
                 }
             }
@@ -666,9 +705,20 @@ impl SnippetSync for SnipSyncService {
 
         let skipped_count = skipped_ids.len() as i32;
 
+        tracing::info!(
+            request_id = %request_id,
+            snippets_synced = proto_snippets.len(),
+            skipped_count = skipped_count,
+            "Sync completed"
+        );
+
         Ok(Response::new(SyncResponse {
             success: true,
-            message: "Sync completed".to_string(),
+            message: if skipped_count > 0 {
+                format!("Sync completed, {} snippets skipped", skipped_count)
+            } else {
+                "Sync completed".to_string()
+            },
             snippets: proto_snippets,
             server_timestamp: timestamp,
             skipped_count,
@@ -680,8 +730,10 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<CreateLibraryRequest>,
     ) -> Result<Response<CreateLibraryResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("create_library");
         self.record_library_op();
+        tracing::info!(request_id = %request_id, "CreateLibrary request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -710,8 +762,10 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<ListLibrariesRequest>,
     ) -> Result<Response<ListLibrariesResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("list_libraries");
         self.record_library_op();
+        tracing::info!(request_id = %request_id, "ListLibraries request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -752,8 +806,10 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<DeleteLibraryRequest>,
     ) -> Result<Response<DeleteLibraryResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("delete_library");
         self.record_library_op();
+        tracing::info!(request_id = %request_id, "DeleteLibrary request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -779,7 +835,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<ListPremadeLibrariesRequest>,
     ) -> Result<Response<ListPremadeLibrariesResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("list_premade_libraries");
+        tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
 
         let req = request.into_inner();
 
@@ -797,7 +855,12 @@ impl SnippetSync for SnipSyncService {
             })
             .collect();
 
-        tracing::debug!("User {} listed premade libraries", user_id);
+        tracing::info!(
+            request_id = %request_id,
+            user_id = %user_id,
+            count = proto_libraries.len(),
+            "ListPremadeLibraries completed"
+        );
 
         Ok(Response::new(ListPremadeLibrariesResponse {
             libraries: proto_libraries,
@@ -808,8 +871,9 @@ impl SnippetSync for SnipSyncService {
         &self,
         request: Request<GetPremadeLibraryRequest>,
     ) -> Result<Response<GetPremadeLibraryResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
         self.record_request("get_premade_library");
-
+        tracing::info!(request_id = %request_id, "GetPremadeLibrary request");
         let req = request.into_inner();
 
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
@@ -901,7 +965,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("gRPC server listening on {}", grpc_addr);
     tracing::info!("HTTP server listening on {}", http_addr);
 
-    let rate_limiter = Arc::new(RateLimiter::new());
+    let rate_limiter = if config.persist_rate_limits {
+        tracing::info!("Rate limiter persistence enabled (PERSIST_RATE_LIMITS=true)");
+        Arc::new(RateLimiter::new_with_db(db.pool().clone(), true))
+    } else {
+        Arc::new(RateLimiter::new())
+    };
+    rate_limiter.load_state().await;
+    rate_limiter.start_persistence_task();
     let cors_allowed_origins = config.cors_allowed_origins.clone();
 
     tracing::info!("Input validation config: max_command={}, max_description={}, max_tags={}, max_tag_length={}, request_timeout={}s",

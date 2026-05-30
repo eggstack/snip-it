@@ -75,6 +75,10 @@ pub struct PremadeLibrary {
 
 #[derive(Debug, Deserialize)]
 struct Snippet {
+    #[serde(rename = "Command", default)]
+    command: Option<String>,
+    #[serde(rename = "Description", default)]
+    description: Option<String>,
     #[serde(flatten, default)]
     _extra: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -164,7 +168,47 @@ impl PremadeManager {
                 continue;
             }
 
-            let snippet_count = snippet_file.snippets.len() as i32;
+            let valid_snippets: Vec<_> = snippet_file
+                .snippets
+                .into_iter()
+                .filter(|s| {
+                    let cmd = s.command.as_deref().unwrap_or("");
+                    if cmd.is_empty() {
+                        tracing::warn!(
+                            "Premade library '{}': skipping snippet with empty command",
+                            filename
+                        );
+                        return false;
+                    }
+                    if cmd.len() > 1024 {
+                        tracing::warn!(
+                            "Premade library '{}': skipping snippet with command exceeding 1024 bytes",
+                            filename
+                        );
+                        return false;
+                    }
+                    if let Some(ref desc) = s.description {
+                        if desc.len() > 1024 {
+                            tracing::warn!(
+                                "Premade library '{}': skipping snippet with description exceeding 1024 bytes",
+                                filename
+                            );
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect();
+
+            if valid_snippets.is_empty() {
+                tracing::warn!(
+                    "Premade library '{}' has no valid snippets, skipping",
+                    filename
+                );
+                continue;
+            }
+
+            let snippet_count = valid_snippets.len() as i32;
 
             let description = snippet_file.description.unwrap_or_else(|| filename.clone());
 

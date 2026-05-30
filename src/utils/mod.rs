@@ -12,5 +12,6 @@ pub mod toml_helpers;
 pub mod variables;
 
 pub use variables::{
-    expand_command, extract_variables_for_display, parse_variables, strip_escape_sequences,
+    expand_command, extract_variables_for_display, has_unmatched_angle_bracket, parse_variables,
+    strip_escape_sequences,
 };

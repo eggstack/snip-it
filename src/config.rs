@@ -6,12 +6,83 @@
 use crate::error::{SnipError, SnipResult};
 pub use crate::utils::config::get_sync_config_path;
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 const KEYCHAIN_SERVICE: &str = "snp-sync";
 const KEYCHAIN_USER: &str = "api-key";
 const KEYCHAIN_MARKER: &str = "@keychain";
+
+struct CachedToml {
+    mtime: SystemTime,
+    content: String,
+}
+
+static TOML_CACHE: Lazy<Mutex<HashMap<String, CachedToml>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn compute_crc32(data: &str) -> u32 {
+    crc32fast::hash(data.as_bytes())
+}
+
+fn verify_integrity(content: &str) -> bool {
+    for line in content.lines() {
+        if let Some(stripped) = line.strip_prefix("# integrity:") {
+            if let Ok(stored) = stripped.trim().parse::<u32>() {
+                let body: String = content
+                    .lines()
+                    .filter(|l| !l.starts_with("# integrity:"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return stored == compute_crc32(&body);
+            }
+        }
+    }
+    true
+}
+
+fn strip_integrity_line(content: &str) -> String {
+    content
+        .lines()
+        .filter(|l| !l.starts_with("# integrity:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
+    let meta = fs::metadata(path)
+        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
+    let mtime = meta
+        .modified()
+        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
+    let key = path.to_string_lossy().to_string();
+
+    {
+        let cache = TOML_CACHE.lock().unwrap();
+        if let Some(entry) = cache.get(&key) {
+            if entry.mtime == mtime {
+                return Ok(entry.content.clone());
+            }
+        }
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
+
+    let mut cache = TOML_CACHE.lock().unwrap();
+    cache.insert(
+        key,
+        CachedToml {
+            mtime,
+            content: content.clone(),
+        },
+    );
+    Ok(content)
+}
 
 /// Sync configuration settings.
 ///
@@ -180,9 +251,11 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
         .map_err(|e| SnipError::toml_error("serialize sync config", e))?;
 
     let content = quote_strings_containing_backslashes(&content);
+    let checksum = compute_crc32(&content);
+    let content_with_integrity = format!("# integrity: {}\n{}", checksum, content);
 
     let tmp_path = path.with_extension("toml.tmp");
-    fs::write(&tmp_path, &content)
+    fs::write(&tmp_path, &content_with_integrity)
         .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
 
     fs::rename(&tmp_path, &path).map_err(|e| {
@@ -200,9 +273,14 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
         return Ok(SyncSettings::default());
     }
 
-    let content =
-        fs::read_to_string(&path).map_err(|e| SnipError::io_error("read sync config", &path, e))?;
+    let content = cached_read_toml(&path)?;
 
+    if !verify_integrity(&content) {
+        tracing::warn!("sync.toml integrity check failed — file may be corrupted. Using defaults.");
+        return Ok(SyncSettings::default());
+    }
+
+    let content = strip_integrity_line(&content);
     let fixed_content = fix_invalid_toml_escapes(&content);
 
     let config: SyncConfigFile = toml::from_str(&fixed_content)

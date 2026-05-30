@@ -28,6 +28,7 @@ use ratatui::{
 
 use crate::clipboard;
 use crate::utils::extract_variables_for_display;
+use crate::utils::has_unmatched_angle_bracket;
 use crate::utils::strip_escape_sequences;
 
 use highlight::highlight_command;
@@ -57,6 +58,56 @@ enum SortMode {
     Oldest,
     AlphaAsc,
     AlphaDesc,
+}
+
+#[derive(Clone, Default)]
+struct SelectState {
+    selected: usize,
+    list_state: ratatui::widgets::ListState,
+    scroll_state: ScrollbarState,
+}
+
+impl SelectState {
+    fn new() -> Self {
+        let mut list_state = ratatui::widgets::ListState::default();
+        list_state.select(Some(0));
+        SelectState {
+            selected: 0,
+            list_state,
+            scroll_state: ScrollbarState::default(),
+        }
+    }
+
+    fn update(&mut self, filtered_len: usize) {
+        if filtered_len == 0 {
+            self.selected = 0;
+        } else if self.selected >= filtered_len {
+            self.selected = filtered_len.saturating_sub(1);
+        }
+        self.list_state.select(Some(self.selected));
+        self.scroll_state = self
+            .scroll_state
+            .content_length(filtered_len)
+            .position(self.selected);
+    }
+
+    fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    fn move_down(&mut self, max: usize) {
+        if self.selected + 1 < max {
+            self.selected += 1;
+        }
+    }
+
+    fn move_to_top(&mut self) {
+        self.selected = 0;
+    }
+
+    fn move_to_bottom(&mut self, max: usize) {
+        self.selected = max.saturating_sub(1);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -144,18 +195,16 @@ fn select_snippet_inner(
     let highlighted_commands: Vec<Line<'static>> =
         commands.iter().map(|cmd| highlight_command(cmd)).collect();
 
-    let mut state = ratatui::widgets::ListState::default();
+    let mut sel = SelectState::new();
     let mut filter = initial_filter.map(String::from).unwrap_or_default();
     let mut incremental_search = String::new();
     // input_text tracks what user types in insert mode - displayed in filter input box, NOT in title bar
     let mut input_text = String::new();
     let mut filter_state = FilterState::default();
-    let mut selected = 0usize;
     let mut filtered: Vec<(usize, String, Vec<String>)> = Vec::new();
     let mut insert_mode = true;
     let mut tag_filter_mode = false;
     let mut list_display_mode = 0;
-    let mut scrollbar_state = ScrollbarState::default();
     let mut should_copy: Option<String> = None;
     let mut copied_message: Option<(String, std::time::Instant)> = None;
     let mut visual_mode = false;
@@ -182,8 +231,6 @@ fn select_snippet_inner(
         .collect();
 
     let all_tags = tags.to_vec();
-
-    state.select(Some(0));
 
     loop {
         // Debounce: only recompute filtered list if enough time has passed since last filter change
@@ -323,15 +370,7 @@ fn select_snippet_inner(
             .map(|(i, d, t, _)| (i, d, t))
             .collect();
 
-        if filtered.is_empty() {
-            selected = 0;
-        } else if selected >= filtered.len() {
-            selected = filtered.len().saturating_sub(1);
-        }
-        state.select(Some(selected));
-        scrollbar_state = scrollbar_state
-            .content_length(filtered.len())
-            .position(selected);
+        sel.update(filtered.len());
 
         // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
         // Main filter text is displayed in the filter input box below, not in the title.
@@ -473,13 +512,13 @@ fn select_snippet_inner(
                 f.set_cursor_position((cursor_x, cursor_y));
             }
 
-            f.render_stateful_widget(list, chunks[1], &mut state);
+            f.render_stateful_widget(list, chunks[1], &mut sel.list_state);
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(ratatui::style::Style::default().bg(ratatui::style::Color::Cyan));
-            f.render_stateful_widget(scrollbar, chunks[1], &mut scrollbar_state);
+            f.render_stateful_widget(scrollbar, chunks[1], &mut sel.scroll_state);
 
-            if selected < filtered.len() {
-                let idx = filtered[selected].0;
+            if sel.selected < filtered.len() {
+                let idx = filtered[sel.selected].0;
                 let snippet_cmd = &commands[idx];
                 let snippet_desc = &descriptions[idx];
                 let _snippet_tags = &tags[idx];
@@ -494,8 +533,13 @@ fn select_snippet_inner(
                     .border_style(style_fg(theme.border))
                     .style(TuiStyle::default().bg(theme.background));
 
-                let preview_content = if has_vars {
-                    format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "))
+                let has_unmatched = has_unmatched_angle_bracket(snippet_cmd);
+                let preview_content = if has_vars || has_unmatched {
+                    let mut content = format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "));
+                    if has_unmatched {
+                        content.push_str("\n\nWarning: unmatched '<' found - will be treated as literal");
+                    }
+                    content
                 } else {
                     strip_escape_sequences(snippet_cmd)
                 };
@@ -569,11 +613,9 @@ fn select_snippet_inner(
                 Ok(CEvent::Mouse(mouse_event)) => {
                     // Check for scroll events
                     if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
-                        if selected + 1 < filtered.len() {
-                            selected += 1;
-                        }
+                        sel.move_down(filtered.len());
                     } else if mouse_event.kind == crossterm::event::MouseEventKind::ScrollUp {
-                        selected = selected.saturating_sub(1);
+                        sel.move_up();
                     }
                     // Handle click to select in list area
                     else if let crossterm::event::MouseEventKind::Up(
@@ -602,7 +644,7 @@ fn select_snippet_inner(
                                 break;
                             } else {
                                 // Single click: select item
-                                selected = clicked_row;
+                                sel.selected = clicked_row;
                                 last_click_row = Some(mouse_event.row);
                                 last_click_time = Some(now);
                             }
@@ -612,7 +654,7 @@ fn select_snippet_inner(
                             last_click_time = None;
                         }
                     }
-                    state.select(Some(selected));
+                    sel.update(filtered.len());
                 }
                 Ok(CEvent::Key(key)) => {
                     if key.kind == KeyEventKind::Press {
@@ -622,8 +664,8 @@ fn select_snippet_inner(
                             }
                         }
 
-                        if is_ctrl_key(&key, 'c') && selected < filtered.len() {
-                            let idx = filtered[selected].0;
+                        if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
+                            let idx = filtered[sel.selected].0;
                             let cmd = strip_escape_sequences(&commands[idx]);
                             if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
                                 tracing::warn!("Clipboard copy failed: {}", e);
@@ -636,16 +678,16 @@ fn select_snippet_inner(
 
                         if key.code == KeyCode::Char('v') && !visual_mode {
                             visual_mode = true;
-                            visual_start = selected;
-                            visual_end = selected;
+                            visual_start = sel.selected;
+                            visual_end = sel.selected;
                             continue;
                         }
 
                         if key.code == KeyCode::Char('V') && !visual_mode {
                             visual_mode = true;
-                            visual_start = selected;
+                            visual_start = sel.selected;
                             visual_end = filtered.len().saturating_sub(1);
-                            selected = visual_end;
+                            sel.selected = visual_end;
                             continue;
                         }
 
@@ -657,26 +699,29 @@ fn select_snippet_inner(
                         if visual_mode {
                             match key.code {
                                 KeyCode::Char('j') | KeyCode::Down
-                                    if selected + 1 < filtered.len() =>
+                                    if sel.selected + 1 < filtered.len() =>
                                 {
-                                    if selected < visual_end {
-                                        selected += 1;
+                                    if sel.selected < visual_end {
+                                        sel.selected += 1;
                                     } else {
-                                        visual_end += 1;
-                                        selected = visual_end;
+                                        visual_end = (sel.selected + 1)
+                                            .min(filtered.len().saturating_sub(1));
+                                        sel.selected = visual_end;
                                     }
                                 }
-                                KeyCode::Char('k') | KeyCode::Up if selected > 0 => {
-                                    if selected > visual_start {
-                                        selected -= 1;
+                                KeyCode::Char('k') | KeyCode::Up if sel.selected > 0 => {
+                                    if sel.selected > visual_start {
+                                        sel.selected -= 1;
                                     } else if visual_start > 0 {
                                         visual_start -= 1;
-                                        selected = visual_start;
+                                        sel.selected = visual_start;
                                     }
                                 }
                                 KeyCode::Char('y') => {
-                                    let start = std::cmp::min(visual_start, visual_end);
-                                    let end = std::cmp::max(visual_start, visual_end);
+                                    let start = std::cmp::min(visual_start, visual_end)
+                                        .min(filtered.len().saturating_sub(1));
+                                    let end = std::cmp::max(visual_start, visual_end)
+                                        .min(filtered.len().saturating_sub(1));
                                     let selected_items: Vec<String> = filtered
                                         .iter()
                                         .skip(start)
@@ -703,32 +748,35 @@ fn select_snippet_inner(
                                 }
                                 _ => {}
                             }
-                            state.select(Some(selected));
+                            sel.update(filtered.len());
                             continue;
                         }
 
                         if is_ctrl_key(&key, 'f') {
-                            selected = (selected + 10).min(filtered.len().saturating_sub(1));
+                            sel.selected =
+                                (sel.selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
                         if is_ctrl_key(&key, 'd') {
-                            selected = (selected + 10).min(filtered.len().saturating_sub(1));
+                            sel.selected =
+                                (sel.selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
                         if is_ctrl_key(&key, 'b') {
-                            selected = selected.saturating_sub(10);
+                            sel.selected = sel.selected.saturating_sub(10);
                         }
 
                         if is_ctrl_key(&key, 'u') {
-                            selected = selected.saturating_sub(10);
+                            sel.selected = sel.selected.saturating_sub(10);
                         }
 
                         if key.code == KeyCode::PageDown {
-                            selected = (selected + 10).min(filtered.len().saturating_sub(1));
+                            sel.selected =
+                                (sel.selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
                         if key.code == KeyCode::PageUp {
-                            selected = selected.saturating_sub(10);
+                            sel.selected = sel.selected.saturating_sub(10);
                         }
 
                         if insert_mode {
@@ -758,8 +806,10 @@ fn select_snippet_inner(
                                         insert_mode = false;
                                     }
                                 }
-                                KeyCode::Down if selected + 1 < filtered.len() => selected += 1,
-                                KeyCode::Up if selected > 0 => selected -= 1,
+                                KeyCode::Down if sel.selected + 1 < filtered.len() => {
+                                    sel.move_down(filtered.len())
+                                }
+                                KeyCode::Up if sel.selected > 0 => sel.move_up(),
                                 KeyCode::Enter => {
                                     break;
                                 }
@@ -783,7 +833,7 @@ fn select_snippet_inner(
                                         last_filter_update = Some(std::time::Instant::now());
                                     }
                                     if !filtered.is_empty() {
-                                        selected = 0;
+                                        sel.move_to_top();
                                     }
                                 }
                                 KeyCode::Char(c) => {
@@ -806,7 +856,7 @@ fn select_snippet_inner(
                                         last_filter_update = Some(std::time::Instant::now());
                                     }
                                     if !filtered.is_empty() {
-                                        selected = 0;
+                                        sel.move_to_top();
                                     }
                                 }
                                 KeyCode::Tab => {
@@ -820,7 +870,7 @@ fn select_snippet_inner(
                             }
                             match key.code {
                                 KeyCode::Char('q') => {
-                                    selected = filtered.len();
+                                    sel.selected = filtered.len();
                                     break;
                                 }
                                 KeyCode::Enter => {
@@ -833,8 +883,8 @@ fn select_snippet_inner(
                                 }
                                 KeyCode::Char('p') => {}
                                 KeyCode::Char('y') => {
-                                    if selected < filtered.len() {
-                                        let idx = filtered[selected].0;
+                                    if sel.selected < filtered.len() {
+                                        let idx = filtered[sel.selected].0;
                                         let cmd = strip_escape_sequences(&commands[idx]);
                                         if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
                                             tracing::warn!("Clipboard copy failed: {}", e);
@@ -849,7 +899,7 @@ fn select_snippet_inner(
                                     list_display_mode = (list_display_mode + 1) % 2;
                                 }
                                 KeyCode::Char('g') if is_ctrl_key(&key, 'g') => {
-                                    selected = 0;
+                                    sel.move_to_top();
                                     pending_gg = false;
                                 }
                                 KeyCode::Char('g') if pending_gg => {
@@ -864,7 +914,7 @@ fn select_snippet_inner(
                                         pending_gg = true;
                                         pending_gg_time = Some(now);
                                     } else {
-                                        selected = 0;
+                                        sel.move_to_top();
                                         pending_gg = false;
                                     }
                                 }
@@ -872,18 +922,22 @@ fn select_snippet_inner(
                                     pending_gg = true;
                                     pending_gg_time = Some(std::time::Instant::now());
                                 }
-                                KeyCode::Char('G') => selected = filtered.len().saturating_sub(1),
-                                KeyCode::Char('h') | KeyCode::Left if selected > 0 => selected -= 1,
-                                KeyCode::Char('j') | KeyCode::Down
-                                    if selected + 1 < filtered.len() =>
-                                {
-                                    selected += 1
+                                KeyCode::Char('G') => sel.move_to_bottom(filtered.len()),
+                                KeyCode::Char('h') | KeyCode::Left if sel.selected > 0 => {
+                                    sel.move_up()
                                 }
-                                KeyCode::Char('k') | KeyCode::Up if selected > 0 => selected -= 1,
-                                KeyCode::Char('l') | KeyCode::Right
-                                    if selected + 1 < filtered.len() =>
+                                KeyCode::Char('j') | KeyCode::Down
+                                    if sel.selected + 1 < filtered.len() =>
                                 {
-                                    selected += 1
+                                    sel.move_down(filtered.len())
+                                }
+                                KeyCode::Char('k') | KeyCode::Up if sel.selected > 0 => {
+                                    sel.move_up()
+                                }
+                                KeyCode::Char('l') | KeyCode::Right
+                                    if sel.selected + 1 < filtered.len() =>
+                                {
+                                    sel.move_down(filtered.len())
                                 }
                                 KeyCode::Char('n') => filter_state.toggle_sort_new(),
                                 KeyCode::Char('o') => filter_state.toggle_sort_old(),
@@ -917,6 +971,9 @@ fn select_snippet_inner(
                         }
                     }
                 }
+                Ok(CEvent::Resize(_, _)) => {
+                    // Terminal resize - redraw will happen on next iteration
+                }
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!("Event read error: {}", e);
@@ -926,8 +983,8 @@ fn select_snippet_inner(
     }
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
-    Ok(if selected < filtered.len() {
-        Some((filtered[selected].0, should_copy))
+    Ok(if sel.selected < filtered.len() {
+        Some((filtered[sel.selected].0, should_copy))
     } else {
         None
     })

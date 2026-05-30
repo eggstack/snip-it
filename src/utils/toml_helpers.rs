@@ -155,6 +155,25 @@ mod tests {
     }
 
     #[test]
+    fn test_fix_invalid_escape_with_single_quote_and_invalid_escape() {
+        let input = r#"command = "it's a \<test\>""#;
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, r#"command = "it's a \\<test\\>""#);
+    }
+
+    #[test]
+    fn test_fix_invalid_escape_with_escaped_quote() {
+        // Input: "it's a \"test\" \<value\>"
+        // The regex captures the full content including \" as escaped chars.
+        // Since content has single quotes, backslashes are doubled.
+        let input = "command = \"it's a \\\"test\\\" \\<value\\>\"";
+        let result = fix_invalid_toml_escapes(input);
+        // Content: it's a \"test\" \<value\>  →  it's a \\"test\\" \\<value\\>
+        assert!(result.contains("\\\\\"test\\\\\""));
+        assert!(result.contains("\\\\<value\\\\>"));
+    }
+
+    #[test]
     fn test_fix_invalid_escape_in_single_quoted() {
         let input = r#"command = 'echo \<test\>'"#;
         let result = fix_invalid_toml_escapes(input);

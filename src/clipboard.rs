@@ -8,11 +8,12 @@
 //! - **macOS/Linux**: Uses `copypasta` crate
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 #[cfg(windows)]
-use clipboard_win::{formats, Clipboard};
+use clipboard_win::Clipboard;
 
 #[cfg(not(windows))]
 use copypasta::{ClipboardContext, ClipboardProvider};
@@ -21,6 +22,16 @@ use crate::error::{SnipError, SnipResult};
 use crate::logging::log_clipboard_operation;
 
 static CLIPBOARD_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+const DEFAULT_CLIPBOARD_TIMEOUT_SECS: u64 = 5;
+
+fn get_clipboard_timeout() -> Duration {
+    let secs = std::env::var("SNP_CLIPBOARD_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_CLIPBOARD_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 pub fn schedule_clipboard_clear(seconds: u32) {
     if seconds == 0 {
@@ -64,8 +75,42 @@ fn clear_clipboard_impl() -> SnipResult<()> {
     Ok(())
 }
 
+fn with_clipboard_timeout<F, T>(operation: &str, f: F) -> SnipResult<T>
+where
+    F: FnOnce() -> SnipResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let timeout = get_clipboard_timeout();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                "Clipboard operation '{}' timed out after {} seconds",
+                operation,
+                timeout.as_secs()
+            );
+            Err(SnipError::clipboard_error(
+                operation,
+                format!(
+                    "clipboard operation timed out after {} seconds",
+                    timeout.as_secs()
+                ),
+            ))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(SnipError::clipboard_error(
+            operation,
+            "clipboard operation thread panicked",
+        )),
+    }
+}
+
 pub fn clear_clipboard() -> SnipResult<()> {
-    clear_clipboard_impl()
+    with_clipboard_timeout("clear", clear_clipboard_impl)
 }
 
 pub fn copy_to_clipboard_with_auto_clear(
@@ -85,36 +130,51 @@ pub fn copy_to_clipboard_auto(text: &str) -> SnipResult<()> {
 }
 
 /// Copy text to the system clipboard.
+///
+/// Only plain text is supported. `clipboard-win` does not expose rich text
+/// or HTML clipboard formats through its public API, so content type cannot
+/// be preserved for non-text payloads.
 #[cfg(windows)]
 pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
-    let mut clipboard = Clipboard::new().map_err(|e| {
-        log_clipboard_operation("open clipboard", false);
-        SnipError::clipboard_error("open clipboard", format!("{}", e))
-    })?;
+    let text = text.to_owned();
+    with_clipboard_timeout("copy", move || {
+        let mut clipboard = Clipboard::new().map_err(|e| {
+            log_clipboard_operation("open clipboard", false);
+            SnipError::clipboard_error("open clipboard", format!("{}", e))
+        })?;
 
-    clipboard.set_text(text).map_err(|e| {
-        log_clipboard_operation("set_text", false);
-        SnipError::clipboard_error("set text", format!("{}", e))
-    })?;
+        clipboard.set_text(&text).map_err(|e| {
+            log_clipboard_operation("set_text", false);
+            SnipError::clipboard_error("set text", format!("{}", e))
+        })?;
 
-    log_clipboard_operation("set_text", true);
-    Ok(())
+        log_clipboard_operation("set_text", true);
+        Ok(())
+    })
 }
 
+/// Copy text to the system clipboard.
+///
+/// Only plain text is supported. `copypasta` handles text natively and does
+/// not expose rich text or HTML clipboard formats, so content type cannot be
+/// preserved for non-text payloads.
 #[cfg(not(windows))]
 pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
-    let mut ctx = ClipboardContext::new().map_err(|e| {
-        log_clipboard_operation("create context", false);
-        SnipError::clipboard_error("create clipboard context", format!("{}", e))
-    })?;
+    let text = text.to_owned();
+    with_clipboard_timeout("copy", move || {
+        let mut ctx = ClipboardContext::new().map_err(|e| {
+            log_clipboard_operation("create context", false);
+            SnipError::clipboard_error("create clipboard context", format!("{}", e))
+        })?;
 
-    ctx.set_contents(text.to_owned()).map_err(|e| {
-        log_clipboard_operation("set_contents", false);
-        SnipError::clipboard_error("set contents", format!("{}", e))
-    })?;
+        ctx.set_contents(text).map_err(|e| {
+            log_clipboard_operation("set_contents", false);
+            SnipError::clipboard_error("set contents", format!("{}", e))
+        })?;
 
-    log_clipboard_operation("set_contents", true);
-    Ok(())
+        log_clipboard_operation("set_contents", true);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
