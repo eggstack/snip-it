@@ -58,9 +58,7 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
 
     let mut mgr = LibraryManager::new()?;
 
-    if let Err(e) = mgr.ensure_library_mode() {
-        eprintln!("Warning: Failed to ensure library mode: {}", e);
-    }
+    mgr.ensure_library_mode()?;
 
     let path = match library_name {
         Some(name) => {
@@ -86,9 +84,7 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
 /// Initializes a LibraryManager with library mode enabled, handling errors gracefully.
 pub fn init_library_manager() -> SnipResult<crate::library::LibraryManager> {
     let mut mgr = crate::library::LibraryManager::new()?;
-    if let Err(e) = mgr.ensure_library_mode() {
-        eprintln!("Warning: Failed to ensure library mode: {}", e);
-    }
+    mgr.ensure_library_mode()?;
     Ok(mgr)
 }
 
@@ -230,6 +226,7 @@ where
     let snippets = crate::library::load_library(&lib_path)?;
     let snippet_data = get_snippet_data(&snippets);
 
+    let mut selected_and_processed = false;
     loop {
         let result = crate::ui::select_snippet(
             &snippet_data.descriptions,
@@ -239,18 +236,17 @@ where
             filter.as_deref(),
             &snippet_data.folders,
             &snippet_data.favorites,
+            &snippets.snippets,
         )?;
         if let Some((idx, copy_flag)) = result {
             let snippet = &snippets.snippets[idx];
             match process_fn(snippet, copy_flag)? {
                 crate::ProcessResult::Cancel => {
-                    if do_sync {
-                        crate::sync_commands::run_default_sync(runtime);
-                    }
                     return Ok(());
                 }
                 crate::ProcessResult::Continue => continue,
                 crate::ProcessResult::Done(_msg) => {
+                    selected_and_processed = true;
                     break;
                 }
             }
@@ -258,7 +254,7 @@ where
             break;
         }
     }
-    if do_sync {
+    if do_sync && selected_and_processed {
         crate::sync_commands::run_default_sync(runtime);
     }
     Ok(())

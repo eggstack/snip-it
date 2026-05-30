@@ -65,12 +65,14 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
         match keychain_retrieve() {
             Ok(key) => Ok(key),
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     "Keychain unavailable, cannot retrieve API key: {}. \
                      Re-save sync settings to store key in config file as fallback.",
                     e
                 );
-                Ok(String::new())
+                Err(serde::de::Error::custom(
+                    "keychain unavailable, cannot retrieve API key",
+                ))
             }
         }
     } else {
@@ -188,12 +190,15 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     // Migrate existing plaintext API key to keychain on first load
     if !settings.api_key.is_empty() && settings.api_key != KEYCHAIN_MARKER {
         if let Err(e) = keychain_store(&settings.api_key) {
-            tracing::warn!("Failed to migrate API key to keychain: {}", e);
+            tracing::error!(
+                "Failed to migrate API key to keychain (keychain unavailable): {}. \
+                 API key will remain in plaintext config file.",
+                e
+            );
         } else {
             settings.api_key = KEYCHAIN_MARKER.to_string();
-            // Re-save to persist the marker
             if let Err(e) = save_sync_settings(&settings) {
-                tracing::warn!("Failed to save keychain marker: {}", e);
+                tracing::error!("Failed to save keychain marker: {}", e);
             }
         }
     }

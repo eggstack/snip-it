@@ -80,9 +80,8 @@ pub fn run(
         load_snippets(&fallback_path)?
     };
 
-    snippets
-        .snippets
-        .push(Snippet::new(description, command, tags));
+    let new_snippet = Snippet::new(description, command, tags)?;
+    snippets.snippets.push(new_snippet);
 
     if let Some(ref p) = lib_path {
         crate::library::save_library(p, &snippets)?;

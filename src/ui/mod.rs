@@ -100,6 +100,7 @@ fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn select_snippet(
     descriptions: &[String],
     commands: &[String],
@@ -108,6 +109,7 @@ pub fn select_snippet(
     initial_filter: Option<&str>,
     folders: &[Vec<String>],
     favorites: &[bool],
+    snippets: &[crate::library::Snippet],
 ) -> io::Result<Option<(usize, Option<String>)>> {
     select_snippet_inner(
         descriptions,
@@ -117,10 +119,12 @@ pub fn select_snippet(
         initial_filter,
         folders,
         favorites,
+        snippets,
     )
 }
 
 #[allow(clippy::collapsible_match)]
+#[allow(clippy::too_many_arguments)]
 fn select_snippet_inner(
     descriptions: &[String],
     commands: &[String],
@@ -129,6 +133,7 @@ fn select_snippet_inner(
     initial_filter: Option<&str>,
     _folders: &[Vec<String>],
     favorites: &[bool],
+    snippets: &[crate::library::Snippet],
 ) -> io::Result<Option<(usize, Option<String>)>> {
     // Enable mouse capture before initializing terminal
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
@@ -616,7 +621,9 @@ fn select_snippet_inner(
                         if is_ctrl_key(&key, 'c') && selected < filtered.len() {
                             let idx = filtered[selected].0;
                             let cmd = strip_escape_sequences(&commands[idx]);
-                            let _ = clipboard::copy_to_clipboard_auto(&cmd);
+                            if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
+                                tracing::warn!("Clipboard copy failed: {}", e);
+                            }
                             should_copy = Some(descriptions[idx].clone());
                             if !is_search {
                                 break;
@@ -672,7 +679,16 @@ fn select_snippet_inner(
                                         .map(|(idx, _, _)| strip_escape_sequences(&commands[*idx]))
                                         .collect();
                                     let copy_text = selected_items.join("\n");
-                                    let _ = clipboard::copy_to_clipboard_auto(&copy_text);
+                                    if let Err(e) = clipboard::copy_to_clipboard_auto(&copy_text) {
+                                        tracing::warn!("Clipboard copy failed: {}", e);
+                                    }
+                                    if let Some((idx, _, _)) = filtered.get(start) {
+                                        if let Err(e) =
+                                            crate::logging::audit_log("copy", &snippets[*idx])
+                                        {
+                                            tracing::debug!("Audit log write failed: {}", e);
+                                        }
+                                    }
                                     should_copy =
                                         Some(format!("{} snippets copied", end - start + 1));
                                     visual_mode = false;
@@ -814,7 +830,9 @@ fn select_snippet_inner(
                                     if selected < filtered.len() {
                                         let idx = filtered[selected].0;
                                         let cmd = strip_escape_sequences(&commands[idx]);
-                                        let _ = clipboard::copy_to_clipboard_auto(&cmd);
+                                        if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
+                                            tracing::warn!("Clipboard copy failed: {}", e);
+                                        }
                                         should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;

@@ -27,12 +27,12 @@ pub fn schedule_clipboard_clear(seconds: u32) {
         return;
     }
 
-    let gen = CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst);
+    let gen_at_spawn = CLIPBOARD_GENERATION.load(Ordering::SeqCst);
 
     let _handle = thread::spawn(move || {
         thread::sleep(Duration::from_secs(seconds as u64));
-        // Only clear if no newer schedule has been requested
-        if gen == CLIPBOARD_GENERATION.load(Ordering::SeqCst) {
+        if gen_at_spawn == CLIPBOARD_GENERATION.load(Ordering::SeqCst) {
             if let Err(e) = clear_clipboard() {
                 tracing::warn!("Auto-clear clipboard failed: {}", e);
             }

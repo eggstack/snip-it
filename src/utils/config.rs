@@ -69,9 +69,6 @@ pub fn migrate_macos_config_dir() -> std::io::Result<()> {
         let entry = entry?;
         let src = entry.path();
         let dst = new_dir.join(entry.file_name());
-        if dst.exists() {
-            continue;
-        }
         if std::fs::rename(&src, &dst).is_ok() {
             continue;
         }
