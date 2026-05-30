@@ -152,16 +152,16 @@ Optional items remaining in `plan.md` (see plan.md for full details):
 
 During the 2026-05-29 architecture review, 8 bugs were fixed and 80+ items were identified for future improvement. See `plan.md` for the full consolidated remediation plan organized into 4 implementation waves:
 
-- **WAVE 1 (Security-Critical):** 6 items - SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, CLI-1
-- **WAVE 2 (Core Bugs):** 17 items - CORE-1 through CORE-11, CLIP-1 through CLIP-3, CONFIG-1, CONFIG-2, CONFIG-4
-- **WAVE 3 (Improvements):** 24 items - SEC-7, SEC-8, SEC-9, CMD-3, CMD-10, CMD-11, LIB-1 through LIB-6, LOG-2, LOG-3, LOG-5, LOG-6, LOG-7, SERVER-3, SERVER-4, SERVER-5, SERVER-6, SERVER-8, PROTO-1, PROTO-2, TUI-1
-- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items
+- **WAVE 1 (Security-Critical):** 6 items - SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, CLI-1 - **COMPLETED**
+- **WAVE 2 (Core Bugs):** 17 items - CORE-1 through CORE-11, CLIP-1 through CLIP-3, CONFIG-1, CONFIG-2, CONFIG-4 - **COMPLETED**
+- **WAVE 3 (Improvements):** 24 items - SEC-7, SEC-8, SEC-9, CMD-3, CMD-10, CMD-11, LIB-1 through LIB-6, LOG-2, LOG-3, LOG-5, LOG-6, LOG-7, SERVER-3, SERVER-4, SERVER-5, SERVER-6, SERVER-8, PROTO-1, PROTO-2, TUI-1 - **COMPLETED**
+- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items - **DEFERRED**
 
 Each wave can be implemented in parallel by separate agents. Within a wave, items are organized by module (UI, Commands, Library, Config, etc.) to minimize context switching.
 
-## Implementation Notes (2026-05-29)
+## Implementation Notes (2026-05-30)
 
-The following bugs were fixed during the architecture review. For detailed fixes, see `plan.md` "Completed in Prior Work" section.
+The following bugs were fixed during architecture review and subsequent work. For detailed fixes, see `plan.md` "Completed in Prior Work" section.
 
 ### High Priority Fixes (Historical)
 1. **Encryption ineffective `drop(key)`** (`src/encryption.rs:176,195`): Removed no-op `drop(key)` calls after key was already moved into cipher
@@ -172,6 +172,12 @@ The following bugs were fixed during the architecture review. For detailed fixes
 6. **Push-only counter bug** (`src/sync_commands.rs:306-323`): `completed` now increments regardless of `has_failures`
 7. **Premade TOCTOU** (`snip-sync/src/premade.rs:199`): Now reads from `canonical_path` instead of original `path`
 8. **Health check DB ping** (`snip-sync/src/main.rs:343-352`): Health RPC now verifies database connectivity via `db.ping()`
+
+### Additional Fixes (2026-05-30)
+9. **CORE-2: deleted flag not filtered in TUI** (`src/commands/mod.rs:159-184`): `get_snippet_data()` now filters out `deleted: true` snippets
+10. **CMD-10: sync error propagation** (`src/commands/sync_cmd.rs:185-192`): `run_sync()` now returns `Result<(), String>` and errors propagate to caller
+11. **CMD-11: premade sync return value** (`src/commands/premade_cmd.rs:144-153`): `run_premade_sync()` now returns error on failure instead of always `Ok(())`
+12. **Added `From<String>` for SnipError** (`src/error.rs`): Enables error conversion from String to SnipError for sync operations
 
 ### Known Scope Constraints
 - `output` field not encrypted during sync (proto definition lacks field - cannot add without breaking change)

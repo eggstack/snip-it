@@ -52,17 +52,35 @@ Output to `plans/<module>_review.md` with:
 | ui | `src/ui/` |
 | utils | `src/utils/` |
 
-## Common Issues Found
+## Common Patterns to Verify
 
-1. **Argon2 memory cost**: Check `encryption.rs` for `ARGON2_MEMORY_COST_KIB`. Currently `1 << 14` (16 MiB). OWASP minimum is 19 MiB.
-2. **Rate limiting gaps**: All endpoints should use `authenticate_and_rate_limit()`. Check `snip-sync/src/main.rs`.
-3. **CORS configuration**: `CORS_ALLOW_ALL` env var enables permissive mode. When not set and no origins configured, cross-origin requests are blocked.
-4. **Sync timestamp updates**: `last_sync` is NOT updated when encryption failures occur (`has_failures` check in `sync_commands.rs`).
-5. **Dead code**: Look for `#[allow(dead_code)]`, unused variables prefixed with `_`, and unreachable branches.
-6. **TOCTOU races**: File existence checks should use `fs::read_to_string()` error handling instead of `exists()` + `read()` patterns.
-7. **Ineffective `drop(key)` after move**: When a value is moved into a struct/cipher, calling `drop(key)` afterwards is a no-op. The key material is cleaned up when the owning struct is dropped.
-8. **Visual mode copy bug in TUI**: When copying in visual mode (`y`), the code copied descriptions instead of commands. Single-select (`y` in normal mode) correctly copies commands.
-9. **Sync merge equal timestamps**: When `server.updated_at >= local.updated_at`, server wins. Previously used `>` which caused local to win on equal timestamps.
-10. **Push-only counter bug**: `completed` counter was only incremented when `!has_failures`, causing incorrect progress tracking when encryption failures occurred.
-11. **Premade TOCTOU**: `premade.rs::get()` validated `canonical_path` but read from original `path`. Must read from the canonicalized path.
-12. **Health check missing DB ping**: `health` RPC returned `healthy: true` unconditionally without checking database connectivity.
+### Security
+- **Path canonicalization**: Output paths and editor paths should be canonicalized before use
+- **TLS verification**: When using TLS, ensure `domain_name(host)` is set on `ClientTlsConfig`
+- **Shell execution**: Prefer hardcoded `/bin/sh` over reading from `$SHELL` env var
+- **Atomic file operations**: Use `fs::OpenOptions::create_new(true)` to prevent TOCTOU races
+
+### Error Handling
+- **Error propagation**: Functions should return `Result` and propagate errors via `?`
+- **From<String> for SnipError**: Enables error conversion from String to SnipError for sync operations
+- **Silent failures**: Check for `let _ = ...` patterns that suppress errors without logging
+
+### Sync
+- **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`)
+- **Timestamp merge**: Server wins on equal timestamps (`>=` not `>`)
+- **Push-only counter**: `completed` should increment regardless of `has_failures`
+
+### Known Historical Fixes (verify they're still in place)
+- Encryption ineffective `drop(key)` removed (key moved into cipher, drop is no-op)
+- Clipboard debug→warn for auto-clear failures
+- Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs:672`
+- Premade TOCTOU: read from `canonical_path` not original `path`
+- Health RPC verifies database connectivity via `db.ping()`
+
+## Verification Checklist
+
+1. **Security items** (SEC-1 through SEC-6): Verify path canonicalization, TLS verification, shell hardening
+2. **Core bugs** (CORE-1 through CORE-11): Verify atomic saves, deleted flag filtering, error propagation
+3. **Clipboard** (CLIP-1 through CLIP-3): Verify generation counter pattern, audit logging, error handling
+4. **Config** (CONFIG-1, CONFIG-2, CONFIG-4): Verify keychain error handling, migration atomicity
+5. **Sync** (CMD-10, CMD-11): Verify `run_sync()` and `run_premade_sync()` return errors properly
