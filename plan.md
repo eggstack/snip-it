@@ -344,25 +344,28 @@ The items in each wave can be implemented in parallel by separate agents. Depend
 - **Wave:** 2
 
 #### CLIP-1: Race Condition in `schedule_clipboard_clear`
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/clipboard.rs:30-39`
 - **Description:** Generation counter logic is fragile - if second call's thread spawns after first thread reads but before it checks, both may attempt clear. Comparison `gen == CLIPBOARD_GENERATION.load()` not atomic with spawn.
+- **Fix Applied:** Changed to proper atomic increment-and-check pattern. Generation is incremented BEFORE spawning thread, and thread captures generation at spawn time to detect newer schedules.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### CLIP-2: Visual Mode Clipboard Copy Missing Audit Log
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/ui/mod.rs:675`
 - **Description:** When copying multiple snippets via visual mode (`V` then `y`), does NOT call `audit_log("copy", snippet)`. Only logged at debug level.
+- **Fix Applied:** Added `audit_log("copy", snippet)` call for the first snippet in visual mode selection, with debug-level error handling.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### CLIP-3: UI Clipboard Operations Suppress Errors
-- **Status:** TODO
+- **Status:** DONE
 - **Location:** `src/ui/mod.rs:619, 675, 817`
 - **Description:** All three UI clipboard operations use `let _ = clipboard::copy_to_clipboard_auto()`. Failures are completely silent.
+- **Fix Applied:** Changed all three locations to use `if let Err(e) = ...` with `tracing::warn!` to log failures instead of silently suppressing them.
 - **Dependencies:** None
-- **Wave:** 2
+- **Wave:** 2 (completed)
 
 #### CLIP-4: Visual Mode Copy Copies Description Not Command
 - **Status:** **FIXED** (verified per AGENTS.md)

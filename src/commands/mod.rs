@@ -236,6 +236,7 @@ where
             filter.as_deref(),
             &snippet_data.folders,
             &snippet_data.favorites,
+            &snippets.snippets,
         )?;
         if let Some((idx, copy_flag)) = result {
             let snippet = &snippets.snippets[idx];
