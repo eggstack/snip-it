@@ -607,7 +607,9 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     }
 
     let mut sorted = snippets.clone();
-    sorted.snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+    sorted
+        .snippets
+        .sort_by_key(|b| std::cmp::Reverse(b.updated_at));
 
     let toml_str = toml::to_string_pretty(&sorted)
         .map_err(|e| SnipError::toml_error("serialize snippets", e))?;

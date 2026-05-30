@@ -321,6 +321,7 @@ fn rotate_audit_log_if_needed(log_path: &Path) -> std::io::Result<()> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum SyncOperationType {
     Connect,
     Disconnect,
@@ -345,6 +346,7 @@ impl std::fmt::Display for SyncOperationType {
     }
 }
 
+#[allow(dead_code)]
 pub fn log_sync_operation(
     operation: SyncOperationType,
     library_id: Option<&str>,
