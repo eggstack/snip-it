@@ -324,7 +324,9 @@ pub fn run_sync(
                         let server_snippets = response.snippets;
                         let merged = merge_snippets(&snippets, &server_snippets);
 
-                        let _ = library::backup_library(&lib_path).ok();
+                        if let Err(e) = library::backup_library(&lib_path) {
+                            tracing::warn!("Backup failed before merge save: {}", e);
+                        }
 
                         if let Err(e) = library::save_library(&lib_path, &merged) {
                             results.push((lib_name.clone(), false, e.to_string()));
@@ -364,7 +366,9 @@ pub fn run_sync(
                         let server_snippets = response.snippets;
                         let merged = merge_snippets(&snippets, &server_snippets);
 
-                        let _ = library::backup_library(&lib_path).ok();
+                        if let Err(e) = library::backup_library(&lib_path) {
+                            tracing::warn!("Backup failed before merge save: {}", e);
+                        }
 
                         if let Err(e) = library::save_library(&lib_path, &merged) {
                             results.push((lib_name.clone(), false, e.to_string()));
