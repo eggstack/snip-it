@@ -30,6 +30,8 @@ const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
 const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 const DEFAULT_MAX_TAGS: usize = 50;
 const DEFAULT_MAX_TAG_LENGTH: usize = 100;
+const DEFAULT_MAX_ID_LENGTH: usize = 128;
+const DEFAULT_MAX_DEVICE_ID_LENGTH: usize = 128;
 const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
@@ -70,6 +72,8 @@ struct LimitsConfig {
     max_description_length: Option<usize>,
     max_tags: Option<usize>,
     max_tag_length: Option<usize>,
+    max_id_length: Option<usize>,
+    max_device_id_length: Option<usize>,
     request_timeout_secs: Option<u64>,
 }
 
@@ -103,6 +107,8 @@ struct Config {
     max_description_length: usize,
     max_tags: usize,
     max_tag_length: usize,
+    max_id_length: usize,
+    max_device_id_length: usize,
     request_timeout_secs: u64,
     rate_limit_per_minute: u32,
     trusted_proxies: Vec<String>,
@@ -199,6 +205,19 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_tag_length))
                 .unwrap_or(DEFAULT_MAX_TAG_LENGTH),
+            max_id_length: std::env::var("MAX_ID_LENGTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(server.limits.as_ref().and_then(|l| l.max_id_length))
+                .unwrap_or(DEFAULT_MAX_ID_LENGTH),
+            max_device_id_length: std::env::var("MAX_DEVICE_ID_LENGTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(server
+                    .limits
+                    .as_ref()
+                    .and_then(|l| l.max_device_id_length))
+                .unwrap_or(DEFAULT_MAX_DEVICE_ID_LENGTH),
             request_timeout_secs: std::env::var("REQUEST_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -214,7 +233,12 @@ impl Config {
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
             trusted_proxies: std::env::var("TRUSTED_PROXIES")
                 .ok()
-                .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty() && s.parse::<std::net::IpAddr>().is_ok())
+                        .collect()
+                })
                 .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
                 .unwrap_or_default(),
             persist_rate_limits: std::env::var("PERSIST_RATE_LIMITS")
@@ -316,6 +340,26 @@ impl SnipSyncService {
     }
 
     fn validate_snippet(&self, snippet: &ProtoSnippet) -> Result<(), Status> {
+        if snippet.id.is_empty() {
+            return Err(Status::invalid_argument("Snippet ID is required"));
+        }
+        if snippet.id.len() > self.config.max_id_length {
+            return Err(Status::invalid_argument(format!(
+                "Snippet ID exceeds maximum length of {} bytes",
+                self.config.max_id_length
+            )));
+        }
+
+        if snippet.device_id.is_empty() {
+            return Err(Status::invalid_argument("Device ID is required"));
+        }
+        if snippet.device_id.len() > self.config.max_device_id_length {
+            return Err(Status::invalid_argument(format!(
+                "Device ID exceeds maximum length of {} bytes",
+                self.config.max_device_id_length
+            )));
+        }
+
         if snippet.command.len() > self.config.max_command_length {
             return Err(Status::invalid_argument(format!(
                 "Command exceeds maximum length of {} bytes",
@@ -344,6 +388,21 @@ impl SnipSyncService {
                     tag, self.config.max_tag_length
                 )));
             }
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        if snippet.updated_at > now + 300 {
+            return Err(Status::invalid_argument(
+                "Updated timestamp is more than 5 minutes in the future",
+            ));
+        }
+        if snippet.created_at > now + 300 {
+            return Err(Status::invalid_argument(
+                "Created timestamp is more than 5 minutes in the future",
+            ));
+        }
+        if snippet.created_at < 0 || snippet.updated_at < 0 {
+            return Err(Status::invalid_argument("Timestamps must be non-negative"));
         }
 
         Ok(())
@@ -747,13 +806,11 @@ impl SnippetSync for SnipSyncService {
                     message: format!("Library '{}' created successfully", req.name),
                 }))
             }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("already exists") {
-                    Err(Status::already_exists(msg))
-                } else {
-                    Err(Status::invalid_argument(msg))
-                }
+            Err(db::DbError::Conflict(msg)) => Err(Status::already_exists(msg)),
+            Err(db::DbError::NotFound(msg)) => Err(Status::invalid_argument(msg)),
+            Err(db::DbError::Database(e)) => {
+                tracing::error!("Database error creating library: {}", e);
+                Err(Status::internal("Internal error"))
             }
         }
     }

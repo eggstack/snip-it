@@ -5,7 +5,7 @@ use argon2::{
 use base64::Engine;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -106,7 +106,17 @@ type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 
 impl Database {
     pub async fn connect(url: &str) -> DbResult<Self> {
-        let pool = SqlitePool::connect(url).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect(url)
+            .await?;
+
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await?;
 
         sqlx::query(
             "
@@ -368,6 +378,7 @@ impl Database {
 
     pub async fn delete_library(&self, user_id: &str, library_id: &str) -> DbResult<()> {
         let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
 
         let result = sqlx::query(
             "UPDATE libraries SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
@@ -375,10 +386,11 @@ impl Database {
         .bind(now)
         .bind(library_id)
         .bind(user_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
         if result.rows_affected() == 0 {
+            tx.rollback().await?;
             return Err(DbError::NotFound(
                 "Library not found or already deleted".to_string(),
             ));
@@ -389,9 +401,10 @@ impl Database {
         )
         .bind(now)
         .bind(library_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 

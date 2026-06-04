@@ -532,7 +532,7 @@ eval "$SNIPPET"
 
 ### Sync Not Working
 
-1. Check server is running: `curl localhost:50051` or equivalent
+1. Check server is running: `curl localhost:50050/health` or equivalent
 2. Verify API key: `cat ~/.config/snp/sync.toml`
 3. Check logs: `tail -f ~/.config/snp/logs/snp.log`
 4. Test connection: `snp sync --servers`

@@ -151,6 +151,50 @@ impl SyncStatus {
     }
 }
 
+fn merge_and_save(
+    lib_path: &std::path::Path,
+    lib_name: &str,
+    snippets: &Snippets,
+    server_snippets: &[ProtoSnippet],
+    device_id: &str,
+) -> Result<(Snippets, Option<String>), String> {
+    let conflicting_ids = sync::detect_device_conflict(server_snippets, device_id);
+    if !conflicting_ids.is_empty() {
+        tracing::warn!(
+            library = %lib_name,
+            count = conflicting_ids.len(),
+            "Device conflicts detected during merge"
+        );
+    }
+
+    let merged = merge_snippets(snippets, server_snippets);
+
+    let backup_path = match library::backup_library(lib_path) {
+        Ok(Some(p)) => Some(p.display().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("Backup failed before merge save: {}", e);
+            None
+        }
+    };
+
+    if let Err(e) = library::save_library(lib_path, &merged) {
+        if let Some(ref backup) = backup_path {
+            if let Err(restore_err) = fs::copy(backup, lib_path) {
+                tracing::error!(
+                    "Failed to restore backup after merge save failure: {}",
+                    restore_err
+                );
+            } else {
+                tracing::info!("Restored library from backup after merge save failure");
+            }
+        }
+        return Err(e.to_string());
+    }
+
+    Ok((merged, backup_path))
+}
+
 pub fn run_sync(
     sync_settings: &SyncSettings,
     library_name: Option<&str>,
@@ -377,59 +421,35 @@ pub fn run_sync(
 
                         let server_snippets = response.snippets;
 
-                        let conflicting_ids = sync::detect_device_conflict(
-                            &server_snippets,
-                            &sync_settings.device_id,
-                        );
-                        if !conflicting_ids.is_empty() {
-                            status.conflicts += conflicting_ids.len() as u32;
-                        }
+                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets, &sync_settings.device_id) {
+                            Ok((_merged, _backup)) => {
+                                if !has_failures {
+                                    let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                }
 
-                        let merged = merge_snippets(&snippets, &server_snippets);
+                                status.pulled += server_snippets.len() as u32;
+                                if has_failures {
+                                    status.conflicts += 1;
+                                }
 
-                        let backup_path = match library::backup_library(&lib_path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                tracing::warn!("Backup failed before merge save: {}", e);
-                                None
-                            }
-                        };
-
-                        if let Err(e) = library::save_library(&lib_path, &merged) {
-                            if let Some(ref backup) = backup_path {
-                                if let Err(restore_err) = fs::copy(backup, &lib_path) {
-                                    tracing::error!(
-                                        "Failed to restore backup after merge save failure: {}",
-                                        restore_err
-                                    );
+                                if has_failures {
+                                    results.push((
+                                        lib_name.clone(),
+                                        true,
+                                        format!(
+                                            "{} snippets skipped (will retry)",
+                                            response.skipped_count
+                                        ),
+                                    ));
                                 } else {
-                                    tracing::info!(
-                                        "Restored library from backup after merge save failure"
-                                    );
+                                    results.push((lib_name.clone(), true, String::new()));
                                 }
                             }
-                            status.failed += 1;
-                            results.push((lib_name.clone(), false, e.to_string()));
-                            continue;
-                        }
-
-                        if !has_failures {
-                            let _ = mgr.update_last_sync(lib_name, new_timestamp);
-                        }
-
-                        status.pulled += server_snippets.len() as u32;
-                        if has_failures {
-                            status.conflicts += 1;
-                        }
-
-                        if has_failures {
-                            results.push((
-                                lib_name.clone(),
-                                true,
-                                format!("{} snippets skipped (will retry)", response.skipped_count),
-                            ));
-                        } else {
-                            results.push((lib_name.clone(), true, String::new()));
+                            Err(e) => {
+                                status.failed += 1;
+                                results.push((lib_name.clone(), false, e));
+                                continue;
+                            }
                         }
                     } else {
                         status.failed += 1;
@@ -452,45 +472,17 @@ pub fn run_sync(
                         let new_timestamp = response.server_timestamp;
                         let server_snippets = response.snippets;
 
-                        let conflicting_ids = sync::detect_device_conflict(
-                            &server_snippets,
-                            &sync_settings.device_id,
-                        );
-                        if !conflicting_ids.is_empty() {
-                            status.conflicts += conflicting_ids.len() as u32;
-                        }
-
-                        let merged = merge_snippets(&snippets, &server_snippets);
-
-                        let backup_path = match library::backup_library(&lib_path) {
-                            Ok(p) => p,
+                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets, &sync_settings.device_id) {
+                            Ok((_merged, _backup)) => {
+                                let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                status.pulled += server_snippets.len() as u32;
+                                results.push((lib_name.clone(), true, String::new()));
+                            }
                             Err(e) => {
-                                tracing::warn!("Backup failed before merge save: {}", e);
-                                None
+                                status.failed += 1;
+                                results.push((lib_name.clone(), false, e));
                             }
-                        };
-
-                        if let Err(e) = library::save_library(&lib_path, &merged) {
-                            if let Some(ref backup) = backup_path {
-                                if let Err(restore_err) = fs::copy(backup, &lib_path) {
-                                    tracing::error!(
-                                        "Failed to restore backup after merge save failure: {}",
-                                        restore_err
-                                    );
-                                } else {
-                                    tracing::info!(
-                                        "Restored library from backup after merge save failure"
-                                    );
-                                }
-                            }
-                            status.failed += 1;
-                            results.push((lib_name.clone(), false, e.to_string()));
-                            continue;
                         }
-
-                        let _ = mgr.update_last_sync(lib_name, new_timestamp);
-                        status.pulled += server_snippets.len() as u32;
-                        results.push((lib_name.clone(), true, String::new()));
                     }
                 }
                 Err(e) => {

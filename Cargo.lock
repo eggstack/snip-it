@@ -1794,7 +1794,6 @@ dependencies = [
  "dirs",
  "fuzzy-matcher",
  "keyring",
- "once_cell",
  "prost",
  "rand",
  "ratatui",

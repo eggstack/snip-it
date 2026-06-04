@@ -11,7 +11,6 @@ struct WindowEntry {
 
 pub struct RateLimiter {
     windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
-    window_secs: u64,
     #[allow(dead_code)]
     shutdown_tx: Arc<tokio::sync::oneshot::Sender<()>>,
     db_pool: Option<sqlx::SqlitePool>,
@@ -62,7 +61,6 @@ impl RateLimiter {
             shutdown_tx: Arc::new(shutdown_tx),
             db_pool,
             persist,
-            window_secs: 60,
         }
     }
 
@@ -121,17 +119,13 @@ impl RateLimiter {
 
         let windows = self.windows.lock().await;
 
-        if let Err(e) = sqlx::query("DELETE FROM rate_limits").execute(pool).await {
-            tracing::warn!("Failed to clear rate limit state: {}", e);
-            return;
-        }
-
         for (key, entry) in windows.iter() {
             if entry.count == 0 {
                 continue;
             }
             if let Err(e) = sqlx::query(
-                "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)",
+                "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)
+                 ON CONFLICT(peer_ip) DO UPDATE SET window_start = excluded.window_start, request_count = excluded.request_count",
             )
             .bind(key)
             .bind(entry.window_start as i64)

@@ -6,10 +6,10 @@
 use crate::error::{SnipError, SnipResult};
 pub use crate::utils::config::get_sync_config_path;
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -24,8 +24,8 @@ struct CachedToml {
     content: String,
 }
 
-static TOML_CACHE: Lazy<Mutex<HashMap<String, CachedToml>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static TOML_CACHE: LazyLock<Mutex<HashMap<String, CachedToml>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn compute_crc32(data: &str) -> u32 {
     crc32fast::hash(data.as_bytes())

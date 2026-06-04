@@ -8,6 +8,8 @@ license = "MIT"
 repository = "https://github.com/anomalyco/snip-it"
 homepage = "https://github.com/anomalyco/snip-it"
 readme = "README.md"
+changelog = "CHANGELOG.md"
+documentation = "https://docs.rs/snp"
 keywords = ["cli", "snippets", "terminal", "tui", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 authors = ["David Bowman"]
@@ -23,6 +25,7 @@ exclude = [
     "USER_GUIDE.md",
     "snippets.example.toml",
     "deny.toml",
+    "snip-sync/",
 ]
 
 [[bin]]
@@ -64,7 +67,7 @@ argon2 = "0.5"
 rand = "0.10"
 base64 = "0.22"
 signal-hook = "0.3"
-once_cell = "1.20"
+
 regex = "1.11"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2"

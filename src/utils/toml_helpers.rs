@@ -8,11 +8,11 @@
 //! because `\<` is not a valid TOML escape. This module converts such strings
 //! to single-quoted TOML strings which are raw literals.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
-static TOML_STRING_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#""([^"\\]*(?:\\.[^"\\]*)*)""#).expect("Invalid regex"));
+static TOML_STRING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""([^"\\]*(?:\\.[^"\\]*)*)""#).expect("Invalid regex"));
 
 /// Internal helper that applies a condition to decide whether to convert
 /// double-quoted TOML strings to single-quoted (or escape backslashes).
