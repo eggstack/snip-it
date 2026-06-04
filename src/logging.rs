@@ -388,7 +388,7 @@ pub fn audit_log(
 ) -> std::io::Result<()> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
     let entry = AuditLogEntry {
@@ -480,7 +480,7 @@ fn rotate_audit_log_if_needed(
     if size > max_size_bytes {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         let rotated_path = log_path.with_extension(format!("{}.rotated", timestamp));
         fs::rename(log_path, rotated_path)?;
@@ -497,7 +497,7 @@ fn rotate_audit_log_if_needed(
                     if let Ok(modified) = metadata.modified() {
                         let age = SystemTime::now()
                             .duration_since(modified)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs();
                         if age > retention_secs {
                             let _ = fs::remove_file(path);

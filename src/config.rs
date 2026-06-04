@@ -62,7 +62,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let key = path.to_string_lossy().to_string();
 
     {
-        let cache = TOML_CACHE.lock().unwrap();
+        let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.get(&key) {
             if entry.mtime == mtime {
                 return Ok(entry.content.clone());
@@ -73,7 +73,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let content = fs::read_to_string(path)
         .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
 
-    let mut cache = TOML_CACHE.lock().unwrap();
+    let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.insert(
         key,
         CachedToml {

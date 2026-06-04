@@ -17,7 +17,7 @@ pub fn get_config_dir() -> PathBuf {
         if !dir.exists() {
             let _ = std::fs::create_dir_all(&dir);
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         }
     }
 

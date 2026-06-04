@@ -3,6 +3,10 @@ FROM rust:1.81 as builder
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
+COPY snip-proto/Cargo.toml snip-proto/Cargo.lock snip-proto/
+COPY snip-proto/build.rs snip-proto/
+COPY snip-proto/proto snip-proto/proto
+COPY snip-proto/src snip-proto/src
 COPY src ./src
 
 RUN cargo build --release

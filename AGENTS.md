@@ -148,58 +148,9 @@ snip-it/
 
 ## Deferred Items
 
-Optional items remaining in `plan.md` (see plan.md for full details):
 - **Command injection warning** (safe mode for snippet execution)
 - **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
-
-## Architecture Review Summary
-
-During the 2026-05-29 architecture review, 8 bugs were fixed and 80+ items were identified for future improvement. See `plan.md` for the full consolidated remediation plan organized into 4 implementation waves:
-
-- **WAVE 1 (Security-Critical):** 6 items - SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, CLI-1 - **COMPLETED**
-- **WAVE 2 (Core Bugs):** 17 items - CORE-1 through CORE-11, CLIP-1 through CLIP-3, CONFIG-1, CONFIG-2, CONFIG-4 - **COMPLETED**
-- **WAVE 3 (Improvements):** 24 items - SEC-7, SEC-8, SEC-9, CMD-3, CMD-10, CMD-11, LIB-1 through LIB-6, LOG-2, LOG-3, LOG-5, LOG-6, LOG-7, SERVER-3, SERVER-4, SERVER-5, SERVER-6, SERVER-8, PROTO-1, PROTO-2, TUI-1 - **COMPLETED**
-- **WAVE 4 (Low Priority):** 40+ items - all TUI, CMD, CONFIG, LOG, LIB, SYNC, OV items - **COMPLETED**
-
-Each wave can be implemented in parallel by separate agents. Within a wave, items are organized by module (UI, Commands, Library, Config, etc.) to minimize context switching.
-
-## Implementation Notes (2026-05-30)
-
-The following bugs were fixed during architecture review and subsequent work. For detailed fixes, see `plan.md` "Completed in Prior Work" section.
-
-### High Priority Fixes (Historical)
-1. **Encryption ineffective `drop(key)`** (`src/encryption.rs:176,195`): Removed no-op `drop(key)` calls after key was already moved into cipher
-2. **Clipboard debug→warn** (`src/clipboard.rs:37`): Changed `tracing::debug` to `tracing::warn` for auto-clear failures
-3. **Clipboard redundant drop** (`src/clipboard.rs:42`): Removed redundant `std::mem::drop(handle)` - thread continues regardless
-4. **TUI visual mode copy bug** (`src/ui/mod.rs:672`): Visual mode `y` now copies commands (not descriptions) to match single-select behavior
-5. **Sync merge equal timestamps** (`src/sync_commands.rs:429`): Changed `>` to `>=` so server wins on equal timestamps
-6. **Push-only counter bug** (`src/sync_commands.rs:306-323`): `completed` now increments regardless of `has_failures`
-7. **Premade TOCTOU** (`snip-sync/src/premade.rs:199`): Now reads from `canonical_path` instead of original `path`
-8. **Health check DB ping** (`snip-sync/src/main.rs:343-352`): Health RPC now verifies database connectivity via `db.ping()`
-
-### Additional Fixes (2026-05-30)
-9. **CORE-2: deleted flag not filtered in TUI** (`src/commands/mod.rs:159-184`): `get_snippet_data()` now filters out `deleted: true` snippets
-10. **CMD-10: sync error propagation** (`src/commands/sync_cmd.rs:185-192`): `run_sync()` now returns `Result<(), String>` and errors propagate to caller
-11. **CMD-11: premade sync return value** (`src/commands/premade_cmd.rs:144-153`): `run_premade_sync()` now returns error on failure instead of always `Ok(())`
-12. **Added `From<String>` for SnipError** (`src/error.rs`): Enables error conversion from String to SnipError for sync operations
-
-### WAVE 4 Final (2026-05-30)
-All previously deferred items implemented:
-- **TUI**: SelectState struct, visual mode fixes, variable warnings, resize handling
-- **Commands**: Cached LibraryManager, editor timeout
-- **Config**: File permissions, CRC32 integrity, TOML caching
-- **Logging**: log_any_error helper, per-module log levels, async audit writer
-- **Library**: Delete confirmation, field aliases, empty vec serialization
-- **Sync**: get_snippets/push_snippets API, device conflict detection, merge failure backup
-- **Server**: Request tracing (UUID), batch API key verification, premade validation
-- **Encryption**: std::mem::take for key cleanup, constant-time comparison
-- **Clipboard**: Generation counter verified, timeout support
-- **Utils**: Escape sequence consistency, nested angle brackets, chained backslashes
-- **Other**: Rate limiter persistence, snippet ID collision logging
-
-### Known Scope Constraints
-- `output` field not encrypted during sync (proto definition lacks field - cannot add without breaking change)
-- Many CLI documentation discrepancies (e.g., `--clip` behavior, cron intervals) are doc bugs not code bugs
+- **API key in gRPC metadata**: Currently sent in request bodies; consider moving to gRPC `authorization` header for better alignment with gRPC security conventions
 
 ## Testing Notes
 
@@ -207,6 +158,6 @@ All previously deferred items implemented:
 - Server tests use `sqlite::memory:` for isolation
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
-- Utils tests cover escape sequences, nested brackets, chained backslashes (28 new tests added)
-- Sync tests cover device conflict detection (3 new tests added)
+- Utils tests cover escape sequences, nested brackets, chained backslashes
+- Sync tests cover device conflict detection
 - Total: 124 unit tests + 16 integration tests + 15 server tests = 155 tests passing

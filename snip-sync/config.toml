@@ -51,5 +51,6 @@ requests_per_minute = 120
 
 [server.cors]
 # Comma-separated list of allowed CORS origins
-# Leave empty to allow all origins
+# Empty string means CORS is disabled (all origins blocked by default)
+# Set to "*" to allow all origins, or list specific origins like "https://example.com"
 allowed_origins = ""

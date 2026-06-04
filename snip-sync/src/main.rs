@@ -1074,7 +1074,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
                 use subtle::ConstantTimeEq;
                 let expected_bytes = expected.as_bytes();
-                decoded.len() == expected_bytes.len() && bool::from(decoded.ct_eq(expected_bytes))
+                if decoded.len() != expected_bytes.len() {
+                    false
+                } else {
+                    bool::from(decoded.ct_eq(expected_bytes))
+                }
             } else {
                 false
             }

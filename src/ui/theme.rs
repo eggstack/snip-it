@@ -62,7 +62,7 @@ static ACTIVE_THEME: LazyLock<std::sync::Mutex<Theme>> = LazyLock::new(|| {
 });
 
 pub fn get_theme() -> std::sync::MutexGuard<'static, Theme> {
-    ACTIVE_THEME.lock().unwrap()
+    ACTIVE_THEME.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub(crate) fn style_fg(fg: Color) -> Style {

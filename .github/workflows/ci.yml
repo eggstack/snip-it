@@ -85,3 +85,11 @@ jobs:
         with:
           file: lcov.info
           fail_ci_if_error: false
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build snip-sync Docker image
+        run: docker build -t snip-sync:test ./snip-sync
