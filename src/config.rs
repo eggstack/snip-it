@@ -88,6 +88,8 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
 ///
 /// These settings control how snippets are synchronized with a remote server,
 /// including server URL, authentication, and sync behavior preferences.
+///
+/// The API key is zeroized on drop to minimize exposure in process memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSettings {
     pub enabled: bool,
@@ -109,6 +111,13 @@ pub struct SyncSettings {
     pub clipboard_auto_clear_seconds: Option<u32>,
     #[serde(default)]
     pub sync_limit: Option<i32>,
+}
+
+impl Drop for SyncSettings {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.api_key.zeroize();
+    }
 }
 
 impl SyncSettings {
@@ -258,6 +267,14 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let tmp_path = path.with_extension("toml.tmp");
     fs::write(&tmp_path, &content_with_integrity)
         .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&tmp_path, perms)
+            .map_err(|e| SnipError::io_error("set sync config permissions", &tmp_path, e))?;
+    }
 
     fs::rename(&tmp_path, &path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);

@@ -3,6 +3,9 @@ name = "snip-proto"
 version = "0.1.0"
 edition = "2021"
 description = "gRPC protocol definitions for snip-it sync"
+license = "MIT"
+repository = "https://github.com/anomalyco/snip-it"
+authors = ["David Bowman"]
 
 [dependencies]
 tonic = "0.14"

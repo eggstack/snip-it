@@ -33,8 +33,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use subtle::ConstantTimeEq;
 
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
-const ARGON2_TIME_COST: u32 = 3;
-const ARGON2_PARALLELISM: u32 = 4;
+const ARGON2_TIME_COST: u32 = 3; // 3 iterations — OWASP minimum recommendation
+const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU core count
 
 #[derive(Zeroize, ZeroizeOnDrop, Default)]
 struct DerivedKey([u8; 32]);

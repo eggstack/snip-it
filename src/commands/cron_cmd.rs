@@ -14,7 +14,7 @@ pub fn run(interval: u32) -> SnipResult<()> {
         .unwrap_or_else(|_| "snp".to_string());
 
     let cron_entry = format!(
-        "*/{} * * * * {} sync --non-interactive",
+        "*/{} * * * * '{}' sync --non-interactive",
         interval, binary_path
     );
 

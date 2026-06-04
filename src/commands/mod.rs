@@ -247,6 +247,10 @@ where
     if do_sync && selected_and_processed {
         if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
             tracing::warn!("Background sync failed: {}", e);
+            eprintln!(
+                "Warning: background sync failed ({}). Run 'snp sync' to retry.",
+                e
+            );
         }
     }
     Ok(())

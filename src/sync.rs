@@ -25,9 +25,9 @@ use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
 use tonic::Code;
 
-const DEFAULT_MAX_RETRIES: u32 = 3;
-const DEFAULT_INITIAL_DELAY_MS: u64 = 100;
-const DEFAULT_MAX_DELAY_MS: u64 = 5000;
+const DEFAULT_MAX_RETRIES: u32 = 3; // Total attempts: 1 initial + 3 retries = 4
+const DEFAULT_INITIAL_DELAY_MS: u64 = 100; // Initial backoff before first retry
+const DEFAULT_MAX_DELAY_MS: u64 = 5000; // Cap exponential backoff at 5 seconds
 
 #[derive(Debug, Clone)]
 pub struct SyncRetryConfig {
@@ -185,21 +185,18 @@ impl SyncClient {
     /// Note: The `retry_grpc!` macro cannot be used here because `self.client.sync()`
     /// borrows `&mut self`, and the macro requires the operation to be a standalone
     /// future expression. This method implements the same exponential backoff strategy.
+    /// The request is cloned on retry to avoid re-cloning on every attempt.
     async fn sync_with_retry(
         &mut self,
         request: SyncRequest,
     ) -> SnipResult<snip_proto::SyncResponse> {
         let config = default_retry_config();
         let mut delay_ms = config.initial_delay_ms;
-        for attempt in 0..=config.max_retries {
-            let req = SyncRequest {
-                api_key: request.api_key.clone(),
-                local_snippets: request.local_snippets.clone(),
-                last_sync_timestamp: request.last_sync_timestamp,
-                library_id: request.library_id.clone(),
-                limit: request.limit,
-            };
-            match self.client.sync(tonic::Request::new(req)).await {
+        let mut attempt = 0;
+        let req = request;
+        loop {
+            let grpc_req = tonic::Request::new(req.clone());
+            match self.client.sync(grpc_req).await {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(e) => {
                     if !SyncRetryConfig::is_retryable_grpc_error(&e)
@@ -219,10 +216,10 @@ impl SyncClient {
                     );
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms * 2).min(config.max_delay_ms);
+                    attempt += 1;
                 }
             }
         }
-        unreachable!()
     }
 
     pub async fn health_check(&mut self) -> SnipResult<bool> {

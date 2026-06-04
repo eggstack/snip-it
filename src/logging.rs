@@ -24,9 +24,9 @@ use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-const AUDIT_LOG_RETENTION_DAYS: u64 = 30;
-const AUDIT_LOG_CHANNEL_SIZE: usize = 1024;
+const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — rotate audit log when exceeded
+const AUDIT_LOG_RETENTION_DAYS: u64 = 30; // Keep 30 days of rotated audit logs
+const AUDIT_LOG_CHANNEL_SIZE: usize = 1024; // Bounded channel for async audit writes
 
 struct AuditLogEntry {
     timestamp: u64,
@@ -295,14 +295,19 @@ pub fn log_panic_info(panic_info: &std::panic::PanicHookInfo) {
 }
 
 pub fn setup_panic_handler() {
-    std::panic::set_hook(Box::new(|panic_info| {
-        ratatui::restore();
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ratatui::restore();
+        }));
 
         log_panic_info(panic_info);
 
         let (location, message) = extract_panic_info(panic_info);
 
         eprintln!("PANIC at {}: {}", location, message);
+
+        previous_hook(panic_info);
     }));
 }
 
@@ -568,5 +573,64 @@ pub fn log_sync_operation(
                 "Sync operation failed"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_pipe_backslash() {
+        assert_eq!(escape_pipe(r"foo\bar"), r"foo\\bar");
+    }
+
+    #[test]
+    fn test_escape_pipe_pipe() {
+        assert_eq!(escape_pipe("foo|bar"), r"foo\|bar");
+    }
+
+    #[test]
+    fn test_escape_pipe_newline() {
+        assert_eq!(escape_pipe("foo\nbar"), r"foo\nbar");
+    }
+
+    #[test]
+    fn test_escape_pipe_carriage_return() {
+        assert_eq!(escape_pipe("foo\rbar"), r"foo\rbar");
+    }
+
+    #[test]
+    fn test_escape_pipe_combined() {
+        assert_eq!(escape_pipe("a\\b|c\nd"), r"a\\b\|c\nd");
+    }
+
+    #[test]
+    fn test_escape_pipe_empty() {
+        assert_eq!(escape_pipe(""), "");
+    }
+
+    #[test]
+    fn test_rotate_audit_log_creates_rotated_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("audit.log");
+        fs::write(&log_path, "x".repeat(100)).unwrap();
+        rotate_audit_log_if_needed(&log_path, 50, 30).unwrap();
+        assert!(!log_path.exists());
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("rotated"))
+            .collect();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn test_rotate_audit_log_no_rotation_under_limit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("audit.log");
+        fs::write(&log_path, "small").unwrap();
+        rotate_audit_log_if_needed(&log_path, 1024, 30).unwrap();
+        assert!(log_path.exists());
     }
 }

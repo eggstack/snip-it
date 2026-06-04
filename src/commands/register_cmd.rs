@@ -32,7 +32,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
         server.clone()
     } else if let Ok(settings) = load_sync_settings() {
         if !settings.server_url.is_empty() {
-            settings.server_url
+            settings.server_url.clone()
         } else {
             server.clone()
         }
@@ -42,13 +42,11 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
 
     match runtime.block_on(crate::sync::SyncClient::register(server_url.clone())) {
         Ok((api_key, device_id)) => {
-            let sync_settings = SyncSettings {
-                enabled: true,
-                server_url: server_url.clone(),
-                api_key: api_key.clone(),
-                device_id: device_id.clone(),
-                ..Default::default()
-            };
+            let mut sync_settings = SyncSettings::default();
+            sync_settings.enabled = true;
+            sync_settings.server_url = server_url.clone();
+            sync_settings.api_key = api_key.clone();
+            sync_settings.device_id = device_id.clone();
 
             if let Err(e) = save_sync_settings(&sync_settings) {
                 eprintln!("Failed to save sync settings: {}", e);

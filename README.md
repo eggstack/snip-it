@@ -25,10 +25,10 @@ cargo build --release
 cp target/release/snp ~/.local/bin/
 ```
 
-### Using Homebrew
+### Using Homebrew (macOS)
 
 ```bash
-brew install snp
+brew install anomalyco/tap/snp
 ```
 
 ## Quick Start
@@ -190,7 +190,7 @@ Use `--non-interactive` flag for headless sync (skips conflict prompts, keeps lo
 
 ### Sync Configuration
 
-After first sync, a configuration section is added to your snippets file:
+After first sync, a configuration file is created at `~/.config/snp/sync.toml`:
 
 ```toml
 [settings.sync]

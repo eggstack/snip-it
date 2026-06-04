@@ -255,3 +255,112 @@ impl PremadeManager {
         self.libraries.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_get_valid_library() {
+        let dir = TempDir::new().unwrap();
+        let toml_content = r#"
+Description = "Test library"
+
+[[Snippets]]
+Command = "echo hello"
+Description = "Say hello"
+"#;
+        fs::write(dir.path().join("test.toml"), toml_content).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let result = manager.get("test");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("echo hello"));
+    }
+
+    #[test]
+    fn test_get_nonexistent_library() {
+        let dir = TempDir::new().unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let result = manager.get("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_path_traversal_rejected() {
+        let dir = TempDir::new().unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let result = manager.get("../../etc/passwd");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message().contains("path traversal"));
+    }
+
+    #[test]
+    fn test_get_dot_dot_slash_rejected() {
+        let dir = TempDir::new().unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let result = manager.get("../escape");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fix_invalid_toml_escapes_backslash_angle() {
+        let input = r#"command = "echo \<hello\>""#;
+        let output = fix_invalid_toml_escapes(input);
+        assert!(output.contains("'echo \\<hello\\>'"));
+    }
+
+    #[test]
+    fn test_fix_invalid_toml_escapes_no_fix_needed() {
+        let input = r#"command = "echo normal""#;
+        let output = fix_invalid_toml_escapes(input);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_scan_directory_empty() {
+        let dir = TempDir::new().unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn test_scan_directory_with_valid_library() {
+        let dir = TempDir::new().unwrap();
+        let toml_content = r#"
+Description = "Docker snippets"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List containers"
+"#;
+        fs::write(dir.path().join("docker.toml"), toml_content).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        assert_eq!(manager.list().len(), 1);
+        assert_eq!(manager.list()[0].name, "docker");
+    }
+
+    #[test]
+    fn test_scan_directory_skips_non_toml() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("readme.txt"), "not a toml").unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn test_scan_directory_skips_empty_snippets() {
+        let dir = TempDir::new().unwrap();
+        let toml_content = r#"
+Description = "Empty library"
+
+[[Snippets]]
+Command = ""
+Description = "Empty command"
+"#;
+        fs::write(dir.path().join("empty.toml"), toml_content).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        assert!(manager.is_empty());
+    }
+}

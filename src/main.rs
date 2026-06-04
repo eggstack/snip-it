@@ -40,8 +40,12 @@ pub enum ProcessResult {
 
 static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(get_snippets_path);
 
-static RUNTIME: LazyLock<tokio::runtime::Runtime> =
-    LazyLock::new(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"));
+static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Runtime::new().unwrap_or_else(|e| {
+        eprintln!("Failed to create async runtime: {}. Ensure no other process is consuming excessive system resources.", e);
+        std::process::exit(1);
+    })
+});
 
 #[cfg(unix)]
 fn setup_signal_handler() {

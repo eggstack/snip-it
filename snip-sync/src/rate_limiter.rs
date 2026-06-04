@@ -181,3 +181,52 @@ impl RateLimiter {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_allow_within_limit() {
+        let limiter = RateLimiter::new();
+        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
+        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
+        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn test_deny_at_limit() {
+        let limiter = RateLimiter::new();
+        for _ in 0..3 {
+            assert!(limiter.allow("10.0.0.1", 3, Duration::from_secs(60)).await);
+        }
+        assert!(!limiter.allow("10.0.0.1", 3, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn test_separate_keys_independent() {
+        let limiter = RateLimiter::new();
+        for _ in 0..2 {
+            assert!(limiter.allow("key-a", 2, Duration::from_secs(60)).await);
+        }
+        assert!(!limiter.allow("key-a", 2, Duration::from_secs(60)).await);
+        assert!(limiter.allow("key-b", 2, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn test_window_expiry_resets_count() {
+        let limiter = RateLimiter::new();
+        for _ in 0..2 {
+            assert!(limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+        }
+        assert!(!limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+    }
+
+    #[tokio::test]
+    async fn test_zero_max_requests_deny_all() {
+        let limiter = RateLimiter::new();
+        assert!(!limiter.allow("zero", 0, Duration::from_secs(60)).await);
+    }
+}

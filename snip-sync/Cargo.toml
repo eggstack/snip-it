@@ -2,6 +2,10 @@
 name = "snip-sync"
 version = "0.1.0"
 edition = "2021"
+description = "gRPC sync server for snp snippet manager"
+license = "MIT"
+repository = "https://github.com/anomalyco/snip-it"
+authors = ["David Bowman"]
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
@@ -33,3 +37,6 @@ subtle = "2"
 [[bin]]
 name = "snip-sync"
 path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3.10"

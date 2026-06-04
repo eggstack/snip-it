@@ -466,6 +466,9 @@ Snippets = []
     ) -> SnipResult<PathBuf> {
         let filename = server_name.to_lowercase().replace(' ', "-");
 
+        validate_library_name(&filename)
+            .map_err(|(title, detail)| SnipError::runtime_error(title, Some(detail)))?;
+
         self.init_libraries_dir()?;
 
         let path = self.libraries_dir.join(format!("{}.toml", filename));
@@ -514,7 +517,33 @@ Snippets = []
     pub fn save_premade_library(&self, filename: &str, content: &str) -> SnipResult<PathBuf> {
         self.init_premade_dir()?;
 
+        if filename.is_empty()
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename.contains('\0')
+            || filename.contains("..")
+        {
+            return Err(SnipError::runtime_error(
+                "Invalid premade library filename",
+                Some(filename),
+            ));
+        }
+
         let path = self.premade_dir.join(format!("{}.toml", filename));
+
+        let canonical_premade = self.premade_dir.canonicalize().map_err(|e| {
+            SnipError::io_error("resolve premade directory", self.premade_dir.clone(), e)
+        })?;
+        let canonical_path = path
+            .canonicalize()
+            .unwrap_or_else(|_| canonical_premade.join(format!("{}.toml", filename)));
+        if !canonical_path.starts_with(&canonical_premade) {
+            return Err(SnipError::runtime_error(
+                "Invalid premade library path",
+                Some("Filename resolves outside premade directory"),
+            ));
+        }
+
         fs::write(&path, content)
             .map_err(|e| SnipError::io_error("save premade library", path.clone(), e))?;
 
@@ -625,7 +654,14 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    fs::write(path, toml_str).map_err(|e| SnipError::io_error("write snippets file", path, e))?;
+    let tmp_path = path.with_extension("toml.tmp");
+    fs::write(&tmp_path, &toml_str)
+        .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        SnipError::io_error("atomic rename snippets file", path, e)
+    })?;
 
     Ok(())
 }
@@ -880,5 +916,152 @@ Command = "sudo iptables-restore \< /path/to/rules"
         let mgr = LibraryManager::new();
         // Should not panic - just verify it can be created
         assert!(mgr.is_ok() || mgr.is_err());
+    }
+
+    #[test]
+    fn test_snippet_new_empty_command_fails() {
+        let result = Snippet::new("desc".to_string(), "  ".to_string(), vec![]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty command"));
+    }
+
+    #[test]
+    fn test_snippet_new_empty_description_fails() {
+        let result = Snippet::new("  ".to_string(), "echo hi".to_string(), vec![]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty description"));
+    }
+
+    #[test]
+    fn test_snippet_new_valid() {
+        let result = Snippet::new(
+            "desc".to_string(),
+            "echo hi".to_string(),
+            vec!["tag".to_string()],
+        );
+        assert!(result.is_ok());
+        let s = result.unwrap();
+        assert_eq!(s.description, "desc");
+        assert_eq!(s.command, "echo hi");
+    }
+
+    #[test]
+    fn test_validate_library_name_empty() {
+        assert!(validate_library_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_too_long() {
+        assert!(validate_library_name(&"a".repeat(51)).is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_slash() {
+        assert!(validate_library_name("foo/bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_backslash() {
+        assert!(validate_library_name("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_null_byte() {
+        assert!(validate_library_name("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_valid() {
+        assert!(validate_library_name("my-library").is_ok());
+        assert!(validate_library_name("work snippets").is_ok());
+    }
+
+    #[test]
+    fn test_save_library_atomic_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.toml");
+        let snippets = Snippets {
+            snippets: vec![Snippet {
+                id: "atomic-test".to_string(),
+                description: "Atomic write test".to_string(),
+                command: "echo atomic".to_string(),
+                output: "".to_string(),
+                tags: vec![],
+                folders: vec![],
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d1".to_string(),
+                deleted: false,
+            }],
+            folders: vec![],
+        };
+        save_library(&path, &snippets).unwrap();
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets.len(), 1);
+        assert_eq!(loaded.snippets[0].id, "atomic-test");
+        let tmp = path.with_extension("toml.tmp");
+        assert!(
+            !tmp.exists(),
+            "temp file should not remain after atomic rename"
+        );
+    }
+
+    #[test]
+    fn test_save_premade_library_path_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let mgr = LibraryManager {
+            config_dir: temp_dir.path().to_path_buf(),
+            libraries_dir: temp_dir.path().join("libraries"),
+            premade_dir: temp_dir.path().join("premade"),
+            config: Default::default(),
+            unsaved_changes: false,
+        };
+        assert!(mgr
+            .save_premade_library("../../etc/passwd", "content")
+            .is_err());
+        assert!(mgr.save_premade_library("../escape", "content").is_err());
+        assert!(mgr.save_premade_library("foo/bar", "content").is_err());
+    }
+
+    #[test]
+    fn test_save_premade_library_valid() {
+        let temp_dir = TempDir::new().unwrap();
+        let mgr = LibraryManager {
+            config_dir: temp_dir.path().to_path_buf(),
+            libraries_dir: temp_dir.path().join("libraries"),
+            premade_dir: temp_dir.path().join("premade"),
+            config: Default::default(),
+            unsaved_changes: false,
+        };
+        let result = mgr.save_premade_library("valid-name", "test content");
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "test content");
+    }
+
+    #[test]
+    fn test_deduplication_on_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("dup.toml");
+        let toml_content = r#"
+[[Snippets]]
+Id = "same-id"
+Description = "First"
+Command = "cmd1"
+
+[[Snippets]]
+Id = "same-id"
+Description = "Second"
+Command = "cmd2"
+"#;
+        std::fs::write(&path, toml_content).unwrap();
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets.len(), 2);
+        assert_ne!(loaded.snippets[0].id, loaded.snippets[1].id);
     }
 }
