@@ -17,6 +17,8 @@ const KEYCHAIN_SERVICE: &str = "snp-sync";
 const KEYCHAIN_USER: &str = "api-key";
 const KEYCHAIN_MARKER: &str = "@keychain";
 
+pub const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
+
 struct CachedToml {
     mtime: SystemTime,
     content: String,
@@ -29,6 +31,13 @@ fn compute_crc32(data: &str) -> u32 {
     crc32fast::hash(data.as_bytes())
 }
 
+/// Verifies CRC32 integrity of the config file content.
+///
+/// Note: CRC32 detects accidental corruption (e.g., partial writes, disk errors)
+/// but is NOT a cryptographic integrity check. An attacker who can modify the
+/// config file can recalculate the CRC32. This is acceptable because the threat
+/// model assumes local-only access — if an attacker can write to the config
+/// directory, they can already replace the entire file or binary.
 fn verify_integrity(content: &str) -> bool {
     for line in content.lines() {
         if let Some(stripped) = line.strip_prefix("# integrity:") {
@@ -224,7 +233,7 @@ pub enum SyncDirection {
 }
 
 fn default_sync_url() -> String {
-    "http://localhost:50051".to_string()
+    DEFAULT_SERVER_URL.to_string()
 }
 
 fn default_sync_interval() -> u32 {
@@ -337,7 +346,7 @@ mod tests {
         let settings = SyncSettings::default();
 
         assert!(!settings.enabled);
-        assert_eq!(settings.server_url, "http://localhost:50051");
+        assert_eq!(settings.server_url, DEFAULT_SERVER_URL);
         assert!(settings.api_key.is_empty());
         assert!(settings.device_id.is_empty());
         assert_eq!(settings.sync_interval_minutes, 30);

@@ -301,7 +301,7 @@ impl SyncClient {
 
     /// Deletes a library from the sync server.
     ///
-    /// This method is available for future use but is not currently called by the CLI.
+    /// Retained for future CLI integration (e.g., `snp library delete --remote`).
     #[allow(dead_code)]
     pub async fn delete_library(&mut self, library_id: &str) -> SnipResult<()> {
         let api_key = self.settings.api_key.clone();
@@ -328,7 +328,7 @@ impl SyncClient {
 
     /// Retrieves snippets from a library on the sync server.
     ///
-    /// This method is available for future use but is not currently called by the CLI.
+    /// Retained for future CLI integration (e.g., `snp sync --list-remote`).
     #[allow(dead_code)]
     pub async fn get_snippets(
         &mut self,
@@ -354,7 +354,7 @@ impl SyncClient {
 
     /// Pushes snippets to a library on the sync server.
     ///
-    /// This method is available for future use but is not currently called by the CLI.
+    /// Retained for future CLI integration (e.g., `snp sync --push-library`).
     #[allow(dead_code)]
     pub async fn push_snippets(
         &mut self,

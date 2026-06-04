@@ -2,6 +2,7 @@
 
 ![Rust](https://img.shields.io/badge/Rust-1.81+-orange.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
+[![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
 
 A fast, terminal-based snippet manager with fuzzy search, clipboard support, variable expansion, and cloud sync.
 
@@ -18,17 +19,23 @@ A fast, terminal-based snippet manager with fuzzy search, clipboard support, var
 
 ## Installation
 
-### From Source
+### From crates.io
 
 ```bash
-cargo build --release
-cp target/release/snp ~/.local/bin/
+cargo install snp
 ```
 
 ### Using Homebrew (macOS)
 
 ```bash
 brew install anomalyco/tap/snp
+```
+
+### From Source
+
+```bash
+cargo build --release
+cp target/release/snp ~/.local/bin/
 ```
 
 ## Quick Start

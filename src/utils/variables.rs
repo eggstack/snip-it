@@ -105,16 +105,16 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 } else {
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 }
             }
 
@@ -255,16 +255,16 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 } else {
-                    var_content.push(chars.next().unwrap());
+                    var_content.push(chars.next().expect("peek confirmed Some"));
                 }
             }
 

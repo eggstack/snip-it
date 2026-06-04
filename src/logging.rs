@@ -40,11 +40,15 @@ struct AuditLogEntry {
 static AUDIT_TX: LazyLock<std::sync::Mutex<Option<mpsc::SyncSender<AuditLogEntry>>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
 
+/// Holds the non-blocking log writer guard alive for the process lifetime.
+/// Dropping this would stop log file writes.
 #[allow(dead_code)]
 static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Configuration for logging behavior.
+///
+/// Retained for future programmatic configuration of logging.
 #[allow(dead_code)]
 pub struct LogConfig {
     pub log_dir: PathBuf,

@@ -43,7 +43,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
                     chars.next();
                     break;
                 }
-                var_content.push(chars.next().unwrap());
+                var_content.push(chars.next().expect("peek confirmed Some"));
             }
             spans.push(Span::styled(format!("<{}>", var_content), color_variable));
             continue;
@@ -70,7 +70,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             let mut flag = String::from(c);
             while let Some(&next) = chars.peek() {
                 if next.is_alphanumeric() || next == '-' || next == '=' {
-                    flag.push(chars.next().unwrap());
+                    flag.push(chars.next().expect("peek confirmed Some"));
                 } else {
                     break;
                 }
@@ -80,7 +80,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             let mut flag = String::from(c);
             if let Some(&next) = chars.peek() {
                 if next.is_alphabetic() {
-                    flag.push(chars.next().unwrap());
+                    flag.push(chars.next().expect("peek confirmed Some"));
                 }
             }
             spans.push(Span::styled(flag, color_flag));
@@ -88,7 +88,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             let mut ws = String::from(c);
             while let Some(&next) = chars.peek() {
                 if next.is_whitespace() {
-                    ws.push(chars.next().unwrap());
+                    ws.push(chars.next().expect("peek confirmed Some"));
                 } else {
                     break;
                 }
@@ -99,7 +99,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             word.push(c);
             while let Some(&next) = chars.peek() {
                 if next.is_alphanumeric() || next == '_' || next == '-' || next == '.' {
-                    word.push(chars.next().unwrap());
+                    word.push(chars.next().expect("peek confirmed Some"));
                 } else {
                     break;
                 }

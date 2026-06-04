@@ -306,7 +306,7 @@ impl SnipSyncService {
             .db
             .get_user_by_api_key(api_key)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|_| Status::internal("Internal error"))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
@@ -440,7 +440,7 @@ impl SnippetSync for SnipSyncService {
             }
             Err(e) => {
                 tracing::error!(request_id = %request_id, "Failed to create user: {}", e);
-                Err(Status::internal(format!("Failed to create user: {}", e)))
+                Err(Status::internal("Internal error"))
             }
         }
     }
@@ -460,13 +460,13 @@ impl SnippetSync for SnipSyncService {
             self.db
                 .get_default_library(&user_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
             {
                 tracing::warn!(
                     "User {} attempted to access library {} without ownership",
@@ -489,7 +489,7 @@ impl SnippetSync for SnipSyncService {
             .db
             .get_snippets(&user_id, &library_id, req.since, limit, offset)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
 
         let has_more = (offset + snippets.len() as i32) < total;
 
@@ -530,13 +530,13 @@ impl SnippetSync for SnipSyncService {
             self.db
                 .get_default_library(&user_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
             {
                 tracing::warn!(
                     "User {} attempted to push to library {} without ownership",
@@ -609,13 +609,13 @@ impl SnippetSync for SnipSyncService {
             self.db
                 .get_default_library(&user_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
             {
                 tracing::warn!(
                     "User {} attempted to sync with library {} without ownership",
@@ -680,13 +680,13 @@ impl SnippetSync for SnipSyncService {
             .db
             .get_snippets(&user_id, &library_id, req.last_sync_timestamp, limit, 0)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
 
         let timestamp = self
             .db
             .get_latest_timestamp(&user_id, &library_id)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
 
         let proto_snippets: Vec<ProtoSnippet> = snippets
             .into_iter()
@@ -781,7 +781,7 @@ impl SnippetSync for SnipSyncService {
             .db
             .list_libraries(&user_id, limit, offset)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
 
         let has_more = (offset + libraries.len() as i32) < total;
 
@@ -827,7 +827,10 @@ impl SnippetSync for SnipSyncService {
                     message: "Library deleted successfully".to_string(),
                 }))
             }
-            Err(e) => Err(Status::not_found(e.to_string())),
+            Err(e) => {
+                tracing::error!("Failed to delete library: {}", e);
+                Err(Status::not_found("Library not found"))
+            }
         }
     }
 

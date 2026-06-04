@@ -1,5 +1,5 @@
 use crate::commands::init_library_manager;
-use crate::config::{load_sync_settings, save_sync_settings, SyncSettings};
+use crate::config::{load_sync_settings, save_sync_settings, SyncSettings, DEFAULT_SERVER_URL};
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
 
@@ -28,7 +28,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
         Err(_) => LibraryManager::get_default_snippets_path(),
     };
 
-    let server_url = if server != "http://localhost:50051" {
+    let server_url = if server != DEFAULT_SERVER_URL {
         server.clone()
     } else if let Ok(settings) = load_sync_settings() {
         if !settings.server_url.is_empty() {

@@ -93,3 +93,22 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build snip-sync Docker image
         run: docker build -t snip-sync:test ./snip-sync
+
+  deny:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  server-test:
+    name: Server Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run snip-sync tests
+        run: cargo test
+        working-directory: snip-sync

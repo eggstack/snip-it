@@ -245,7 +245,8 @@ impl PremadeManager {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     Status::not_found(format!("Premade library '{}' not found", filename))
                 } else {
-                    Status::internal(format!("Failed to read premade library: {}", e))
+                    tracing::error!("Failed to read premade library: {}", e);
+                    Status::internal("Internal error")
                 }
             })
             .map(|content| fix_invalid_toml_escapes(&content))

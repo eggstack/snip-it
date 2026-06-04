@@ -169,7 +169,7 @@ enum Commands {
     /// Register a new sync account
     #[command(alias = "reg")]
     Register {
-        #[arg(long, default_value = "http://localhost:50051")]
+        #[arg(long, default_value = crate::config::DEFAULT_SERVER_URL)]
         server: String,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         force: bool,

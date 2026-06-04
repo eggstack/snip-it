@@ -21,8 +21,8 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
     let mut last_end = 0;
 
     for cap in TOML_STRING_PATTERN.captures_iter(toml_str) {
-        let full_match = cap.get(0).unwrap();
-        let content = cap.get(1).unwrap().as_str();
+        let full_match = cap.get(0).expect("regex match guarantees group 0");
+        let content = cap.get(1).expect("regex pattern captures group 1").as_str();
 
         result.push_str(&toml_str[last_end..full_match.start()]);
 
