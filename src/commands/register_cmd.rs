@@ -70,7 +70,10 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             );
         }
         Err(e) => {
-            eprintln!("Registration failed: {}", e);
+            return Err(crate::error::SnipError::runtime_error(
+                "Registration failed",
+                Some(&e.to_string()),
+            ));
         }
     }
     Ok(())

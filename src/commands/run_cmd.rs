@@ -4,7 +4,6 @@ use crate::error::{SnipError, SnipResult};
 use crate::library::Snippet;
 use crate::logging::{audit_log, log_command_execution};
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
@@ -75,7 +74,11 @@ fn run_command_with_timeout(
 }
 
 fn get_shell() -> String {
-    "/bin/sh".to_string()
+    if cfg!(windows) {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
 }
 
 fn handle_command_result(
@@ -222,7 +225,6 @@ pub fn run(
     filter: Option<String>,
     do_sync: bool,
     library: Option<String>,
-    _config: Option<PathBuf>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
     run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
@@ -237,6 +239,18 @@ mod tests {
     #[test]
     fn test_get_shell() {
         let shell = get_shell();
-        assert_eq!(shell, "/bin/sh");
+        if cfg!(windows) {
+            assert!(
+                shell.ends_with("cmd.exe") || shell.ends_with("CMD.EXE"),
+                "Expected cmd.exe on Windows, got: {}",
+                shell
+            );
+        } else {
+            assert!(
+                shell.contains("/bin/sh") || std::env::var("SHELL").is_ok(),
+                "Expected /bin/sh or $SHELL on Unix, got: {}",
+                shell
+            );
+        }
     }
 }

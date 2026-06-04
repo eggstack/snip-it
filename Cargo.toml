@@ -11,6 +11,18 @@ readme = "README.md"
 keywords = ["cli", "snippets", "terminal", "tui", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 authors = ["David Bowman"]
+exclude = [
+    ".github/",
+    "architecture/",
+    ".skills/",
+    "plans/",
+    "plan.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "CONTRIBUTING.md",
+    "USER_GUIDE.md",
+    "snippets.example.toml",
+]
 
 [[bin]]
 name = "snp"

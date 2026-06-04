@@ -112,6 +112,7 @@ pub struct SyncSettings {
 }
 
 impl SyncSettings {
+    /// Returns the sync limit value, defaulting to 1000 if not set.
     #[allow(dead_code)]
     pub fn sync_limit_value(&self) -> i32 {
         self.sync_limit.unwrap_or(1000)
@@ -214,7 +215,7 @@ pub enum SyncDirection {
 }
 
 fn default_sync_url() -> String {
-    "https://localhost:50051".to_string()
+    "http://localhost:50051".to_string()
 }
 
 fn default_sync_interval() -> u32 {
@@ -319,7 +320,7 @@ mod tests {
         let settings = SyncSettings::default();
 
         assert!(!settings.enabled);
-        assert_eq!(settings.server_url, "https://localhost:50051");
+        assert_eq!(settings.server_url, "http://localhost:50051");
         assert!(settings.api_key.is_empty());
         assert!(settings.device_id.is_empty());
         assert_eq!(settings.sync_interval_minutes, 30);

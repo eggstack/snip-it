@@ -114,14 +114,15 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
         let backup_path = path.with_extension("toml.bak");
         if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
-            eprintln!(
-                "Warning: Failed to parse config and could not create backup: {} (backup error: {})",
-                e, backup_err
+            tracing::warn!(
+                error = %e,
+                backup_error = %backup_err,
+                "Failed to parse config and could not create backup"
             );
         } else {
-            eprintln!(
-                "Warning: Failed to parse config file. Backup saved to {}.",
-                backup_path.display()
+            tracing::warn!(
+                backup = %backup_path.display(),
+                "Failed to parse config file. Backup saved."
             );
         }
         SnipError::toml_error("parse snippets file", e)

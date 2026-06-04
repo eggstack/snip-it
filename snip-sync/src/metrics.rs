@@ -61,7 +61,13 @@ impl Metrics {
 }
 
 impl Default for Metrics {
+    /// Creates a default Metrics instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if prometheus metrics cannot be created. This should only happen
+    /// if there's a fundamental issue with the prometheus library.
     fn default() -> Self {
-        Self::new().expect("Failed to create metrics")
+        Self::new().expect("Failed to create metrics (this should never happen)")
     }
 }

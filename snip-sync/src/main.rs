@@ -1146,18 +1146,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(http_addr)
-            .await
-            .expect("Failed to bind HTTP");
+        let listener = match tokio::net::TcpListener::bind(http_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!(addr = %http_addr, error = %e, "Failed to bind HTTP listener");
+                return;
+            }
+        };
         tracing::info!("HTTP server listening on http://{}", http_addr);
 
-        axum::serve(listener, app)
+        if let Err(e) = axum::serve(listener, app)
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
                 tracing::info!("Shutdown signal received, stopping HTTP server...");
             })
             .await
-            .expect("HTTP server failed");
+        {
+            tracing::error!(error = %e, "HTTP server error");
+        }
     });
 
     let _ = tokio::join!(grpc_handle, http_handle);

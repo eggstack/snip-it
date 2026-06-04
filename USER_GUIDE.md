@@ -494,44 +494,36 @@ snp sync "$@"
 
 ---
 
-## API Reference (For Developers)
+## Programmatic Usage
 
-### Programmatic Access
+snp is a binary application and does not expose a public Rust API. For automation, use the CLI:
 
-```rust
-// Example: Using snp as a library
-use snp::library::{Snippets, Snippet};
-use snp::commands::{load_snippets, save_snippets};
+```bash
+# Create a snippet
+snp new "git commit" -t git
 
-// Load snippets
-let snippets = load_snippets(&None)?;
+# List snippets (JSON format for scripting)
+snp list --json
 
-// Add a snippet
-snippets.snippets.push(Snippet::new(
-    "My command".to_string(),
-    "echo hello".to_string(),
-    vec!["test".to_string()],
-));
+# Run a snippet non-interactively (with filter)
+snp run --filter "deploy"
 
-// Save
-save_snippets(&snippets, &None)?;
+# Copy to clipboard
+snp clip --filter "ssh"
+
+# Sync programmatically
+snp sync --non-interactive
 ```
 
-### TUI Integration
+### Shell Integration
 
-```rust
-// Select a snippet programmatically
-use snp::ui::select_snippet;
+```bash
+# Add to .bashrc or .zshrc for quick snippet access
+alias snp-run='eval "$(snp run)"'
 
-let result = select_snippet(
-    &descriptions,
-    &commands,
-    &tags,
-    false,
-    Some("git"),
-    &folders,
-    &favorites,
-)?;
+# Use in scripts
+SNIPPET=$(snp list --json | jq -r '.[0].command')
+eval "$SNIPPET"
 ```
 
 ---

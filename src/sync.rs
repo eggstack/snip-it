@@ -302,6 +302,9 @@ impl SyncClient {
         }
     }
 
+    /// Deletes a library from the sync server.
+    ///
+    /// This method is available for future use but is not currently called by the CLI.
     #[allow(dead_code)]
     pub async fn delete_library(&mut self, library_id: &str) -> SnipResult<()> {
         let api_key = self.settings.api_key.clone();
@@ -326,6 +329,9 @@ impl SyncClient {
         }
     }
 
+    /// Retrieves snippets from a library on the sync server.
+    ///
+    /// This method is available for future use but is not currently called by the CLI.
     #[allow(dead_code)]
     pub async fn get_snippets(
         &mut self,
@@ -349,6 +355,9 @@ impl SyncClient {
         Ok(response.into_inner())
     }
 
+    /// Pushes snippets to a library on the sync server.
+    ///
+    /// This method is available for future use but is not currently called by the CLI.
     #[allow(dead_code)]
     pub async fn push_snippets(
         &mut self,

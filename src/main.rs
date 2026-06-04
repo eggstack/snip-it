@@ -254,7 +254,7 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             sync,
             library,
         } => {
-            commands::run_cmd::run(filter, sync, library, None, &RUNTIME)?;
+            commands::run_cmd::run(filter, sync, library, &RUNTIME)?;
         }
         Commands::Clip {
             filter,
@@ -285,7 +285,6 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             dry_run,
         } => {
             let options = commands::sync_cmd::SyncOptions {
-                config: None,
                 library,
                 servers,
                 non_interactive,

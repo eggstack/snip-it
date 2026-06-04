@@ -4,7 +4,6 @@ use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use snip_proto::Library;
 use std::io::{self, Write};
-use std::path::PathBuf;
 
 fn link_server_library(
     lib: &Library,
@@ -122,8 +121,6 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
 }
 
 pub struct SyncOptions {
-    #[allow(dead_code)]
-    pub config: Option<PathBuf>,
     pub library: Option<String>,
     pub servers: bool,
     pub non_interactive: bool,

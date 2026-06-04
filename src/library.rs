@@ -178,7 +178,7 @@ impl LibraryManager {
     pub fn new() -> SnipResult<Self> {
         // Migrate legacy macOS config dir if needed
         if let Err(e) = crate::utils::config::migrate_macos_config_dir() {
-            eprintln!("Warning: Failed to migrate config directory: {}", e);
+            tracing::warn!(error = %e, "Failed to migrate config directory");
         }
 
         let config_dir = get_config_dir();
@@ -196,19 +196,18 @@ impl LibraryManager {
                     // Backup corrupted file so data isn't lost on next save
                     let backup = config_path.with_extension("toml.corrupt");
                     if let Err(copy_err) = fs::copy(&config_path, &backup) {
-                        eprintln!(
-                            "Warning: Failed to parse {}: {} (backup also failed: {})",
-                            config_path.display(),
-                            e,
-                            copy_err
+                        tracing::warn!(
+                            config = %config_path.display(),
+                            error = %e,
+                            backup_error = %copy_err,
+                            "Failed to parse config (backup also failed)"
                         );
                     } else {
-                        eprintln!(
-                            "Warning: Failed to parse {}: {}. \
-                             Corrupted file backed up to {}. Using defaults.",
-                            config_path.display(),
-                            e,
-                            backup.display()
+                        tracing::warn!(
+                            config = %config_path.display(),
+                            error = %e,
+                            backup = %backup.display(),
+                            "Failed to parse config, backed up to file. Using defaults."
                         );
                     }
                     LibraryConfig::default()

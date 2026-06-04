@@ -1,4 +1,5 @@
 use crate::config::{SyncDirection, SyncSettings};
+use crate::error::{SnipError, SnipResult};
 use crate::library::{self, Snippet, Snippets};
 use crate::sync;
 use snip_proto::Snippet as ProtoSnippet;
@@ -22,11 +23,11 @@ impl From<&Snippet> for ProtoSnippet {
 
 fn ensure_sync_configured(settings: &SyncSettings) -> bool {
     if !settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+        tracing::warn!("Sync is not enabled. Configure sync settings first.");
         return false;
     }
     if settings.api_key.is_empty() {
-        eprintln!("Sync is enabled but no API key configured");
+        tracing::warn!("Sync is enabled but no API key configured");
         return false;
     }
     true
@@ -49,7 +50,7 @@ fn check_server_health(
     match runtime.block_on(client.health_check()) {
         Ok(true) => true,
         _ => {
-            eprintln!("Server is not reachable at {}", server_url);
+            tracing::error!("Server is not reachable at {}", server_url);
             false
         }
     }
@@ -58,7 +59,7 @@ fn check_server_health(
 pub fn run_premade_sync(
     sync_settings: &SyncSettings,
     runtime: &tokio::runtime::Runtime,
-) -> Result<(), String> {
+) -> SnipResult<()> {
     if !sync_settings.enabled || sync_settings.api_key.is_empty() {
         return Ok(());
     }
@@ -66,7 +67,10 @@ pub fn run_premade_sync(
     let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
         Ok(c) => c,
         Err(e) => {
-            return Err(format!("Failed to create sync client: {}", e));
+            return Err(SnipError::runtime_error(
+                "Failed to create sync client",
+                Some(&e.to_string()),
+            ));
         }
     };
 
@@ -78,7 +82,10 @@ pub fn run_premade_sync(
         let mgr = match library::LibraryManager::new() {
             Ok(m) => m,
             Err(e) => {
-                return Err(format!("Failed to initialize library manager: {}", e));
+                return Err(SnipError::runtime_error(
+                    "Failed to initialize library manager",
+                    Some(&e.to_string()),
+                ));
             }
         };
 
@@ -115,7 +122,10 @@ pub fn run_premade_sync(
             }
 
             if premade_results.iter().any(|(_, success, _)| !success) {
-                return Err("Some premade libraries failed to sync".to_string());
+                return Err(SnipError::runtime_error(
+                    "Some premade libraries failed to sync",
+                    None,
+                ));
             }
         }
     }
@@ -148,7 +158,7 @@ pub fn run_sync(
     push_only: bool,
     pull_only: bool,
     runtime: &tokio::runtime::Runtime,
-) -> Result<(), String> {
+) -> SnipResult<()> {
     let direction = if push_only {
         SyncDirection::Push
     } else if pull_only {
@@ -158,29 +168,38 @@ pub fn run_sync(
     };
 
     if !ensure_sync_configured(sync_settings) {
-        return Err("Sync not configured".to_string());
+        return Err(SnipError::runtime_error("Sync not configured", None));
     }
 
     let mut client = match create_sync_client(runtime, sync_settings) {
         Some(c) => c,
         None => {
-            return Err("Failed to create sync client".to_string());
+            return Err(SnipError::runtime_error(
+                "Failed to create sync client",
+                None,
+            ));
         }
     };
 
     if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
-        return Err("Server health check failed".to_string());
+        return Err(SnipError::runtime_error("Server health check failed", None));
     }
 
     let mut mgr = match library::LibraryManager::new() {
         Ok(m) => m,
         Err(e) => {
-            return Err(format!("Failed to initialize library manager: {}", e));
+            return Err(SnipError::runtime_error(
+                "Failed to initialize library manager",
+                Some(&e.to_string()),
+            ));
         }
     };
 
     if let Err(e) = mgr.ensure_library_mode() {
-        return Err(format!("Failed to initialize library mode: {}", e));
+        return Err(SnipError::runtime_error(
+            "Failed to initialize library mode",
+            Some(&e.to_string()),
+        ));
     }
 
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
@@ -203,7 +222,7 @@ pub fn run_sync(
 
     if libraries_to_sync.is_empty() {
         eprintln!("No libraries to sync.");
-        return Err("No libraries to sync".to_string());
+        return Err(SnipError::runtime_error("No libraries to sync", None));
     }
 
     for lib_name in &libraries_to_sync {
@@ -238,12 +257,12 @@ pub fn run_sync(
 
                     if mgr.get_library_by_filename(lib_name).is_none() {
                         if let Err(e) = mgr.add_existing_library(lib_name) {
-                            eprintln!("  Warning: Failed to add library to config: {}", e);
+                            tracing::warn!(library = %lib_name, error = %e, "Failed to add library to config");
                         }
                     }
 
                     if let Err(e) = mgr.update_library_id(lib_name, &new_id) {
-                        eprintln!("  Warning: Failed to link library in config: {}", e);
+                        tracing::warn!(library = %lib_name, error = %e, "Failed to link library in config");
                     }
 
                     println!(
@@ -252,7 +271,7 @@ pub fn run_sync(
                     );
                 }
                 Err(e) => {
-                    eprintln!("  Failed to create library on server: {}", e);
+                    tracing::error!(library = %lib_name, error = %e, "Failed to create library on server");
                     continue;
                 }
             }
@@ -297,7 +316,7 @@ pub fn run_sync(
         let mut snippets = match library::load_library(&lib_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Failed to load library '{}': {}", lib_name, e);
+                tracing::error!(library = %lib_name, error = %e, "Failed to load library");
                 continue;
             }
         };
@@ -316,7 +335,7 @@ pub fn run_sync(
 
         if !snippets_needing_ids.is_empty() {
             if let Err(e) = library::save_library(&lib_path, &snippets) {
-                eprintln!("Warning: Failed to save generated IDs: {}", e);
+                tracing::warn!(library = %lib_name, error = %e, "Failed to save generated IDs");
             }
         }
 
@@ -496,7 +515,10 @@ pub fn run_sync(
     );
 
     if status.failed > 0 {
-        Err("Some libraries failed to sync".to_string())
+        Err(SnipError::runtime_error(
+            "Some libraries failed to sync",
+            None,
+        ))
     } else {
         Ok(())
     }
@@ -593,7 +615,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     }
 }
 
-pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> Result<(), String> {
+pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let settings = crate::config::load_sync_settings().unwrap_or_default();
     run_sync(&settings, None, false, false, false, runtime)
 }

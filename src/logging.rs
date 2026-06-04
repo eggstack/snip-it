@@ -141,6 +141,9 @@ pub fn init_default_logging() {
     self_check();
 }
 
+/// Logs an error with its full cause chain.
+///
+/// This utility is available for future use but is not currently called by the CLI.
 #[allow(dead_code)]
 pub fn log_any_error(context: &str, error: &dyn std::error::Error) {
     tracing::error!(error = %error, context = %context, "Error occurred");
@@ -511,6 +514,9 @@ fn rotate_audit_log_if_needed(
     Ok(())
 }
 
+/// Types of sync operations for audit logging.
+///
+/// This enum is available for future use but is not currently used by the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum SyncOperationType {
@@ -537,6 +543,9 @@ impl std::fmt::Display for SyncOperationType {
     }
 }
 
+/// Logs the result of a sync operation.
+///
+/// This function is available for future use but is not currently called by the CLI.
 #[allow(dead_code)]
 pub fn log_sync_operation(
     operation: SyncOperationType,
