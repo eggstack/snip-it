@@ -754,46 +754,58 @@ impl SnippetSync for SnipSyncService {
 
         let mut skipped_ids = Vec::new();
 
+        let mut tx = self.db.pool().begin().await.map_err(|e| {
+            tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
+            Status::internal("Internal error")
+        })?;
+
         for snippet in &req.local_snippets {
-            if snippet.updated_at > req.last_sync_timestamp {
-                if let Err(e) = self.validate_snippet(snippet) {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        snippet_id = %snippet.id,
-                        reason = %e,
-                        "Snippet skipped: validation failed"
-                    );
-                    skipped_ids.push(snippet.id.clone());
-                    continue;
-                }
+            if let Err(e) = self.validate_snippet(snippet) {
+                tracing::warn!(
+                    request_id = %request_id,
+                    snippet_id = %snippet.id,
+                    reason = %e,
+                    "Snippet skipped: validation failed"
+                );
+                skipped_ids.push(snippet.id.clone());
+                continue;
+            }
 
-                let db_snippet = db::Snippet {
-                    id: snippet.id.clone(),
-                    description: snippet.description.clone(),
-                    command: snippet.command.clone(),
-                    tags: snippet.tags.clone(),
-                    created_at: snippet.created_at,
-                    updated_at: snippet.updated_at,
-                    device_id: snippet.device_id.clone(),
-                    deleted: snippet.deleted,
-                    encrypted: snippet.encrypted,
-                };
+            if snippet.updated_at <= req.last_sync_timestamp {
+                continue;
+            }
 
-                if let Err(e) = self
-                    .db
-                    .upsert_snippet(&db_snippet, &user_id, &library_id)
-                    .await
-                {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        snippet_id = %snippet.id,
-                        reason = %e,
-                        "Snippet skipped: upsert failed"
-                    );
-                    skipped_ids.push(snippet.id.clone());
-                }
+            let db_snippet = db::Snippet {
+                id: snippet.id.clone(),
+                description: snippet.description.clone(),
+                command: snippet.command.clone(),
+                tags: snippet.tags.clone(),
+                created_at: snippet.created_at,
+                updated_at: snippet.updated_at,
+                device_id: snippet.device_id.clone(),
+                deleted: snippet.deleted,
+                encrypted: snippet.encrypted,
+            };
+
+            if let Err(e) = self
+                .db
+                .upsert_snippet_in_tx(&mut tx, &db_snippet, &user_id, &library_id)
+                .await
+            {
+                tracing::warn!(
+                    request_id = %request_id,
+                    snippet_id = %snippet.id,
+                    reason = %e,
+                    "Snippet skipped: upsert failed"
+                );
+                skipped_ids.push(snippet.id.clone());
             }
         }
+
+        tx.commit().await.map_err(|e| {
+            tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)

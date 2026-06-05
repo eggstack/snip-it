@@ -24,6 +24,7 @@ use std::path::PathBuf;
 /// Errors are categorized by domain to make debugging and handling easier.
 /// Each variant includes context about the operation that failed.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SnipError {
     /// I/O operation failures.
     ///

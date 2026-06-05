@@ -225,6 +225,7 @@ impl Default for SyncSettings {
 /// Determines whether snippets are pushed to the server, pulled from it,
 /// or synchronized bidirectionally.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[non_exhaustive]
 pub enum SyncDirection {
     #[default]
     Push,

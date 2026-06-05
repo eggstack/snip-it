@@ -105,7 +105,7 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 } else if next == '>' {
                     depth -= 1;
@@ -113,10 +113,10 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                         chars.next();
                         break;
                     }
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 } else {
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 }
             }
@@ -258,7 +258,7 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 } else if next == '>' {
                     depth -= 1;
@@ -266,10 +266,10 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                         chars.next();
                         break;
                     }
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 } else {
-                    // SAFETY: we just peeked and confirmed Some
+                    // peek() confirmed Some above
                     var_content.push(chars.next().unwrap());
                 }
             }

@@ -142,19 +142,6 @@ pub fn init_default_logging() {
     self_check();
 }
 
-/// Logs an error with its full cause chain.
-///
-/// This utility is available for future use but is not currently called by the CLI.
-#[allow(dead_code)]
-pub fn log_any_error(context: &str, error: &dyn std::error::Error) {
-    tracing::error!(error = %error, context = %context, "Error occurred");
-    let mut source = error.source();
-    while let Some(cause) = source {
-        tracing::debug!(error = %cause, context = %context, "Caused by");
-        source = cause.source();
-    }
-}
-
 fn self_check() {
     let log_dir = get_default_log_dir();
     if !log_dir.exists()

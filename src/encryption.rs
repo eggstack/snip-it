@@ -50,6 +50,7 @@ impl DerivedKey {
 }
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum CryptoError {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),

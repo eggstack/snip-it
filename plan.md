@@ -145,7 +145,7 @@
 | ID | Description | Status |
 |----|-------------|--------|
 | CONFIG-3 | Atomic write for sync.toml | COMPLETED |
-| CONFIG-5 | Config files default permissions | COMPLETED (0755 on Unix) |
+| CONFIG-5 | Config files default permissions | COMPLETED (0o700 on Unix) |
 | CONFIG-6 | Integrity checking for sync.toml | COMPLETED (CRC32 checksum) |
 | CONFIG-7 | TOML caching on load | COMPLETED (mtime-based cache) |
 

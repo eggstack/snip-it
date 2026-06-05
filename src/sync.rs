@@ -17,9 +17,9 @@ use crate::error::{SnipError, SnipResult};
 use crate::proto::PremadeLibrary;
 use crate::proto::snippet_sync_client::SnippetSyncClient;
 use crate::proto::{
-    CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, GetSnippetsRequest,
-    HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest, PushSnippetsRequest,
-    PushSnippetsResponse, RegisterRequest, SnippetList, SyncRequest,
+    CreateLibraryRequest, GetPremadeLibraryRequest,
+    HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest,
+    RegisterRequest, SyncRequest,
 };
 use std::time::Duration;
 use tonic::Code;
@@ -311,82 +311,6 @@ impl SyncClient {
                 Some(&response.message),
             ))
         }
-    }
-
-    /// Deletes a library from the sync server.
-    ///
-    /// Retained for future CLI integration (e.g., `snp library delete --remote`).
-    #[allow(dead_code)]
-    pub async fn delete_library(&mut self, library_id: &str) -> SnipResult<()> {
-        let api_key = self.settings.api_key.clone();
-        let library_id_str = library_id.to_string();
-        let response = retry_grpc!(
-            self.client
-                .delete_library(tonic::Request::new(DeleteLibraryRequest {
-                    api_key: api_key.clone(),
-                    library_id: library_id_str.clone(),
-                })),
-            "Delete library"
-        )?;
-
-        let response = response.into_inner();
-        if response.success {
-            Ok(())
-        } else {
-            Err(SnipError::runtime_error(
-                "Failed to delete library",
-                Some(&response.message),
-            ))
-        }
-    }
-
-    /// Retrieves snippets from a library on the sync server.
-    ///
-    /// Retained for future CLI integration (e.g., `snp sync --list-remote`).
-    #[allow(dead_code)]
-    pub async fn get_snippets(
-        &mut self,
-        library_id: &str,
-        limit: i32,
-        offset: i32,
-    ) -> SnipResult<SnippetList> {
-        let api_key = self.settings.api_key.clone();
-        let library_id_str = library_id.to_string();
-        let response = retry_grpc!(
-            self.client
-                .get_snippets(tonic::Request::new(GetSnippetsRequest {
-                    api_key: api_key.clone(),
-                    since: 0,
-                    library_id: library_id_str.clone(),
-                    limit,
-                    offset,
-                })),
-            "Get snippets"
-        )?;
-        Ok(response.into_inner())
-    }
-
-    /// Pushes snippets to a library on the sync server.
-    ///
-    /// Retained for future CLI integration (e.g., `snp sync --push-library`).
-    #[allow(dead_code)]
-    pub async fn push_snippets(
-        &mut self,
-        snippets: &[crate::proto::Snippet],
-        library_id: &str,
-    ) -> SnipResult<PushSnippetsResponse> {
-        let api_key = self.settings.api_key.clone();
-        let library_id_str = library_id.to_string();
-        let response = retry_grpc!(
-            self.client
-                .push_snippets(tonic::Request::new(PushSnippetsRequest {
-                    api_key: api_key.clone(),
-                    snippets: snippets.to_vec(),
-                    library_id: library_id_str.clone(),
-                })),
-            "Push snippets"
-        )?;
-        Ok(response.into_inner())
     }
 
     /// Lists all premade libraries available on the server.

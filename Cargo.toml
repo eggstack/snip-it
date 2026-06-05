@@ -19,7 +19,6 @@ exclude = [
     "plan.md",
     "AGENTS.md",
     "AGENTS.override.md",
-    "CONTRIBUTING.md",
     "USER_GUIDE.md",
     "snippets.example.toml",
     "deny.toml",
@@ -28,7 +27,6 @@ exclude = [
     "rustfmt.toml",
     ".gitignore",
     "snip-proto/",
-    "SECURITY.md",
 ]
 
 [[bin]]
