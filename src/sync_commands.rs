@@ -8,7 +8,7 @@ use crate::config::{SyncDirection, SyncSettings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::{self, Snippet, Snippets};
 use crate::sync;
-use snip_proto::Snippet as ProtoSnippet;
+use crate::proto::Snippet as ProtoSnippet;
 use std::fs;
 
 impl From<&Snippet> for ProtoSnippet {
@@ -423,7 +423,9 @@ pub fn run_sync(
 
                         if direction == SyncDirection::Push {
                             if !has_failures {
-                                let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                if let Err(e) = mgr.update_last_sync(lib_name, new_timestamp) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
+                                }
                                 completed += 1;
                                 status.pushed += 1;
                             } else {
@@ -442,8 +444,10 @@ pub fn run_sync(
                             &sync_settings.device_id,
                         ) {
                             Ok((_merged, _backup)) => {
-                                if !has_failures {
-                                    let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                if !has_failures
+                                    && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
+                                {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
 
                                 status.pulled += server_snippets.len() as u32;
@@ -500,8 +504,10 @@ pub fn run_sync(
                         ) {
                             Ok((_merged, _backup)) => {
                                 let has_failures = response.skipped_count > 0;
-                                if !has_failures {
-                                    let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                if !has_failures
+                                    && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
+                                {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
                                 status.pulled += server_snippets.len() as u32;
                                 results.push((lib_name.clone(), true, String::new()));
@@ -644,7 +650,7 @@ pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
 mod tests {
     use super::*;
     use crate::library::{Snippet, Snippets};
-    use snip_proto::Snippet as ProtoSnippet;
+use crate::proto::Snippet as ProtoSnippet;
 
     fn make_local_snippet(id: &str, desc: &str, cmd: &str, updated_at: i64) -> Snippet {
         Snippet {

@@ -2,7 +2,7 @@ use crate::commands::init_library_manager;
 use crate::config::{SyncSettings, load_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
-use snip_proto::Library;
+use crate::proto::Library;
 use std::io::{self, Write};
 
 fn link_server_library(

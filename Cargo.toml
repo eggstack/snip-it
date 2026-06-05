@@ -71,7 +71,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 uuid = { version = "1", features = ["v4"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
-snip-proto = { version = "0.1.0", path = "./snip-proto" }
+prost = "0.14"
+tonic-prost = "0.14"
 aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"

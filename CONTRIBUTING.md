@@ -6,7 +6,7 @@ Thank you for your interest in contributing to snip-it! This document provides g
 
 ### Prerequisites
 
-- Rust 1.81 or later
+- Rust 1.88 or later
 - Protobuf compiler (`protoc`) — required for building `snip-proto`
 
 ### Getting Started

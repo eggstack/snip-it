@@ -14,9 +14,9 @@
 use crate::config::SyncSettings;
 use crate::encryption;
 use crate::error::{SnipError, SnipResult};
-use snip_proto::PremadeLibrary;
-use snip_proto::snippet_sync_client::SnippetSyncClient;
-use snip_proto::{
+use crate::proto::PremadeLibrary;
+use crate::proto::snippet_sync_client::SnippetSyncClient;
+use crate::proto::{
     CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, GetSnippetsRequest,
     HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest, PushSnippetsRequest,
     PushSnippetsResponse, RegisterRequest, SnippetList, SyncRequest,
@@ -129,10 +129,10 @@ impl SyncClient {
 
     pub async fn sync_encrypted(
         &mut self,
-        local_snippets: Vec<snip_proto::Snippet>,
+        local_snippets: Vec<crate::proto::Snippet>,
         last_sync: i64,
         library_id: &str,
-    ) -> SnipResult<snip_proto::SyncResponse> {
+    ) -> SnipResult<crate::proto::SyncResponse> {
         let api_key = self.settings.api_key.clone();
 
         let mut encrypted_snippets = Vec::new();
@@ -192,7 +192,7 @@ impl SyncClient {
     async fn sync_with_retry(
         &mut self,
         request: SyncRequest,
-    ) -> SnipResult<snip_proto::SyncResponse> {
+    ) -> SnipResult<crate::proto::SyncResponse> {
         let config = default_retry_config();
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
@@ -360,7 +360,7 @@ impl SyncClient {
     #[allow(dead_code)]
     pub async fn push_snippets(
         &mut self,
-        snippets: &[snip_proto::Snippet],
+        snippets: &[crate::proto::Snippet],
         library_id: &str,
     ) -> SnipResult<PushSnippetsResponse> {
         let api_key = self.settings.api_key.clone();
@@ -446,8 +446,8 @@ async fn create_tls_channel(
 
 pub fn encrypt_snippet(
     api_key: &str,
-    snippet: &snip_proto::Snippet,
-) -> SnipResult<snip_proto::Snippet> {
+    snippet: &crate::proto::Snippet,
+) -> SnipResult<crate::proto::Snippet> {
     let data = EncryptedSnippetData {
         description: snippet.description.clone(),
         command: snippet.command.clone(),
@@ -460,7 +460,7 @@ pub fn encrypt_snippet(
     let encrypted = encryption::encrypt(api_key, &json)
         .map_err(|e| SnipError::runtime_error("Encrypt snippet", Some(&e.to_string())))?;
 
-    Ok(snip_proto::Snippet {
+    Ok(crate::proto::Snippet {
         id: snippet.id.clone(),
         description: String::new(),
         command: encrypted,
@@ -475,8 +475,8 @@ pub fn encrypt_snippet(
 
 pub fn decrypt_snippet(
     api_key: &str,
-    snippet: &snip_proto::Snippet,
-) -> SnipResult<snip_proto::Snippet> {
+    snippet: &crate::proto::Snippet,
+) -> SnipResult<crate::proto::Snippet> {
     if !snippet.encrypted {
         return Ok(snippet.clone());
     }
@@ -487,7 +487,7 @@ pub fn decrypt_snippet(
     let data: EncryptedSnippetData = serde_json::from_str(&decrypted)
         .map_err(|e| SnipError::runtime_error("Deserialize snippet data", Some(&e.to_string())))?;
 
-    Ok(snip_proto::Snippet {
+    Ok(crate::proto::Snippet {
         id: snippet.id.clone(),
         description: data.description,
         command: data.command,
@@ -503,7 +503,7 @@ pub fn decrypt_snippet(
 /// Detects if any server snippets have a device_id that doesn't match the
 /// expected local device_id, indicating a potential conflict from another device.
 pub fn detect_device_conflict(
-    server_snippets: &[snip_proto::Snippet],
+    server_snippets: &[crate::proto::Snippet],
     expected_device_id: &str,
 ) -> Vec<String> {
     if expected_device_id.is_empty() {
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_detect_device_conflict_empty_device_id() {
-        let snippets = vec![snip_proto::Snippet {
+        let snippets = vec![crate::proto::Snippet {
             id: "1".to_string(),
             description: String::new(),
             command: String::new(),
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_detect_device_conflict_no_conflict() {
-        let snippets = vec![snip_proto::Snippet {
+        let snippets = vec![crate::proto::Snippet {
             id: "1".to_string(),
             description: String::new(),
             command: String::new(),
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_detect_device_conflict_with_mismatch() {
-        let snippets = vec![snip_proto::Snippet {
+        let snippets = vec![crate::proto::Snippet {
             id: "1".to_string(),
             description: String::new(),
             command: String::new(),
