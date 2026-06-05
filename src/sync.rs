@@ -236,7 +236,10 @@ impl SyncClient {
             "Health check"
         ) {
             Ok(response) => Ok(response.into_inner().healthy),
-            Err(_) => Ok(false),
+            Err(e) => {
+                tracing::debug!(error = %e, "Health check failed");
+                Ok(false)
+            }
         }
     }
 

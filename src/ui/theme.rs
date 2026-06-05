@@ -60,15 +60,13 @@ fn resolve_theme(theme_name: &str) -> Theme {
     }
 }
 
-static ACTIVE_THEME: LazyLock<std::sync::Mutex<Theme>> = LazyLock::new(|| {
-    std::sync::Mutex::new({
-        let theme_name = std::env::var("SNP_THEME").unwrap_or_else(|_| "auto".to_string());
-        resolve_theme(&theme_name)
-    })
+static ACTIVE_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    let theme_name = std::env::var("SNP_THEME").unwrap_or_else(|_| "auto".to_string());
+    resolve_theme(&theme_name)
 });
 
-pub fn get_theme() -> std::sync::MutexGuard<'static, Theme> {
-    ACTIVE_THEME.lock().unwrap_or_else(|e| e.into_inner())
+pub fn get_theme() -> Theme {
+    *ACTIVE_THEME
 }
 
 pub(crate) fn style_fg(fg: Color) -> Style {

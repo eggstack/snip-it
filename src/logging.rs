@@ -27,6 +27,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — rotate audit log when exceeded
 const AUDIT_LOG_RETENTION_DAYS: u64 = 30; // Keep 30 days of rotated audit logs
 const AUDIT_LOG_CHANNEL_SIZE: usize = 1024; // Bounded channel for async audit writes
+const SECS_PER_DAY: u64 = 86400;
 
 struct AuditLogEntry {
     timestamp: u64,
@@ -42,13 +43,10 @@ static AUDIT_TX: LazyLock<std::sync::Mutex<Option<mpsc::SyncSender<AuditLogEntry
 
 /// Holds the non-blocking log writer guard alive for the process lifetime.
 /// Dropping this would stop log file writes.
-#[allow(dead_code)]
 static LOG_GUARD: LazyLock<std::sync::Mutex<Option<WorkerGuard>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Configuration for logging behavior.
-///
-/// Retained for future programmatic configuration of logging.
 #[allow(dead_code)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
@@ -86,7 +84,6 @@ fn level_str(level: Level) -> &'static str {
     }
 }
 
-#[tracing::instrument(level = "info", skip(config))]
 pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>> {
     let log_dir = &config.log_dir;
 
@@ -511,7 +508,7 @@ fn rotate_audit_log_if_needed(
 
     let log_dir = log_path.parent().unwrap_or(log_path);
     if let Ok(entries) = fs::read_dir(log_dir) {
-        let retention_secs = retention_days * 86400;
+        let retention_secs = retention_days * SECS_PER_DAY;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -531,63 +528,6 @@ fn rotate_audit_log_if_needed(
     }
 
     Ok(())
-}
-
-/// Types of sync operations for audit logging.
-///
-/// This enum is available for future use but is not currently used by the CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum SyncOperationType {
-    Connect,
-    Disconnect,
-    Merge,
-    Push,
-    Pull,
-    ConflictResolved,
-    SyncFailed,
-}
-
-impl std::fmt::Display for SyncOperationType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SyncOperationType::Connect => write!(f, "connect"),
-            SyncOperationType::Disconnect => write!(f, "disconnect"),
-            SyncOperationType::Merge => write!(f, "merge"),
-            SyncOperationType::Push => write!(f, "push"),
-            SyncOperationType::Pull => write!(f, "pull"),
-            SyncOperationType::ConflictResolved => write!(f, "conflict_resolved"),
-            SyncOperationType::SyncFailed => write!(f, "sync_failed"),
-        }
-    }
-}
-
-/// Logs the result of a sync operation.
-///
-/// This function is available for future use but is not currently called by the CLI.
-#[allow(dead_code)]
-pub fn log_sync_operation(
-    operation: SyncOperationType,
-    library_id: Option<&str>,
-    result: &Result<(), String>,
-) {
-    match result {
-        Ok(()) => {
-            tracing::info!(
-                operation = %operation,
-                library_id = ?library_id,
-                "Sync operation completed"
-            );
-        }
-        Err(e) => {
-            tracing::error!(
-                operation = %operation,
-                library_id = ?library_id,
-                error = %e,
-                "Sync operation failed"
-            );
-        }
-    }
 }
 
 #[cfg(test)]

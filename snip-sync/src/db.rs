@@ -268,39 +268,6 @@ impl Database {
         Ok(None)
     }
 
-    #[allow(dead_code)]
-    pub async fn batch_verify_api_keys(
-        &self,
-        api_keys: &[&str],
-    ) -> DbResult<Vec<(String, Option<String>)>> {
-        if api_keys.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let prefixes: Vec<String> = api_keys.iter().map(|k| compute_api_key_prefix(k)).collect();
-
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, api_key FROM users WHERE api_key_prefix IN (SELECT value FROM json_each(?)) OR api_key_prefix IS NULL",
-        )
-        .bind(serde_json::to_string(&prefixes).unwrap_or_else(|_| "[]".to_string()))
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut results = Vec::with_capacity(api_keys.len());
-        for api_key in api_keys {
-            let mut found_user_id = None;
-            for (user_id, stored_hash) in &rows {
-                if verify_api_key(api_key, stored_hash) {
-                    found_user_id = Some(user_id.clone());
-                    break;
-                }
-            }
-            results.push((api_key.to_string(), found_user_id));
-        }
-
-        Ok(results)
-    }
-
     pub async fn create_library(&self, user_id: &str, name: &str) -> DbResult<String> {
         if !name
             .chars()

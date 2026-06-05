@@ -347,7 +347,13 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
 }
 
 pub fn get_sync_settings() -> SyncSettings {
-    load_sync_settings().unwrap_or_default()
+    match load_sync_settings() {
+        Ok(settings) => settings,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to load sync settings, using defaults");
+            SyncSettings::default()
+        }
+    }
 }
 
 #[cfg(test)]

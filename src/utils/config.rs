@@ -20,20 +20,20 @@ pub fn get_config_dir() -> PathBuf {
 
     if !dir.exists() {
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            eprintln!(
-                "error: Could not create config directory {}: {}",
-                dir.display(),
-                e
+            tracing::error!(
+                directory = %dir.display(),
+                error = %e,
+                "Could not create config directory"
             );
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
-                eprintln!(
-                    "warning: Could not set permissions on config directory {}: {}",
-                    dir.display(),
-                    e
+                tracing::warn!(
+                    directory = %dir.display(),
+                    error = %e,
+                    "Could not set permissions on config directory"
                 );
             }
         }
@@ -86,10 +86,10 @@ pub fn migrate_macos_config_dir() -> std::io::Result<()> {
     };
 
     let new_dir = get_config_dir();
-    eprintln!(
-        "Migrating config from {} to {}",
-        legacy_dir.display(),
-        new_dir.display()
+    tracing::info!(
+        from = %legacy_dir.display(),
+        to = %new_dir.display(),
+        "Migrating config directory"
     );
 
     std::fs::create_dir_all(&new_dir)?;
@@ -114,7 +114,7 @@ pub fn migrate_macos_config_dir() -> std::io::Result<()> {
         let _ = std::fs::remove_dir(&legacy_dir);
     }
 
-    eprintln!("Migration complete.");
+    tracing::info!("Config migration complete");
     Ok(())
 }
 

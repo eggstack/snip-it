@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const MAX_PREMADE_COMMAND_LENGTH: usize = 1024;
+const MAX_PREMADE_DESCRIPTION_LENGTH: usize = 1024;
 use tonic::Status;
 
 /// Fixes invalid TOML escape sequences (`\<` and `\>`) in double-quoted strings.
@@ -180,19 +183,21 @@ impl PremadeManager {
                         );
                         return false;
                     }
-                    if cmd.len() > 1024 {
+                    if cmd.len() > MAX_PREMADE_COMMAND_LENGTH {
                         tracing::warn!(
-                            "Premade library '{}': skipping snippet with command exceeding 1024 bytes",
-                            filename
+                            "Premade library '{}': skipping snippet with command exceeding {} bytes",
+                            filename,
+                            MAX_PREMADE_COMMAND_LENGTH
                         );
                         return false;
                     }
                     if let Some(ref desc) = s.description
-                        && desc.len() > 1024
+                        && desc.len() > MAX_PREMADE_DESCRIPTION_LENGTH
                     {
                         tracing::warn!(
-                            "Premade library '{}': skipping snippet with description exceeding 1024 bytes",
-                            filename
+                            "Premade library '{}': skipping snippet with description exceeding {} bytes",
+                            filename,
+                            MAX_PREMADE_DESCRIPTION_LENGTH
                         );
                         return false;
                     }

@@ -11,7 +11,6 @@ struct WindowEntry {
 
 pub struct RateLimiter {
     windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
-    #[allow(dead_code)]
     shutdown_tx: Arc<tokio::sync::oneshot::Sender<()>>,
     db_pool: Option<sqlx::SqlitePool>,
     persist: bool,
@@ -144,8 +143,9 @@ impl RateLimiter {
 
         let limiter = Arc::clone(self);
         tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
+                interval.tick().await;
                 limiter.save_state().await;
             }
         });

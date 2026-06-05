@@ -27,7 +27,6 @@ exclude = [
     "tests/",
     "rustfmt.toml",
     ".gitignore",
-    "CHANGELOG.md",
     "snip-proto/",
     "SECURITY.md",
 ]

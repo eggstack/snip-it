@@ -267,23 +267,32 @@ pub fn run_sync(
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
         vec![name.to_string()]
     } else {
-        std::fs::read_dir(mgr.get_libraries_dir())
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
-                    .filter_map(|e| {
-                        e.path()
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().to_string())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        match std::fs::read_dir(mgr.get_libraries_dir()) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+                .filter_map(|e| {
+                    e.path()
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                })
+                .collect(),
+            Err(e) => {
+                tracing::error!(
+                    directory = %mgr.get_libraries_dir().display(),
+                    error = %e,
+                    "Failed to read libraries directory"
+                );
+                return Err(SnipError::runtime_error(
+                    "Failed to read libraries directory",
+                    Some(&e.to_string()),
+                ));
+            }
+        }
     };
 
     if libraries_to_sync.is_empty() {
-        eprintln!("No libraries to sync.");
+        tracing::warn!("No libraries to sync");
         return Err(SnipError::runtime_error("No libraries to sync", None));
     }
 
@@ -291,7 +300,7 @@ pub fn run_sync(
         let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
 
         if !lib_path.exists() {
-            eprintln!("Library file '{}' not found, skipping", lib_name);
+            tracing::warn!(library = %lib_name, "Library file not found, skipping");
             continue;
         }
 
@@ -312,7 +321,7 @@ pub fn run_sync(
         };
 
         if library_id.is_empty() {
-            println!("Creating library '{}' on server...", lib_name);
+            tracing::info!(library = %lib_name, "Creating library on server");
             let normalized_name = lib_name.to_lowercase().replace(' ', "-");
 
             match runtime.block_on(client.create_library(&normalized_name)) {
@@ -329,9 +338,10 @@ pub fn run_sync(
                         tracing::warn!(library = %lib_name, error = %e, "Failed to link library in config");
                     }
 
-                    println!(
-                        "  Created and linked library '{}' to server ID '{}'",
-                        lib_name, new_id
+                    tracing::info!(
+                        library = %lib_name,
+                        server_id = %new_id,
+                        "Created and linked library to server"
                     );
                 }
                 Err(e) => {
@@ -354,7 +364,7 @@ pub fn run_sync(
         let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
 
         if !lib_path.exists() {
-            eprintln!("Library file '{}' not found, skipping", lib_name);
+            tracing::warn!(library = %lib_name, "Library file not found, skipping sync");
             continue;
         }
 
@@ -375,7 +385,7 @@ pub fn run_sync(
         };
 
         if library_id.is_empty() {
-            eprintln!("Library '{}' not linked to server, skipping", lib_name);
+            tracing::warn!(library = %lib_name, "Library not linked to server, skipping");
             continue;
         }
 
@@ -414,7 +424,7 @@ pub fn run_sync(
                 .collect();
 
             if local_snippets.is_empty() && direction == SyncDirection::Push {
-                println!("  No local changes to push, skipping.");
+                tracing::info!(library = %lib_name, "No local changes to push, skipping");
                 continue;
             }
 
@@ -540,13 +550,16 @@ pub fn run_sync(
 
     for (name, _success, msg) in &results {
         if !msg.is_empty() {
-            println!("  {} - {}", name, msg);
+            tracing::info!(library = %name, details = %msg, "Sync result");
         }
     }
 
-    println!(
-        "\nSync complete: {} pushed, {} pulled, {} conflicts, {} failed",
-        status.pushed, status.pulled, status.conflicts, status.failed
+    tracing::info!(
+        pushed = status.pushed,
+        pulled = status.pulled,
+        conflicts = status.conflicts,
+        failed = status.failed,
+        "Sync complete"
     );
 
     if status.failed > 0 {

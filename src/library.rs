@@ -130,6 +130,12 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
             "Library name cannot contain null bytes",
         ));
     }
+    if name == ".." || name.contains("..") {
+        return Err((
+            "Invalid library name",
+            "Library name cannot contain path traversal sequences",
+        ));
+    }
     Ok(())
 }
 
@@ -654,17 +660,17 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
             // Create backup of corrupted file before returning defaults
             let backup_path = path.with_extension("toml.corrupt.bak");
             if let Err(backup_err) = fs::copy(path, &backup_path) {
-                eprintln!(
-                    "error: Failed to parse {} and could not create backup: {}",
-                    path.display(),
-                    backup_err
+                tracing::error!(
+                    file = %path.display(),
+                    error = %backup_err,
+                    "Failed to parse TOML and could not create backup"
                 );
             } else {
-                eprintln!(
-                    "error: Failed to parse {}, backup saved to {}: {}",
-                    path.display(),
-                    backup_path.display(),
-                    e
+                tracing::error!(
+                    file = %path.display(),
+                    backup = %backup_path.display(),
+                    error = %e,
+                    "Failed to parse TOML, backup saved"
                 );
             }
             Snippets::default()

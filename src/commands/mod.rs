@@ -154,7 +154,13 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    let tmp_path = path.with_extension("toml.tmp");
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("config"),
+        uuid::Uuid::new_v4()
+    ));
     fs::write(&tmp_path, &toml_str)
         .map_err(|e| SnipError::io_error("write config temp", &tmp_path, e))?;
 
@@ -228,7 +234,7 @@ where
     let lib_path = match get_library_path(library)? {
         Some(p) => p,
         None => {
-            eprintln!("No library found. Create one with 'snp library create <name>'");
+            tracing::warn!("No library found. Create one with 'snp library create <name>'");
             return Ok(());
         }
     };
@@ -267,11 +273,7 @@ where
         && selected_and_processed
         && let Err(e) = crate::sync_commands::run_default_sync(runtime)
     {
-        tracing::warn!("Background sync failed: {}", e);
-        eprintln!(
-            "Warning: background sync failed ({}). Run 'snp sync' to retry.",
-            e
-        );
+        tracing::warn!(error = %e, "Background sync failed");
     }
     Ok(())
 }

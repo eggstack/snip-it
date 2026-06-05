@@ -121,19 +121,19 @@ impl std::error::Error for SnipError {
 
 impl From<io::Error> for SnipError {
     fn from(error: io::Error) -> Self {
+        let operation = match error.kind() {
+            io::ErrorKind::NotFound => "file not found",
+            io::ErrorKind::PermissionDenied => "permission denied",
+            io::ErrorKind::AlreadyExists => "file already exists",
+            io::ErrorKind::InvalidInput => "invalid input",
+            io::ErrorKind::InvalidData => "invalid data",
+            io::ErrorKind::UnexpectedEof => "unexpected end of file",
+            _ => "I/O operation",
+        };
         SnipError::Io {
-            operation: "I/O operation".to_string(),
+            operation: operation.to_string(),
             path: None,
             source: error,
-        }
-    }
-}
-
-impl From<String> for SnipError {
-    fn from(error: String) -> Self {
-        SnipError::Runtime {
-            message: error,
-            detail: None,
         }
     }
 }
@@ -249,14 +249,15 @@ mod tests {
         let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "access denied");
         let err: SnipError = io_err.into();
         let msg = err.to_string();
-        assert!(msg.contains("I/O operation"));
+        assert!(msg.contains("permission denied"));
     }
 
     #[test]
-    fn test_from_string() {
-        let err: SnipError = "something went wrong".to_string().into();
+    fn test_from_io_error_not_found() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "no such file");
+        let err: SnipError = io_err.into();
         let msg = err.to_string();
-        assert!(msg.contains("something went wrong"));
+        assert!(msg.contains("file not found"));
     }
 
     #[test]

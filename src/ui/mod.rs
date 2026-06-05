@@ -8,13 +8,8 @@ mod highlight;
 mod theme;
 mod variables;
 
-#[allow(unused_imports)]
-pub use theme::Theme;
 pub use theme::get_theme;
 pub use variables::{VariablePromptResult, prompt_variables};
-
-#[allow(unused_imports)]
-pub use crate::utils::variables::Variable;
 
 use std::io;
 use std::sync::LazyLock;

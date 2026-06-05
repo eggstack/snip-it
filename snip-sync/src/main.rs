@@ -135,8 +135,8 @@ impl Config {
                 Ok(content) => match toml::from_str(&content) {
                     Ok(c) => c,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse config file {}: {}. Using defaults.",
+                        tracing::error!(
+                            "Failed to parse config file {}: {}. Using defaults. Fix the config file or remove it to regenerate.",
                             config_path.display(),
                             e
                         );
@@ -144,7 +144,7 @@ impl Config {
                     }
                 },
                 Err(e) => {
-                    tracing::warn!("Failed to read config file: {}", e);
+                    tracing::error!("Failed to read config file {}: {}. Using defaults.", config_path.display(), e);
                     ConfigFile::default()
                 }
             }
@@ -642,6 +642,14 @@ impl SnippetSync for SnipSyncService {
             }
             req.library_id
         };
+
+        if req.snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
+            return Err(Status::invalid_argument(format!(
+                "Too many snippets in push request (max {}), got {}",
+                DEFAULT_MAX_SYNC_SNIPPETS,
+                req.snippets.len()
+            )));
+        }
 
         let mut accepted = 0;
         let mut rejected = 0;
