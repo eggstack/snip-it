@@ -31,12 +31,6 @@ Shell history is unorganized, and dedicated tools like `navi` or `pet` either la
 cargo install snp
 ```
 
-### Using Homebrew (macOS)
-
-```bash
-brew install anomalyco/tap/snp
-```
-
 ### From Source
 
 ```bash
