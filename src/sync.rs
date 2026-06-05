@@ -17,9 +17,8 @@ use crate::error::{SnipError, SnipResult};
 use crate::proto::PremadeLibrary;
 use crate::proto::snippet_sync_client::SnippetSyncClient;
 use crate::proto::{
-    CreateLibraryRequest, GetPremadeLibraryRequest,
-    HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest,
-    RegisterRequest, SyncRequest,
+    CreateLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library, ListLibrariesRequest,
+    ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
 };
 use std::time::Duration;
 use tonic::Code;
