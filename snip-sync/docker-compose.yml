@@ -1,14 +1,13 @@
-version: '3.8'
-
 services:
   snip-sync:
     build: .
+    image: ghcr.io/anomalyco/snip-it/snip-sync:latest
     container_name: snip-sync
     ports:
       - "50051:50051"
       - "50050:50050"
     volumes:
-      - ./data:/data
+      - snippets-data:/data
     environment:
       - DATABASE_URL=/data/snippets.db
       - GRPC_HOST=0.0.0.0
@@ -16,3 +15,12 @@ services:
       - HTTP_HOST=0.0.0.0
       - HTTP_PORT=50050
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:50050/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  snippets-data:

@@ -2,6 +2,11 @@
 
 A gRPC server for syncing snippets between clients.
 
+> **For production, terminate TLS at a reverse proxy** (nginx, Caddy,
+> traefik) with a real certificate (Let's Encrypt, etc.). The server
+> itself speaks plain gRPC; TLS is delegated to the proxy. See the
+> [Production Deployment](#production-deployment) section.
+
 ## Quick Start
 
 ```bash
@@ -13,6 +18,14 @@ cargo build --release
 ./target/release/snip-sync
 ```
 
+A complete annotated configuration is at `config.example.toml` — copy
+it to `config.toml` and edit as needed:
+
+```bash
+cp config.example.toml config.toml
+$EDITOR config.toml
+```
+
 ## Configuration
 
 The server looks for `config.toml` in the current working directory. If not found, a default config is created.
@@ -21,6 +34,18 @@ The server looks for `config.toml` in the current working directory. If not foun
 
 - Working directory: `./config.toml`
 - Or set via: `CONFIG_PATH=/path/to/config.toml`
+
+### Generating a Local TLS Certificate
+
+For local development, generate a self-signed certificate with:
+
+```bash
+./scripts/gen-dev-cert.sh ./certs
+```
+
+This writes `./certs/cert.pem` and `./certs/key.pem` (mode 600).
+**Do not** ship self-signed certs to production; use Let's Encrypt or
+your organization's CA instead.
 
 ### Configuration Options
 

@@ -13,21 +13,28 @@ RUN cargo build --release -p snip-sync
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-references libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=builder /build/target/release/snip-sync /app/
 
-ENV DATABASE_URL=/data/snippets.db
-ENV GRPC_HOST=0.0.0.0
-ENV GRPC_PORT=50051
-ENV HTTP_HOST=0.0.0.0
-ENV HTTP_PORT=50050
-ENV SNIP_SYNC_ALLOW_HTTP=true
+ENV DATABASE_URL=/data/snippets.db \
+    GRPC_HOST=0.0.0.0 \
+    GRPC_PORT=50051 \
+    HTTP_HOST=0.0.0.0 \
+    HTTP_PORT=50050 \
+    SNIP_SYNC_ALLOW_HTTP=true
 
 VOLUME /data
 
 EXPOSE 50051 50050
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${HTTP_PORT}/health || exit 1
 
 ENTRYPOINT ["/app/snip-sync"]

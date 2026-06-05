@@ -1,0 +1,53 @@
+# snip-sync server configuration example.
+#
+# Copy this file to ./config.toml (or set CONFIG_PATH) and customize.
+# Every field is optional; the server uses safe defaults when omitted.
+
+[server]
+# gRPC server (main sync API)
+grpc_host = "127.0.0.1"
+grpc_port = 50051
+
+# HTTP server (Prometheus /metrics and /health)
+http_host = "127.0.0.1"
+http_port = 50050
+
+[server.database]
+# SQLite database file. Relative paths are resolved against the
+# working directory. Recommended: an absolute path on a persistent volume.
+# path = "/var/lib/snip-sync/snippets.db"
+max_connections = 5
+
+[server.premade]
+# Directory containing premade snippet libraries served to clients.
+directory = "./premade-libraries"
+
+[server.limits]
+max_command_length = 1024
+max_description_length = 1024
+max_tags = 50
+max_tag_length = 100
+max_id_length = 128
+max_device_id_length = 128
+request_timeout_secs = 30
+grpc_max_message_size = 4194304   # 4 MiB
+
+[server.rate_limit]
+# Per-API-key request limit.
+requests_per_minute = 120
+# If your snip-sync is behind nginx/Caddy, list the trusted proxy IPs/CIDRs
+# here so X-Forwarded-For is honored correctly.
+# trusted_proxies = ["127.0.0.1/32"]
+# Persist rate-limit counters in the SQLite database (survives restart).
+# persist = false
+
+[server.metrics]
+# Basic auth for /metrics. Leave both commented out to disable the
+# /metrics endpoint entirely (returns 404).
+# username = "change-me"
+# password = "change-me"
+
+[server.cors]
+# Comma-separated list of allowed CORS origins.
+# Empty = disabled (default), "*" = allow all, otherwise list exact origins.
+allowed_origins = ""
