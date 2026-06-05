@@ -1,44 +1,81 @@
-# snp - Snippet Manager
+# snp
 
 [![Crates.io](https://img.shields.io/crates/v/snp.svg)](https://crates.io/crates/snp)
 [![Downloads](https://img.shields.io/crates/d/snp.svg)](https://crates.io/crates/snp)
-![Rust](https://img.shields.io/badge/Rust-1.88+-orange.svg)
-![License](https://img.shields.io/badge/License-MIT-blue.svg)
+[![docs.rs](https://img.shields.io/docsrs/snp)](https://docs.rs/snp)
 [![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
+![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88+-orange.svg)
 
-A fast, terminal-based snippet manager with fuzzy search, clipboard support, variable expansion, and cloud sync.
+A fast, terminal-based snippet manager. Fuzzy search your command library,
+expand `<variable>` placeholders on the fly, organize snippets into
+libraries, and keep every device in sync with end-to-end encryption.
+
+## Demo
+
+![snp demo](assets/demo.gif)
+
+> Recording of: launching the TUI, fuzzy-filtering to a snippet, expanding
+> a variable, and running the command.
+> Regenerate with `vhs demo.tape` (see `assets/demo.tape`).
 
 ## Why snp?
 
-Shell history is unorganized, and dedicated tools like `navi` or `pet` either lack sync or require complex setup. snp gives you a clean TUI with fuzzy search, variable templates, clipboard integration, and encrypted cross-device sync — all in a single binary with zero dependencies.
-
-## Features
-
-- **Fuzzy Search** - Quickly find snippets by description, command, or tags
-- **Clipboard Support** - Copy snippets to clipboard with a single keypress
-- **Variable Expansion** - Use `<varname=default>` syntax for dynamic snippets
-- **TUI Interface** - Clean terminal UI with keyboard navigation
-- **Cloud Sync** - End-to-end encrypted sync between devices
-- **Snippet Libraries** - Organize snippets into multiple collections
-- **Premade Libraries** - Download community-built snippet collections
-- **Cross-Platform** - Works on macOS, Linux, and Windows
+Your shell history is unorganized. Generic snippet tools like `pet` don't
+sync. Cloud-first managers want your data. **snp** is a single Rust
+binary that runs everywhere, stores snippets in plain TOML you can grep,
+and adds *optional* end-to-end-encrypted sync without ever holding your
+plaintext.
 
 ## Installation
 
-### From crates.io
+### From crates.io (recommended)
 
 ```bash
 cargo install snp
 ```
 
-### From Source
+### From source
 
 ```bash
+git clone https://github.com/anomalyco/snip-it.git
+cd snip-it
 cargo build --release
-cp target/release/snp ~/.local/bin/
+./target/release/snp --version
 ```
 
-## Quick Start
+### Pre-built binaries
+
+Download from the [latest release](https://github.com/anomalyco/snip-it/releases/latest):
+
+| Platform       | Asset                                    |
+| -------------- | ---------------------------------------- |
+| Linux x86_64   | `snp-linux-x86_64.tar.gz`                |
+| Linux aarch64  | `snp-linux-aarch64.tar.gz`               |
+| macOS x86_64   | `snp-macos-x86_64.tar.gz`                |
+| macOS Apple Si | `snp-macos-aarch64.tar.gz`               |
+| Windows x86_64 | `snp-windows-x86_64.exe.zip`             |
+
+```bash
+# Linux / macOS
+tar -xzf snp-linux-x86_64.tar.gz
+sudo mv snp /usr/local/bin/
+```
+
+### Homebrew
+
+```bash
+brew install anomalyco/tap/snp
+```
+
+### Docker (sync server only)
+
+```bash
+docker pull ghcr.io/anomalyco/snip-it/snip-sync:latest
+```
+
+## Quickstart
 
 ```bash
 # Create a snippet with variables
@@ -50,70 +87,86 @@ snp new 'git push origin <branch=main>' -t git
 # List all snippets
 snp list
 
-# Run a snippet (opens TUI)
+# Launch the TUI to search, run, or copy
 snp run
-
-# Copy to clipboard
 snp clip
 
-# Search snippets
-snp search
+# Open the snippets file in $EDITOR
+snp edit
 ```
 
-## Security Warning
-
-**Snippet commands are executed as-is via your shell.** Only add snippets you trust. Avoid storing snippets with sensitive data (passwords, tokens, API keys) as they are stored in plaintext TOML files.
-
-## Configuration
-
-Snippets are stored in `~/.config/snp/snippets.toml` (or `$XDG_CONFIG_HOME/snp/snippets.toml`).
-
-### Snippet Format
+Snippets live in `~/.config/snp/snippets.toml`:
 
 ```toml
 [[Snippets]]
 Description = "git commit with message"
-Output = ""
 Tag = ["git", "version-control"]
 command = "git commit -m \"<message>\""
 
 [[Snippets]]
-Description = "ssh to server"
-Output = ""
-Tag = ["ssh", "server"]
-command = "ssh <user>@<host>"
-
-[[Snippets]]
-Description = "docker cleanup"
-Output = ""
-Tag = ["docker", "cleanup"]
-command = "docker system prune -af"
-```
-
-### Variable Syntax
-
-Variables use `<name=default>` or `<name>` syntax:
-
-- `<name=default>` - Shows default value, user can override
-- `<name>` - Prompts for input with no default
-
-```toml
-# With defaults
-[[Snippets]]
-Description = "SSH with port"
+Description = "ssh with port"
+Tag = ["ssh"]
 command = "ssh <user=root>@<host> -p <port=22>"
-
-# Required input
-[[Snippets]]
-Description = "Docker run"
-command = "docker run -it <image> /bin/bash"
 ```
 
-## Usage
+## Features
+
+- **Fuzzy search** — find snippets by description, command, or tags (`skim` algorithm).
+- **Variable expansion** — `<name=default>` syntax prompts for values at runtime.
+- **TUI** — keyboard-driven selection with themes (`SNP_THEME=dark|bright`).
+- **Multiple libraries** — separate collections per project, environment, or client.
+- **Premade libraries** — download community-built snippet packs (`snp premade sync`).
+- **End-to-end encrypted sync** — AES-256-GCM + Argon2id; the server never sees plaintext.
+- **Cron-friendly** — `snp sync --non-interactive` for headless setups.
+- **TOML you can grep** — snippets are plain files; version-control them, edit them, diff them.
+- **Cross-platform** — macOS, Linux, Windows; uses the system clipboard and keychain.
+- **Shell keyword expansion** — `$HOME`, `~`, `$(date)`, etc. expand at copy time.
+
+## Security
+
+> **Snippet commands are executed as-is via your shell.** Only add snippets
+> you trust. Snippets that contain secrets (passwords, tokens, keys) live
+> in plaintext TOML — use a sync server with end-to-end encryption rather
+> than sharing the file.
+
+- Sync: snippets are encrypted with **AES-256-GCM** before leaving the
+  client; the server stores only ciphertext.
+- Key derivation: **Argon2id** with OWASP-recommended parameters.
+- API keys: stored in the OS keychain (macOS Keychain, GNOME Keyring,
+  Windows Credential Manager) by default. A `SNP_ALLOW_PLAINTEXT_API_KEY=true`
+  opt-in falls back to a plaintext key with a warning.
+- Integrity: `sync.toml` carries a CRC32 checksum comment to detect
+  accidental corruption (e.g., partial writes).
+
+See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy
+and a fuller threat model.
+
+## Optional: Sync Server
+
+`snp` is a single binary; sync is **opt-in** and requires a `snip-sync`
+server (also in this repo). See [snip-sync/README.md](snip-sync/README.md)
+for installation, configuration, and a `docker-compose.yml` example.
+
+```bash
+# Register against your server (stores API key in OS keychain)
+snp register https://sync.example.com:50051
+
+# Manual sync
+snp sync
+
+# Push-only / pull-only
+snp sync --push-only
+snp sync --pull-only
+
+# Set up a 15-minute sync cron job
+snp cron
+```
+
+## CLI Overview
 
 ```
 $ snp --help
-A fast, terminal-based snippet manager with TUI, fuzzy search, cloud sync, and encrypted storage
+A fast, terminal-based snippet manager with fuzzy search, clipboard support, and cloud sync
 
 Usage: snp [COMMAND]
 
@@ -130,241 +183,43 @@ Commands:
   premade     Browse/download premade libraries
   register    Register sync account
   keybindings Show TUI keybindings
+  completions Generate shell completions
   version     Show version
-
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
 ```
 
-### Commands
-
-| Command | Alias | Description |
-|---------|-------|--------------|
-| `snp new` | `snp n` | Create a new snippet |
-| `snp list` | `snp l` | List all snippets |
-| `snp run` | `snp r` | Run a snippet via TUI |
-| `snp clip` | `snp c` | Copy snippet to clipboard |
-| `snp search` | `snp s` | Search and view snippet details |
-| `snp edit` | `snp e` | Edit snippets file in $EDITOR |
-| `snp sync` | `snp y` | Sync snippets with server |
-| `snp cron` | | Setup automatic sync |
-| `snp library` | `snp lib` | Manage snippet libraries |
-| `snp premade` | `snp p` | Browse/download premade libraries |
-| `snp register` | `snp reg` | Register sync account |
-| `snp version` | `snp v` | Show version |
-
-## Libraries
-
-Organize snippets into multiple collections:
-
-```bash
-# Create a new library
-snp library create work-snippets
-
-# List all libraries
-snp library list
-
-# Switch to a library
-snp run --library work-snippets
-
-# Delete a library
-snp library delete work-snippets
-
-# Set primary library
-snp library set-primary work-snippets
-```
-
-## Sync
-
-Sync your local snippets with a server for cross-device access.
-
-### Register and Connect
-
-```bash
-# Register with a sync server
-snp register https://your-sync-server.com
-
-# Or use default local server
-snp register
-```
-
-### Sync Operations
-
-```bash
-# Manual sync
-snp sync
-
-# Push only (upload local changes)
-snp sync --push-only
-
-# Pull only (download remote changes)
-snp sync --pull-only
-
-# List connected servers
-snp sync --servers
-```
-
-### Automated Sync (Cron)
-
-Set up automatic periodic sync:
-
-```bash
-# Set up sync every 15 minutes (default)
-snp cron
-
-# Set up sync every 30 minutes
-snp cron -i 30
-
-# Set up sync every hour
-snp cron -i 60
-```
-
-The command displays the crontab entry, platform-specific instructions, and offers to copy it to clipboard.
-
-Use `--non-interactive` flag for headless sync (skips conflict prompts, keeps local versions).
-
-### Sync Configuration
-
-After first sync, a configuration file is created at `~/.config/snp/sync.toml`:
-
-```toml
-[settings.sync]
-enabled = true
-server_url = "https://your-server.com"
-api_key = "your-api-key"
-device_id = "your-device-id"
-sync_interval_minutes = 30
-auto_sync = false
-sync_direction = "Bidirectional"  # Push, Pull, or Bidirectional
-```
-
-## Premade Libraries
-
-Browse and download pre-built snippet collections from the community:
-
-```bash
-# List available premade libraries
-snp premade list
-
-# Download a specific library
-snp premade get docker-essentials
-
-# Download all available libraries
-snp premade get all
-
-# Sync all premade libraries (download missing)
-snp premade sync
-```
-
-Premade libraries are stored in `~/.config/snp/premade/`.
-
-## TUI Keybindings
-
-### Normal Mode
-
-| Key | Action |
-|-----|--------|
-| `↑/↓` or `j/k` | Navigate snippets |
-| `Enter` | Run selected snippet |
-| `i` | Enter insert mode (filter) |
-| `y` | Copy to clipboard and quit |
-| `q` | Quit |
-| `n` | Sort by newest |
-| `o` | Sort by oldest |
-| `a` | Sort A-Z |
-| `z` | Sort Z-A |
-| `t` | Toggle tag filter mode |
-| `d` | Clear filter |
-| `Ctrl+C` | Copy to clipboard |
-| `Ctrl+D` | Page down |
-| `Ctrl+U` | Page up |
-
-### Insert Mode (Filter)
-
-| Key | Action |
-|-----|--------|
-| `Esc` | Return to normal mode |
-| `↑/↓` or `j/k` | Navigate snippets |
-| `Enter` | Run selected snippet |
-| `Backspace` | Delete character |
-| `Type` | Filter snippets |
+See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SNP_CONFIG_HOME` | Override config directory | `~/.config/snp` |
-| `SNP_COMMAND_TIMEOUT` | Command execution timeout (seconds) | `300` |
-| `SNP_CLIPBOARD_TIMEOUT` | Clipboard operation timeout (seconds) | `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | Allow API key in config file (not keychain) | `false` |
-| `SNP_THEME` | UI theme (`dark` or `bright`) | `dark` |
-| `SNP_LOG_LEVEL` | Log level (`trace`, `debug`, `info`, `warn`, `error`) | `info` |
-| `SNP_LOG` | Per-module log filter (e.g., `snp=debug`) | - |
-| `EDITOR` | Editor for `snp edit` command | - |
+| Variable                          | Description                                            | Default     |
+| --------------------------------- | ------------------------------------------------------ | ----------- |
+| `SNP_CONFIG_HOME`                 | Override config directory                              | `~/.config/snp` |
+| `SNP_COMMAND_TIMEOUT`             | Command execution timeout (seconds)                    | `300`       |
+| `SNP_CLIPBOARD_TIMEOUT`           | Clipboard operation timeout (seconds)                  | `5`         |
+| `SNP_ALLOW_PLAINTEXT_API_KEY`     | Allow API key in config file (not keychain)            | `false`     |
+| `SNP_SYNC_CONNECT_TIMEOUT`        | Sync TCP connect timeout (seconds)                     | `10`        |
+| `SNP_SYNC_REQUEST_TIMEOUT`        | Sync per-request timeout (seconds)                     | `30`        |
+| `SNP_THEME`                       | UI theme (`dark` or `bright`)                          | `dark`      |
+| `SNP_LOG_LEVEL`                   | Log level (`trace`, `debug`, `info`, `warn`, `error`)  | `info`      |
+| `SNP_LOG`                         | Per-module log filter (e.g., `snp=debug`)              | -           |
+| `EDITOR`                          | Editor for `snp edit` command                          | `vim`       |
 
 ## Documentation
 
-- [User Guide](USER_GUIDE.md) - Detailed guide covering all features
-- [Contributing](CONTRIBUTING.md) - Development setup and guidelines
-- [Security Policy](SECURITY.md) - Vulnerability reporting and security considerations
-- [Changelog](CHANGELOG.md) - Release history
+- **[USER_GUIDE.md](USER_GUIDE.md)** — Detailed guide: libraries, sync, variables, premade libraries, troubleshooting.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Development setup, code style, testing, release process.
+- **[SECURITY.md](SECURITY.md)** — Vulnerability disclosure policy and threat model.
+- **[CHANGELOG.md](CHANGELOG.md)** — Release history.
+- **[docs.rs/snp](https://docs.rs/snp)** — API reference (this is a binary crate; doc-comments are for contributor reference).
+- **[snip-sync/README.md](snip-sync/README.md)** — Sync server setup, configuration, deployment.
 
-## Troubleshooting
+## Contributing
 
-### Snippets not saving
-
-Ensure the config directory exists and is writable:
-
-```bash
-mkdir -p ~/.config/snp
-chmod 755 ~/.config/snp
-```
-
-### Clipboard not working
-
-- **macOS**: Grant Terminal access to Clipboard in System Preferences
-- **Linux**: Install `xclip` or `xsel`
-- **Windows**: Should work automatically
-
-### Sync conflicts
-
-When the same snippet is modified on multiple devices:
-
-- **Interactive mode**: Prompts to choose version
-- **Non-interactive mode**: Keeps local version by default
-
-### Variable expansion issues
-
-If variables aren't expanding correctly, check for:
-
-- Missing `>` closing bracket: `<var` should be `<var>`
-- Escaped characters: `\<` is treated as literal `<`
-
-## Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
-
-```bash
-# Build
-cargo build --release
-
-# Run all tests
-cargo test
-
-# Lint
-cargo clippy --all-targets -- -D warnings
-
-# Format
-cargo fmt
-```
-
-## Security
-
-- **Sync encryption**: All snippets are encrypted with AES-256-GCM before sync
-- **Key derivation**: API keys are hashed with Argon2
-- **Transport**: gRPC over TLS when server supports it
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
+development setup, code style, and the release process. Bug reports
+and feature requests go through [GitHub Issues](https://github.com/anomalyco/snip-it/issues).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+[MIT](LICENSE) © 2026 David Bowman
