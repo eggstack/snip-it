@@ -312,6 +312,24 @@ If variables aren't expanding correctly, check for:
 - Missing `>` closing bracket: `<var` should be `<var>`
 - Escaped characters: `\<` is treated as literal `<`
 
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+```bash
+# Build
+cargo build --release
+
+# Run all tests
+cargo test
+
+# Lint
+cargo clippy --all-targets -- -D warnings
+
+# Format
+cargo fmt
+```
+
 ## Security
 
 - **Sync encryption**: All snippets are encrypted with AES-256-GCM before sync

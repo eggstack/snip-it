@@ -21,8 +21,8 @@
 # Server database
 *.db
 
-# Generated proto code (built from build.rs)
-snip-proto/src/snip_proto.rs
+# Note: snip-proto/src/snip_proto.rs is committed (standard for tonic crates)
+# so that consumers don't need protoc installed.
 
 # Server binary
 snip-sync/snip-sync

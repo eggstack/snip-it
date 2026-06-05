@@ -131,7 +131,6 @@ impl Drop for SyncSettings {
 
 impl SyncSettings {
     /// Returns the sync limit value, defaulting to 1000 if not set.
-    #[allow(dead_code)]
     pub fn sync_limit_value(&self) -> i32 {
         self.sync_limit.unwrap_or(1000)
     }
