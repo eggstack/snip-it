@@ -20,18 +20,34 @@
 # macOS artifacts
 **/.DS_Store
 ._*
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+desktop.ini
 
 # Environment files
 .env
+.env.local
 
 # TLS certificates and keys
 *.pem
 
-# Server database
+# SQLite databases and runtime data
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
-# Note: snip-proto/src/snip_proto.rs is committed (standard for tonic crates)
-# so that consumers don't need protoc installed.
-
-# Server binary
+# snip-sync server binary
 snip-sync/snip-sync
+
+# Coverage reports
+lcov.info
+coverage/
+*.profraw
+
+# snip-proto/src/snip_proto.rs is committed (standard for tonic crates)
+# so that consumers don't need protoc installed.

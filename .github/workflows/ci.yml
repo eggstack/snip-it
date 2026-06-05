@@ -16,6 +16,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  repo-hygiene:
+    name: Repo Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for tracked OS junk
+        run: |
+          if git ls-files | grep -E '(\.DS_Store$|Thumbs\.db$|desktop\.ini$)'; then
+            echo "::error::Tracked OS junk files detected. Add to .gitignore and git rm --cached."
+            exit 1
+          fi
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
