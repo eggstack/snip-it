@@ -6,6 +6,10 @@ labels: enhancement
 assignees: ""
 ---
 
+> **Found a security issue?** Please email
+> **dbowman91@proton.me** instead of opening a public issue.
+> See [SECURITY.md](../../SECURITY.md).
+
 ## Problem
 
 A clear and concise description of what problem this feature would solve.

@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-06-05
+
+### Added
+- `rust-toolchain.toml` pinning Rust 1.88 with required components (`rustfmt`, `clippy`, `llvm-tools-preview`).
+- `assets/demo.tape` for regenerating the README demo GIF with [vhs](https://github.com/charmbracelet/vhs).
+- `.github/workflows/link-check.yml` running `lychee` weekly and on PRs.
+- `.github/ISSUE_TEMPLATE/security.md` redirecting security reports to email.
+- Dependabot grouping for minor/patch updates to reduce PR noise.
+- `repo-hygiene` CI job that fails if any `.DS_Store`/`Thumbs.db`/`desktop.ini` is tracked.
+- `msrv` CI job now exercises all three crates (snp, snip-sync, snip-proto).
+
+### Changed
+- README rewritten for end-user audience: lead with tagline, demo, install matrix, security callout.
+- USER_GUIDE.md table of contents now complete; added "Migrating from pet", "Reset and Recovery", "Keychain Issues" subsections.
+- SECURITY.md expanded: threat model, key derivation parameters, known API-key-in-body limitation, server deployment checklist.
+- CONTRIBUTING.md expanded: full release process, MSRV policy, branching rules, dependency list.
+- crates.io metadata: added `homepage`, expanded `keywords` and `categories`, set `documentation = "https://docs.rs/snp"`, added author email.
+- `docs.rs` config: added `rustdoc-args = ["--cfg", "docsrs"]`; explicit target list (now includes `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`).
+- `dependencies` audit: removed unused crates; pruned feature flags.
+
+## [1.1.0] - 2026-06-05
 
 ### Changed
 - Bump MSRV to 1.88 and edition to 2024
@@ -103,3 +123,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [1.1.0]: https://github.com/anomalyco/snip-it/releases/tag/v1.1.0
 [1.0.0]: https://github.com/anomalyco/snip-it/releases/tag/v1.0.0
+[1.2.0]: https://github.com/anomalyco/snip-it/releases/tag/v1.2.0

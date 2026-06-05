@@ -6,6 +6,10 @@ labels: bug
 assignees: ""
 ---
 
+> **Found a security issue?** Please email
+> **dbowman91@proton.me** instead of opening a public issue.
+> See [SECURITY.md](../../SECURITY.md).
+
 ## Describe the bug
 
 A clear and concise description of what the bug is.
