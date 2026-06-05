@@ -20,6 +20,7 @@ pub fn run() -> SnipResult<()> {
     println!("  y     : copy and quit");
     println!("  p     : preview command");
     println!("  i     : insert mode");
+    println!("  e     : open theme picker");
     println!("  q     : quit");
     println!("  Esc   : no-op (use q to quit)");
     println!("  /     : search");
@@ -37,5 +38,17 @@ pub fn run() -> SnipResult<()> {
     println!("  Esc   : return to normal mode");
     println!("  /     : start search");
     println!("  Backspace: delete character");
+    println!();
+    println!("Theme Picker (opened with e in normal mode):");
+    println!("  i     : filter (insert mode)");
+    println!("  j/↓   : next theme (live preview)");
+    println!("  k/↑   : previous theme (live preview)");
+    println!("  Ctrl+d/PageDown : page down (10 themes)");
+    println!("  Ctrl+u/PageUp   : page up (10 themes)");
+    println!("  gg    : first theme");
+    println!("  G     : last theme");
+    println!("  Enter : save & apply theme");
+    println!("  e/q   : cancel & revert to previous theme");
+    println!("  Esc   : leave filter (back to picker normal mode)");
     Ok(())
 }

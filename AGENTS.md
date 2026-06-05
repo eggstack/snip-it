@@ -49,7 +49,7 @@ snip-it/
 │   ├── sync_commands.rs# Sync orchestration, merge logic
 │   ├── ui/              # TUI (ratatui), fuzzy search, themes
 │   │   ├── mod.rs       # Main TUI loop, re-exports
-│   │   ├── theme.rs     # Theme system, dark/bright themes
+│   │   ├── theme.rs     # Theme system, dark/bright themes, Halloy TOML parsing, ThemeManager
 │   │   ├── highlight.rs # Syntax highlighting for commands
 │   │   └── variables.rs # Variable prompting UI
 │   ├── commands/       # One module per CLI subcommand
@@ -121,7 +121,14 @@ snip-it/
 - Syntax highlighting is pre-computed once at startup (not in draw loop)
 - Fuzzy matching via `fuzzy-matcher` (skim algorithm)
 - Debounced filter updates (150ms)
-- Theme: dark (default) or bright, controlled by `SNP_THEME` env var
+- Theme picker: press `e` in normal mode to open; `j`/`k` to preview live, `i` to filter, `Enter` to commit, `e`/`q`/`Esc` to cancel. INS sub-mode mirrors the snippet browser INS UX.
+- Theme: Halloy-compatible TOML at `~/.config/snp/themes/<name>.toml`; active theme persisted in `~/.config/snp/themes.toml`. `SNP_THEME` env var still works for backward compat.
+
+### Bundled Themes
+- 50 Halloy themes live in `themes/` and are LZMA-compressed and base64-encoded at build time by `scripts/build_themes.py` into `src/ui/_generated_bundled_themes.rs`.
+- `build.rs` re-invokes the script when the source themes directory is newer than the generated file.
+- The default theme (`Cyber Red`) is hardcoded in the binary via `include_str!` as a fallback if `themes.toml` is missing.
+- Decoding uses the pure-Rust `lzma-rs` crate (no C toolchain).
 
 ### Sync Merge Strategy
 - Last-write-wins based on `updated_at` timestamp

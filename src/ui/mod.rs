@@ -9,6 +9,8 @@ mod state;
 mod theme;
 mod variables;
 
+mod _generated_bundled_themes;
+
 pub use theme::get_theme;
 pub use variables::{VariablePromptResult, prompt_variables};
 
@@ -46,6 +48,82 @@ static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
 
 fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
+}
+
+fn ensure_theme_picker_ready(
+    manager: &mut Option<theme::ThemeManager>,
+    list: &mut Vec<theme::ThemeInfo>,
+    filtered: &mut Vec<usize>,
+    active_idx: &mut usize,
+) -> io::Result<()> {
+    if manager.is_some() {
+        return Ok(());
+    }
+    let mut mgr =
+        theme::ThemeManager::new().map_err(|e| io::Error::other(format!("theme manager: {e}")))?;
+    mgr.init_themes_dir()
+        .map_err(|e| io::Error::other(format!("init themes: {e}")))?;
+    *list = mgr
+        .list_themes()
+        .map_err(|e| io::Error::other(format!("list themes: {e}")))?;
+    *filtered = (0..list.len()).collect();
+    *active_idx = mgr
+        .get_active_theme_name()
+        .as_ref()
+        .and_then(|n| list.iter().position(|t| &t.name == n))
+        .unwrap_or(0);
+    *manager = Some(mgr);
+    Ok(())
+}
+
+fn apply_theme_from_picker(
+    manager: &Option<theme::ThemeManager>,
+    list: &[theme::ThemeInfo],
+    filtered: &[usize],
+    active_idx: usize,
+) -> bool {
+    let Some(mgr) = manager else { return false };
+    let Some(&idx) = filtered.get(active_idx) else {
+        return false;
+    };
+    let Some(info) = list.get(idx) else {
+        return false;
+    };
+    match mgr.load_theme(&info.name) {
+        Ok(t) => {
+            theme::set_active_theme(t);
+            true
+        }
+        Err(e) => {
+            tracing::warn!("failed to load theme {}: {e}", info.name);
+            false
+        }
+    }
+}
+
+fn commit_theme_picker(
+    manager: &mut Option<theme::ThemeManager>,
+    list: &[theme::ThemeInfo],
+    filtered: &[usize],
+    active_idx: usize,
+) -> io::Result<()> {
+    if let Some(mgr) = manager.as_mut()
+        && let Some(&idx) = filtered.get(active_idx)
+        && let Some(info) = list.get(idx)
+    {
+        mgr.set_active_theme(&info.name)
+            .map_err(|e| io::Error::other(format!("save theme: {e}")))?;
+    }
+    Ok(())
+}
+
+fn cancel_theme_picker(manager: &Option<theme::ThemeManager>) {
+    if let Some(mgr) = manager
+        && let Some(name) = mgr.get_active_theme_name()
+        && let Ok(t) = mgr.load_theme(&name)
+    {
+        theme::set_active_theme(t);
+    }
 }
 
 pub struct SnippetListParams<'a> {
@@ -89,7 +167,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
     // Pre-compute syntax-highlighted commands once at startup (not inside draw loop)
     // This avoids the closure-capture issues that cause TUI to hang
-    let highlighted_commands: Vec<Line<'static>> =
+    let mut highlighted_commands: Vec<Line<'static>> =
         commands.iter().map(|cmd| highlight_command(cmd)).collect();
 
     let mut sel = SelectState::new();
@@ -111,6 +189,20 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut pending_gg_time: Option<std::time::Instant> = None;
     const GG_TIMEOUT_MS: u64 = 500;
 
+    // Theme picker state
+    let mut theme_picker_mode = false;
+    let mut theme_picker_insert_mode = false;
+    let mut theme_filter = String::new();
+    let mut theme_input_text = String::new();
+    let mut theme_filtered: Vec<usize> = Vec::new();
+    let mut theme_dirty = false;
+    let mut theme_active_idx: usize = 0;
+    let mut theme_picker_manager: Option<theme::ThemeManager> = None;
+    let mut theme_picker_list: Vec<theme::ThemeInfo> = Vec::new();
+    let mut pending_rehighlight = false;
+    let mut last_theme_update: Option<std::time::Instant> = None;
+    const THEME_DEBOUNCE_MS: u64 = 150;
+
     // Debounce filter updates to avoid fuzzy matching on every keystroke
     let mut filter_dirty = false;
     let mut last_filter_update: Option<std::time::Instant> = None;
@@ -130,6 +222,58 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let all_tags = tags.to_vec();
 
     loop {
+        // Lazy init theme picker
+        if theme_picker_mode && theme_picker_manager.is_none() {
+            if let Err(e) = ensure_theme_picker_ready(
+                &mut theme_picker_manager,
+                &mut theme_picker_list,
+                &mut theme_filtered,
+                &mut theme_active_idx,
+            ) {
+                tracing::warn!("theme picker init failed: {e}");
+                theme_picker_mode = false;
+            } else if apply_theme_from_picker(
+                &theme_picker_manager,
+                &theme_picker_list,
+                &theme_filtered,
+                theme_active_idx,
+            ) {
+                pending_rehighlight = true;
+            }
+        }
+
+        // Re-highlight on theme change
+        if pending_rehighlight {
+            highlighted_commands = commands.iter().map(|c| highlight_command(c)).collect();
+            pending_rehighlight = false;
+        }
+
+        // Debounced theme filter rebuild
+        let theme_debounce_elapsed =
+            last_theme_update.is_none_or(|t| t.elapsed().as_millis() >= THEME_DEBOUNCE_MS as u128);
+        if theme_dirty && theme_debounce_elapsed {
+            theme_filtered = if theme_filter.is_empty() {
+                (0..theme_picker_list.len()).collect()
+            } else {
+                theme_picker_list
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        if MATCHER.fuzzy_match(&t.name, &theme_filter).is_some() {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if theme_active_idx >= theme_filtered.len() {
+                theme_active_idx = theme_filtered.len().saturating_sub(1);
+            }
+            theme_dirty = false;
+            last_theme_update = None;
+        }
+
         // Debounce: only recompute filtered list if enough time has passed since last filter change
         let debounce_elapsed = last_filter_update
             .is_none_or(|t| t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128);
@@ -306,16 +450,43 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 f.render_widget(paragraph, size);
                 return;
             }
-            let count = filtered.len();
-            let title_part = format!("Snippets [{count}] {filter_indicator}{sort_indicator}");
+            let picker_mode = theme_picker_mode;
+            let picker_ins = theme_picker_insert_mode;
+            let picker_filter_text: &str = if picker_ins {
+                &theme_input_text
+            } else {
+                &theme_filter
+            };
+            let count = if picker_mode {
+                theme_filtered.len()
+            } else {
+                filtered.len()
+            };
+            let title_part = if picker_mode {
+                let active_name = theme_picker_manager
+                    .as_ref()
+                    .and_then(|m| m.get_active_theme_name())
+                    .unwrap_or_default();
+                let active_str = if active_name.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{active_name}]")
+                };
+                format!("Themes [{count}]{active_str} {filter_indicator}")
+            } else {
+                format!("Snippets [{count}] {filter_indicator}{sort_indicator}")
+            };
             let separator = "─".repeat((size.width as usize).saturating_sub(title_part.len() + 8));
             let theme = get_theme();
             let block = Block::default()
                 .title(format!("{title_part} {separator}"))
                 .borders(Borders::ALL)
                 .border_style(style_fg(theme.border))
+                .title_style(style_fg(theme.secondary))
                 .style(TuiStyle::default().bg(theme.background));
-            let input_block_title = if tag_filter_mode {
+            let input_block_title = if picker_mode {
+                "Theme Filter"
+            } else if tag_filter_mode {
                 "Tag Filter"
             } else {
                 "Filter"
@@ -324,6 +495,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 .title(input_block_title)
                 .borders(Borders::ALL)
                 .border_style(style_fg(theme.border))
+                .title_style(style_fg(theme.secondary))
                 .style(TuiStyle::default().bg(theme.background));
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -334,59 +506,16 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                     Constraint::Length(1),
                 ])
                 .split(size);
-            // Use pre-computed highlights (computed once at startup, outside draw loop)
-            let items: Vec<ListItem> = filtered
-                .iter()
-                .map(|(idx, _desc, _tags)| {
-                    let is_fav = *favorites.get(*idx).unwrap_or(&false);
-                    let fav_indicator = if is_fav { "★ " } else { "  " };
-
-                    let line = if list_display_mode == 1 {
-                        let desc = &descriptions[*idx];
-                        let cmd_spans = highlighted_commands
-                            .get(*idx)
-                            .cloned()
-                            .map(|line| line.spans)
-                            .unwrap_or_default();
-
-                        let mut combined: Vec<ratatui::text::Span<'static>> =
-                            vec![ratatui::text::Span::styled(
-                                format!("[{desc}] "),
-                                style_fg(theme.text),
-                            )];
-                        combined.extend(cmd_spans);
-                        Line::from(combined)
-                    } else {
-                        highlighted_commands
-                            .get(*idx)
-                            .cloned()
-                            .unwrap_or_else(|| Line::from(""))
-                    };
-
-                    let mut spans = vec![ratatui::text::Span::raw(fav_indicator)];
-                    spans.extend(line.spans);
-                    let final_line = Line::from(spans);
-
-                    ListItem::new(final_line)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(block)
-                .style(TuiStyle::default().bg(theme.background))
-                .highlight_style(
-                    ratatui::style::Style::default()
-                        .fg(theme.text)
-                        .bg(theme.selected_bg),
-                )
-                .highlight_symbol(if is_search { "" } else { "▶ " });
 
             f.render_widget(input_block, chunks[0]);
             // Filter text displayed in the filter input box (NOT in title bar).
             // Insert mode: show input_text (what user is typing)
             // Normal mode: show filter (applied filter)
             // Tag filter mode: show tag_filter_text
-            // DO NOT move this text to the title bar - it belongs in the filter input box.
-            let filter_text = if tag_filter_mode {
+            // Picker mode: show theme_input_text in INS or theme_filter in NOR
+            let filter_text: &str = if picker_mode {
+                picker_filter_text
+            } else if tag_filter_mode {
                 if filter_state.tag_filter_text.is_empty() {
                     ""
                 } else {
@@ -409,57 +538,220 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 ),
             );
 
-            if insert_mode {
+            if (picker_mode && picker_ins) || (!picker_mode && insert_mode) {
                 use unicode_width::UnicodeWidthStr;
+                let cursor_text: &str = if picker_mode {
+                    &theme_input_text
+                } else {
+                    &input_text
+                };
                 let cursor_x = chunks[0].x
                     + 1
-                    + input_text.width().min(u16::MAX as usize) as u16;
+                    + cursor_text.width().min(u16::MAX as usize) as u16;
                 let cursor_y = chunks[0].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }
 
-            f.render_stateful_widget(list, chunks[1], &mut sel.list_state);
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_style(ratatui::style::Style::default().bg(theme.secondary));
-            f.render_stateful_widget(scrollbar, chunks[1], &mut sel.scroll_state);
+            if picker_mode {
+                // Theme picker list
+                let saved_name = theme_picker_manager
+                    .as_ref()
+                    .and_then(|m| m.get_active_theme_name());
+                let picker_items: Vec<ListItem> = theme_filtered
+                    .iter()
+                    .filter_map(|&idx| theme_picker_list.get(idx))
+                    .map(|info| {
+                        let is_active = saved_name.as_deref() == Some(info.name.as_str());
+                        let prefix = if is_active { "★ " } else { "  " };
+                        let style = if is_active {
+                            style_fg(theme.accent)
+                        } else {
+                            style_fg(theme.text)
+                        };
+                        let line = Line::from(vec![
+                            ratatui::text::Span::raw(prefix),
+                            ratatui::text::Span::styled(info.name.clone(), style),
+                        ]);
+                        ListItem::new(line)
+                    })
+                    .collect();
+                let picker_list = List::new(picker_items)
+                    .block(block)
+                    .style(TuiStyle::default().bg(theme.background))
+                    .highlight_style(
+                        ratatui::style::Style::default()
+                            .fg(theme.text)
+                            .bg(theme.selected_bg),
+                    )
+                    .highlight_symbol("▶ ");
+                let mut picker_list_state = ratatui::widgets::ListState::default();
+                picker_list_state.select(Some(theme_active_idx));
+                f.render_stateful_widget(picker_list, chunks[1], &mut picker_list_state);
+                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .thumb_style(ratatui::style::Style::default().bg(theme.secondary));
+                let mut picker_scroll_state = ratatui::widgets::ScrollbarState::default()
+                    .content_length(theme_filtered.len())
+                    .position(theme_active_idx);
+                f.render_stateful_widget(scrollbar, chunks[1], &mut picker_scroll_state);
 
-            if sel.selected < filtered.len() {
-                let idx = filtered[sel.selected].0;
-                let snippet_cmd = &commands[idx];
-                let snippet_desc = &descriptions[idx];
-
-                let vars = extract_variables(snippet_cmd);
-                let has_vars = !vars.is_empty();
-
-                let preview_title = format!("Preview: {snippet_desc}");
+                // Theme swatch preview
+                let preview_name = theme_filtered
+                    .get(theme_active_idx)
+                    .and_then(|&idx| theme_picker_list.get(idx))
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| "(no selection)".to_string());
+                let is_saved_active = saved_name.as_deref() == Some(preview_name.as_str());
+                let preview_title = format!("Preview: {preview_name}");
                 let preview_block = Block::default()
                     .title(preview_title)
                     .borders(Borders::ALL)
                     .border_style(style_fg(theme.border))
+                    .title_style(style_fg(theme.secondary))
                     .style(TuiStyle::default().bg(theme.background));
 
-                let has_unmatched = has_unmatched_angle_bracket(snippet_cmd);
-                let preview_content = if has_vars || has_unmatched {
-                    let mut content = format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "));
-                    if has_unmatched {
-                        content.push_str("\n\nWarning: unmatched '<' found - will be treated as literal");
-                    }
-                    content
-                } else {
-                    strip_escape_sequences(snippet_cmd)
+                let swatch = |c: ratatui::style::Color| {
+                    ratatui::text::Span::styled("███", style_fg(c))
+                };
+                let label = |s: &str| -> ratatui::text::Span<'static> {
+                    ratatui::text::Span::styled(s.to_string(), style_fg(theme.text))
+                };
+                let dim = |s: &str| -> ratatui::text::Span<'static> {
+                    ratatui::text::Span::styled(s.to_string(), style_fg(theme.muted))
                 };
 
-                let preview_widget = Paragraph::new(preview_content)
+                let mut preview_spans: Vec<ratatui::text::Span<'static>> = vec![
+                    swatch(theme.primary),
+                    label(" primary  "),
+                    swatch(theme.secondary),
+                    label(" tertiary  "),
+                    swatch(theme.accent),
+                    label(" accent"),
+                    ratatui::text::Span::raw("\n"),
+                    label("Background: "),
+                    swatch(theme.background),
+                    ratatui::text::Span::raw("\n"),
+                    label("> Selected: "),
+                    swatch(theme.selected_bg),
+                    ratatui::text::Span::raw("\n"),
+                    label("Text: "),
+                    swatch(theme.text),
+                    label("  Border: "),
+                    swatch(theme.border),
+                    label("  Muted: "),
+                    swatch(theme.muted),
+                    ratatui::text::Span::raw("\n"),
+                    label("String literal: "),
+                    swatch(theme.string_color),
+                    label("  Escape: "),
+                    swatch(theme.escape_color),
+                ];
+                if is_saved_active {
+                    preview_spans.push(ratatui::text::Span::raw("\n"));
+                    preview_spans.push(dim("(this is your saved active theme)"));
+                }
+
+                let preview_widget = Paragraph::new(Line::from(preview_spans))
                     .block(preview_block)
                     .style(style_fg_bg(theme.text, theme.background));
                 f.render_widget(preview_widget, chunks[2]);
+            } else {
+                // Snippet list (existing rendering)
+                let items: Vec<ListItem> = filtered
+                    .iter()
+                    .map(|(idx, _desc, _tags)| {
+                        let is_fav = *favorites.get(*idx).unwrap_or(&false);
+                        let fav_indicator = if is_fav { "★ " } else { "  " };
+
+                        let line = if list_display_mode == 1 {
+                            let desc = &descriptions[*idx];
+                            let cmd_spans = highlighted_commands
+                                .get(*idx)
+                                .cloned()
+                                .map(|line| line.spans)
+                                .unwrap_or_default();
+
+                            let mut combined: Vec<ratatui::text::Span<'static>> =
+                                vec![ratatui::text::Span::styled(
+                                    format!("[{desc}] "),
+                                    style_fg(theme.text),
+                                )];
+                            combined.extend(cmd_spans);
+                            Line::from(combined)
+                        } else {
+                            highlighted_commands
+                                .get(*idx)
+                                .cloned()
+                                .unwrap_or_else(|| Line::from(""))
+                        };
+
+                        let mut spans = vec![ratatui::text::Span::raw(fav_indicator)];
+                        spans.extend(line.spans);
+                        let final_line = Line::from(spans);
+
+                        ListItem::new(final_line)
+                    })
+                    .collect();
+                let list = List::new(items)
+                    .block(block)
+                    .style(TuiStyle::default().bg(theme.background))
+                    .highlight_style(
+                        ratatui::style::Style::default()
+                            .fg(theme.text)
+                            .bg(theme.selected_bg),
+                    )
+                    .highlight_symbol(if is_search { "" } else { "▶ " });
+
+                f.render_stateful_widget(list, chunks[1], &mut sel.list_state);
+                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .thumb_style(ratatui::style::Style::default().bg(theme.secondary));
+                f.render_stateful_widget(scrollbar, chunks[1], &mut sel.scroll_state);
+
+                if sel.selected < filtered.len() {
+                    let idx = filtered[sel.selected].0;
+                    let snippet_cmd = &commands[idx];
+                    let snippet_desc = &descriptions[idx];
+
+                    let vars = extract_variables(snippet_cmd);
+                    let has_vars = !vars.is_empty();
+
+                    let preview_title = format!("Preview: {snippet_desc}");
+                    let preview_block = Block::default()
+                        .title(preview_title)
+                        .borders(Borders::ALL)
+                        .border_style(style_fg(theme.border))
+                        .title_style(style_fg(theme.secondary))
+                        .style(TuiStyle::default().bg(theme.background));
+
+                    let has_unmatched = has_unmatched_angle_bracket(snippet_cmd);
+                    let preview_content = if has_vars || has_unmatched {
+                        let mut content = format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "));
+                        if has_unmatched {
+                            content.push_str("\n\nWarning: unmatched '<' found - will be treated as literal");
+                        }
+                        content
+                    } else {
+                        strip_escape_sequences(snippet_cmd)
+                    };
+
+                    let preview_widget = Paragraph::new(preview_content)
+                        .block(preview_block)
+                        .style(style_fg_bg(theme.text, theme.background));
+                    f.render_widget(preview_widget, chunks[2]);
+                }
             }
 
             let copied_desc = copied_message.as_ref().map(|(desc, _)| desc.clone());
             let mode_str = if insert_mode { "INS" } else { "NOR" };
             let tag_mode_str = if tag_filter_mode { " TAG" } else { "" };
 
-            let status_text: String = if let Some(desc) = copied_desc {
+            let status_text: String = if picker_mode {
+                if picker_ins {
+                    "[THEME-INS] | esc: leave ins | enter: apply | up/down: navigate".to_string()
+                } else {
+                    "[THEME-NOR] | i: filter | enter: apply | up/down: preview | e/q: back"
+                        .to_string()
+                }
+            } else if let Some(desc) = copied_desc {
                 format!("[{mode_str}]{tag_mode_str} | {desc}")
             } else if is_search {
                 if insert_mode {
@@ -515,50 +807,53 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         if polled {
             match event::read() {
                 Ok(CEvent::Mouse(mouse_event)) => {
-                    // Check for scroll events
-                    if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
-                        sel.move_down(filtered.len());
-                    } else if mouse_event.kind == crossterm::event::MouseEventKind::ScrollUp {
-                        sel.move_up();
-                    }
-                    // Handle click to select in list area
-                    else if let crossterm::event::MouseEventKind::Up(
-                        crossterm::event::MouseButton::Left,
-                    ) = mouse_event.kind
-                    {
-                        if mouse_event.row >= list_area.y
-                            && mouse_event.row < list_area.y + list_area.height
-                            && mouse_event.row
-                                < list_area.y + filtered.len().min(list_area.height as usize) as u16
-                        {
-                            let clicked_row = (mouse_event.row - list_area.y) as usize;
-
-                            // Check for double-click (same row within time window)
-                            let now = std::time::Instant::now();
-                            let is_double_click = last_click_row == Some(mouse_event.row)
-                                && last_click_time
-                                    .map(|t| {
-                                        now.duration_since(t).as_millis()
-                                            < DOUBLE_CLICK_DURATION_MS as u128
-                                    })
-                                    .unwrap_or(false);
-
-                            if is_double_click {
-                                // Double-click: run selected snippet
-                                break;
-                            } else {
-                                // Single click: select item
-                                sel.selected = clicked_row;
-                                last_click_row = Some(mouse_event.row);
-                                last_click_time = Some(now);
-                            }
-                        } else {
-                            // Clicked outside list, reset double-click state
-                            last_click_row = None;
-                            last_click_time = None;
+                    if !theme_picker_mode {
+                        // Check for scroll events
+                        if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
+                            sel.move_down(filtered.len());
+                        } else if mouse_event.kind == crossterm::event::MouseEventKind::ScrollUp {
+                            sel.move_up();
                         }
+                        // Handle click to select in list area
+                        else if let crossterm::event::MouseEventKind::Up(
+                            crossterm::event::MouseButton::Left,
+                        ) = mouse_event.kind
+                        {
+                            if mouse_event.row >= list_area.y
+                                && mouse_event.row < list_area.y + list_area.height
+                                && mouse_event.row
+                                    < list_area.y
+                                        + filtered.len().min(list_area.height as usize) as u16
+                            {
+                                let clicked_row = (mouse_event.row - list_area.y) as usize;
+
+                                // Check for double-click (same row within time window)
+                                let now = std::time::Instant::now();
+                                let is_double_click = last_click_row == Some(mouse_event.row)
+                                    && last_click_time
+                                        .map(|t| {
+                                            now.duration_since(t).as_millis()
+                                                < DOUBLE_CLICK_DURATION_MS as u128
+                                        })
+                                        .unwrap_or(false);
+
+                                if is_double_click {
+                                    // Double-click: run selected snippet
+                                    break;
+                                } else {
+                                    // Single click: select item
+                                    sel.selected = clicked_row;
+                                    last_click_row = Some(mouse_event.row);
+                                    last_click_time = Some(now);
+                                }
+                            } else {
+                                // Clicked outside list, reset double-click state
+                                last_click_row = None;
+                                last_click_time = None;
+                            }
+                        }
+                        sel.update(filtered.len());
                     }
-                    sel.update(filtered.len());
                 }
                 Ok(CEvent::Key(key)) => {
                     if key.kind == KeyEventKind::Press {
@@ -566,6 +861,179 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             && instant.elapsed().as_secs() >= 3
                         {
                             copied_message = None;
+                        }
+
+                        if theme_picker_mode {
+                            if theme_picker_insert_mode {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        if !theme_input_text.is_empty() {
+                                            theme_filter = theme_input_text.clone();
+                                            theme_input_text.clear();
+                                        }
+                                        theme_picker_insert_mode = false;
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j')
+                                        if theme_active_idx + 1 < theme_filtered.len() =>
+                                    {
+                                        theme_active_idx += 1;
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') if theme_active_idx > 0 => {
+                                        theme_active_idx -= 1;
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::Backspace => {
+                                        if !theme_input_text.is_empty() {
+                                            theme_input_text.pop();
+                                            theme_filter = theme_input_text.clone();
+                                            theme_dirty = true;
+                                            last_theme_update = Some(std::time::Instant::now());
+                                        }
+                                    }
+                                    KeyCode::Char(c) => {
+                                        theme_input_text.push(c);
+                                        theme_filter = theme_input_text.clone();
+                                        theme_dirty = true;
+                                        last_theme_update = Some(std::time::Instant::now());
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Err(e) = commit_theme_picker(
+                                            &mut theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            tracing::warn!("commit theme failed: {e}");
+                                        }
+                                        theme_picker_mode = false;
+                                        theme_picker_insert_mode = false;
+                                        pending_rehighlight = true;
+                                    }
+                                    _ => {}
+                                }
+                            } else {
+                                match key.code {
+                                    KeyCode::Char('i') => {
+                                        theme_picker_insert_mode = true;
+                                        theme_input_text = theme_filter.clone();
+                                    }
+                                    KeyCode::Char('q') | KeyCode::Esc => {
+                                        cancel_theme_picker(&theme_picker_manager);
+                                        theme_picker_mode = false;
+                                        theme_picker_insert_mode = false;
+                                        pending_rehighlight = true;
+                                    }
+                                    KeyCode::Char('e') => {
+                                        cancel_theme_picker(&theme_picker_manager);
+                                        theme_picker_mode = false;
+                                        theme_picker_insert_mode = false;
+                                        pending_rehighlight = true;
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Err(e) = commit_theme_picker(
+                                            &mut theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            tracing::warn!("commit theme failed: {e}");
+                                        }
+                                        theme_picker_mode = false;
+                                        theme_picker_insert_mode = false;
+                                        pending_rehighlight = true;
+                                    }
+                                    KeyCode::Char('j') | KeyCode::Down
+                                        if theme_active_idx + 1 < theme_filtered.len() =>
+                                    {
+                                        theme_active_idx += 1;
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::Char('k') | KeyCode::Up if theme_active_idx > 0 => {
+                                        theme_active_idx -= 1;
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::Char('g') if is_ctrl_key(&key, 'g') => {
+                                        theme_active_idx = 0;
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::Char('G') => {
+                                        theme_active_idx = theme_filtered.len().saturating_sub(1);
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::PageDown | KeyCode::Char('d')
+                                        if is_ctrl_key(&key, 'd') =>
+                                    {
+                                        theme_active_idx = (theme_active_idx + 10)
+                                            .min(theme_filtered.len().saturating_sub(1));
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    KeyCode::PageUp | KeyCode::Char('u')
+                                        if is_ctrl_key(&key, 'u') =>
+                                    {
+                                        theme_active_idx = theme_active_idx.saturating_sub(10);
+                                        if apply_theme_from_picker(
+                                            &theme_picker_manager,
+                                            &theme_picker_list,
+                                            &theme_filtered,
+                                            theme_active_idx,
+                                        ) {
+                                            pending_rehighlight = true;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            continue;
                         }
 
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
@@ -866,6 +1334,11 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 KeyCode::Esc => {
                                     // Esc no longer quits - use q or Ctrl+C instead
                                 }
+                                KeyCode::Char('e') => {
+                                    if !theme_picker_mode {
+                                        theme_picker_mode = true;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -904,5 +1377,27 @@ mod tests {
 
         terminate.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(terminate.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn bundled_themes_decoder_roundtrip() {
+        use super::_generated_bundled_themes::bundled_themes_decoded;
+        let decoded = bundled_themes_decoded();
+        assert!(
+            decoded.len() >= 40,
+            "expected ~50 bundled themes, got {}",
+            decoded.len()
+        );
+        for (name, content) in &decoded {
+            let first_line = content.lines().next().unwrap_or("");
+            assert!(
+                first_line.trim() == "[general]",
+                "theme {name:?} does not start with [general]: {first_line:?}"
+            );
+        }
+        let default = super::_generated_bundled_themes::DEFAULT_BUNDLED;
+        assert!(default.contains("[general]"));
+        assert!(default.contains("[text]"));
+        assert!(default.contains("[buffer]"));
     }
 }

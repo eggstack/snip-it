@@ -515,3 +515,24 @@ fn test_library_set_primary() {
         "Expected lib-b to be primary: {stdout}"
     );
 }
+
+// --- Keybindings: theme picker ---
+
+#[test]
+fn test_keybindings_lists_theme_picker() {
+    let output = snp_cmd().arg("keybindings").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Theme Picker"),
+        "expected 'Theme Picker' section in keybindings output: {stdout}"
+    );
+    assert!(
+        stdout.contains("open theme picker"),
+        "expected 'open theme picker' binding: {stdout}"
+    );
+    assert!(
+        stdout.contains("save & apply theme"),
+        "expected 'save & apply theme' binding: {stdout}"
+    );
+}
