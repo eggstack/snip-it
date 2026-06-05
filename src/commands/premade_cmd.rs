@@ -119,7 +119,10 @@ pub fn run_get(
         _ => {
             eprintln!("Usage: snp premade get <name>   or   snp premade get all");
             eprintln!("Use 'snp premade list' to see available libraries.");
-            return Ok(());
+            return Err(crate::error::SnipError::runtime_error(
+                "Invalid usage",
+                Some("Expected: snp premade get <name> or snp premade get all"),
+            ));
         }
     };
 

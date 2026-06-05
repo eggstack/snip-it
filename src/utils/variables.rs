@@ -134,7 +134,10 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                 } else {
                     (var_content.trim().to_string(), None)
                 };
-                tokens.push((name, default));
+                // Skip empty variable names (e.g., bare `<>`)
+                if !name.is_empty() {
+                    tokens.push((name, default));
+                }
             }
         }
     }

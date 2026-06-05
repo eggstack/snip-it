@@ -17,16 +17,44 @@ fn get_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+#[cfg(not(windows))]
+fn kill_process_tree(pid: libc::pid_t) {
+    // Send SIGTERM to the entire process group (negative pid = process group)
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    // Give processes a moment to exit, then force-kill
+    std::thread::sleep(Duration::from_millis(100));
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree(_pid: u32) {
+    // On Windows, child.kill() is sufficient — it calls TerminateProcess
+    // which only kills the direct child, but Windows doesn't have process groups the same way
+}
+
 fn run_command_with_timeout(
     shell: &str,
     command: &str,
     timeout: Duration,
 ) -> SnipResult<std::process::Output> {
-    let mut child = Command::new(shell)
-        .arg("-c")
+    let mut cmd = Command::new(shell);
+    cmd.arg("-c")
         .arg(command)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        // Create a new process group so we can kill all children on timeout
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))?;
 
@@ -51,7 +79,15 @@ fn run_command_with_timeout(
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
+                    #[cfg(not(windows))]
+                    {
+                        let pid = child.id();
+                        kill_process_tree(pid as i32);
+                    }
+                    #[cfg(windows)]
+                    {
+                        let _ = child.kill();
+                    }
                     let _ = child.wait();
                     return Err(SnipError::runtime_error(
                         "Command timed out",
@@ -131,10 +167,6 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
 
         let output_path = cwd.join(&snippet.output);
 
-        let canonical_path = output_path
-            .canonicalize()
-            .unwrap_or_else(|_| output_path.clone());
-
         let canonical_cwd = cwd.canonicalize().map_err(|e| {
             SnipError::runtime_error(
                 "Failed to verify current directory",
@@ -142,11 +174,42 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             )
         })?;
 
-        if !canonical_path.starts_with(&canonical_cwd) {
-            return Err(SnipError::runtime_error(
-                "Invalid output path",
-                Some("Output path resolves outside of working directory (possible symlink attack)"),
-            ));
+        // Check path safety: if file exists, canonicalize it; otherwise check parent dir
+        if output_path.exists() {
+            let canonical_path = output_path.canonicalize().map_err(|e| {
+                SnipError::runtime_error(
+                    "Failed to verify output path",
+                    Some(&format!("Cannot canonicalize output path: {e}")),
+                )
+            })?;
+            if !canonical_path.starts_with(&canonical_cwd) {
+                return Err(SnipError::runtime_error(
+                    "Invalid output path",
+                    Some(
+                        "Output path resolves outside of working directory (possible symlink attack)",
+                    ),
+                ));
+            }
+        } else {
+            // File doesn't exist yet — verify the parent directory is safe
+            let parent = output_path
+                .parent()
+                .unwrap_or(&output_path)
+                .canonicalize()
+                .map_err(|e| {
+                    SnipError::runtime_error(
+                        "Failed to verify output directory",
+                        Some(&format!("Cannot canonicalize parent directory: {e}")),
+                    )
+                })?;
+            if !parent.starts_with(&canonical_cwd) {
+                return Err(SnipError::runtime_error(
+                    "Invalid output path",
+                    Some(
+                        "Output path resolves outside of working directory (possible symlink attack)",
+                    ),
+                ));
+            }
         }
 
         let output_file = fs::OpenOptions::new()
@@ -157,10 +220,16 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
 
         let shell = get_shell();
         let timeout = get_timeout();
-        let mut child = Command::new(&shell)
-            .arg("-c")
-            .arg(&final_command)
-            .stdout(output_file)
+        let mut cmd = Command::new(&shell);
+        cmd.arg("-c").arg(&final_command).stdout(output_file);
+
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
 
@@ -170,7 +239,15 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
                 Ok(Some(status)) => break status,
                 Ok(None) => {
                     if start.elapsed() >= timeout {
-                        let _ = child.kill();
+                        #[cfg(not(windows))]
+                        {
+                            let pid = child.id();
+                            kill_process_tree(pid as i32);
+                        }
+                        #[cfg(windows)]
+                        {
+                            let _ = child.kill();
+                        }
                         let _ = child.wait();
                         return Err(SnipError::runtime_error(
                             "Command timed out",

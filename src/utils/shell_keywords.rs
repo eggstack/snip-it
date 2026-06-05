@@ -87,7 +87,6 @@ pub const SHELL_KEYWORDS: &[&str] = &[
     "rar",
     "systemctl",
     "journalctl",
-    "daemon-reload",
     "ps",
     "kill",
     "killall",

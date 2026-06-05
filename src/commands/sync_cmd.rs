@@ -34,9 +34,7 @@ fn link_server_library(
         };
 
         if existing_id.is_empty() && local_has_content {
-            println!(
-                "\n  Local library '{filename}' has snippets. Server also has snippets."
-            );
+            println!("\n  Local library '{filename}' has snippets. Server also has snippets.");
             match prompt_conflict(&filename, non_interactive).as_deref() {
                 Some("overwrite") => {
                     println!("  Will overwrite with server version");
@@ -99,9 +97,7 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
         return None;
     }
 
-    println!(
-        "\nConflict: Local library '{lib_name}' has different content than server"
-    );
+    println!("\nConflict: Local library '{lib_name}' has different content than server");
     println!("  (s)kip - keep local version");
     println!("  (o)verwrite - replace with server version");
     println!("  (r)ename - rename local and pull from server");
@@ -216,11 +212,9 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             println!("\nPulling snippets from server...");
             // Respect config direction when no CLI flags are provided
             let effective_push = options.push_only
-                || (!options.pull_only
-                    && sync_settings.sync_direction == SyncDirection::Push);
+                || (!options.pull_only && sync_settings.sync_direction == SyncDirection::Push);
             let effective_pull = options.pull_only
-                || (!options.push_only
-                    && sync_settings.sync_direction == SyncDirection::Pull);
+                || (!options.push_only && sync_settings.sync_direction == SyncDirection::Pull);
             crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),

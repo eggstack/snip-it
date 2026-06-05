@@ -1039,10 +1039,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
                             let idx = filtered[sel.selected].0;
                             let cmd = strip_escape_sequences(&commands[idx]);
-                            if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
-                                tracing::warn!("Clipboard copy failed: {}", e);
+                            match clipboard::copy_to_clipboard_auto(&cmd) {
+                                Ok(()) => {
+                                    should_copy = Some(descriptions[idx].clone());
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Clipboard copy failed: {}", e);
+                                    copied_message = Some((
+                                        format!("Copy failed: {e}"),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
                             }
-                            should_copy = Some(descriptions[idx].clone());
                             if !is_search {
                                 break;
                             }
@@ -1101,8 +1109,20 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         .map(|(idx, _, _)| strip_escape_sequences(&commands[*idx]))
                                         .collect();
                                     let copy_text = selected_items.join("\n");
-                                    if let Err(e) = clipboard::copy_to_clipboard_auto(&copy_text) {
-                                        tracing::warn!("Clipboard copy failed: {}", e);
+                                    match clipboard::copy_to_clipboard_auto(&copy_text) {
+                                        Ok(()) => {
+                                            should_copy = Some(format!(
+                                                "{} snippets copied",
+                                                end - start + 1
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Clipboard copy failed: {}", e);
+                                            copied_message = Some((
+                                                format!("Copy failed: {e}"),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
                                     }
                                     if let Some((idx, _, _)) = filtered.get(start) {
                                         let original_idx =
@@ -1117,8 +1137,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                             tracing::debug!("Audit log write failed: {}", e);
                                         }
                                     }
-                                    should_copy =
-                                        Some(format!("{} snippets copied", end - start + 1));
                                     visual_mode = false;
                                     if !is_search {
                                         break;
@@ -1252,10 +1270,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     if sel.selected < filtered.len() {
                                         let idx = filtered[sel.selected].0;
                                         let cmd = strip_escape_sequences(&commands[idx]);
-                                        if let Err(e) = clipboard::copy_to_clipboard_auto(&cmd) {
-                                            tracing::warn!("Clipboard copy failed: {}", e);
+                                        match clipboard::copy_to_clipboard_auto(&cmd) {
+                                            Ok(()) => {
+                                                should_copy = Some(descriptions[idx].clone());
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Clipboard copy failed: {}", e);
+                                                copied_message = Some((
+                                                    format!("Copy failed: {e}"),
+                                                    std::time::Instant::now(),
+                                                ));
+                                            }
                                         }
-                                        should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;
                                         }
@@ -1312,6 +1338,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 KeyCode::Char('x') | KeyCode::Char('c') => {
                                     filter.clear();
                                     incremental_search.clear();
+                                    filter_state.tag_filter_text.clear();
+                                    tag_filter_mode = false;
                                     filter_dirty = true;
                                     last_filter_update = Some(std::time::Instant::now());
                                 }

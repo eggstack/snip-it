@@ -93,9 +93,9 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
     use std::fs;
 
     let path = get_config_path(config)?;
-    crate::logging::log_config_operation("load", &path, &Ok(()));
 
     if !path.exists() {
+        crate::logging::log_config_operation("load", &path, &Err("file not found"));
         return Ok(crate::library::Snippets::default());
     }
 
@@ -105,6 +105,7 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
     })?;
 
     if content.is_empty() || content.trim().is_empty() {
+        crate::logging::log_config_operation("load", &path, &Ok(()));
         return Ok(crate::library::Snippets::default());
     }
 
@@ -127,6 +128,8 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         }
         SnipError::toml_error("parse snippets file", e)
     })?;
+
+    crate::logging::log_config_operation("load", &path, &Ok(()));
 
     Ok(snippets)
 }

@@ -122,7 +122,7 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
         .with(env_filter)
         .with(file_layer);
 
-    subscriber.init();
+    let _ = subscriber.try_init();
 
     *LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
 
@@ -239,6 +239,13 @@ impl AuditLogWriter {
             .append(true)
             .open(&log_path)?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&log_path, perms);
+        }
+
         file.write_all(log_entry.as_bytes())
     }
 }
@@ -330,6 +337,41 @@ fn redact_command(command: &str) -> String {
         format!("{}...", &command[..77])
     } else {
         command.to_string()
+    }
+}
+
+/// Redacts potentially sensitive portions of a command for safe logging.
+/// This truncates and is used in structured logging fields where the full
+/// command is already available in the instrumented function's scope.
+#[allow(dead_code)]
+fn redact_sensitive(command: &str) -> String {
+    let redacted_keywords = ["password", "secret", "token", "key", "api_key", "apikey"];
+    let mut result = command.to_string();
+    for keyword in redacted_keywords {
+        if let Some(pos) = result.to_lowercase().find(keyword) {
+            let after_keyword = &result[pos + keyword.len()..];
+            if let Some(eq_pos) = after_keyword.find('=') {
+                let value_start = pos + keyword.len() + eq_pos + 1;
+                let value_end = after_keyword[eq_pos + 1..]
+                    .find(|c: char| c.is_whitespace())
+                    .map(|i| value_start + i)
+                    .unwrap_or(result.len());
+                let value = &result[value_start..value_end];
+                if !value.is_empty() && value != "\"\"" && value != "''" {
+                    result = format!(
+                        "{}{}***REDACTED***{}",
+                        &result[..value_start],
+                        &result[value_start..value_start + 1],
+                        &result[value_end..]
+                    );
+                }
+            }
+        }
+    }
+    if result.len() > 80 {
+        format!("{}...", &result[..77])
+    } else {
+        result
     }
 }
 

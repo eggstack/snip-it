@@ -42,9 +42,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
                 Some("Use --force to delete libraries in non-interactive mode"),
             ));
         }
-        eprint!(
-            "Are you sure you want to delete library '{name}'? [y/N]: "
-        );
+        eprint!("Are you sure you want to delete library '{name}'? [y/N]: ");
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).ok();
         if input.trim().to_lowercase() != "y" {
@@ -85,6 +83,10 @@ pub fn run_show(name: Option<String>) -> SnipResult<()> {
             }
         } else {
             eprintln!("Library '{name}' not found");
+            return Err(crate::error::SnipError::runtime_error(
+                "Library not found",
+                Some(&format!("Library '{name}' does not exist")),
+            ));
         }
     } else {
         println!("Libraries:");

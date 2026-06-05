@@ -13,7 +13,10 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
                 eprintln!(
                     "Library '{lib_name}' not found. Use 'snp library list' to see available libraries."
                 );
-                return Ok(());
+                return Err(crate::error::SnipError::runtime_error(
+                    "Library not found",
+                    Some(&format!("Library '{lib_name}' does not exist")),
+                ));
             }
         }
     } else {

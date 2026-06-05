@@ -5,7 +5,7 @@
 //! # Platform Support
 //!
 //! - **Windows**: Uses `clipboard-win` crate
-//! - **macOS/Linux**: Uses `copypasta` crate
+//! - **macOS/Linux**: Uses `arboard` crate
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +17,7 @@ use std::time::Duration;
 use clipboard_win::Clipboard;
 
 #[cfg(not(windows))]
-use copypasta::{ClipboardContext, ClipboardProvider};
+use arboard::Clipboard;
 
 use crate::error::{SnipError, SnipResult};
 use crate::logging::log_clipboard_operation;
@@ -104,10 +104,10 @@ fn clear_clipboard_impl() -> SnipResult<()> {
 
     #[cfg(not(windows))]
     {
-        let mut ctx = ClipboardContext::new().map_err(|e| {
+        let mut ctx = Clipboard::new().map_err(|e| {
             SnipError::clipboard_error("create clipboard context for clear", format!("{e}"))
         })?;
-        ctx.set_contents(String::new())
+        ctx.set_text("")
             .map_err(|e| SnipError::clipboard_error("clear clipboard", format!("{e}")))?;
     }
 
@@ -195,24 +195,24 @@ pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
 
 /// Copy text to the system clipboard.
 ///
-/// Only plain text is supported. `copypasta` handles text natively and does
+/// Only plain text is supported. `arboard` handles text natively and does
 /// not expose rich text or HTML clipboard formats, so content type cannot be
 /// preserved for non-text payloads.
 #[cfg(not(windows))]
 pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
     let text = text.to_owned();
     with_clipboard_timeout("copy", move || {
-        let mut ctx = ClipboardContext::new().map_err(|e| {
+        let mut ctx = Clipboard::new().map_err(|e| {
             log_clipboard_operation("create context", false);
             SnipError::clipboard_error("create clipboard context", format!("{e}"))
         })?;
 
-        ctx.set_contents(text).map_err(|e| {
-            log_clipboard_operation("set_contents", false);
-            SnipError::clipboard_error("set contents", format!("{e}"))
+        ctx.set_text(&text).map_err(|e| {
+            log_clipboard_operation("set_text", false);
+            SnipError::clipboard_error("set text", format!("{e}"))
         })?;
 
-        log_clipboard_operation("set_contents", true);
+        log_clipboard_operation("set_text", true);
         Ok(())
     })
 }

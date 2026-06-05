@@ -374,6 +374,13 @@ Snippets = []
         fs::write(&path, default_content)
             .map_err(|e| SnipError::io_error("create library file", path.clone(), e))?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&path, perms);
+        }
+
         let is_first = self.config.libraries.is_empty();
         let mut meta = LibraryMeta::new(filename);
         meta.is_primary = is_first;
@@ -527,6 +534,12 @@ Snippets = []
             let default_content = "# Imported from server\n\nSnippets = []\n";
             fs::write(&path, default_content)
                 .map_err(|e| SnipError::io_error("create imported library", path.clone(), e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o600);
+                let _ = fs::set_permissions(&path, perms);
+            }
         }
 
         // Update existing entry if one with the same filename already exists
@@ -603,6 +616,13 @@ Snippets = []
         fs::write(&path, content)
             .map_err(|e| SnipError::io_error("save premade library", path.clone(), e))?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&path, perms);
+        }
+
         Ok(path)
     }
 
@@ -625,6 +645,13 @@ Snippets = []
         let tmp_path = parent_dir.join("libraries.toml.tmp");
         fs::write(&tmp_path, &toml_str)
             .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&tmp_path, perms);
+        }
 
         std::fs::rename(&tmp_path, &config_path)
             .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
@@ -717,6 +744,13 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     let tmp_path = path.with_extension("toml.tmp");
     fs::write(&tmp_path, &toml_str)
         .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = fs::set_permissions(&tmp_path, perms);
+    }
 
     fs::rename(&tmp_path, path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);

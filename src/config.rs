@@ -151,7 +151,7 @@ impl Drop for SyncSettings {
 impl SyncSettings {
     /// Returns the sync limit value, defaulting to 1000 if not set.
     pub fn sync_limit_value(&self) -> i32 {
-        self.sync_limit.unwrap_or(1000)
+        self.sync_limit.filter(|&v| v > 0).unwrap_or(1000)
     }
 }
 
@@ -294,15 +294,24 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let content_with_integrity = format!("# integrity: {checksum}\n{content}");
 
     let tmp_path = path.with_extension("toml.tmp");
-    fs::write(&tmp_path, &content_with_integrity)
-        .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&tmp_path, perms)
-            .map_err(|e| SnipError::io_error("set sync config permissions", &tmp_path, e))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true).mode(0o600);
+        let mut file = opts
+            .open(&tmp_path)
+            .map_err(|e| SnipError::io_error("create sync config temp", &tmp_path, e))?;
+        use std::io::Write;
+        file.write_all(content_with_integrity.as_bytes())
+            .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(&tmp_path, &content_with_integrity)
+            .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
     }
 
     fs::rename(&tmp_path, &path).map_err(|e| {

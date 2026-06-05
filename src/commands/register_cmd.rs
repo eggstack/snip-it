@@ -1,7 +1,5 @@
-use crate::commands::init_library_manager;
 use crate::config::{DEFAULT_SERVER_URL, SyncSettings, load_sync_settings, save_sync_settings};
 use crate::error::SnipResult;
-use crate::library::LibraryManager;
 
 /// Registers this device with a sync server and saves the API key to the OS keychain.
 pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
@@ -17,16 +15,6 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
         eprintln!("Use --force to re-register.");
         return Ok(());
     }
-
-    let _config_path = match init_library_manager() {
-        Ok(mgr) => match mgr.get_primary_library() {
-            Some(primary) => mgr
-                .get_libraries_dir()
-                .join(format!("{}.toml", primary.filename)),
-            None => LibraryManager::get_default_snippets_path(),
-        },
-        Err(_) => LibraryManager::get_default_snippets_path(),
-    };
 
     let server_url = if server != DEFAULT_SERVER_URL {
         server.clone()
