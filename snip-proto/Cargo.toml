@@ -9,7 +9,7 @@ repository = "https://github.com/anomalyco/snip-it"
 authors = ["David Bowman"]
 keywords = ["grpc", "protobuf", "sync", "snippets"]
 categories = ["encoding"]
-publish = false
+publish = true
 
 [dependencies]
 tonic = "0.14"

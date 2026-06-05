@@ -606,22 +606,20 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     let snippets: Snippets = match toml::from_str(&fixed_content) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to parse {}, using defaults: {}",
-                path.display(),
-                e
-            );
             // Create backup of corrupted file before returning defaults
             let backup_path = path.with_extension("toml.corrupt.bak");
             if let Err(backup_err) = fs::copy(path, &backup_path) {
                 eprintln!(
-                    "Warning: Could not create backup of corrupted file: {}",
+                    "error: Failed to parse {} and could not create backup: {}",
+                    path.display(),
                     backup_err
                 );
             } else {
                 eprintln!(
-                    "Backup of corrupted file saved to {}",
-                    backup_path.display()
+                    "error: Failed to parse {}, backup saved to {}: {}",
+                    path.display(),
+                    backup_path.display(),
+                    e
                 );
             }
             Snippets::default()

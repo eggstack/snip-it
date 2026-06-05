@@ -58,16 +58,36 @@ impl Metrics {
             auth_failures,
         })
     }
+
+    /// Creates a fallback instance with no-op counters for when metrics
+    /// initialization fails. All counters are created with dummy names
+    /// that won't conflict with real metrics.
+    pub fn fallback() -> Self {
+        let registry = Arc::new(Registry::new());
+        let dummy = || {
+            IntCounter::new("snip_sync_fallback_dummy", "Dummy counter for fallback")
+                .unwrap_or_else(|_| {
+                    // If even this fails, create an unregistered counter
+                    IntCounter::new("snip_sync_fallback", "fallback").unwrap()
+                })
+        };
+        Self {
+            registry,
+            requests_total: dummy(),
+            sync_operations_total: dummy(),
+            library_operations_total: dummy(),
+            rate_limit_hits: dummy(),
+            auth_failures: dummy(),
+        }
+    }
 }
 
 impl Default for Metrics {
-    /// Creates a default Metrics instance.
+    /// Creates a fallback Metrics instance with no-op counters.
     ///
-    /// # Panics
-    ///
-    /// Panics if prometheus metrics cannot be created. This should only happen
-    /// if there's a fundamental issue with the prometheus library.
+    /// Used when metrics initialization fails to allow the server to continue
+    /// operating without metrics collection.
     fn default() -> Self {
-        Self::new().expect("Failed to create metrics (this should never happen)")
+        Self::fallback()
     }
 }

@@ -337,15 +337,18 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
     Ok(())
 }
 
-fn main() -> SnipResult<()> {
+fn main() {
     setup_panic_handler();
     setup_signal_handler();
     init_default_logging();
     log_startup_info();
 
     let cli = Cli::parse();
-    dispatch_command(cli.command)?;
+    if let Err(e) = dispatch_command(cli.command) {
+        eprintln!("error: {}", e);
+        log_shutdown_info();
+        std::process::exit(1);
+    }
 
     log_shutdown_info();
-    Ok(())
 }

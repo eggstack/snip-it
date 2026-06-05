@@ -1044,7 +1044,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let timeout = Duration::from_secs(config.request_timeout_secs);
 
-    let metrics = Metrics::new().expect("Failed to create metrics");
+    let metrics = match Metrics::new() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("Failed to create metrics: {}. Metrics will be unavailable.", e);
+            Metrics::fallback()
+        }
+    };
 
     if config.metrics_username.is_some() && config.metrics_password.is_some() {
         tracing::info!("Metrics endpoint enabled with authentication");

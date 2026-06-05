@@ -28,6 +28,8 @@ exclude = [
     "rustfmt.toml",
     ".gitignore",
     "CHANGELOG.md",
+    "snip-proto/",
+    "SECURITY.md",
 ]
 
 [[bin]]
@@ -36,7 +38,13 @@ path = "src/main.rs"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
-targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "4.5"

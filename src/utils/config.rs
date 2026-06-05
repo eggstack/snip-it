@@ -18,12 +18,24 @@ pub fn get_config_dir() -> PathBuf {
         })
         .join("snp");
 
-    #[cfg(unix)]
-    {
-        if !dir.exists() {
-            let _ = std::fs::create_dir_all(&dir);
+    if !dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!(
+                "error: Could not create config directory {}: {}",
+                dir.display(),
+                e
+            );
+        }
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+                eprintln!(
+                    "warning: Could not set permissions on config directory {}: {}",
+                    dir.display(),
+                    e
+                );
+            }
         }
     }
 
