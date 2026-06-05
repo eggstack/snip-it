@@ -104,7 +104,7 @@ where
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(SnipError::clipboard_error(
             operation,
-            "clipboard operation thread panicked",
+            "clipboard operation channel closed unexpectedly",
         )),
     }
 }

@@ -193,9 +193,8 @@ impl SyncClient {
         let config = default_retry_config();
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
-        let req = request;
         loop {
-            let grpc_req = tonic::Request::new(req.clone());
+            let grpc_req = tonic::Request::new(request.clone());
             match self.client.sync(grpc_req).await {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(e) => {

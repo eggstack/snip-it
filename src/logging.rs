@@ -419,9 +419,10 @@ pub fn audit_log(
         .cloned();
 
     match tx {
-        Some(tx) => tx
-            .try_send(entry)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e.to_string())),
+        Some(tx) => tx.try_send(entry).map_err(|e| {
+            tracing::warn!("Audit log channel full, dropping entry: {}", e);
+            std::io::Error::new(std::io::ErrorKind::WouldBlock, e.to_string())
+        }),
         None => {
             tracing::warn!("Audit log channel not initialized, writing synchronously");
             write_audit_log_entry_sync(&entry)
@@ -475,10 +476,20 @@ fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {
 }
 
 fn escape_pipe(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => result.push_str("\\\\"),
+            '|' => result.push_str("\\|"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            c if c.is_control() => {
+                result.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 fn rotate_audit_log_if_needed(
@@ -486,7 +497,7 @@ fn rotate_audit_log_if_needed(
     max_size_bytes: u64,
     retention_days: u64,
 ) -> std::io::Result<()> {
-    let metadata = fs::metadata(log_path)?;
+    let metadata = fs::symlink_metadata(log_path)?;
     let size = metadata.len();
 
     if size > max_size_bytes {

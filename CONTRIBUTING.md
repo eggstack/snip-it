@@ -23,6 +23,23 @@ cargo build --release
 cargo test
 ```
 
+### Development Environment
+
+```bash
+# Run snp locally (development build)
+cargo run -- run
+
+# Run the sync server locally for testing
+cd snip-sync
+cargo run
+
+# In another terminal, register with the local server
+cargo run -- register http://localhost:50051
+
+# Test sync operations
+cargo run -- sync
+```
+
 ## Development Workflow
 
 ### Code Style

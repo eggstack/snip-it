@@ -151,41 +151,33 @@ fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn select_snippet(
-    descriptions: &[String],
-    commands: &[String],
-    tags: &[Vec<String>],
-    is_search: bool,
-    initial_filter: Option<&str>,
-    folders: &[Vec<String>],
-    favorites: &[bool],
-    snippets: &[crate::library::Snippet],
-) -> io::Result<Option<(usize, Option<String>)>> {
-    select_snippet_inner(
+pub struct SnippetListParams<'a> {
+    pub descriptions: &'a [String],
+    pub commands: &'a [String],
+    pub tags: &'a [Vec<String>],
+    pub is_search: bool,
+    pub initial_filter: Option<&'a str>,
+    pub folders: &'a [Vec<String>],
+    pub favorites: &'a [bool],
+    pub snippets: &'a [crate::library::Snippet],
+}
+
+pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<(usize, Option<String>)>> {
+    select_snippet_inner(params)
+}
+
+#[allow(clippy::collapsible_match)]
+fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, Option<String>)>> {
+    let SnippetListParams {
         descriptions,
         commands,
         tags,
         is_search,
         initial_filter,
-        folders,
+        folders: _folders,
         favorites,
         snippets,
-    )
-}
-
-#[allow(clippy::collapsible_match)]
-#[allow(clippy::too_many_arguments)]
-fn select_snippet_inner(
-    descriptions: &[String],
-    commands: &[String],
-    tags: &[Vec<String>],
-    is_search: bool,
-    initial_filter: Option<&str>,
-    _folders: &[Vec<String>],
-    favorites: &[bool],
-    snippets: &[crate::library::Snippet],
-) -> io::Result<Option<(usize, Option<String>)>> {
+    } = params;
     // Enable mouse capture before initializing terminal
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     let mut terminal = ratatui::init();
@@ -521,7 +513,6 @@ fn select_snippet_inner(
                 let idx = filtered[sel.selected].0;
                 let snippet_cmd = &commands[idx];
                 let snippet_desc = &descriptions[idx];
-                let _snippet_tags = &tags[idx];
 
                 let vars = extract_variables(snippet_cmd);
                 let has_vars = !vars.is_empty();
@@ -752,30 +743,18 @@ fn select_snippet_inner(
                             continue;
                         }
 
-                        if is_ctrl_key(&key, 'f') {
+                        if is_ctrl_key(&key, 'f')
+                            || is_ctrl_key(&key, 'd')
+                            || key.code == KeyCode::PageDown
+                        {
                             sel.selected =
                                 (sel.selected + 10).min(filtered.len().saturating_sub(1));
                         }
 
-                        if is_ctrl_key(&key, 'd') {
-                            sel.selected =
-                                (sel.selected + 10).min(filtered.len().saturating_sub(1));
-                        }
-
-                        if is_ctrl_key(&key, 'b') {
-                            sel.selected = sel.selected.saturating_sub(10);
-                        }
-
-                        if is_ctrl_key(&key, 'u') {
-                            sel.selected = sel.selected.saturating_sub(10);
-                        }
-
-                        if key.code == KeyCode::PageDown {
-                            sel.selected =
-                                (sel.selected + 10).min(filtered.len().saturating_sub(1));
-                        }
-
-                        if key.code == KeyCode::PageUp {
+                        if is_ctrl_key(&key, 'b')
+                            || is_ctrl_key(&key, 'u')
+                            || key.code == KeyCode::PageUp
+                        {
                             sel.selected = sel.selected.saturating_sub(10);
                         }
 
@@ -881,7 +860,6 @@ fn select_snippet_inner(
                                     insert_mode = true;
                                     input_text = filter.clone();
                                 }
-                                KeyCode::Char('p') => {}
                                 KeyCode::Char('y') => {
                                     if sel.selected < filtered.len() {
                                         let idx = filtered[sel.selected].0;
@@ -904,13 +882,13 @@ fn select_snippet_inner(
                                 }
                                 KeyCode::Char('g') if pending_gg => {
                                     let now = std::time::Instant::now();
-                                    let timed_out = pending_gg_time
+                                    let is_expired = pending_gg_time
                                         .map(|t| {
                                             now.duration_since(t).as_millis()
                                                 > GG_TIMEOUT_MS as u128
                                         })
                                         .unwrap_or(true);
-                                    if timed_out {
+                                    if is_expired {
                                         pending_gg = true;
                                         pending_gg_time = Some(now);
                                     } else {

@@ -41,8 +41,11 @@ cp target/release/snp ~/.local/bin/
 ## Quick Start
 
 ```bash
-# Create a new snippet
-snp new "git commit" -t git
+# Create a snippet with variables
+snp new 'ssh <user>@<host>' -t ssh
+
+# Create a snippet with a default value
+snp new 'git push origin <branch=main>' -t git
 
 # List all snippets
 snp list
@@ -56,6 +59,10 @@ snp clip
 # Search snippets
 snp search
 ```
+
+## Security Warning
+
+**Snippet commands are executed as-is via your shell.** Only add snippets you trust. Avoid storing snippets with sensitive data (passwords, tokens, API keys) as they are stored in plaintext TOML files.
 
 ## Configuration
 
@@ -260,6 +267,19 @@ Premade libraries are stored in `~/.config/snp/premade/`.
 | `Enter` | Run selected snippet |
 | `Backspace` | Delete character |
 | `Type` | Filter snippets |
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SNP_CONFIG_HOME` | Override config directory | `~/.config/snp` |
+| `SNP_COMMAND_TIMEOUT` | Command execution timeout (seconds) | `300` |
+| `SNP_CLIPBOARD_TIMEOUT` | Clipboard operation timeout (seconds) | `5` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | Allow API key in config file (not keychain) | `false` |
+| `SNP_THEME` | UI theme (`dark` or `bright`) | `dark` |
+| `SNP_LOG_LEVEL` | Log level (`trace`, `debug`, `info`, `warn`, `error`) | `info` |
+| `SNP_LOG` | Per-module log filter (e.g., `snp=debug`) | - |
+| `EDITOR` | Editor for `snp edit` command | - |
 
 ## Troubleshooting
 

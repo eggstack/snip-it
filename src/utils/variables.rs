@@ -105,16 +105,19 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 } else {
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 }
             }
 
@@ -255,16 +258,19 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 } else {
-                    var_content.push(chars.next().expect("peek confirmed Some"));
+                    // SAFETY: we just peeked and confirmed Some
+                    var_content.push(chars.next().unwrap());
                 }
             }
 
@@ -278,7 +284,13 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                     .map(|(_, v)| v.trim());
                 *count += 1;
 
-                result.push_str(replacement.unwrap_or(name));
+                match replacement {
+                    Some(val) => result.push_str(val),
+                    None => {
+                        tracing::debug!(variable = %name, "No value provided for variable, using raw name");
+                        result.push_str(name);
+                    }
+                }
             } else {
                 result.push('<');
                 result.push_str(&var_content);

@@ -421,7 +421,13 @@ pub fn run_sync(
 
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets, &sync_settings.device_id) {
+                        match merge_and_save(
+                            &lib_path,
+                            lib_name,
+                            &snippets,
+                            &server_snippets,
+                            &sync_settings.device_id,
+                        ) {
                             Ok((_merged, _backup)) => {
                                 if !has_failures {
                                     let _ = mgr.update_last_sync(lib_name, new_timestamp);
@@ -472,7 +478,13 @@ pub fn run_sync(
                         let new_timestamp = response.server_timestamp;
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets, &sync_settings.device_id) {
+                        match merge_and_save(
+                            &lib_path,
+                            lib_name,
+                            &snippets,
+                            &server_snippets,
+                            &sync_settings.device_id,
+                        ) {
                             Ok((_merged, _backup)) => {
                                 let _ = mgr.update_last_sync(lib_name, new_timestamp);
                                 status.pulled += server_snippets.len() as u32;

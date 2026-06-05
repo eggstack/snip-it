@@ -1,6 +1,6 @@
 [package]
 name = "snp"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.81"
 description = "A fast, terminal-based snippet manager with TUI, fuzzy search, cloud sync, and encrypted storage"
@@ -8,8 +8,7 @@ license = "MIT"
 repository = "https://github.com/anomalyco/snip-it"
 homepage = "https://github.com/anomalyco/snip-it"
 readme = "README.md"
-changelog = "CHANGELOG.md"
-documentation = "https://docs.rs/snp"
+documentation = "https://github.com/anomalyco/snip-it#readme"
 keywords = ["cli", "snippets", "terminal", "tui", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 authors = ["David Bowman"]
@@ -26,6 +25,12 @@ exclude = [
     "snippets.example.toml",
     "deny.toml",
     "snip-sync/",
+    "tests/",
+    "rustfmt.toml",
+    "Cargo.lock",
+    ".gitignore",
+    ".DS_Store",
+    "CHANGELOG.md",
 ]
 
 [[bin]]
@@ -61,7 +66,7 @@ uuid = { version = "1", features = ["v4", "v7"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 prost = "0.14"
 rustls-native-certs = "0.7"
-snip-proto = { path = "./snip-proto" }
+snip-proto = { version = "0.1.0", path = "./snip-proto" }
 aes-gcm = "0.10"
 argon2 = "0.5"
 rand = "0.10"

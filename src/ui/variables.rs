@@ -41,7 +41,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
 
     let mut values: Vec<String> = defaults.clone();
     let mut selected = 0usize;
-    let mut mode = 1usize;
     let mut show_defaults = true;
 
     loop {
@@ -105,7 +104,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 f.render_widget(p, var_chunks[i]);
             }
 
-            if mode == 1 && selected < values.len() {
+            if selected < values.len() {
                 let var_chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(vec![Constraint::Length(3); num_vars])
@@ -141,11 +140,9 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                         }
                         KeyCode::Up | KeyCode::Char('k') if selected > 0 => {
                             selected -= 1;
-                            mode = 1;
                         }
                         KeyCode::Down | KeyCode::Char('j') if selected + 1 < values.len() => {
                             selected += 1;
-                            mode = 1;
                         }
                         KeyCode::Tab => {
                             if selected + 1 < values.len() {
@@ -153,21 +150,22 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                             } else {
                                 selected = 0;
                             }
-                            mode = 1;
                         }
                         KeyCode::Enter => {
-                            if values[selected].is_empty() && !defaults[selected].is_empty() {
-                                values[selected] = defaults[selected].clone();
+                            for (i, val) in values.iter_mut().enumerate() {
+                                if val.is_empty() && !defaults[i].is_empty() {
+                                    *val = defaults[i].clone();
+                                }
                             }
                             break;
                         }
-                        KeyCode::Backspace if mode == 1 => {
+                        KeyCode::Backspace => {
                             values[selected].pop();
                         }
-                        KeyCode::Char('d') if mode == 1 => {
+                        KeyCode::Char('d') => {
                             show_defaults = !show_defaults;
                         }
-                        KeyCode::Char(c) if mode == 1 => {
+                        KeyCode::Char(c) => {
                             if values[selected] == defaults[selected]
                                 && !defaults[selected].is_empty()
                             {
@@ -182,7 +180,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
         }
     }
 
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
 
     let result: Vec<(String, String)> = vars

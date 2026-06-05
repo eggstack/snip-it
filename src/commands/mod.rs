@@ -218,16 +218,16 @@ where
 
     let mut selected_and_processed = false;
     loop {
-        let result = crate::ui::select_snippet(
-            &snippet_data.descriptions,
-            &snippet_data.commands,
-            &snippet_data.tags,
-            false,
-            filter.as_deref(),
-            &snippet_data.folders,
-            &snippet_data.favorites,
-            &snippets.snippets,
-        )?;
+        let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
+            descriptions: &snippet_data.descriptions,
+            commands: &snippet_data.commands,
+            tags: &snippet_data.tags,
+            is_search: false,
+            initial_filter: filter.as_deref(),
+            folders: &snippet_data.folders,
+            favorites: &snippet_data.favorites,
+            snippets: &snippets.snippets,
+        })?;
         if let Some((idx, copy_flag)) = result {
             let snippet = &snippets.snippets[idx];
             match process_fn(snippet, copy_flag)? {
