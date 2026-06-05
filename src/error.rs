@@ -91,7 +91,17 @@ impl fmt::Display for SnipError {
                 args,
                 source,
             } => {
-                let args_str = args.join(" ");
+                let args_display: Vec<String> = args
+                    .iter()
+                    .map(|a| {
+                        if a.len() > 40 {
+                            format!("{}...", &a[..37])
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect();
+                let args_str = args_display.join(" ");
                 write!(
                     f,
                     "Command execution error: '{}' {} - {}",

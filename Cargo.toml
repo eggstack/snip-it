@@ -15,6 +15,7 @@ exclude = [
     ".github/",
     "architecture/",
     ".skills/",
+    ".opencode/",
     "plans/",
     "plan.md",
     "AGENTS.md",
@@ -27,6 +28,10 @@ exclude = [
     "rustfmt.toml",
     ".gitignore",
     "snip-proto/",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
 ]
 
 [[bin]]

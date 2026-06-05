@@ -131,18 +131,9 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
 
         let output_path = cwd.join(&snippet.output);
 
-        let output_file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&output_path)
-            .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
-
-        let canonical_path = output_path.canonicalize().map_err(|e| {
-            SnipError::runtime_error(
-                "Failed to verify output path",
-                Some(&format!("Cannot canonicalize path: {}", e)),
-            )
-        })?;
+        let canonical_path = output_path
+            .canonicalize()
+            .unwrap_or_else(|_| output_path.clone());
 
         let canonical_cwd = cwd.canonicalize().map_err(|e| {
             SnipError::runtime_error(
@@ -154,11 +145,15 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         if !canonical_path.starts_with(&canonical_cwd) {
             return Err(SnipError::runtime_error(
                 "Invalid output path",
-                Some(
-                    "Output path resolves outside of working directory after creation (possible symlink attack)",
-                ),
+                Some("Output path resolves outside of working directory (possible symlink attack)"),
             ));
         }
+
+        let output_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output_path)
+            .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
 
         let shell = get_shell();
         let timeout = get_timeout();

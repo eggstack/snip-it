@@ -118,7 +118,12 @@ pub fn run(
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+    if s.contains(',')
+        || s.contains('"')
+        || s.contains('\n')
+        || s.contains('\r')
+        || s.contains('\t')
+    {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()

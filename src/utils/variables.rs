@@ -594,4 +594,22 @@ mod tests {
     fn test_has_unmatched_truly_unmatched() {
         assert!(has_unmatched_angle_bracket(r"<var\>"));
     }
+
+    #[test]
+    fn test_bare_unmatched_angle_bracket() {
+        let vars = parse_variables("echo <unclosed");
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn test_expand_bare_unmatched_angle_bracket() {
+        let result = expand_command("echo <unclosed", &[]);
+        assert_eq!(result, "echo <unclosed");
+    }
+
+    #[test]
+    fn test_expand_command_with_empty_value_produces_empty() {
+        let result = expand_command("<host>", &[("host".to_string(), "".to_string())]);
+        assert_eq!(result, "");
+    }
 }

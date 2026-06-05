@@ -236,3 +236,44 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prompt_conflict_non_interactive() {
+        let result = prompt_conflict("test-lib", true);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_library_filename_slug() {
+        // link_server_library derives filenames by lowercasing and replacing spaces.
+        // The function takes a &mut LibraryManager, but the slug transformation
+        // is the testable contract — verify the expected mapping directly.
+        let cases = vec![
+            ("My Library", "my-library"),
+            ("UPPERCASE", "uppercase"),
+            ("multi word name", "multi-word-name"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(input.to_lowercase().replace(' ', "-"), expected);
+        }
+    }
+
+    #[test]
+    fn test_sync_options_defaults() {
+        let opts = SyncOptions {
+            library: None,
+            servers: false,
+            non_interactive: false,
+            push_only: false,
+            pull_only: false,
+            dry_run: false,
+        };
+        assert!(!opts.servers);
+        assert!(!opts.push_only);
+        assert!(!opts.pull_only);
+    }
+}

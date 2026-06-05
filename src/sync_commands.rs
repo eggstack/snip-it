@@ -27,6 +27,24 @@ impl From<&Snippet> for ProtoSnippet {
     }
 }
 
+fn get_library_sync_info(mgr: &library::LibraryManager, lib_name: &str) -> (String, i64) {
+    match mgr.get_library_by_filename(lib_name) {
+        Some(l) => {
+            let id = l.library_id.clone();
+            if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
+                tracing::warn!(
+                    "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
+                    lib_name,
+                    id,
+                    l.server_id
+                );
+            }
+            (id, l.last_sync.unwrap_or(0))
+        }
+        None => (String::new(), 0),
+    }
+}
+
 fn ensure_sync_configured(settings: &SyncSettings) -> bool {
     if !settings.enabled {
         tracing::warn!("Sync is not enabled. Configure sync settings first.");
@@ -304,21 +322,7 @@ pub fn run_sync(
             continue;
         }
 
-        let (library_id, _last_sync) = match mgr.get_library_by_filename(lib_name) {
-            Some(l) => {
-                let id = l.library_id.clone();
-                if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
-                    tracing::warn!(
-                        "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
-                        lib_name,
-                        id,
-                        l.server_id
-                    );
-                }
-                (id, l.last_sync.unwrap_or(0))
-            }
-            None => (String::new(), 0),
-        };
+        let (library_id, _last_sync) = get_library_sync_info(&mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::info!(library = %lib_name, "Creating library on server");
@@ -368,21 +372,7 @@ pub fn run_sync(
             continue;
         }
 
-        let (library_id, _last_sync) = match mgr.get_library_by_filename(lib_name) {
-            Some(l) => {
-                let id = l.library_id.clone();
-                if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
-                    tracing::warn!(
-                        "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
-                        lib_name,
-                        id,
-                        l.server_id
-                    );
-                }
-                (id, l.last_sync.unwrap_or(0))
-            }
-            None => (String::new(), 0),
-        };
+        let (library_id, _last_sync) = get_library_sync_info(&mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::warn!(library = %lib_name, "Library not linked to server, skipping");

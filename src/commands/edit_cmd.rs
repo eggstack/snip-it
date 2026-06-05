@@ -10,7 +10,10 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
         match get_library_path(library.clone())? {
             Some(p) => p,
             None => {
-                tracing::warn!(library = %lib_name, "Library not found");
+                eprintln!(
+                    "Library '{}' not found. Use 'snp library list' to see available libraries.",
+                    lib_name
+                );
                 return Ok(());
             }
         }

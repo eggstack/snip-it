@@ -13,12 +13,34 @@ pub fn get_config_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
+                .unwrap_or_else(|| {
+                    tracing::warn!("Home directory not found, using current directory for config");
+                    PathBuf::from(".")
+                })
                 .join(".config")
         })
         .join("snp");
 
-    if !dir.exists() {
+    if dir.exists() {
+        // Fix permissions on existing directory if needed
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = std::fs::metadata(&dir) {
+                let mode = metadata.permissions().mode();
+                if mode & 0o077 != 0
+                    && let Err(e) =
+                        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                {
+                    tracing::warn!(
+                        directory = %dir.display(),
+                        error = %e,
+                        "Could not fix permissions on config directory"
+                    );
+                }
+            }
+        }
+    } else {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::error!(
                 directory = %dir.display(),

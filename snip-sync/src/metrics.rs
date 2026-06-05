@@ -1,13 +1,13 @@
-use prometheus::{Histogram, HistogramOpts, IntCounter, Registry};
+use prometheus::{HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Registry};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Metrics {
     pub registry: Arc<Registry>,
-    pub requests_total: IntCounter,
-    pub request_duration_seconds: Histogram,
-    pub sync_operations_total: IntCounter,
-    pub library_operations_total: IntCounter,
+    pub requests_total: IntCounterVec,
+    pub request_duration_seconds: HistogramVec,
+    pub sync_operations_total: IntCounterVec,
+    pub library_operations_total: IntCounterVec,
     pub rate_limit_hits: IntCounter,
     pub auth_failures: IntCounter,
 }
@@ -16,10 +16,12 @@ impl Metrics {
     pub fn new() -> Result<Self, prometheus::Error> {
         let registry = Arc::new(Registry::new());
 
-        let requests_total =
-            IntCounter::new("snip_sync_requests_total", "Total number of requests")?;
+        let requests_total = IntCounterVec::new(
+            prometheus::opts!("snip_sync_requests_total", "Total number of requests"),
+            &["method"],
+        )?;
 
-        let request_duration_seconds = Histogram::with_opts(
+        let request_duration_seconds = HistogramVec::new(
             HistogramOpts::new(
                 "snip_sync_request_duration_seconds",
                 "Request duration in seconds",
@@ -27,16 +29,23 @@ impl Metrics {
             .buckets(vec![
                 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
             ]),
+            &["method"],
         )?;
 
-        let sync_operations_total = IntCounter::new(
-            "snip_sync_sync_operations_total",
-            "Total number of sync operations",
+        let sync_operations_total = IntCounterVec::new(
+            prometheus::opts!(
+                "snip_sync_sync_operations_total",
+                "Total number of sync operations"
+            ),
+            &["direction"],
         )?;
 
-        let library_operations_total = IntCounter::new(
-            "snip_sync_library_operations_total",
-            "Total number of library operations (create, list, delete)",
+        let library_operations_total = IntCounterVec::new(
+            prometheus::opts!(
+                "snip_sync_library_operations_total",
+                "Total number of library operations (create, list, delete)"
+            ),
+            &["operation"],
         )?;
 
         let rate_limit_hits = IntCounter::new(
@@ -82,19 +91,24 @@ impl Metrics {
         // A fresh registry is used each call, avoiding name collisions.
         Self {
             registry,
-            requests_total: IntCounter::new("snip_sync_fallback_requests", "fallback").unwrap(),
-            request_duration_seconds: Histogram::with_opts(
+            requests_total: IntCounterVec::new(
+                prometheus::opts!("snip_sync_fallback_requests", "fallback"),
+                &["method"],
+            )
+            .unwrap(),
+            request_duration_seconds: HistogramVec::new(
                 HistogramOpts::new("snip_sync_fallback_duration", "fallback"),
+                &["method"],
             )
             .unwrap(),
-            sync_operations_total: IntCounter::new(
-                "snip_sync_fallback_sync_ops",
-                "fallback",
+            sync_operations_total: IntCounterVec::new(
+                prometheus::opts!("snip_sync_fallback_sync_ops", "fallback"),
+                &["direction"],
             )
             .unwrap(),
-            library_operations_total: IntCounter::new(
-                "snip_sync_fallback_lib_ops",
-                "fallback",
+            library_operations_total: IntCounterVec::new(
+                prometheus::opts!("snip_sync_fallback_lib_ops", "fallback"),
+                &["operation"],
             )
             .unwrap(),
             rate_limit_hits: IntCounter::new("snip_sync_fallback_rate_limit", "fallback").unwrap(),

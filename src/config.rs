@@ -99,7 +99,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
 /// including server URL, authentication, and sync behavior preferences.
 ///
 /// The API key is zeroized on drop to minimize exposure in process memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SyncSettings {
     pub enabled: bool,
     pub server_url: String,
@@ -120,6 +120,25 @@ pub struct SyncSettings {
     pub clipboard_auto_clear_seconds: Option<u32>,
     #[serde(default)]
     pub sync_limit: Option<i32>,
+}
+
+impl std::fmt::Debug for SyncSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncSettings")
+            .field("enabled", &self.enabled)
+            .field("server_url", &self.server_url)
+            .field("api_key", &"[REDACTED]")
+            .field("device_id", &self.device_id)
+            .field("sync_interval_minutes", &self.sync_interval_minutes)
+            .field("auto_sync", &self.auto_sync)
+            .field("sync_direction", &self.sync_direction)
+            .field(
+                "clipboard_auto_clear_seconds",
+                &self.clipboard_auto_clear_seconds,
+            )
+            .field("sync_limit", &self.sync_limit)
+            .finish()
+    }
 }
 
 impl Drop for SyncSettings {

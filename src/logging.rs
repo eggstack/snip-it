@@ -299,7 +299,7 @@ pub fn setup_panic_handler() {
     }));
 }
 
-#[tracing::instrument(level = "info", skip(result), fields(command = %command))]
+#[tracing::instrument(level = "info", skip(result), fields(command = %redact_command(command)))]
 pub fn log_command_execution(
     command: &str,
     args: &[String],
@@ -309,19 +309,27 @@ pub fn log_command_execution(
     match result {
         Ok(()) => {
             tracing::info!(
-                args = ?args,
+                args_count = args.len(),
                 working_dir = ?working_dir,
                 "Command executed successfully"
             );
         }
         Err(e) => {
             tracing::error!(
-                args = ?args,
+                args_count = args.len(),
                 error = %e,
                 working_dir = ?working_dir,
                 "Command execution failed"
             );
         }
+    }
+}
+
+fn redact_command(command: &str) -> String {
+    if command.len() > 80 {
+        format!("{}...", &command[..77])
+    } else {
+        command.to_string()
     }
 }
 

@@ -11,6 +11,10 @@ struct WindowEntry {
 
 pub struct RateLimiter {
     windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
+    // Kept alive to prevent the cleanup task from shutting down.
+    // The sender is wrapped in Arc so the oneshot channel stays open
+    // (when all senders are dropped, the receiver signals shutdown).
+    #[allow(dead_code)]
     shutdown_tx: Arc<tokio::sync::oneshot::Sender<()>>,
     db_pool: Option<sqlx::SqlitePool>,
     persist: bool,

@@ -18,8 +18,10 @@ http_host = "127.0.0.1"
 http_port = 50050
 
 [server.database]
-# Path to SQLite database (relative to working directory)
-path = "snippets.db"
+# Path to SQLite database.
+# If omitted, defaults to ~/.config/snip-sync/snippets.db (absolute).
+# Uncomment to use a relative path (relative to the working directory):
+# path = "snippets.db"
 
 [server.premade]
 # Directory containing premade snippet libraries

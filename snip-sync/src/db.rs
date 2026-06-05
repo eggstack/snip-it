@@ -474,6 +474,7 @@ impl Database {
         Ok((snippets, saturating_i32(total.0)))
     }
 
+    #[cfg(test)]
     pub async fn upsert_snippet(
         &self,
         snippet: &Snippet,

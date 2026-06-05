@@ -119,8 +119,10 @@ enum Commands {
         #[arg(short, long)]
         library: Option<String>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(conflicts_with = "csv")]
         json: bool,
         #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(conflicts_with = "json")]
         csv: bool,
     },
     /// Run a snippet via TUI selection (r)
@@ -172,13 +174,16 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue, help = "Skip conflict prompts (keeps local)")]
         non_interactive: bool,
         #[arg(long, action = clap::ArgAction::SetTrue, help = "Upload local changes only")]
+        #[arg(conflicts_with = "pull_only")]
         push_only: bool,
         #[arg(long, action = clap::ArgAction::SetTrue, help = "Download remote changes only")]
+        #[arg(conflicts_with = "push_only")]
         pull_only: bool,
         #[arg(long, action = clap::ArgAction::SetTrue, help = "Show what would be synced")]
         dry_run: bool,
     },
     /// Setup automatic sync with cron
+    #[command(alias = "cr")]
     Cron {
         #[arg(short, long, default_value = "15")]
         interval: u32,

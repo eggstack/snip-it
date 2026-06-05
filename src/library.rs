@@ -184,7 +184,6 @@ pub struct LibraryManager {
     libraries_dir: PathBuf,
     premade_dir: PathBuf,
     config: LibraryConfig,
-    unsaved_changes: bool,
 }
 
 impl LibraryManager {
@@ -239,7 +238,6 @@ impl LibraryManager {
             libraries_dir,
             premade_dir,
             config,
-            unsaved_changes: false,
         })
     }
 
@@ -303,7 +301,7 @@ impl LibraryManager {
         let mut meta = LibraryMeta::new("snippets");
         meta.is_primary = true;
         self.config.libraries.push(meta);
-        self.unsaved_changes = true;
+
         self.save_config()?;
 
         Ok(())
@@ -381,7 +379,7 @@ Snippets = []
         let mut meta = LibraryMeta::new(filename);
         meta.is_primary = is_first;
         self.config.libraries.push(meta);
-        self.unsaved_changes = true;
+
         self.save_config()?;
 
         Ok(path)
@@ -430,7 +428,6 @@ Snippets = []
             {
                 self.config.libraries[idx].is_primary = true;
             }
-            self.unsaved_changes = true;
         }
 
         self.save_config()?;
@@ -464,7 +461,7 @@ Snippets = []
         for lib in &mut self.config.libraries {
             lib.is_primary = lib.filename == filename;
         }
-        self.unsaved_changes = true;
+
         self.save_config()?;
         Ok(())
     }
@@ -473,7 +470,7 @@ Snippets = []
     pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = library_id.to_string();
-            self.unsaved_changes = true;
+
             self.save_config()?;
         }
         Ok(())
@@ -494,7 +491,7 @@ Snippets = []
         };
 
         self.config.libraries.push(meta);
-        self.unsaved_changes = true;
+
         self.save_config()?;
         Ok(())
     }
@@ -503,7 +500,7 @@ Snippets = []
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.last_sync = Some(timestamp);
-            self.unsaved_changes = true;
+
             self.save_config()?;
         }
         Ok(())
@@ -537,7 +534,7 @@ Snippets = []
         if let Some(existing) = self.get_library_by_filename_mut(&filename) {
             existing.library_id = server_id.to_string();
             existing.server_id = Some(server_id.to_string());
-            self.unsaved_changes = true;
+
             self.save_config()?;
             return Ok(path);
         }
@@ -549,7 +546,7 @@ Snippets = []
         meta.is_primary = is_first;
 
         self.config.libraries.push(meta);
-        self.unsaved_changes = true;
+
         self.save_config()?;
 
         Ok(path)
@@ -633,7 +630,6 @@ Snippets = []
         std::fs::rename(&tmp_path, &config_path)
             .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
 
-        self.unsaved_changes = false;
         Ok(())
     }
 }
@@ -1132,7 +1128,6 @@ Command = "sudo iptables-restore \< /path/to/rules"
             libraries_dir: temp_dir.path().join("libraries"),
             premade_dir: temp_dir.path().join("premade"),
             config: Default::default(),
-            unsaved_changes: false,
         };
         assert!(
             mgr.save_premade_library("../../etc/passwd", "content")
@@ -1150,7 +1145,6 @@ Command = "sudo iptables-restore \< /path/to/rules"
             libraries_dir: temp_dir.path().join("libraries"),
             premade_dir: temp_dir.path().join("premade"),
             config: Default::default(),
-            unsaved_changes: false,
         };
         let result = mgr.save_premade_library("valid-name", "test content");
         assert!(result.is_ok());

@@ -554,4 +554,98 @@ mod tests {
         let conflicts = detect_device_conflict(&snippets, "device-a");
         assert_eq!(conflicts, vec!["1".to_string()]);
     }
+
+    #[test]
+    fn test_encrypt_decrypt_snippet_roundtrip() {
+        let api_key = "test-api-key-for-encryption";
+        let snippet = crate::proto::Snippet {
+            id: "test-id".to_string(),
+            description: "Test Description".to_string(),
+            command: "echo hello world".to_string(),
+            tags: vec!["bash".to_string(), "test".to_string()],
+            created_at: 1000,
+            updated_at: 2000,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let encrypted = encrypt_snippet(api_key, &snippet).unwrap();
+        assert!(encrypted.encrypted);
+        assert_eq!(encrypted.id, "test-id");
+        assert_eq!(encrypted.description, "");
+        assert!(encrypted.tags.is_empty());
+        assert!(!encrypted.command.is_empty());
+        assert_ne!(encrypted.command, "echo hello world");
+
+        let decrypted = decrypt_snippet(api_key, &encrypted).unwrap();
+        assert!(!decrypted.encrypted);
+        assert_eq!(decrypted.description, "Test Description");
+        assert_eq!(decrypted.command, "echo hello world");
+        assert_eq!(decrypted.tags, vec!["bash", "test"]);
+        assert_eq!(decrypted.created_at, 1000);
+        assert_eq!(decrypted.updated_at, 2000);
+        assert_eq!(decrypted.device_id, "device-1");
+    }
+
+    #[test]
+    fn test_decrypt_non_encrypted_passthrough() {
+        let api_key = "test-api-key";
+        let snippet = crate::proto::Snippet {
+            id: "test-id".to_string(),
+            description: "desc".to_string(),
+            command: "cmd".to_string(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let result = decrypt_snippet(api_key, &snippet).unwrap();
+        assert_eq!(result.description, "desc");
+        assert_eq!(result.command, "cmd");
+    }
+
+    #[test]
+    fn test_decrypt_wrong_key_fails() {
+        let snippet = crate::proto::Snippet {
+            id: "test-id".to_string(),
+            description: "desc".to_string(),
+            command: "cmd".to_string(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let encrypted = encrypt_snippet("correct-key", &snippet).unwrap();
+        let result = decrypt_snippet("wrong-key", &encrypted);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_with_special_characters() {
+        let api_key = "test-key-special-chars";
+        let snippet = crate::proto::Snippet {
+            id: "id".to_string(),
+            description: "Unicode: 你好世界 🌍".to_string(),
+            command: "echo 'hello \"world\"' && echo $HOME".to_string(),
+            tags: vec!["tag with spaces".to_string()],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let encrypted = encrypt_snippet(api_key, &snippet).unwrap();
+        let decrypted = decrypt_snippet(api_key, &encrypted).unwrap();
+        assert_eq!(decrypted.description, "Unicode: 你好世界 🌍");
+        assert_eq!(decrypted.command, "echo 'hello \"world\"' && echo $HOME");
+        assert_eq!(decrypted.tags, vec!["tag with spaces"]);
+    }
 }

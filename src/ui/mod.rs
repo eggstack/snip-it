@@ -5,6 +5,7 @@
 //! system and variable prompting dialog.
 
 mod highlight;
+mod state;
 mod theme;
 mod variables;
 
@@ -22,9 +23,7 @@ use ratatui::text::Line;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::Style as TuiStyle,
-    widgets::{
-        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
 };
 
 use crate::clipboard;
@@ -33,6 +32,7 @@ use crate::utils::has_unmatched_angle_bracket;
 use crate::utils::strip_escape_sequences;
 
 use highlight::highlight_command;
+use state::{FilterState, SelectState, SortMode, is_ctrl_key};
 use theme::{style_fg, style_fg_bg};
 
 static TERMINATE: LazyLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
@@ -43,110 +43,6 @@ pub fn get_terminate() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
 }
 
 static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
-
-fn is_ctrl_key(key: &crossterm::event::KeyEvent, c: char) -> bool {
-    key.code == crossterm::event::KeyCode::Char(c)
-        && key
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL)
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-enum SortMode {
-    #[default]
-    None,
-    Newest,
-    Oldest,
-    AlphaAsc,
-    AlphaDesc,
-}
-
-#[derive(Clone, Default)]
-struct SelectState {
-    selected: usize,
-    list_state: ratatui::widgets::ListState,
-    scroll_state: ScrollbarState,
-}
-
-impl SelectState {
-    fn new() -> Self {
-        let mut list_state = ratatui::widgets::ListState::default();
-        list_state.select(Some(0));
-        SelectState {
-            selected: 0,
-            list_state,
-            scroll_state: ScrollbarState::default(),
-        }
-    }
-
-    fn update(&mut self, filtered_len: usize) {
-        if filtered_len == 0 {
-            self.selected = 0;
-        } else if self.selected >= filtered_len {
-            self.selected = filtered_len.saturating_sub(1);
-        }
-        self.list_state.select(Some(self.selected));
-        self.scroll_state = self
-            .scroll_state
-            .content_length(filtered_len)
-            .position(self.selected);
-    }
-
-    fn move_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-
-    fn move_down(&mut self, max: usize) {
-        if self.selected + 1 < max {
-            self.selected += 1;
-        }
-    }
-
-    fn move_to_top(&mut self) {
-        self.selected = 0;
-    }
-
-    fn move_to_bottom(&mut self, max: usize) {
-        self.selected = max.saturating_sub(1);
-    }
-}
-
-#[derive(Clone, Default)]
-struct FilterState {
-    sort_mode: SortMode,
-    tag_filter_text: String,
-}
-
-impl FilterState {
-    fn toggle_sort_new(&mut self) {
-        self.sort_mode = if self.sort_mode == SortMode::Newest {
-            SortMode::None
-        } else {
-            SortMode::Newest
-        };
-    }
-    fn toggle_sort_old(&mut self) {
-        self.sort_mode = if self.sort_mode == SortMode::Oldest {
-            SortMode::None
-        } else {
-            SortMode::Oldest
-        };
-    }
-    fn toggle_sort_alpha(&mut self) {
-        self.sort_mode = if self.sort_mode == SortMode::AlphaAsc {
-            SortMode::None
-        } else {
-            SortMode::AlphaAsc
-        };
-    }
-    fn toggle_sort_alpha_rev(&mut self) {
-        self.sort_mode = if self.sort_mode == SortMode::AlphaDesc {
-            SortMode::None
-        } else {
-            SortMode::AlphaDesc
-        };
-    }
-}
 
 fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
@@ -161,6 +57,7 @@ pub struct SnippetListParams<'a> {
     pub folders: &'a [Vec<String>],
     pub favorites: &'a [bool],
     pub snippets: &'a [crate::library::Snippet],
+    pub original_indices: &'a [usize],
 }
 
 pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<(usize, Option<String>)>> {
@@ -178,6 +75,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         folders: _folders,
         favorites,
         snippets,
+        original_indices,
     } = params;
     // Enable mouse capture before initializing terminal
     // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
@@ -617,7 +515,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             chunks[1]
         };
 
-        if event::poll(Duration::from_millis(200))? {
+        let polled = event::poll(Duration::from_millis(200)).unwrap_or(false);
+        if polled {
             match event::read() {
                 Ok(CEvent::Mouse(mouse_event)) => {
                     // Check for scroll events
@@ -741,11 +640,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     if let Err(e) = clipboard::copy_to_clipboard_auto(&copy_text) {
                                         tracing::warn!("Clipboard copy failed: {}", e);
                                     }
-                                    if let Some((idx, _, _)) = filtered.get(start)
-                                        && let Err(e) =
-                                            crate::logging::audit_log("copy", &snippets[*idx], None)
-                                    {
-                                        tracing::debug!("Audit log write failed: {}", e);
+                                    if let Some((idx, _, _)) = filtered.get(start) {
+                                        let original_idx =
+                                            original_indices.get(*idx).copied().unwrap_or(*idx);
+                                        if original_idx < snippets.len()
+                                            && let Err(e) = crate::logging::audit_log(
+                                                "copy",
+                                                &snippets[original_idx],
+                                                None,
+                                            )
+                                        {
+                                            tracing::debug!("Audit log write failed: {}", e);
+                                        }
                                     }
                                     should_copy =
                                         Some(format!("{} snippets copied", end - start + 1));
@@ -993,63 +899,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_filter_state_toggle_sort_new() {
-        let mut state = FilterState::default();
-        assert_eq!(state.sort_mode, SortMode::None);
-
-        state.toggle_sort_new();
-        assert_eq!(state.sort_mode, SortMode::Newest);
-
-        state.toggle_sort_new();
-        assert_eq!(state.sort_mode, SortMode::None);
-    }
-
-    #[test]
-    fn test_filter_state_toggle_sort_alpha() {
-        let mut state = FilterState::default();
-        assert_eq!(state.sort_mode, SortMode::None);
-
-        state.toggle_sort_alpha();
-        assert_eq!(state.sort_mode, SortMode::AlphaAsc);
-
-        state.toggle_sort_alpha_rev();
-        assert_eq!(state.sort_mode, SortMode::AlphaDesc);
-    }
-
-    #[test]
-    fn test_is_ctrl_key_true() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('c'),
-            modifiers: crossterm::event::KeyModifiers::CONTROL,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert!(is_ctrl_key(&key, 'c'));
-    }
-
-    #[test]
-    fn test_is_ctrl_key_false_no_modifier() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('c'),
-            modifiers: crossterm::event::KeyModifiers::empty(),
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert!(!is_ctrl_key(&key, 'c'));
-    }
-
-    #[test]
-    fn test_is_ctrl_key_false_different_char() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('a'),
-            modifiers: crossterm::event::KeyModifiers::CONTROL,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert!(!is_ctrl_key(&key, 'c'));
-    }
 
     #[test]
     fn test_terminate_functionality() {

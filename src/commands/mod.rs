@@ -175,21 +175,34 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 
 /// Extracts snippet data arrays for TUI display.
 ///
-/// Returns parallel arrays of descriptions, commands, tags, folders, and favorites.
-pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetData {
-    let filtered: Vec<_> = snippets.snippets.iter().filter(|s| !s.deleted).collect();
-    let descriptions: Vec<String> = filtered.iter().map(|s| s.description.clone()).collect();
-    let commands: Vec<String> = filtered.iter().map(|s| s.command.clone()).collect();
-    let tags: Vec<Vec<String>> = filtered.iter().map(|s| s.tags.clone()).collect();
-    let folders: Vec<Vec<String>> = filtered.iter().map(|s| s.folders.clone()).collect();
-    let favorites: Vec<bool> = filtered.iter().map(|s| s.favorite).collect();
-    crate::SnippetData {
-        descriptions,
-        commands,
-        tags,
-        folders,
-        favorites,
-    }
+/// Returns parallel arrays of descriptions, commands, tags, folders, and favorites,
+/// along with a mapping from filtered indices to original snippet indices.
+pub fn get_snippet_data(snippets: &crate::library::Snippets) -> (crate::SnippetData, Vec<usize>) {
+    let filtered: Vec<_> = snippets
+        .snippets
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.deleted)
+        .collect();
+    let original_indices: Vec<usize> = filtered.iter().map(|(i, _)| *i).collect();
+    let descriptions: Vec<String> = filtered
+        .iter()
+        .map(|(_, s)| s.description.clone())
+        .collect();
+    let commands: Vec<String> = filtered.iter().map(|(_, s)| s.command.clone()).collect();
+    let tags: Vec<Vec<String>> = filtered.iter().map(|(_, s)| s.tags.clone()).collect();
+    let folders: Vec<Vec<String>> = filtered.iter().map(|(_, s)| s.folders.clone()).collect();
+    let favorites: Vec<bool> = filtered.iter().map(|(_, s)| s.favorite).collect();
+    (
+        crate::SnippetData {
+            descriptions,
+            commands,
+            tags,
+            folders,
+            favorites,
+        },
+        original_indices,
+    )
 }
 
 /// Expands a snippet command, prompting for variables if present.
@@ -234,12 +247,12 @@ where
     let lib_path = match get_library_path(library)? {
         Some(p) => p,
         None => {
-            tracing::warn!("No library found. Create one with 'snp library create <name>'");
+            eprintln!("No library found. Create one with 'snp library create <name>'");
             return Ok(());
         }
     };
     let snippets = crate::library::load_library(&lib_path)?;
-    let snippet_data = get_snippet_data(&snippets);
+    let (snippet_data, original_indices) = get_snippet_data(&snippets);
 
     let mut selected_and_processed = false;
     loop {
@@ -252,9 +265,10 @@ where
             folders: &snippet_data.folders,
             favorites: &snippet_data.favorites,
             snippets: &snippets.snippets,
+            original_indices: &original_indices,
         })?;
         if let Some((idx, copy_flag)) = result {
-            let snippet = &snippets.snippets[idx];
+            let snippet = &snippets.snippets[original_indices[idx]];
             match process_fn(snippet, copy_flag)? {
                 crate::ProcessResult::Cancel => {
                     return Ok(());
@@ -276,4 +290,89 @@ where
         tracing::warn!(error = %e, "Background sync failed");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_load_snippets_missing_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = Some(tmp.path().join("nonexistent.toml"));
+        let snippets = load_snippets(&path).unwrap();
+        assert!(snippets.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_load_snippets_empty_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("empty.toml");
+        std::fs::write(&path, "").unwrap();
+        let snippets = load_snippets(&Some(path)).unwrap();
+        assert!(snippets.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_load_snippets_valid_toml() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("valid.toml");
+        std::fs::write(
+            &path,
+            r#"[[Snippets]]
+description = "test"
+command = "echo hello"
+"#,
+        )
+        .unwrap();
+        let snippets = load_snippets(&Some(path)).unwrap();
+        assert_eq!(snippets.snippets.len(), 1);
+        assert_eq!(snippets.snippets[0].description, "test");
+        assert_eq!(snippets.snippets[0].command, "echo hello");
+    }
+
+    #[test]
+    fn test_load_snippets_invalid_toml_creates_backup() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("invalid.toml");
+        std::fs::write(&path, "invalid = [toml").unwrap();
+        let backup_path = path.with_extension("toml.bak");
+        let result = load_snippets(&Some(path));
+        assert!(result.is_err());
+        assert!(backup_path.exists());
+    }
+
+    #[test]
+    fn test_get_snippet_data_filters_deleted() {
+        let snippets = crate::library::Snippets {
+            snippets: vec![
+                crate::library::Snippet {
+                    id: "1".to_string(),
+                    description: "active".to_string(),
+                    command: "echo 1".to_string(),
+                    ..Default::default()
+                },
+                crate::library::Snippet {
+                    id: "2".to_string(),
+                    description: "deleted".to_string(),
+                    command: "echo 2".to_string(),
+                    deleted: true,
+                    ..Default::default()
+                },
+                crate::library::Snippet {
+                    id: "3".to_string(),
+                    description: "also active".to_string(),
+                    command: "echo 3".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let (data, indices) = get_snippet_data(&snippets);
+        assert_eq!(data.descriptions.len(), 2);
+        assert_eq!(data.descriptions[0], "active");
+        assert_eq!(data.descriptions[1], "also active");
+        assert_eq!(indices, vec![0, 2]);
+    }
 }

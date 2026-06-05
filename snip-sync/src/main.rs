@@ -144,7 +144,11 @@ impl Config {
                     }
                 },
                 Err(e) => {
-                    tracing::error!("Failed to read config file {}: {}. Using defaults.", config_path.display(), e);
+                    tracing::error!(
+                        "Failed to read config file {}: {}. Using defaults.",
+                        config_path.display(),
+                        e
+                    );
                     ConfigFile::default()
                 }
             }
@@ -176,7 +180,15 @@ impl Config {
             db_path: std::env::var("DATABASE_URL")
                 .ok()
                 .or_else(|| server.database.as_ref().and_then(|d| d.path.clone()))
-                .unwrap_or_else(|| "snippets.db".to_string()),
+                .unwrap_or_else(|| {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join(".config")
+                        .join("snip-sync")
+                        .join("snippets.db")
+                        .to_string_lossy()
+                        .into_owned()
+                }),
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -306,13 +318,19 @@ struct SnipSyncService {
 
 impl SnipSyncService {
     fn record_request(&self, method: &str) {
-        self.metrics.requests_total.inc();
+        self.metrics
+            .requests_total
+            .with_label_values(&[method])
+            .inc();
         tracing::trace!("Request: {}", method);
     }
 
     fn record_request_duration(&self, method: &str, start: std::time::Instant) {
         let duration = start.elapsed().as_secs_f64();
-        self.metrics.request_duration_seconds.observe(duration);
+        self.metrics
+            .request_duration_seconds
+            .with_label_values(&[method])
+            .observe(duration);
         tracing::debug!("Request {} completed in {:.3}s", method, duration);
     }
 
@@ -324,12 +342,18 @@ impl SnipSyncService {
         self.metrics.auth_failures.inc();
     }
 
-    fn record_sync(&self) {
-        self.metrics.sync_operations_total.inc();
+    fn record_sync(&self, direction: &str) {
+        self.metrics
+            .sync_operations_total
+            .with_label_values(&[direction])
+            .inc();
     }
 
-    fn record_library_op(&self) {
-        self.metrics.library_operations_total.inc();
+    fn record_library_op(&self, operation: &str) {
+        self.metrics
+            .library_operations_total
+            .with_label_values(&[operation])
+            .inc();
     }
 
     async fn authenticate_and_rate_limit(&self, api_key: &str) -> Result<String, Status> {
@@ -713,7 +737,7 @@ impl SnippetSync for SnipSyncService {
         let request_id = uuid::Uuid::new_v4();
         let start = std::time::Instant::now();
         self.record_request("sync");
-        self.record_sync();
+        self.record_sync("bidirectional");
         tracing::info!(request_id = %request_id, "Sync request");
         let req = request.into_inner();
 
@@ -877,7 +901,7 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<CreateLibraryResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("create_library");
-        self.record_library_op();
+        self.record_library_op("create");
         tracing::info!(request_id = %request_id, "CreateLibrary request");
         let req = request.into_inner();
 
@@ -907,7 +931,7 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<ListLibrariesResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("list_libraries");
-        self.record_library_op();
+        self.record_library_op("list");
         tracing::info!(request_id = %request_id, "ListLibraries request");
         let req = request.into_inner();
 
@@ -954,7 +978,7 @@ impl SnippetSync for SnipSyncService {
     ) -> Result<Response<DeleteLibraryResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("delete_library");
-        self.record_library_op();
+        self.record_library_op("delete");
         tracing::info!(request_id = %request_id, "DeleteLibrary request");
         let req = request.into_inner();
 
@@ -1060,6 +1084,18 @@ impl SnippetSync for SnipSyncService {
             message: "Library fetched successfully".to_string(),
         }))
     }
+}
+
+async fn security_headers_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert("cache-control", "no-store".parse().unwrap());
+    response
 }
 
 #[tokio::main]
@@ -1214,7 +1250,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         tracing::info!("CORS allowed origins: {:?}", cors_allowed_origins);
-        cors.allow_methods(Any).allow_headers(Any)
+        cors.allow_methods([axum::http::Method::GET])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+            ])
     };
 
     async fn metrics_handler(
@@ -1293,6 +1333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .route("/metrics", axum::routing::get(metrics_handler))
+        .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(cors)
         .with_state(state);
 
@@ -1348,4 +1389,431 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Server shutdown complete");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use snip_proto::{
+        CreateLibraryRequest, GetSnippetsRequest, HealthRequest, ListLibrariesRequest,
+        PushSnippetsRequest, RegisterRequest, Snippet as ProtoSnippet, SyncRequest,
+    };
+    use std::sync::Arc;
+
+    async fn setup_test_service() -> SnipSyncService {
+        let db = Arc::new(Database::connect("sqlite::memory:", 5).await.unwrap());
+        let config = Config {
+            grpc_host: "127.0.0.1".to_string(),
+            grpc_port: 50051,
+            http_host: "127.0.0.1".to_string(),
+            http_port: 50050,
+            db_path: "sqlite::memory:".to_string(),
+            db_max_connections: 5,
+            premade_dir: PathBuf::from("premade-libraries"),
+            max_command_length: 1024,
+            max_description_length: 1024,
+            max_tags: 50,
+            max_tag_length: 100,
+            max_id_length: 128,
+            max_device_id_length: 128,
+            request_timeout_secs: 30,
+            grpc_max_message_size: 4 * 1024 * 1024,
+            rate_limit_per_minute: 120,
+            trusted_proxies: vec![],
+            persist_rate_limits: false,
+            metrics_username: None,
+            metrics_password: None,
+            cors_allowed_origins: vec![],
+        };
+        let metrics = Metrics::fallback();
+        let rate_limiter = Arc::new(RateLimiter::new());
+        let premade_manager = PremadeManager::new(PathBuf::from("premade-libraries"));
+
+        SnipSyncService {
+            db,
+            rate_limiter,
+            config,
+            metrics,
+            premade_manager,
+        }
+    }
+
+    async fn register_test_user(service: &SnipSyncService) -> String {
+        let req = Request::new(RegisterRequest {
+            device_id: "test-device".to_string(),
+        });
+        let resp = service.register(req).await.unwrap();
+        resp.into_inner().api_key
+    }
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let service = setup_test_service().await;
+        let req = Request::new(HealthRequest {});
+        let resp = service.health(req).await.unwrap();
+        let health = resp.into_inner();
+        assert!(health.healthy);
+        assert_eq!(health.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn test_register_creates_user() {
+        let service = setup_test_service().await;
+        let req = Request::new(RegisterRequest {
+            device_id: "test-device".to_string(),
+        });
+        let resp = service.register(req).await.unwrap();
+        let reg = resp.into_inner();
+        assert!(reg.success);
+        assert!(!reg.api_key.is_empty());
+        assert!(!reg.device_id.is_empty());
+        assert!(uuid::Uuid::parse_str(&reg.device_id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_register_rate_limiting() {
+        let service = setup_test_service().await;
+        // Exhaust rate limit
+        for _ in 0..120 {
+            let req = Request::new(RegisterRequest {
+                device_id: "test-device".to_string(),
+            });
+            let _ = service.register(req).await;
+        }
+        // Next request should be rate limited
+        let req = Request::new(RegisterRequest {
+            device_id: "test-device".to_string(),
+        });
+        let resp = service.register(req).await;
+        assert!(resp.is_err());
+        assert_eq!(resp.unwrap_err().code(), tonic::Code::ResourceExhausted);
+    }
+
+    #[tokio::test]
+    async fn test_create_and_list_libraries() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        // Create library
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "test-lib".to_string(),
+        });
+        let resp = service.create_library(req).await.unwrap();
+        let create = resp.into_inner();
+        assert!(create.success);
+        assert!(!create.library_id.is_empty());
+
+        // List libraries - should have default + test-lib
+        let req = Request::new(ListLibrariesRequest {
+            api_key: api_key.clone(),
+            limit: 100,
+            offset: 0,
+        });
+        let resp = service.list_libraries(req).await.unwrap();
+        let list = resp.into_inner();
+        assert_eq!(list.libraries.len(), 2);
+        assert!(list.libraries.iter().any(|l| l.name == "test-lib"));
+    }
+
+    #[tokio::test]
+    async fn test_create_duplicate_library_name() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "test-lib".to_string(),
+        });
+        let _ = service.create_library(req).await.unwrap();
+
+        // Create with same name should fail
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "test-lib".to_string(),
+        });
+        let resp = service.create_library(req).await;
+        assert!(resp.is_err());
+        assert_eq!(resp.unwrap_err().code(), tonic::Code::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_api_key() {
+        let service = setup_test_service().await;
+        let req = Request::new(GetSnippetsRequest {
+            api_key: "invalid-key".to_string(),
+            library_id: String::new(),
+            limit: 100,
+            offset: 0,
+            since: 0,
+        });
+        let resp = service.get_snippets(req).await;
+        assert!(resp.is_err());
+        assert_eq!(resp.unwrap_err().code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_empty_id() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: String::new(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message().contains("ID is required"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_oversized_command() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: "test-id".to_string(),
+            description: "test".to_string(),
+            command: "x".repeat(2000),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message().contains("maximum length"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_future_timestamp() {
+        let service = setup_test_service().await;
+        let future = chrono::Utc::now().timestamp() + 600; // 10 minutes in future
+        let snippet = ProtoSnippet {
+            id: "test-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: future,
+            updated_at: future,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message().contains("future"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_negative_timestamp() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: "test-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: -1,
+            updated_at: -1,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message().contains("non-negative"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_too_many_tags() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: "test-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: (0..100).map(|i| format!("tag{}", i)).collect(),
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message().contains("Too many tags"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_valid() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: "test-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec!["bash".to_string()],
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        assert!(service.validate_snippet(&snippet).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cross_user_library_access_denied() {
+        let service = setup_test_service().await;
+        let api_key1 = register_test_user(&service).await;
+
+        // Create library with user 1
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key1.clone(),
+            name: "user1-lib".to_string(),
+        });
+        let resp = service.create_library(req).await.unwrap();
+        let library_id = resp.into_inner().library_id;
+
+        // Register user 2
+        let api_key2 = register_test_user(&service).await;
+
+        // User 2 tries to access user 1's library
+        let req = Request::new(GetSnippetsRequest {
+            api_key: api_key2,
+            library_id,
+            limit: 100,
+            offset: 0,
+            since: 0,
+        });
+        let resp = service.get_snippets(req).await;
+        assert!(resp.is_err());
+        assert_eq!(resp.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_push_and_get_snippets() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        // Create library
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "test-lib".to_string(),
+        });
+        let resp = service.create_library(req).await.unwrap();
+        let library_id = resp.into_inner().library_id;
+
+        // Push snippets
+        let snippet = ProtoSnippet {
+            id: "snippet-1".to_string(),
+            description: "Test snippet".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec!["test".to_string()],
+            created_at: chrono::Utc::now().timestamp(),
+            updated_at: chrono::Utc::now().timestamp(),
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let req = Request::new(PushSnippetsRequest {
+            api_key: api_key.clone(),
+            library_id: library_id.clone(),
+            snippets: vec![snippet],
+        });
+        let resp = service.push_snippets(req).await.unwrap();
+        let push = resp.into_inner();
+        assert_eq!(push.accepted_count, 1);
+        assert_eq!(push.rejected_count, 0);
+
+        // Get snippets
+        let req = Request::new(GetSnippetsRequest {
+            api_key: api_key.clone(),
+            library_id,
+            limit: 100,
+            offset: 0,
+            since: 0,
+        });
+        let resp = service.get_snippets(req).await.unwrap();
+        let list = resp.into_inner();
+        assert_eq!(list.snippets.len(), 1);
+        assert_eq!(list.snippets[0].id, "snippet-1");
+        assert_eq!(list.snippets[0].command, "echo hello");
+    }
+
+    #[tokio::test]
+    async fn test_delete_library() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        // Create library
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "to-delete".to_string(),
+        });
+        let resp = service.create_library(req).await.unwrap();
+        let library_id = resp.into_inner().library_id;
+
+        // Delete library
+        let req = Request::new(snip_proto::DeleteLibraryRequest {
+            api_key: api_key.clone(),
+            library_id: library_id.clone(),
+        });
+        let resp = service.delete_library(req).await.unwrap();
+        assert!(resp.into_inner().success);
+
+        // Verify deleted - should still have default library
+        let req = Request::new(ListLibrariesRequest {
+            api_key: api_key.clone(),
+            limit: 100,
+            offset: 0,
+        });
+        let resp = service.list_libraries(req).await.unwrap();
+        let list = resp.into_inner();
+        assert_eq!(list.libraries.len(), 1);
+        assert_eq!(list.libraries[0].name, "default");
+    }
+
+    #[tokio::test]
+    async fn test_delete_default_library_blocked() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(snip_proto::DeleteLibraryRequest {
+            api_key: api_key.clone(),
+            library_id: "default".to_string(),
+        });
+        let resp = service.delete_library(req).await;
+        assert!(resp.is_err());
+        assert!(resp.unwrap_err().message().contains("Cannot delete"));
+    }
+
+    #[tokio::test]
+    async fn test_sync_basic() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        // Create library
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "sync-test".to_string(),
+        });
+        let resp = service.create_library(req).await.unwrap();
+        let library_id = resp.into_inner().library_id;
+
+        // Sync with empty local snippets (pull only)
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            library_id,
+            limit: 1000,
+        });
+        let resp = service.sync(req).await.unwrap();
+        let sync = resp.into_inner();
+        assert_eq!(sync.snippets.len(), 0);
+    }
 }

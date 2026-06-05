@@ -133,52 +133,56 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             f.render_widget(status_widget, chunks[1]);
         })?;
 
-        if event::poll(Duration::from_millis(200))?
-            && let CEvent::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            match key.code {
-                KeyCode::Char('q') => {
-                    ratatui::restore();
-                    return Ok(VariablePromptResult::Cancel);
-                }
-                KeyCode::Esc => {
-                    // Esc no longer quits - use q instead
-                }
-                KeyCode::Up | KeyCode::Char('k') if selected > 0 => {
-                    selected -= 1;
-                }
-                KeyCode::Down | KeyCode::Char('j') if selected + 1 < values.len() => {
-                    selected += 1;
-                }
-                KeyCode::Tab => {
-                    if selected + 1 < values.len() {
-                        selected += 1;
-                    } else {
-                        selected = 0;
+        let polled = event::poll(Duration::from_millis(200)).unwrap_or(false);
+        if polled {
+            let key_event = event::read().ok();
+            if let Some(CEvent::Key(key)) = key_event
+                && key.kind == KeyEventKind::Press
+            {
+                match key.code {
+                    KeyCode::Char('q') => {
+                        ratatui::restore();
+                        return Ok(VariablePromptResult::Cancel);
                     }
-                }
-                KeyCode::Enter => {
-                    for (i, val) in values.iter_mut().enumerate() {
-                        if val.is_empty() && !defaults[i].is_empty() {
-                            *val = defaults[i].clone();
+                    KeyCode::Esc => {
+                        // Esc no longer quits - use q instead
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if selected > 0 => {
+                        selected -= 1;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if selected + 1 < values.len() => {
+                        selected += 1;
+                    }
+                    KeyCode::Tab => {
+                        if selected + 1 < values.len() {
+                            selected += 1;
+                        } else {
+                            selected = 0;
                         }
                     }
-                    break;
-                }
-                KeyCode::Backspace => {
-                    values[selected].pop();
-                }
-                KeyCode::Char('d') => {
-                    show_defaults = !show_defaults;
-                }
-                KeyCode::Char(c) => {
-                    if values[selected] == defaults[selected] && !defaults[selected].is_empty() {
-                        values[selected] = String::new();
+                    KeyCode::Enter => {
+                        for (i, val) in values.iter_mut().enumerate() {
+                            if val.is_empty() && !defaults[i].is_empty() {
+                                *val = defaults[i].clone();
+                            }
+                        }
+                        break;
                     }
-                    values[selected].push(c);
+                    KeyCode::Backspace => {
+                        values[selected].pop();
+                    }
+                    KeyCode::Char('d') => {
+                        show_defaults = !show_defaults;
+                    }
+                    KeyCode::Char(c) => {
+                        if values[selected] == defaults[selected] && !defaults[selected].is_empty()
+                        {
+                            values[selected] = String::new();
+                        }
+                        values[selected].push(c);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
