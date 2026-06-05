@@ -283,7 +283,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         let filter_indicator = if tag_filter_mode {
             format!("[tag: {}]", filter_state.tag_filter_text)
         } else if !insert_mode && !incremental_search.is_empty() {
-            format!("/{}", incremental_search)
+            format!("/{incremental_search}")
         } else {
             String::new()
         };
@@ -307,7 +307,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 return;
             }
             let count = filtered.len();
-            let title_part = format!("Snippets [{count}] {}{}", filter_indicator, sort_indicator);
+            let title_part = format!("Snippets [{count}] {filter_indicator}{sort_indicator}");
             let separator = "─".repeat((size.width as usize).saturating_sub(title_part.len() + 8));
             let theme = get_theme();
             let block = Block::default()
@@ -351,7 +351,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                         let mut combined: Vec<ratatui::text::Span<'static>> =
                             vec![ratatui::text::Span::styled(
-                                format!("[{}] ", desc),
+                                format!("[{desc}] "),
                                 style_fg(theme.text),
                             )];
                         combined.extend(cmd_spans);
@@ -431,7 +431,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 let vars = extract_variables(snippet_cmd);
                 let has_vars = !vars.is_empty();
 
-                let preview_title = format!("Preview: {}", snippet_desc);
+                let preview_title = format!("Preview: {snippet_desc}");
                 let preview_block = Block::default()
                     .title(preview_title)
                     .borders(Borders::ALL)
@@ -460,28 +460,24 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             let tag_mode_str = if tag_filter_mode { " TAG" } else { "" };
 
             let status_text: String = if let Some(desc) = copied_desc {
-                format!("[{}]{} | {}", mode_str, tag_mode_str, desc)
+                format!("[{mode_str}]{tag_mode_str} | {desc}")
             } else if is_search {
                 if insert_mode {
                     format!(
-                        "[{}]{} | esc: normal | /: search | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode",
-                        mode_str, tag_mode_str
+                        "[{mode_str}]{tag_mode_str} | esc: normal | /: search | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode"
                     )
                 } else {
                     format!(
-                        "[{}]{} | i: insert | y/ctrl+c: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode",
-                        mode_str, tag_mode_str
+                        "[{mode_str}]{tag_mode_str} | i: insert | y/ctrl+c: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode"
                     )
                 }
             } else if insert_mode {
                 format!(
-                    "[{}]{} | esc: normal | enter: run | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode",
-                    mode_str, tag_mode_str
+                    "[{mode_str}]{tag_mode_str} | esc: normal | enter: run | ctrl+u/d : page | n/o/a/z: sort | t: tags | x/c: clear | tab: mode"
                 )
             } else {
                 format!(
-                    "[{}]{} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run",
-                    mode_str, tag_mode_str
+                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run"
                 )
             };
             let status_widget = Paragraph::new(status_text)

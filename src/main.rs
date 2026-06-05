@@ -52,7 +52,7 @@ static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(get_snippets_path);
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("Failed to create async runtime: {}. Ensure no other process is consuming excessive system resources.", e);
+        eprintln!("Failed to create async runtime: {e}. Ensure no other process is consuming excessive system resources.");
         std::process::exit(1);
     })
 });
@@ -64,11 +64,11 @@ fn setup_signal_handler() {
     let terminate = ui::get_terminate();
 
     if let Err(e) = flag::register(signal_hook::consts::signal::SIGINT, terminate.clone()) {
-        eprintln!("Failed to set Ctrl+C handler: {}", e);
+        eprintln!("Failed to set Ctrl+C handler: {e}");
         std::process::exit(1);
     }
     if let Err(e) = flag::register(signal_hook::consts::signal::SIGTERM, terminate) {
-        eprintln!("Failed to set SIGTERM handler: {}", e);
+        eprintln!("Failed to set SIGTERM handler: {e}");
         std::process::exit(1);
     }
 }
@@ -366,7 +366,7 @@ fn main() {
 
     let cli = Cli::parse();
     if let Err(e) = dispatch_command(cli.command) {
-        eprintln!("error: {}", e);
+        eprintln!("error: {e}");
         log_shutdown_info();
         std::process::exit(1);
     }

@@ -95,7 +95,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                     } else {
                         values[i].clone()
                     };
-                let text = format!("{}{}", prefix, display_value);
+                let text = format!("{prefix}{display_value}");
 
                 let p = Paragraph::new(text)
                     .block(var_block)

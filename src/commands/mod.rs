@@ -65,7 +65,7 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
             let lib = mgr.get_library_by_filename(&name)
                 .ok_or_else(|| SnipError::runtime_error(
                     "Library not found",
-                    Some(&format!("Library '{}' does not exist. Use 'snp library list' to see available libraries.", name)),
+                    Some(&format!("Library '{name}' does not exist. Use 'snp library list' to see available libraries.")),
                 ))?;
             Some(
                 mgr.get_libraries_dir()

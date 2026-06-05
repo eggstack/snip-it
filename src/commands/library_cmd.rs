@@ -35,8 +35,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     if !force {
         if !std::io::stdin().is_terminal() {
             eprintln!(
-                "Refusing to delete library '{}' in non-interactive mode. Use --force to override.",
-                name
+                "Refusing to delete library '{name}' in non-interactive mode. Use --force to override."
             );
             return Err(crate::error::SnipError::runtime_error(
                 "Non-interactive delete",
@@ -44,8 +43,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
             ));
         }
         eprint!(
-            "Are you sure you want to delete library '{}'? [y/N]: ",
-            name
+            "Are you sure you want to delete library '{name}'? [y/N]: "
         );
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).ok();
@@ -56,7 +54,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     }
 
     mgr.delete_library(&name)?;
-    println!("Deleted library '{}'", name);
+    println!("Deleted library '{name}'");
     Ok(())
 }
 
@@ -64,7 +62,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
 pub fn run_set_primary(name: String) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
     mgr.set_primary(&name)?;
-    println!("Set '{}' as primary library", name);
+    println!("Set '{name}' as primary library");
     Ok(())
 }
 
@@ -86,7 +84,7 @@ pub fn run_show(name: Option<String>) -> SnipResult<()> {
                 );
             }
         } else {
-            eprintln!("Library '{}' not found", name);
+            eprintln!("Library '{name}' not found");
         }
     } else {
         println!("Libraries:");

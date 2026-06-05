@@ -105,9 +105,9 @@ pub fn run_get(
         } else {
             for (name, success, msg) in results {
                 if success {
-                    println!("  + {} → {}", name, msg);
+                    println!("  + {name} → {msg}");
                 } else {
-                    println!("  ✗ {}: {}", name, msg);
+                    println!("  ✗ {name}: {msg}");
                 }
             }
         }

@@ -153,9 +153,9 @@ pub fn extract_variables_for_display(command: &str) -> Vec<String> {
         .into_iter()
         .map(|(name, default)| {
             if let Some(default_val) = default {
-                format!("{} = {}", name, default_val)
+                format!("{name} = {default_val}")
             } else {
-                format!("{} (prompt)", name)
+                format!("{name} (prompt)")
             }
         })
         .collect()

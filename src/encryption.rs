@@ -94,7 +94,7 @@ impl EncryptedPayload {
     pub fn from_base64(data: &str) -> CryptoResult<Self> {
         let combined = BASE64
             .decode(data)
-            .map_err(|e| CryptoError::InvalidData(format!("Failed to decode base64: {}", e)))?;
+            .map_err(|e| CryptoError::InvalidData(format!("Failed to decode base64: {e}")))?;
 
         if combined.len() < SALT_SIZE + NONCE_SIZE {
             return Err(CryptoError::InvalidData("Data too short".to_string()));
@@ -114,7 +114,7 @@ impl EncryptedPayload {
 
 fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
     let salt_string = SaltString::encode_b64(salt)
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Salt encoding failed: {}", e)))?;
+        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Salt encoding failed: {e}")))?;
 
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
@@ -125,12 +125,12 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
             ARGON2_PARALLELISM,
             Some(32),
         )
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Invalid Argon2 params: {}", e)))?,
+        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Invalid Argon2 params: {e}")))?,
     );
 
     let hash = argon2
         .hash_password(api_key.as_bytes(), &salt_string)
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Hashing failed: {}", e)))?;
+        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Hashing failed: {e}")))?;
 
     let hash_output = hash
         .hash
@@ -155,7 +155,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
     let mut key = derive_key(api_key, &salt)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {}", e)))?;
+        .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {e}")))?;
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -163,7 +163,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_bytes())
-        .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {}", e)))?;
+        .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {e}")))?;
 
     drop(std::mem::take(&mut key));
 
@@ -182,18 +182,18 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let mut key = derive_key(api_key, &payload.salt)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
-        .map_err(|e| CryptoError::DecryptionFailed(format!("Key init failed: {}", e)))?;
+        .map_err(|e| CryptoError::DecryptionFailed(format!("Key init failed: {e}")))?;
 
     let nonce = Nonce::from_slice(&payload.nonce);
 
     let plaintext = cipher
         .decrypt(nonce, payload.ciphertext.as_ref())
-        .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {}", e)))?;
+        .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {e}")))?;
 
     drop(std::mem::take(&mut key));
 
     String::from_utf8(plaintext)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {}", e)))
+        .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {e}")))
 }
 
 #[cfg(test)]

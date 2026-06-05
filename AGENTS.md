@@ -36,7 +36,7 @@ as a workspace with a library crate.
 
 ```
 snip-it/
-├── Cargo.toml          # Main crate: binary "snp" (Rust 1.81+)
+├── Cargo.toml          # Main crate: binary "snp" (Rust 1.88+)
 ├── src/
 │   ├── main.rs         # CLI entry point, clap command dispatch
 │   ├── clipboard.rs    # Cross-platform clipboard (copypasta / clipboard-win)

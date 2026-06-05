@@ -50,7 +50,7 @@ pub fn run(
     } else {
         println!(
             "{}",
-            style(format!("Command> {}", command)).with(Color::Yellow)
+            style(format!("Command> {command}")).with(Color::Yellow)
         );
         command
     };

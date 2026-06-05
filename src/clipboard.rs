@@ -105,10 +105,10 @@ fn clear_clipboard_impl() -> SnipResult<()> {
     #[cfg(not(windows))]
     {
         let mut ctx = ClipboardContext::new().map_err(|e| {
-            SnipError::clipboard_error("create clipboard context for clear", format!("{}", e))
+            SnipError::clipboard_error("create clipboard context for clear", format!("{e}"))
         })?;
         ctx.set_contents(String::new())
-            .map_err(|e| SnipError::clipboard_error("clear clipboard", format!("{}", e)))?;
+            .map_err(|e| SnipError::clipboard_error("clear clipboard", format!("{e}")))?;
     }
 
     log_clipboard_operation("clear_clipboard", true);
@@ -204,12 +204,12 @@ pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
     with_clipboard_timeout("copy", move || {
         let mut ctx = ClipboardContext::new().map_err(|e| {
             log_clipboard_operation("create context", false);
-            SnipError::clipboard_error("create clipboard context", format!("{}", e))
+            SnipError::clipboard_error("create clipboard context", format!("{e}"))
         })?;
 
         ctx.set_contents(text).map_err(|e| {
             log_clipboard_operation("set_contents", false);
-            SnipError::clipboard_error("set contents", format!("{}", e))
+            SnipError::clipboard_error("set contents", format!("{e}"))
         })?;
 
         log_clipboard_operation("set_contents", true);

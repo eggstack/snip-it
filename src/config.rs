@@ -291,7 +291,7 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     let content = quote_strings_containing_backslashes(&content);
     let checksum = compute_crc32(&content);
-    let content_with_integrity = format!("# integrity: {}\n{}", checksum, content);
+    let content_with_integrity = format!("# integrity: {checksum}\n{content}");
 
     let tmp_path = path.with_extension("toml.tmp");
     fs::write(&tmp_path, &content_with_integrity)

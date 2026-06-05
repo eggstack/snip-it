@@ -143,9 +143,9 @@ pub fn run_premade_sync(
             println!("\nPremade libraries:");
             for (name, success, msg) in &premade_results {
                 if *success {
-                    println!("  + {} → {}", name, msg);
+                    println!("  + {name} → {msg}");
                 } else {
-                    println!("  ✗ {}: {}", name, msg);
+                    println!("  ✗ {name}: {msg}");
                 }
             }
 
@@ -315,7 +315,7 @@ pub fn run_sync(
     }
 
     for lib_name in &libraries_to_sync {
-        let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
+        let lib_path = mgr.get_libraries_dir().join(format!("{lib_name}.toml"));
 
         if !lib_path.exists() {
             tracing::warn!(library = %lib_name, "Library file not found, skipping");
@@ -365,7 +365,7 @@ pub fn run_sync(
         print!("\r[{}/{}] Syncing {}...", completed + 1, total, lib_name);
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
-        let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", lib_name));
+        let lib_path = mgr.get_libraries_dir().join(format!("{lib_name}.toml"));
 
         if !lib_path.exists() {
             tracing::warn!(library = %lib_name, "Library file not found, skipping sync");

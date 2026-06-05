@@ -11,8 +11,7 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
             Some(p) => p,
             None => {
                 eprintln!(
-                    "Library '{}' not found. Use 'snp library list' to see available libraries.",
-                    lib_name
+                    "Library '{lib_name}' not found. Use 'snp library list' to see available libraries."
                 );
                 return Ok(());
             }
@@ -52,8 +51,7 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
             return Err(SnipError::runtime_error(
                 "Editor not found",
                 Some(&format!(
-                    "EDITOR '{}' does not exist. Set EDITOR to a valid editor path.",
-                    editor
+                    "EDITOR '{editor}' does not exist. Set EDITOR to a valid editor path."
                 )),
             ));
         }
@@ -61,9 +59,8 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
             return Err(SnipError::runtime_error(
                 "Editor is not a file",
                 Some(&format!(
-                    "EDITOR '{}' exists but is not a file (it may be a directory). \
-                     Set EDITOR to a valid editor executable.",
-                    editor
+                    "EDITOR '{editor}' exists but is not a file (it may be a directory). \
+                     Set EDITOR to a valid editor executable."
                 )),
             ));
         }
@@ -75,7 +72,7 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
         let cwd = std::env::current_dir().map_err(|e| {
             SnipError::runtime_error(
                 "Failed to get current directory",
-                Some(&format!("Cannot resolve relative editor path: {}", e)),
+                Some(&format!("Cannot resolve relative editor path: {e}")),
             )
         })?;
         let candidate = cwd.join(editor);
@@ -113,7 +110,7 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
         let canonical_cwd = cwd.canonicalize().map_err(|e| {
             SnipError::runtime_error(
                 "Current directory resolution failed",
-                Some(&format!("Cannot canonicalize CWD: {}", e)),
+                Some(&format!("Cannot canonicalize CWD: {e}")),
             )
         })?;
 
@@ -121,8 +118,7 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
             return Err(SnipError::runtime_error(
                 "Editor path unsafe",
                 Some(&format!(
-                    "EDITOR '{}' resolves outside of current directory (possible symlink attack). Use an absolute path.",
-                    editor
+                    "EDITOR '{editor}' resolves outside of current directory (possible symlink attack). Use an absolute path."
                 )),
             ));
         }
@@ -155,9 +151,8 @@ fn resolve_editor(editor: &str) -> SnipResult<String> {
     Err(SnipError::runtime_error(
         "Editor not found",
         Some(&format!(
-            "EDITOR '{}' is not an absolute path and could not be found in PATH. \
-             Set EDITOR to an absolute path (e.g., /usr/bin/vim).",
-            editor
+            "EDITOR '{editor}' is not an absolute path and could not be found in PATH. \
+             Set EDITOR to an absolute path (e.g., /usr/bin/vim)."
         )),
     ))
 }

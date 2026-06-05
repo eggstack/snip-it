@@ -49,7 +49,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             sync_settings.device_id = device_id.clone();
 
             if let Err(e) = save_sync_settings(&sync_settings) {
-                eprintln!("Failed to save sync settings: {}", e);
+                eprintln!("Failed to save sync settings: {e}");
                 return Err(e);
             }
 
@@ -59,9 +59,9 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             } else {
                 "****".to_string()
             };
-            println!("API key: {}", masked_key);
+            println!("API key: {masked_key}");
             println!("(Note: API key is stored in the OS keychain when available.)");
-            println!("Device ID: {}", device_id);
+            println!("Device ID: {device_id}");
             println!(
                 "Saved to: {}",
                 crate::config::get_sync_config_path().display()

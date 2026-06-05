@@ -78,13 +78,13 @@ impl fmt::Display for SnipError {
                     Some(p) => format!(" (path: {})", p.display()),
                     None => String::new(),
                 };
-                write!(f, "I/O error during {}: {}{}", operation, source, path_info)
+                write!(f, "I/O error during {operation}: {source}{path_info}")
             }
             SnipError::Toml { operation, source } => {
-                write!(f, "TOML error during {}: {}", operation, source)
+                write!(f, "TOML error during {operation}: {source}")
             }
             SnipError::Clipboard { operation, message } => {
-                write!(f, "Clipboard error during {}: {}", operation, message)
+                write!(f, "Clipboard error during {operation}: {message}")
             }
             SnipError::Command {
                 command,
@@ -104,16 +104,15 @@ impl fmt::Display for SnipError {
                 let args_str = args_display.join(" ");
                 write!(
                     f,
-                    "Command execution error: '{}' {} - {}",
-                    command, args_str, source
+                    "Command execution error: '{command}' {args_str} - {source}"
                 )
             }
             SnipError::Runtime { message, detail } => {
                 let detail_str = detail
                     .as_ref()
-                    .map(|d| format!(": {}", d))
+                    .map(|d| format!(": {d}"))
                     .unwrap_or_default();
-                write!(f, "Runtime error: {}{}", message, detail_str)
+                write!(f, "Runtime error: {message}{detail_str}")
             }
         }
     }

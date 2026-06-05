@@ -93,14 +93,14 @@ fn handle_command_result(
         }
         Ok(())
     } else {
-        Err(format!("exit code: {}", result))
+        Err(format!("exit code: {result}"))
     };
     log_command_execution(command, &[], &result_str, working_dir);
 
     if result.success() {
         crate::ProcessResult::Done("Executed".to_string())
     } else {
-        crate::ProcessResult::Done(format!("Executed with exit code: {}", result))
+        crate::ProcessResult::Done(format!("Executed with exit code: {result}"))
     }
 }
 
@@ -125,7 +125,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         let cwd = std::env::current_dir().map_err(|e| {
             SnipError::runtime_error(
                 "Failed to get current directory",
-                Some(&format!("Cannot create output file: {}", e)),
+                Some(&format!("Cannot create output file: {e}")),
             )
         })?;
 
@@ -138,7 +138,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         let canonical_cwd = cwd.canonicalize().map_err(|e| {
             SnipError::runtime_error(
                 "Failed to verify current directory",
-                Some(&format!("Cannot canonicalize CWD: {}", e)),
+                Some(&format!("Cannot canonicalize CWD: {e}")),
             )
         })?;
 
@@ -205,7 +205,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.is_empty() {
-                eprintln!("Error: {}", stderr);
+                eprintln!("Error: {stderr}");
             }
         }
 
@@ -240,14 +240,12 @@ mod tests {
         if cfg!(windows) {
             assert!(
                 shell.ends_with("cmd.exe") || shell.ends_with("CMD.EXE"),
-                "Expected cmd.exe on Windows, got: {}",
-                shell
+                "Expected cmd.exe on Windows, got: {shell}"
             );
         } else {
             assert!(
                 shell.contains("/bin/sh") || std::env::var("SHELL").is_ok(),
-                "Expected /bin/sh or $SHELL on Unix, got: {}",
-                shell
+                "Expected /bin/sh or $SHELL on Unix, got: {shell}"
             );
         }
     }

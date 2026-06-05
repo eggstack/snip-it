@@ -31,7 +31,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             if c == '<' || c == '>' {
                 spans.push(Span::styled(c.to_string(), color_default));
             } else {
-                spans.push(Span::styled(format!("\\{}", c), color_escape));
+                spans.push(Span::styled(format!("\\{c}"), color_escape));
             }
             continue;
         }
@@ -50,7 +50,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
                 }
                 var_content.push(chars.next().expect("peek confirmed Some"));
             }
-            spans.push(Span::styled(format!("<{}>", var_content), color_variable));
+            spans.push(Span::styled(format!("<{var_content}>"), color_variable));
             continue;
         }
 

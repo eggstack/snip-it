@@ -34,8 +34,8 @@ pub fn run(interval: u32) -> SnipResult<()> {
         shell_escape_path(&binary_path)
     );
 
-    println!("Crontab entry (every {} minutes):", interval);
-    println!("{}", cron_entry);
+    println!("Crontab entry (every {interval} minutes):");
+    println!("{cron_entry}");
     println!();
 
     #[cfg(not(target_os = "windows"))]
@@ -64,7 +64,7 @@ pub fn run(interval: u32) -> SnipResult<()> {
     if io::stdin().read_line(&mut input).is_ok() && input.trim().to_lowercase() == "y" {
         match crate::clipboard::copy_to_clipboard_auto(&cron_entry) {
             Ok(()) => println!("Copied to clipboard!"),
-            Err(e) => eprintln!("Failed to copy to clipboard: {}", e),
+            Err(e) => eprintln!("Failed to copy to clipboard: {e}"),
         }
     }
     Ok(())

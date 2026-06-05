@@ -344,7 +344,7 @@ impl LibraryManager {
         self.init_libraries_dir()?;
 
         let filename_lower = filename.to_lowercase();
-        let path = self.libraries_dir.join(format!("{}.toml", filename));
+        let path = self.libraries_dir.join(format!("{filename}.toml"));
 
         if path.exists() {
             return Err(SnipError::runtime_error(
@@ -358,8 +358,7 @@ impl LibraryManager {
                 return Err(SnipError::runtime_error(
                     "Library already exists",
                     Some(&format!(
-                        "A library with name '{}' already exists (case-insensitive duplicate)",
-                        filename
+                        "A library with name '{filename}' already exists (case-insensitive duplicate)"
                     )),
                 ));
             }
@@ -400,7 +399,7 @@ Snippets = []
             .map(|l| l.server_id.is_some())
             .unwrap_or(false);
 
-        let path = self.libraries_dir.join(format!("{}.toml", filename));
+        let path = self.libraries_dir.join(format!("{filename}.toml"));
 
         // Save config first (remove from metadata), then delete the file.
         // If we crash after config save but before file delete, the orphaned
@@ -455,7 +454,7 @@ Snippets = []
         {
             return Err(SnipError::runtime_error(
                 "Library not found",
-                Some(&format!("No library with filename '{}'", filename)),
+                Some(&format!("No library with filename '{filename}'")),
             ));
         }
         for lib in &mut self.config.libraries {
@@ -522,7 +521,7 @@ Snippets = []
 
         self.init_libraries_dir()?;
 
-        let path = self.libraries_dir.join(format!("{}.toml", filename));
+        let path = self.libraries_dir.join(format!("{filename}.toml"));
 
         if !path.exists() {
             let default_content = "# Imported from server\n\nSnippets = []\n";
@@ -564,7 +563,7 @@ Snippets = []
 
     /// Returns `true` if a premade library with the given filename exists on disk.
     pub fn premade_exists(&self, filename: &str) -> bool {
-        self.premade_dir.join(format!("{}.toml", filename)).exists()
+        self.premade_dir.join(format!("{filename}.toml")).exists()
     }
 
     /// Saves a premade library file to the premade directory.
@@ -586,14 +585,14 @@ Snippets = []
             ));
         }
 
-        let path = self.premade_dir.join(format!("{}.toml", filename));
+        let path = self.premade_dir.join(format!("{filename}.toml"));
 
         let canonical_premade = self.premade_dir.canonicalize().map_err(|e| {
             SnipError::io_error("resolve premade directory", self.premade_dir.clone(), e)
         })?;
         let canonical_path = path
             .canonicalize()
-            .unwrap_or_else(|_| canonical_premade.join(format!("{}.toml", filename)));
+            .unwrap_or_else(|_| canonical_premade.join(format!("{filename}.toml")));
         if !canonical_path.starts_with(&canonical_premade) {
             return Err(SnipError::runtime_error(
                 "Invalid premade library path",
@@ -775,7 +774,7 @@ fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()
         None => return Ok(()),
     };
 
-    let prefix = format!("{}.", file_stem);
+    let prefix = format!("{file_stem}.");
     let mut backups: Vec<_> = fs::read_dir(backup_dir)
         .map_err(|e| SnipError::io_error("read backup directory", backup_dir.to_path_buf(), e))?
         .filter_map(|entry| entry.ok())

@@ -22,7 +22,7 @@ fn link_server_library(
             return false;
         }
 
-        let lib_path = mgr.get_libraries_dir().join(format!("{}.toml", filename));
+        let lib_path = mgr.get_libraries_dir().join(format!("{filename}.toml"));
         let local_has_content = if lib_path.exists() {
             if let Ok(snippets) = crate::library::load_library(&lib_path) {
                 !snippets.snippets.is_empty()
@@ -35,25 +35,24 @@ fn link_server_library(
 
         if existing_id.is_empty() && local_has_content {
             println!(
-                "\n  Local library '{}' has snippets. Server also has snippets.",
-                filename
+                "\n  Local library '{filename}' has snippets. Server also has snippets."
             );
             match prompt_conflict(&filename, non_interactive).as_deref() {
                 Some("overwrite") => {
                     println!("  Will overwrite with server version");
                 }
                 Some("rename") => {
-                    let new_name = format!("{}_local", filename);
-                    println!("  Renaming to '{}' and pulling from server", new_name);
+                    let new_name = format!("{filename}_local");
+                    println!("  Renaming to '{new_name}' and pulling from server");
                     if let Err(e) = mgr.create_library(&new_name) {
-                        eprintln!("    Failed to create backup: {}", e);
+                        eprintln!("    Failed to create backup: {e}");
                         return false;
                     }
                     if let Err(e) = mgr.update_library_id(&new_name, &lib.id) {
-                        eprintln!("    Failed to link backup: {}", e);
+                        eprintln!("    Failed to link backup: {e}");
                         return false;
                     }
-                    println!("    Created '{}' with local content", new_name);
+                    println!("    Created '{new_name}' with local content");
                     return true;
                 }
                 _ => {
@@ -95,15 +94,13 @@ fn link_server_library(
 pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> {
     if non_interactive {
         println!(
-            "  Conflict: '{}' has different content, keeping local (non-interactive mode)",
-            lib_name
+            "  Conflict: '{lib_name}' has different content, keeping local (non-interactive mode)"
         );
         return None;
     }
 
     println!(
-        "\nConflict: Local library '{}' has different content than server",
-        lib_name
+        "\nConflict: Local library '{lib_name}' has different content than server"
     );
     println!("  (s)kip - keep local version");
     println!("  (o)verwrite - replace with server version");
@@ -141,7 +138,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
     let sync_settings = match load_sync_settings() {
         Ok(settings) => settings,
         Err(e) => {
-            eprintln!("Failed to load sync settings: {}", e);
+            eprintln!("Failed to load sync settings: {e}");
             SyncSettings::default()
         }
     };
@@ -165,7 +162,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                     println!("  {} ({})", lib.name, lib.id);
                 }
             }
-            Err(e) => eprintln!("Failed to list server libraries: {}", e),
+            Err(e) => eprintln!("Failed to list server libraries: {e}"),
         }
         return Ok(());
     }
@@ -206,7 +203,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 } else {
                     "bidirectional"
                 };
-                println!("  Direction: {}", direction);
+                println!("  Direction: {direction}");
                 println!("  Snippets in library: {}", snippets.snippets.len());
                 for s in &snippets.snippets {
                     if !s.deleted {
@@ -228,7 +225,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             Ok(())
         }
         Err(e) => {
-            eprintln!("Failed to pull libraries: {}", e);
+            eprintln!("Failed to pull libraries: {e}");
             Err(SnipError::runtime_error(
                 "Failed to list server libraries",
                 Some(&e.to_string()),

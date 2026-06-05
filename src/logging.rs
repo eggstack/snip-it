@@ -102,7 +102,7 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     let env_filter = if let Ok(filter_str) = std::env::var("SNP_LOG") {
         EnvFilter::try_new(&filter_str).unwrap_or_else(|e| {
-            eprintln!("Warning: Invalid SNP_LOG filter '{}': {}", filter_str, e);
+            eprintln!("Warning: Invalid SNP_LOG filter '{filter_str}': {e}");
             EnvFilter::new(format!("snp={}", level_str(config.level)))
         })
     } else {
@@ -137,7 +137,7 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 pub fn init_default_logging() {
     let config = LogConfig::default();
     if let Err(e) = init_logging(&config) {
-        eprintln!("Warning: Failed to initialize logging: {}", e);
+        eprintln!("Warning: Failed to initialize logging: {e}");
     }
     self_check();
 }
@@ -293,7 +293,7 @@ pub fn setup_panic_handler() {
 
         let (location, message) = extract_panic_info(panic_info);
 
-        eprintln!("PANIC at {}: {}", location, message);
+        eprintln!("PANIC at {location}: {message}");
 
         previous_hook(panic_info);
     }));
@@ -497,7 +497,7 @@ fn rotate_audit_log_if_needed(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let rotated_path = log_path.with_extension(format!("{}.rotated", timestamp));
+        let rotated_path = log_path.with_extension(format!("{timestamp}.rotated"));
         fs::rename(log_path, rotated_path)?;
     }
 
