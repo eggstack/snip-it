@@ -519,9 +519,14 @@ pub fn run_sync(
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
                                 }
                                 tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
-                                // Retry sync with new library ID
+                                // Retry sync with new library ID — push local snippets to fresh server library
+                                let local_snippets_for_retry: Vec<ProtoSnippet> = snippets
+                                    .snippets
+                                    .iter()
+                                    .map(ProtoSnippet::from)
+                                    .collect();
                                 let retry_result = runtime.block_on(
-                                    client.sync_encrypted(vec![], 0, &server_lib.id)
+                                    client.sync_encrypted(local_snippets_for_retry, 0, &server_lib.id)
                                 );
                                 match retry_result {
                                     Ok(retry_response) if retry_response.success => {
@@ -534,6 +539,9 @@ pub fn run_sync(
                                             &sync_settings.device_id,
                                         ) {
                                             Ok((_merged, _backup, _conflicts)) => {
+                                                if let Err(e) = mgr.update_last_sync(lib_name, retry_response.server_timestamp) {
+                                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                                                }
                                                 status.pulled += server_snippets.len() as u32;
                                                 results.push((lib_name.clone(), true, "Re-linked and synced".to_string()));
                                             }
@@ -622,8 +630,13 @@ pub fn run_sync(
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
                                 }
                                 tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
+                                let local_snippets_for_retry: Vec<ProtoSnippet> = snippets
+                                    .snippets
+                                    .iter()
+                                    .map(ProtoSnippet::from)
+                                    .collect();
                                 let retry_result = runtime.block_on(
-                                    client.sync_encrypted(vec![], 0, &server_lib.id)
+                                    client.sync_encrypted(local_snippets_for_retry, 0, &server_lib.id)
                                 );
                                 match retry_result {
                                     Ok(retry_response) if retry_response.success => {
@@ -636,6 +649,9 @@ pub fn run_sync(
                                             &sync_settings.device_id,
                                         ) {
                                             Ok((_merged, _backup, _conflicts)) => {
+                                                if let Err(e) = mgr.update_last_sync(lib_name, retry_response.server_timestamp) {
+                                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                                                }
                                                 status.pulled += server_snippets.len() as u32;
                                                 results.push((lib_name.clone(), true, "Re-linked and synced".to_string()));
                                             }

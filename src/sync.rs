@@ -186,7 +186,7 @@ impl SyncClient {
             final_message = std::mem::take(&mut response.message);
             final_total_count = response.total_count;
 
-            if !response.has_more {
+            if !response.has_more || response.snippets.is_empty() {
                 break;
             }
 
