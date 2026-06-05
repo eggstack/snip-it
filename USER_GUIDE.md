@@ -11,6 +11,10 @@ Advanced topics and detailed usage documentation for snp (Snippet Manager).
 - [Shell Keyword Expansion](#shell-keyword-expansion)
 - [Import/Export](#importexport)
 - [Configuration Reference](#configuration-reference)
+- [Advanced Usage](#advanced-usage)
+- [Programmatic Usage](#programmatic-usage)
+- [Troubleshooting](#troubleshooting)
+  - [Reset and Recovery](#reset-and-recovery)
 
 ---
 
@@ -351,6 +355,21 @@ command = "cp <file> ~/backups/backup-$(date).tar.gz"
 
 ## Import/Export
 
+### Import from `pet` (or `navi`)
+
+snp accepts the same TOML schema as `pet`; copy the file in place and
+you're done:
+
+```bash
+# Typical pet config location: ~/.config/pet/snippets.toml
+cp ~/.config/pet/snippets.toml ~/.config/snp/lippets.toml
+# (note: file is renamed, but the inner TOML is read as-is)
+```
+
+`snp` reads the legacy `pet` keys (`Command`, `Description`, `Tag`,
+`Output`) and the modern lowercase keys (`command`, `description`,
+`tags`, `output`); both work in the same file.
+
 ### Import from snip (Python version)
 
 The snip format is compatible:
@@ -552,3 +571,42 @@ If snippets are lost:
 1. Check `~/.config/snp/snippets.toml.bak`
 2. Check `~/.config/snp/libraries/` for backups
 3. Restore from server: `snp sync --pull-only`
+
+### Reset and Recovery
+
+To wipe all local data and start fresh:
+
+```bash
+# Remove all snippets, sync settings, libraries, logs, and audit log
+rm -rf ~/.config/snp
+
+# Next invocation will recreate the directory with default permissions
+snp --version
+```
+
+`rm -rf` is destructive. Back up first if you intend to keep anything:
+
+```bash
+mv ~/.config/snp ~/.config/snp.backup-$(date +%Y%m%d)
+```
+
+To reset just sync state (keep snippets, drop the server connection):
+
+```bash
+rm ~/.config/snp/sync.toml
+snp register https://your-server:50051
+```
+
+### Keychain Issues (Linux headless / SSH sessions)
+
+On Linux, the `keyring` crate requires a running Secret Service
+(GNOME Keyring, KWallet, or similar). If unavailable, snp logs an
+error and refuses to write the API key in plaintext by default.
+
+Fallback for headless / CI usage:
+
+```bash
+export SNP_ALLOW_PLAINTEXT_API_KEY=true
+snp register https://your-server:50051
+# API key is now stored in sync.toml with a runtime warning emitted
+```
