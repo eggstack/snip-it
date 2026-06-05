@@ -1,5 +1,5 @@
 use crate::commands::init_library_manager;
-use crate::config::{SyncSettings, load_sync_settings};
+use crate::config::{SyncDirection, SyncSettings, load_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use crate::proto::Library;
@@ -214,12 +214,19 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             }
 
             println!("\nPulling snippets from server...");
+            // Respect config direction when no CLI flags are provided
+            let effective_push = options.push_only
+                || (!options.pull_only
+                    && sync_settings.sync_direction == SyncDirection::Push);
+            let effective_pull = options.pull_only
+                || (!options.push_only
+                    && sync_settings.sync_direction == SyncDirection::Pull);
             crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),
                 options.non_interactive,
-                options.push_only,
-                options.pull_only,
+                effective_push,
+                effective_pull,
                 runtime,
             )?;
             Ok(())

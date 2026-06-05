@@ -57,6 +57,7 @@ message SyncRequest {
     int64 last_sync_timestamp = 3;
     string library_id = 4;
     int32 limit = 5;
+    int32 offset = 6;
 }
 
 message SyncResponse {
@@ -66,6 +67,8 @@ message SyncResponse {
     int64 server_timestamp = 4;
     int32 skipped_count = 5;
     repeated string skipped_ids = 6;
+    bool has_more = 7;
+    int32 total_count = 8;
 }
 
 message Snippet {
@@ -150,6 +153,8 @@ message ListPremadeLibrariesRequest {
 
 message ListPremadeLibrariesResponse {
     repeated PremadeLibrary libraries = 1;
+    bool has_more = 2;
+    int32 total_count = 3;
 }
 
 message PremadeLibrary {

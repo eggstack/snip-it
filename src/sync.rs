@@ -131,6 +131,7 @@ impl SyncClient {
     /// Encrypts local snippets, sends them to the server, and decrypts the response.
     ///
     /// Snippets that fail encryption/decryption are counted as skipped.
+    /// Handles server-side pagination by fetching all pages before returning.
     pub async fn sync_encrypted(
         &mut self,
         local_snippets: Vec<crate::proto::Snippet>,
@@ -152,39 +153,59 @@ impl SyncClient {
             }
         }
 
-        let request = SyncRequest {
+        let mut request = SyncRequest {
             api_key: api_key.clone(),
             local_snippets: encrypted_snippets,
             last_sync_timestamp: last_sync,
             library_id: library_id.to_string(),
             limit: self.settings.sync_limit_value(),
+            offset: 0,
         };
 
-        let response = self.sync_with_retry(request).await?;
+        let mut all_server_snippets = Vec::new();
+        let mut all_skipped_ids = encrypt_failed_ids;
+        let mut final_timestamp;
+        let mut final_message;
+        let mut final_total_count;
 
-        let mut decrypted_snippets = Vec::new();
-        let mut decrypt_failed_ids = Vec::new();
+        loop {
+            let mut response = self.sync_with_retry(request.clone()).await?;
 
-        for s in &response.snippets {
-            match decrypt_snippet(&api_key, s) {
-                Ok(ds) => decrypted_snippets.push(ds),
-                Err(e) => {
-                    decrypt_failed_ids.push(s.id.clone());
-                    tracing::warn!("Failed to decrypt snippet {}: {}", s.id, e);
+            // Decrypt server snippets from this page
+            for s in &response.snippets {
+                match decrypt_snippet(&api_key, s) {
+                    Ok(ds) => all_server_snippets.push(ds),
+                    Err(e) => {
+                        all_skipped_ids.push(s.id.clone());
+                        tracing::warn!("Failed to decrypt snippet {}: {}", s.id, e);
+                    }
                 }
             }
+
+            final_timestamp = response.server_timestamp;
+            final_message = std::mem::take(&mut response.message);
+            final_total_count = response.total_count;
+
+            if !response.has_more {
+                break;
+            }
+
+            // Prepare next page request — don't re-send local snippets
+            request.local_snippets.clear();
+            request.offset += response.snippets.len() as i32;
         }
 
-        let total_skipped = encrypt_failed_ids.len() + decrypt_failed_ids.len();
-        let mut all_skipped_ids = encrypt_failed_ids;
-        all_skipped_ids.extend(decrypt_failed_ids);
-
-        let mut response = response;
-        response.snippets = decrypted_snippets;
-        response.skipped_count = total_skipped as i32;
-        response.skipped_ids = all_skipped_ids;
-
-        Ok(response)
+        let total_skipped = all_skipped_ids.len();
+        Ok(crate::proto::SyncResponse {
+            success: true,
+            message: final_message,
+            snippets: all_server_snippets,
+            server_timestamp: final_timestamp,
+            skipped_count: total_skipped as i32,
+            skipped_ids: all_skipped_ids,
+            has_more: false,
+            total_count: final_total_count,
+        })
     }
 
     /// Manual retry logic for sync requests.

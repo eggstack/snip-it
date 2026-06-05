@@ -49,6 +49,8 @@ pub struct SyncRequest {
     pub library_id: ::prost::alloc::string::String,
     #[prost(int32, tag = "5")]
     pub limit: i32,
+    #[prost(int32, tag = "6")]
+    pub offset: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncResponse {
@@ -64,6 +66,10 @@ pub struct SyncResponse {
     pub skipped_count: i32,
     #[prost(string, repeated, tag = "6")]
     pub skipped_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bool, tag = "7")]
+    pub has_more: bool,
+    #[prost(int32, tag = "8")]
+    pub total_count: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Snippet {
@@ -188,6 +194,10 @@ pub struct ListPremadeLibrariesRequest {
 pub struct ListPremadeLibrariesResponse {
     #[prost(message, repeated, tag = "1")]
     pub libraries: ::prost::alloc::vec::Vec<PremadeLibrary>,
+    #[prost(bool, tag = "2")]
+    pub has_more: bool,
+    #[prost(int32, tag = "3")]
+    pub total_count: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PremadeLibrary {

@@ -185,7 +185,7 @@ fn merge_and_save(
     snippets: &Snippets,
     server_snippets: &[ProtoSnippet],
     device_id: &str,
-) -> SnipResult<(Snippets, Option<String>)> {
+) -> SnipResult<(Snippets, Option<String>, Vec<String>)> {
     let conflicting_ids = sync::detect_device_conflict(server_snippets, device_id);
     if !conflicting_ids.is_empty() {
         tracing::warn!(
@@ -223,7 +223,7 @@ fn merge_and_save(
         ));
     }
 
-    Ok((merged, backup_path))
+    Ok((merged, backup_path, conflicting_ids))
 }
 
 /// Performs a full sync operation across one or more libraries.
@@ -246,6 +246,13 @@ pub fn run_sync(
     } else {
         SyncDirection::Bidirectional
     };
+
+    if direction == SyncDirection::Push {
+        tracing::warn!(
+            "Push-only mode: local changes will be uploaded but remote changes from other devices \
+             will NOT be downloaded. Use bidirectional sync for multi-device support."
+        );
+    }
 
     if !ensure_sync_configured(sync_settings) {
         return Err(SnipError::runtime_error("Sync not configured", None));
@@ -452,7 +459,7 @@ pub fn run_sync(
                             &server_snippets,
                             &sync_settings.device_id,
                         ) {
-                            Ok((_merged, _backup)) => {
+                            Ok((_merged, _backup, conflicts)) => {
                                 if !has_failures
                                     && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
                                 {
@@ -473,6 +480,15 @@ pub fn run_sync(
                                             response.skipped_count
                                         ),
                                     ));
+                                } else if !conflicts.is_empty() {
+                                    results.push((
+                                        lib_name.clone(),
+                                        true,
+                                        format!(
+                                            "{} snippets overwritten by another device",
+                                            conflicts.len()
+                                        ),
+                                    ));
                                 } else {
                                     results.push((lib_name.clone(), true, String::new()));
                                 }
@@ -489,8 +505,64 @@ pub fn run_sync(
                     }
                 }
                 Err(e) => {
-                    status.failed += 1;
-                    results.push((lib_name.clone(), false, e.to_string()));
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Library not found") {
+                        // Server library was deleted — re-create it
+                        tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
+                        let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+                        match runtime.block_on(client.create_library(&normalized_name)) {
+                            Ok(server_lib) => {
+                                if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
+                                }
+                                if let Err(e) = mgr.update_last_sync(lib_name, 0) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
+                                }
+                                tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
+                                // Retry sync with new library ID
+                                let retry_result = runtime.block_on(
+                                    client.sync_encrypted(vec![], 0, &server_lib.id)
+                                );
+                                match retry_result {
+                                    Ok(retry_response) if retry_response.success => {
+                                        let server_snippets = retry_response.snippets;
+                                        match merge_and_save(
+                                            &lib_path,
+                                            lib_name,
+                                            &snippets,
+                                            &server_snippets,
+                                            &sync_settings.device_id,
+                                        ) {
+                                            Ok((_merged, _backup, _conflicts)) => {
+                                                status.pulled += server_snippets.len() as u32;
+                                                results.push((lib_name.clone(), true, "Re-linked and synced".to_string()));
+                                            }
+                                            Err(e) => {
+                                                status.failed += 1;
+                                                results.push((lib_name.clone(), false, e.to_string()));
+                                            }
+                                        }
+                                    }
+                                    Ok(retry_response) => {
+                                        status.failed += 1;
+                                        results.push((lib_name.clone(), false, retry_response.message));
+                                    }
+                                    Err(e) => {
+                                        status.failed += 1;
+                                        results.push((lib_name.clone(), false, e.to_string()));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
+                                status.failed += 1;
+                                results.push((lib_name.clone(), false, format!("Library deleted and re-creation failed: {e}")));
+                            }
+                        }
+                    } else {
+                        status.failed += 1;
+                        results.push((lib_name.clone(), false, err_msg));
+                    }
                 }
             }
         }
@@ -511,7 +583,7 @@ pub fn run_sync(
                             &server_snippets,
                             &sync_settings.device_id,
                         ) {
-                            Ok((_merged, _backup)) => {
+                            Ok((_merged, _backup, conflicts)) => {
                                 let has_failures = response.skipped_count > 0;
                                 if !has_failures
                                     && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
@@ -519,7 +591,15 @@ pub fn run_sync(
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
                                 status.pulled += server_snippets.len() as u32;
-                                results.push((lib_name.clone(), true, String::new()));
+                                if !conflicts.is_empty() {
+                                    results.push((
+                                        lib_name.clone(),
+                                        true,
+                                        format!("{} snippets overwritten by another device", conflicts.len()),
+                                    ));
+                                } else {
+                                    results.push((lib_name.clone(), true, String::new()));
+                                }
                             }
                             Err(e) => {
                                 status.failed += 1;
@@ -529,8 +609,62 @@ pub fn run_sync(
                     }
                 }
                 Err(e) => {
-                    status.failed += 1;
-                    results.push((lib_name.clone(), false, e.to_string()));
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Library not found") {
+                        tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
+                        let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+                        match runtime.block_on(client.create_library(&normalized_name)) {
+                            Ok(server_lib) => {
+                                if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
+                                }
+                                if let Err(e) = mgr.update_last_sync(lib_name, 0) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
+                                }
+                                tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
+                                let retry_result = runtime.block_on(
+                                    client.sync_encrypted(vec![], 0, &server_lib.id)
+                                );
+                                match retry_result {
+                                    Ok(retry_response) if retry_response.success => {
+                                        let server_snippets = retry_response.snippets;
+                                        match merge_and_save(
+                                            &lib_path,
+                                            lib_name,
+                                            &snippets,
+                                            &server_snippets,
+                                            &sync_settings.device_id,
+                                        ) {
+                                            Ok((_merged, _backup, _conflicts)) => {
+                                                status.pulled += server_snippets.len() as u32;
+                                                results.push((lib_name.clone(), true, "Re-linked and synced".to_string()));
+                                            }
+                                            Err(e) => {
+                                                status.failed += 1;
+                                                results.push((lib_name.clone(), false, e.to_string()));
+                                            }
+                                        }
+                                    }
+                                    Ok(retry_response) => {
+                                        status.failed += 1;
+                                        results.push((lib_name.clone(), false, retry_response.message));
+                                    }
+                                    Err(e) => {
+                                        status.failed += 1;
+                                        results.push((lib_name.clone(), false, e.to_string()));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
+                                status.failed += 1;
+                                results.push((lib_name.clone(), false, format!("Library deleted and re-creation failed: {e}")));
+                            }
+                        }
+                    } else {
+                        status.failed += 1;
+                        results.push((lib_name.clone(), false, err_msg));
+                    }
                 }
             }
         }
@@ -614,7 +748,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                     tags: server_snip.tags.clone(),
                     folders: local_snip.folders.clone(),
                     favorite: local_snip.favorite,
-                    created_at: local_snip.created_at,
+                    created_at: local_snip.created_at.min(server_snip.created_at),
                     updated_at: server_snip.updated_at,
                     device_id: local_snip.device_id.clone(),
                     deleted: false,

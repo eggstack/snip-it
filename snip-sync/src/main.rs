@@ -600,7 +600,7 @@ impl SnippetSync for SnipSyncService {
 
         let (snippets, total) = self
             .db
-            .get_snippets(&user_id, &library_id, req.since, limit, offset)
+            .get_snippets(&user_id, &library_id, req.since, limit, offset, false)
             .await
             .map_err(|e| {
                 tracing::error!("Internal error: {}", e);
@@ -837,23 +837,38 @@ impl SnippetSync for SnipSyncService {
             1000
         };
 
-        let (snippets, _) = self
+        let offset = if req.offset > 0 { req.offset } else { 0 };
+
+        let (snippets, total) = self
             .db
-            .get_snippets(&user_id, &library_id, req.last_sync_timestamp, limit, 0)
+            .get_snippets(
+                &user_id,
+                &library_id,
+                req.last_sync_timestamp,
+                limit,
+                offset,
+                true,
+            )
             .await
             .map_err(|e| {
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
 
-        let timestamp = self
-            .db
-            .get_latest_timestamp(&user_id, &library_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("Internal error: {}", e);
-                Status::internal("Internal error")
-            })?;
+        let has_more = (offset + snippets.len() as i32) < total;
+
+        let timestamp = if has_more {
+            // Don't advance timestamp when paginating — client needs to fetch remaining pages
+            req.last_sync_timestamp
+        } else {
+            self.db
+                .get_latest_timestamp(&user_id, &library_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Internal error: {}", e);
+                    Status::internal("Internal error")
+                })?
+        };
 
         let proto_snippets: Vec<ProtoSnippet> = snippets
             .into_iter()
@@ -876,6 +891,7 @@ impl SnippetSync for SnipSyncService {
             request_id = %request_id,
             snippets_synced = proto_snippets.len(),
             skipped_count = skipped_count,
+            has_more = has_more,
             "Sync completed"
         );
 
@@ -892,6 +908,8 @@ impl SnippetSync for SnipSyncService {
             server_timestamp: timestamp,
             skipped_count,
             skipped_ids,
+            has_more,
+            total_count: total,
         }))
     }
 
@@ -1035,8 +1053,12 @@ impl SnippetSync for SnipSyncService {
             "ListPremadeLibraries completed"
         );
 
+        let count = proto_libraries.len() as i32;
+
         Ok(Response::new(ListPremadeLibrariesResponse {
             libraries: proto_libraries,
+            has_more: false,
+            total_count: count,
         }))
     }
 
@@ -1168,10 +1190,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.max_tag_length,
         config.request_timeout_secs
     );
-
-    if cors_allowed_origins.is_empty() {
-        tracing::warn!("CORS: no origins configured, requests from any origin will be allowed");
-    }
 
     let timeout = Duration::from_secs(config.request_timeout_secs);
 
@@ -1811,6 +1829,7 @@ mod tests {
             last_sync_timestamp: 0,
             library_id,
             limit: 1000,
+            offset: 0,
         });
         let resp = service.sync(req).await.unwrap();
         let sync = resp.into_inner();

@@ -414,25 +414,35 @@ impl Database {
         since: i64,
         limit: i32,
         offset: i32,
+        include_deleted: bool,
     ) -> DbResult<(Vec<Snippet>, i32)> {
-        let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM snippets \
-             WHERE user_id = ? AND library_id = ? AND updated_at > ? AND deleted = 0",
-        )
-        .bind(user_id)
-        .bind(library_id)
-        .bind(since)
-        .fetch_one(&self.pool)
-        .await?;
+        let deleted_filter = if include_deleted {
+            ""
+        } else {
+            " AND deleted = 0"
+        };
 
-        let rows: Vec<SnippetRow> =
-            sqlx::query_as(
-                "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
-                 FROM snippets \
-                 WHERE user_id = ? AND library_id = ? AND updated_at > ? AND deleted = 0 \
-                 ORDER BY updated_at DESC \
-                 LIMIT ? OFFSET ?",
-            )
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM snippets \
+             WHERE user_id = ? AND library_id = ? AND updated_at > ?{}",
+            deleted_filter
+        );
+        let total: (i64,) = sqlx::query_as(&count_sql)
+            .bind(user_id)
+            .bind(library_id)
+            .bind(since)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let data_sql = format!(
+            "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
+             FROM snippets \
+             WHERE user_id = ? AND library_id = ? AND updated_at > ?{} \
+             ORDER BY updated_at DESC \
+             LIMIT ? OFFSET ?",
+            deleted_filter
+        );
+        let rows: Vec<SnippetRow> = sqlx::query_as(&data_sql)
             .bind(user_id)
             .bind(library_id)
             .bind(since)
@@ -528,6 +538,9 @@ impl Database {
         let deleted = snippet.deleted as i32;
         let encrypted = snippet.encrypted as i32;
 
+        // Upsert with last-write-wins conflict resolution.
+        // Tie-breaking uses device_id string comparison, which is correct for
+        // lowercase hex UUIDs (lexicographic == numeric for lowercase hex).
         sqlx::query(
             "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -741,7 +754,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (snippets, total) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        let (snippets, total) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
         assert_eq!(total, 1);
         assert_eq!(snippets[0].description, "Test snippet");
         assert_eq!(snippets[0].command, "echo hello");
@@ -785,7 +801,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
         assert_eq!(snippets.len(), 1);
         assert_eq!(snippets[0].description, "Updated");
         assert_eq!(snippets[0].command, "echo new");
@@ -828,7 +847,10 @@ mod tests {
         db.upsert_snippet(&older, &user_id, &lib_id).await.unwrap();
 
         // Newer data should be preserved
-        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
         assert_eq!(snippets.len(), 1);
         assert_eq!(snippets[0].description, "Newer");
         assert_eq!(snippets[0].command, "echo newer");
@@ -892,7 +914,10 @@ mod tests {
         assert!(db.delete_library(&user_id, &lib_id).await.is_err());
 
         // Snippet should be marked deleted
-        let (snippets, _) = db.get_snippets(&user_id, &lib_id, 0, 10, 0).await.unwrap();
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
         assert_eq!(snippets.len(), 0);
     }
 
@@ -1029,13 +1054,13 @@ mod tests {
             .unwrap();
 
         let (snippets, _) = db
-            .get_snippets(&user1_id, &user1_lib, 0, 10, 0)
+            .get_snippets(&user1_id, &user1_lib, 0, 10, 0, false)
             .await
             .unwrap();
         assert_eq!(snippets.len(), 1);
 
         let (snippets, _) = db
-            .get_snippets(&user2_id, &user1_lib, 0, 10, 0)
+            .get_snippets(&user2_id, &user1_lib, 0, 10, 0, false)
             .await
             .unwrap();
         assert_eq!(snippets.len(), 0);
@@ -1060,5 +1085,59 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_snippets_include_deleted() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let snippet = Snippet {
+            id: "snip-1".to_string(),
+            description: "Test".to_string(),
+            command: "echo".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        // Soft-delete the snippet
+        let deleted = Snippet {
+            id: "snip-1".to_string(),
+            description: "Test".to_string(),
+            command: "echo".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: true,
+            encrypted: false,
+        };
+        db.upsert_snippet(&deleted, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        // Without include_deleted: should not see deleted snippet
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(snippets.len(), 0);
+
+        // With include_deleted: should see deleted snippet
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(snippets.len(), 1);
+        assert!(snippets[0].deleted);
+        assert_eq!(snippets[0].updated_at, 200);
     }
 }
