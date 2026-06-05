@@ -1,7 +1,7 @@
 use crate::commands::{get_library_path, init_library_manager, load_snippets, save_snippets};
 use crate::error::SnipResult;
 use crate::library::Snippet;
-use crossterm::style::{style, Color, Stylize};
+use crossterm::style::{Color, Stylize, style};
 use std::io::{self, Write};
 use std::path::PathBuf;
 

@@ -17,7 +17,7 @@ const KEYCHAIN_SERVICE: &str = "snp-sync";
 const KEYCHAIN_USER: &str = "api-key";
 const KEYCHAIN_MARKER: &str = "@keychain";
 
-pub const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
+pub const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 
 struct CachedToml {
     mtime: SystemTime,
@@ -40,15 +40,15 @@ fn compute_crc32(data: &str) -> u32 {
 /// directory, they can already replace the entire file or binary.
 fn verify_integrity(content: &str) -> bool {
     for line in content.lines() {
-        if let Some(stripped) = line.strip_prefix("# integrity:") {
-            if let Ok(stored) = stripped.trim().parse::<u32>() {
-                let body: String = content
-                    .lines()
-                    .filter(|l| !l.starts_with("# integrity:"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return stored == compute_crc32(&body);
-            }
+        if let Some(stripped) = line.strip_prefix("# integrity:")
+            && let Ok(stored) = stripped.trim().parse::<u32>()
+        {
+            let body: String = content
+                .lines()
+                .filter(|l| !l.starts_with("# integrity:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return stored == compute_crc32(&body);
         }
     }
     true
@@ -72,10 +72,10 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
 
     {
         let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(&key) {
-            if entry.mtime == mtime {
-                return Ok(entry.content.clone());
-            }
+        if let Some(entry) = cache.get(&key)
+            && entry.mtime == mtime
+        {
+            return Ok(entry.content.clone());
         }
     }
 
@@ -303,6 +303,16 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
 
     if !verify_integrity(&content) {
         tracing::warn!("sync.toml integrity check failed — file may be corrupted. Using defaults.");
+        // Backup corrupted file before returning defaults
+        let backup_path = path.with_extension("toml.corrupt.bak");
+        if let Err(backup_err) = fs::copy(&path, &backup_path) {
+            tracing::error!("Failed to backup corrupted sync config: {}", backup_err);
+        } else {
+            tracing::info!(
+                "Backed up corrupted sync config to {}",
+                backup_path.display()
+            );
+        }
         return Ok(SyncSettings::default());
     }
 

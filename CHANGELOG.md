@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Bump MSRV to 1.88 and edition to 2024
+- Mark snip-proto and snip-sync as non-publishable (`publish = false`)
+- Remove unused dependencies (prost, rustls-native-certs, rand from root crate; tower, hyper, http, async-trait from snip-sync)
+- Simplify uuid features to v4-only (removed unused v7)
+- Default server URL changed from http:// to https://
+- CI MSRV check updated to Rust 1.88
+- CI server-test job now runs `cargo test -p snip-sync` instead of `cargo test` from snip-sync directory
+
+### Added
+- Configurable sync network timeouts via `SNP_SYNC_CONNECT_TIMEOUT` and `SNP_SYNC_REQUEST_TIMEOUT` environment variables
+- Theme-aware syntax highlighting colors (string and escape colors adapt to dark/bright theme)
+- TUI draw errors are now logged instead of silently discarded
+- Mouse capture disable failure is now logged
+- Doc comments on SnipError constructors, SnippetData, ProcessResult
+- Config corruption now creates a backup before returning defaults
+
+### Fixed
+- TUI: pressing `/` in insert mode now correctly clears the filter (was desyncing display from actual matching)
+- TUI: cursor position overflow protection for very long input text
+- TUI: scrollbar thumb and variable prompt now use theme colors instead of hardcoded Cyan/Yellow
+- Sync: `sync_cmd::run()` now returns errors instead of silently swallowing them with exit code 0
+- Sync: `merge_and_save` now returns `SnipResult` instead of `Result<_, String>`
+- Sync: pull-only sync now checks for failures before advancing `last_sync` timestamp
+- Library: `delete_library` now saves config before deleting file (atomicity improvement)
+- Signal handlers now log errors gracefully instead of panicking with `expect()`
+- Removed `.github/.DS_Store` from tracking, added recursive .DS_Store to .gitignore
+
 ## [1.1.0] - 2026-06-05
 
 ### Added
@@ -71,4 +101,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.1.0]: https://github.com/anomalyco/snip-it/releases/tag/v1.1.0
 [1.0.0]: https://github.com/anomalyco/snip-it/releases/tag/v1.0.0

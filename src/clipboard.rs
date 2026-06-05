@@ -33,6 +33,11 @@ fn get_clipboard_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Schedule automatic clipboard clearing after the specified number of seconds.
+///
+/// Uses an atomic generation counter so that a new copy cancels any pending clear.
+/// The clear runs on a detached thread — if the process exits first, the clear
+/// is skipped (best-effort security measure).
 pub fn schedule_clipboard_clear(seconds: u32) {
     if seconds == 0 {
         return;
@@ -43,10 +48,10 @@ pub fn schedule_clipboard_clear(seconds: u32) {
 
     let _handle = thread::spawn(move || {
         thread::sleep(Duration::from_secs(seconds as u64));
-        if gen_at_spawn == CLIPBOARD_GENERATION.load(Ordering::SeqCst) {
-            if let Err(e) = clear_clipboard() {
-                tracing::warn!("Auto-clear clipboard failed: {}", e);
-            }
+        if gen_at_spawn == CLIPBOARD_GENERATION.load(Ordering::SeqCst)
+            && let Err(e) = clear_clipboard()
+        {
+            tracing::warn!("Auto-clear clipboard failed: {}", e);
         }
     });
 }

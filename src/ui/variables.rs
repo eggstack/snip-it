@@ -1,3 +1,8 @@
+//! Variable prompting dialog for snippet parameters.
+//!
+//! Displays a modal TUI dialog that prompts the user to fill in
+//! variable values for snippets using `<name=default>` syntax.
+
 use std::io;
 use std::time::Duration;
 
@@ -76,7 +81,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                     .title(var.name.as_str())
                     .borders(Borders::ALL)
                     .style(if i == selected {
-                        TuiStyle::default().fg(ratatui::style::Color::Yellow)
+                        TuiStyle::default().fg(theme.accent)
                     } else {
                         TuiStyle::default()
                     });
@@ -111,7 +116,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                     .split(chunks[0]);
                 let prefix_len = 2;
                 let cursor_x =
-                    var_chunks[selected].x + 1 + prefix_len + values[selected].len() as u16;
+                    var_chunks[selected].x + 1 + prefix_len + values[selected].len().min(u16::MAX as usize) as u16;
                 let cursor_y = var_chunks[selected].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }
@@ -122,60 +127,57 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             let status_widget = Paragraph::new(Line::from(vec![
                 Span::styled(status_text, style_fg(theme.muted)),
                 Span::raw("  "),
-                Span::styled(warning_text, style_fg(ratatui::style::Color::Yellow)),
+                Span::styled(warning_text, style_fg(theme.accent)),
             ]));
             f.render_widget(status_widget, chunks[1]);
         })?;
 
-        if event::poll(Duration::from_millis(200))? {
-            if let CEvent::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            ratatui::restore();
-                            return Ok(VariablePromptResult::Cancel);
-                        }
-                        KeyCode::Esc => {
-                            // Esc no longer quits - use q instead
-                        }
-                        KeyCode::Up | KeyCode::Char('k') if selected > 0 => {
-                            selected -= 1;
-                        }
-                        KeyCode::Down | KeyCode::Char('j') if selected + 1 < values.len() => {
-                            selected += 1;
-                        }
-                        KeyCode::Tab => {
-                            if selected + 1 < values.len() {
-                                selected += 1;
-                            } else {
-                                selected = 0;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            for (i, val) in values.iter_mut().enumerate() {
-                                if val.is_empty() && !defaults[i].is_empty() {
-                                    *val = defaults[i].clone();
-                                }
-                            }
-                            break;
-                        }
-                        KeyCode::Backspace => {
-                            values[selected].pop();
-                        }
-                        KeyCode::Char('d') => {
-                            show_defaults = !show_defaults;
-                        }
-                        KeyCode::Char(c) => {
-                            if values[selected] == defaults[selected]
-                                && !defaults[selected].is_empty()
-                            {
-                                values[selected] = String::new();
-                            }
-                            values[selected].push(c);
-                        }
-                        _ => {}
+        if event::poll(Duration::from_millis(200))?
+            && let CEvent::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Char('q') => {
+                    ratatui::restore();
+                    return Ok(VariablePromptResult::Cancel);
+                }
+                KeyCode::Esc => {
+                    // Esc no longer quits - use q instead
+                }
+                KeyCode::Up | KeyCode::Char('k') if selected > 0 => {
+                    selected -= 1;
+                }
+                KeyCode::Down | KeyCode::Char('j') if selected + 1 < values.len() => {
+                    selected += 1;
+                }
+                KeyCode::Tab => {
+                    if selected + 1 < values.len() {
+                        selected += 1;
+                    } else {
+                        selected = 0;
                     }
                 }
+                KeyCode::Enter => {
+                    for (i, val) in values.iter_mut().enumerate() {
+                        if val.is_empty() && !defaults[i].is_empty() {
+                            *val = defaults[i].clone();
+                        }
+                    }
+                    break;
+                }
+                KeyCode::Backspace => {
+                    values[selected].pop();
+                }
+                KeyCode::Char('d') => {
+                    show_defaults = !show_defaults;
+                }
+                KeyCode::Char(c) => {
+                    if values[selected] == defaults[selected] && !defaults[selected].is_empty() {
+                        values[selected] = String::new();
+                    }
+                    values[selected].push(c);
+                }
+                _ => {}
             }
         }
     }

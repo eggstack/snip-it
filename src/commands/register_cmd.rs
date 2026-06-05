@@ -1,21 +1,20 @@
 use crate::commands::init_library_manager;
-use crate::config::{load_sync_settings, save_sync_settings, SyncSettings, DEFAULT_SERVER_URL};
+use crate::config::{DEFAULT_SERVER_URL, SyncSettings, load_sync_settings, save_sync_settings};
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
 
 pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    if !force {
-        if let Ok(settings) = load_sync_settings() {
-            if !settings.device_id.is_empty() {
-                eprintln!("Already registered! Device ID: {}", settings.device_id);
-                eprintln!(
-                    "Config file: {}",
-                    crate::config::get_sync_config_path().display()
-                );
-                eprintln!("Use --force to re-register.");
-                return Ok(());
-            }
-        }
+    if !force
+        && let Ok(settings) = load_sync_settings()
+        && !settings.device_id.is_empty()
+    {
+        eprintln!("Already registered! Device ID: {}", settings.device_id);
+        eprintln!(
+            "Config file: {}",
+            crate::config::get_sync_config_path().display()
+        );
+        eprintln!("Use --force to re-register.");
+        return Ok(());
     }
 
     let _config_path = match init_library_manager() {

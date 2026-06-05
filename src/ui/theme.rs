@@ -12,6 +12,8 @@ pub struct Theme {
     pub border: Color,
     pub selected_bg: Color,
     pub muted: Color,
+    pub string_color: Color,
+    pub escape_color: Color,
 }
 
 const DARK_THEME: Theme = Theme {
@@ -23,6 +25,8 @@ const DARK_THEME: Theme = Theme {
     border: Color::Cyan,
     selected_bg: Color::Blue,
     muted: Color::Gray,
+    string_color: Color::Green,
+    escape_color: Color::Magenta,
 };
 
 const BRIGHT_THEME: Theme = Theme {
@@ -34,6 +38,8 @@ const BRIGHT_THEME: Theme = Theme {
     border: Color::Blue,
     selected_bg: Color::LightBlue,
     muted: Color::Gray,
+    string_color: Color::DarkGray,
+    escape_color: Color::DarkGray,
 };
 
 fn resolve_theme(theme_name: &str) -> Theme {

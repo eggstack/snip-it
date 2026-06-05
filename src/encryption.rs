@@ -21,11 +21,11 @@
 //! ```
 
 use aes_gcm::{
-    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
 };
-use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 

@@ -154,7 +154,9 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         if !canonical_path.starts_with(&canonical_cwd) {
             return Err(SnipError::runtime_error(
                 "Invalid output path",
-                Some("Output path resolves outside of working directory after creation (possible symlink attack)"),
+                Some(
+                    "Output path resolves outside of working directory after creation (possible symlink attack)",
+                ),
             ));
         }
 

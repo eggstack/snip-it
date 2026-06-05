@@ -140,6 +140,7 @@ impl From<String> for SnipError {
 
 // Convenient error constructors
 impl SnipError {
+    /// Create an I/O error with operation context and optional file path.
     pub fn io_error(operation: &str, path: impl Into<PathBuf>, source: io::Error) -> Self {
         SnipError::Io {
             operation: operation.to_string(),
@@ -148,6 +149,7 @@ impl SnipError {
         }
     }
 
+    /// Create a TOML parsing or serialization error with operation context.
     pub fn toml_error(
         operation: &str,
         source: impl std::error::Error + Send + Sync + 'static,
@@ -158,6 +160,7 @@ impl SnipError {
         }
     }
 
+    /// Create a clipboard error with operation context and message.
     pub fn clipboard_error(operation: &str, message: impl Into<String>) -> Self {
         SnipError::Clipboard {
             operation: operation.to_string(),
@@ -165,6 +168,7 @@ impl SnipError {
         }
     }
 
+    /// Create a command execution error with command name, arguments, and source error.
     pub fn command_error(command: &str, args: Vec<String>, source: io::Error) -> Self {
         SnipError::Command {
             command: command.to_string(),
@@ -173,6 +177,7 @@ impl SnipError {
         }
     }
 
+    /// Create a runtime error with a message and optional detail string.
     pub fn runtime_error(message: &str, detail: Option<&str>) -> Self {
         SnipError::Runtime {
             message: message.to_string(),
@@ -181,7 +186,7 @@ impl SnipError {
     }
 }
 
-// Convenient Result type
+/// Convenient Result type
 pub type SnipResult<T> = Result<T, SnipError>;
 
 #[cfg(test)]

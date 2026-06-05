@@ -1,3 +1,9 @@
+//! Configuration directory and path management.
+//!
+//! Handles platform-specific config directory resolution (XDG on Linux,
+//! Application Support on macOS, AppData on Windows) and macOS legacy
+//! config directory migration.
+
 use std::path::{Path, PathBuf};
 
 pub fn get_config_dir() -> PathBuf {

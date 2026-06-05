@@ -1,3 +1,9 @@
+//! Sync orchestration and merge logic.
+//!
+//! Coordinates the bidirectional sync flow between local snippet libraries
+//! and the remote server. Handles merge conflict resolution using
+//! last-write-wins based on `updated_at` timestamps.
+
 use crate::config::{SyncDirection, SyncSettings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::{self, Snippet, Snippets};
@@ -157,7 +163,7 @@ fn merge_and_save(
     snippets: &Snippets,
     server_snippets: &[ProtoSnippet],
     device_id: &str,
-) -> Result<(Snippets, Option<String>), String> {
+) -> SnipResult<(Snippets, Option<String>)> {
     let conflicting_ids = sync::detect_device_conflict(server_snippets, device_id);
     if !conflicting_ids.is_empty() {
         tracing::warn!(
@@ -189,7 +195,10 @@ fn merge_and_save(
                 tracing::info!("Restored library from backup after merge save failure");
             }
         }
-        return Err(e.to_string());
+        return Err(SnipError::runtime_error(
+            "Failed to save merged library",
+            Some(&e.to_string()),
+        ));
     }
 
     Ok((merged, backup_path))
@@ -283,7 +292,9 @@ pub fn run_sync(
                 if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
                     tracing::warn!(
                         "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
-                        lib_name, id, l.server_id
+                        lib_name,
+                        id,
+                        l.server_id
                     );
                 }
                 (id, l.last_sync.unwrap_or(0))
@@ -299,10 +310,10 @@ pub fn run_sync(
                 Ok(server_lib) => {
                     let new_id = server_lib.id.clone();
 
-                    if mgr.get_library_by_filename(lib_name).is_none() {
-                        if let Err(e) = mgr.add_existing_library(lib_name) {
-                            tracing::warn!(library = %lib_name, error = %e, "Failed to add library to config");
-                        }
+                    if mgr.get_library_by_filename(lib_name).is_none()
+                        && let Err(e) = mgr.add_existing_library(lib_name)
+                    {
+                        tracing::warn!(library = %lib_name, error = %e, "Failed to add library to config");
                     }
 
                     if let Err(e) = mgr.update_library_id(lib_name, &new_id) {
@@ -344,7 +355,9 @@ pub fn run_sync(
                 if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
                     tracing::warn!(
                         "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
-                        lib_name, id, l.server_id
+                        lib_name,
+                        id,
+                        l.server_id
                     );
                 }
                 (id, l.last_sync.unwrap_or(0))
@@ -377,10 +390,10 @@ pub fn run_sync(
             }
         }
 
-        if !snippets_needing_ids.is_empty() {
-            if let Err(e) = library::save_library(&lib_path, &snippets) {
-                tracing::warn!(library = %lib_name, error = %e, "Failed to save generated IDs");
-            }
+        if !snippets_needing_ids.is_empty()
+            && let Err(e) = library::save_library(&lib_path, &snippets)
+        {
+            tracing::warn!(library = %lib_name, error = %e, "Failed to save generated IDs");
         }
 
         if direction == SyncDirection::Push || direction == SyncDirection::Bidirectional {
@@ -453,7 +466,7 @@ pub fn run_sync(
                             }
                             Err(e) => {
                                 status.failed += 1;
-                                results.push((lib_name.clone(), false, e));
+                                results.push((lib_name.clone(), false, e.to_string()));
                                 continue;
                             }
                         }
@@ -486,13 +499,16 @@ pub fn run_sync(
                             &sync_settings.device_id,
                         ) {
                             Ok((_merged, _backup)) => {
-                                let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                let has_failures = response.skipped_count > 0;
+                                if !has_failures {
+                                    let _ = mgr.update_last_sync(lib_name, new_timestamp);
+                                }
                                 status.pulled += server_snippets.len() as u32;
                                 results.push((lib_name.clone(), true, String::new()));
                             }
                             Err(e) => {
                                 status.failed += 1;
-                                results.push((lib_name.clone(), false, e));
+                                results.push((lib_name.clone(), false, e.to_string()));
                             }
                         }
                     }
@@ -541,24 +557,24 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         if server_snip.deleted {
             // Server deleted this snippet. If a local copy exists, mark it as
             // deleted (preserving the data) rather than silently removing it.
-            if let Some(local_snip) = local_by_id.get(&server_snip.id) {
-                if !local_snip.deleted {
-                    merged_snippets.push(Snippet {
-                        id: local_snip.id.clone(),
-                        description: local_snip.description.clone(),
-                        command: local_snip.command.clone(),
-                        output: local_snip.output.clone(),
-                        tags: local_snip.tags.clone(),
-                        folders: local_snip.folders.clone(),
-                        favorite: local_snip.favorite,
-                        created_at: local_snip.created_at,
-                        updated_at: server_snip.updated_at,
-                        device_id: local_snip.device_id.clone(),
-                        deleted: true,
-                    });
-                }
-                // If both server and local agree deleted, skip entirely
+            if let Some(local_snip) = local_by_id.get(&server_snip.id)
+                && !local_snip.deleted
+            {
+                merged_snippets.push(Snippet {
+                    id: local_snip.id.clone(),
+                    description: local_snip.description.clone(),
+                    command: local_snip.command.clone(),
+                    output: local_snip.output.clone(),
+                    tags: local_snip.tags.clone(),
+                    folders: local_snip.folders.clone(),
+                    favorite: local_snip.favorite,
+                    created_at: local_snip.created_at,
+                    updated_at: server_snip.updated_at,
+                    device_id: local_snip.device_id.clone(),
+                    deleted: true,
+                });
             }
+            // If both server and local agree deleted, skip entirely
             continue;
         }
 

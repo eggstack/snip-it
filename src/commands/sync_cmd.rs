@@ -1,5 +1,5 @@
 use crate::commands::init_library_manager;
-use crate::config::{load_sync_settings, SyncSettings};
+use crate::config::{SyncSettings, load_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use snip_proto::Library;
@@ -120,6 +120,7 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
     }
 }
 
+/// Options for the `sync` command.
 pub struct SyncOptions {
     pub library: Option<String>,
     pub servers: bool,
@@ -209,21 +210,22 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             }
 
             println!("\nPulling snippets from server...");
-            if let Err(e) = crate::sync_commands::run_sync(
+            crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),
                 options.non_interactive,
                 options.push_only,
                 options.pull_only,
                 runtime,
-            ) {
-                eprintln!("Sync failed: {}", e);
-            }
+            )?;
             Ok(())
         }
         Err(e) => {
             eprintln!("Failed to pull libraries: {}", e);
-            Ok(())
+            Err(SnipError::runtime_error(
+                "Failed to list server libraries",
+                Some(&e.to_string()),
+            ))
         }
     }
 }

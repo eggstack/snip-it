@@ -14,21 +14,24 @@
 use crate::config::SyncSettings;
 use crate::encryption;
 use crate::error::{SnipError, SnipResult};
-use snip_proto::snippet_sync_client::SnippetSyncClient;
 use snip_proto::PremadeLibrary;
+use snip_proto::snippet_sync_client::SnippetSyncClient;
 use snip_proto::{
     CreateLibraryRequest, DeleteLibraryRequest, GetPremadeLibraryRequest, GetSnippetsRequest,
     HealthRequest, Library, ListLibrariesRequest, ListPremadeLibrariesRequest, PushSnippetsRequest,
     PushSnippetsResponse, RegisterRequest, SnippetList, SyncRequest,
 };
 use std::time::Duration;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
 use tonic::Code;
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
 
 const DEFAULT_MAX_RETRIES: u32 = 3; // Total attempts: 1 initial + 3 retries = 4
 const DEFAULT_INITIAL_DELAY_MS: u64 = 100; // Initial backoff before first retry
 const DEFAULT_MAX_DELAY_MS: u64 = 5000; // Cap exponential backoff at 5 seconds
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
+/// Configuration for gRPC retry behavior with exponential backoff.
 #[derive(Debug, Clone)]
 pub struct SyncRetryConfig {
     pub max_retries: u32,
@@ -422,10 +425,19 @@ async fn create_tls_channel(
         .domain_name(host)
         .assume_http2(true);
 
+    let connect_timeout_secs = std::env::var("SNP_SYNC_CONNECT_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
+    let request_timeout_secs = std::env::var("SNP_SYNC_REQUEST_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+
     let channel = Endpoint::new(uri)?
         .tls_config(tls_config)?
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(connect_timeout_secs))
+        .timeout(Duration::from_secs(request_timeout_secs))
         .connect()
         .await?;
 

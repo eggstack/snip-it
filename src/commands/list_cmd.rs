@@ -1,14 +1,18 @@
 use crate::commands::{get_library_path, load_snippets};
 use crate::error::SnipResult;
-use crossterm::style::{style, Color, Stylize};
-use fuzzy_matcher::skim::SkimMatcherV2;
+use crossterm::style::{Color, Stylize, style};
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::path::PathBuf;
 
+/// Output format for the `list` command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListFormat {
+    /// Human-readable table format (default).
     Default,
+    /// JSON output for scripting.
     Json,
+    /// CSV output for spreadsheet import.
     Csv,
 }
 

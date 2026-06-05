@@ -79,6 +79,9 @@ pub struct LibraryConfig {
 }
 
 /// Metadata for a single snippet library.
+///
+/// Tracks the library filename, optional server linkage, sync state,
+/// and whether it is the primary library.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibraryMeta {
     pub filename: String,
@@ -368,11 +371,11 @@ Snippets = []
 
         let path = self.libraries_dir.join(format!("{}.toml", filename));
 
-        if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| SnipError::io_error("delete library file", path.clone(), e))?;
-        }
-
+        // Save config first (remove from metadata), then delete the file.
+        // If we crash after config save but before file delete, the orphaned
+        // file is recoverable — operations on the deleted library will fail
+        // gracefully with IO errors. The reverse order (delete file first,
+        // then save config) leaves a stale config reference on crash.
         self.config.libraries.retain(|l| l.filename != filename);
 
         if was_primary && !self.config.libraries.is_empty() {
@@ -385,20 +388,30 @@ Snippets = []
             } else {
                 self.config.libraries.first()
             };
-            if let Some(promoted_lib) = promoted {
-                if let Some(idx) = self
+            if let Some(promoted_lib) = promoted
+                && let Some(idx) = self
                     .config
                     .libraries
                     .iter()
                     .position(|l| l.filename == promoted_lib.filename)
-                {
-                    self.config.libraries[idx].is_primary = true;
-                }
+            {
+                self.config.libraries[idx].is_primary = true;
             }
             self.unsaved_changes = true;
         }
 
         self.save_config()?;
+
+        if path.exists()
+            && let Err(e) = fs::remove_file(&path)
+        {
+            tracing::warn!(
+                library = %filename,
+                error = %e,
+                "Config updated but failed to delete library file"
+            );
+        }
+
         Ok(())
     }
 
@@ -929,10 +942,12 @@ Command = "sudo iptables-restore \< /path/to/rules"
     fn test_snippet_new_empty_description_fails() {
         let result = Snippet::new("  ".to_string(), "echo hi".to_string(), vec![]);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Empty description"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Empty description")
+        );
     }
 
     #[test]
@@ -1020,9 +1035,10 @@ Command = "sudo iptables-restore \< /path/to/rules"
             config: Default::default(),
             unsaved_changes: false,
         };
-        assert!(mgr
-            .save_premade_library("../../etc/passwd", "content")
-            .is_err());
+        assert!(
+            mgr.save_premade_library("../../etc/passwd", "content")
+                .is_err()
+        );
         assert!(mgr.save_premade_library("../escape", "content").is_err());
         assert!(mgr.save_premade_library("foo/bar", "content").is_err());
     }

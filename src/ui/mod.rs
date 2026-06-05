@@ -1,11 +1,17 @@
+//! Terminal user interface for snippet selection.
+//!
+//! Provides the main TUI event loop with fuzzy search, syntax highlighting,
+//! visual multi-select mode, and keyboard navigation. Re-exports the theme
+//! system and variable prompting dialog.
+
 mod highlight;
 mod theme;
 mod variables;
 
-pub use theme::get_theme;
 #[allow(unused_imports)]
 pub use theme::Theme;
-pub use variables::{prompt_variables, VariablePromptResult};
+pub use theme::get_theme;
+pub use variables::{VariablePromptResult, prompt_variables};
 
 #[allow(unused_imports)]
 pub use crate::utils::variables::Variable;
@@ -15,8 +21,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::text::Line;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -226,9 +232,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
     loop {
         // Debounce: only recompute filtered list if enough time has passed since last filter change
-        let debounce_elapsed = last_filter_update.map_or(true, |t| {
-            t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128
-        });
+        let debounce_elapsed = last_filter_update
+            .is_none_or(|t| t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128);
         let should_recompute = if filter_dirty {
             // Always recompute immediately when filter becomes empty (backspace cleared filter)
             // to avoid 150ms delay showing stale filtered results
@@ -383,7 +388,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             SortMode::AlphaDesc => "[z-a]".to_string(),
         };
 
-        let _ = terminal.draw(|f| {
+        if let Err(e) = terminal.draw(|f| {
             let size = f.area();
             if size.width < 10 || size.height < 10 {
                 let error_msg = "Terminal too small - resize to at least 10x10";
@@ -499,14 +504,14 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             if insert_mode {
                 let cursor_x = chunks[0].x
                     + 1
-                    + input_text.len() as u16;
+                    + input_text.len().min(u16::MAX as usize) as u16;
                 let cursor_y = chunks[0].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }
 
             f.render_stateful_widget(list, chunks[1], &mut sel.list_state);
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_style(ratatui::style::Style::default().bg(ratatui::style::Color::Cyan));
+                .thumb_style(ratatui::style::Style::default().bg(theme.secondary));
             f.render_stateful_widget(scrollbar, chunks[1], &mut sel.scroll_state);
 
             if sel.selected < filtered.len() {
@@ -579,7 +584,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 1,
             );
             f.render_widget(status_widget, status_area);
-        });
+        }) {
+            tracing::warn!("Terminal draw error: {}", e);
+        }
 
         // Get terminal size for mouse click detection
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -649,10 +656,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 }
                 Ok(CEvent::Key(key)) => {
                     if key.kind == KeyEventKind::Press {
-                        if let Some((_, instant)) = copied_message {
-                            if instant.elapsed().as_secs() >= 3 {
-                                copied_message = None;
-                            }
+                        if let Some((_, instant)) = copied_message
+                            && instant.elapsed().as_secs() >= 3
+                        {
+                            copied_message = None;
                         }
 
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
@@ -723,12 +730,11 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     if let Err(e) = clipboard::copy_to_clipboard_auto(&copy_text) {
                                         tracing::warn!("Clipboard copy failed: {}", e);
                                     }
-                                    if let Some((idx, _, _)) = filtered.get(start) {
-                                        if let Err(e) =
+                                    if let Some((idx, _, _)) = filtered.get(start)
+                                        && let Err(e) =
                                             crate::logging::audit_log("copy", &snippets[*idx], None)
-                                        {
-                                            tracing::debug!("Audit log write failed: {}", e);
-                                        }
+                                    {
+                                        tracing::debug!("Audit log write failed: {}", e);
                                     }
                                     should_copy =
                                         Some(format!("{} snippets copied", end - start + 1));
@@ -764,6 +770,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     insert_mode = true;
                                     incremental_search.clear();
                                     input_text.clear();
+                                    filter.clear();
                                     filter_dirty = true;
                                     last_filter_update = Some(std::time::Instant::now());
                                 }
@@ -938,6 +945,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 KeyCode::Char('/') => {
                                     insert_mode = true;
                                     incremental_search.clear();
+                                    input_text.clear();
+                                    filter.clear();
                                     filter_dirty = true;
                                     last_filter_update = Some(std::time::Instant::now());
                                 }
@@ -959,7 +968,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             }
         }
     }
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    if let Err(e) = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture) {
+        tracing::warn!("Failed to disable mouse capture: {}", e);
+    }
     ratatui::restore();
     Ok(if sel.selected < filtered.len() {
         Some((filtered[sel.selected].0, should_copy))

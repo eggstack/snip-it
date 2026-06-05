@@ -1,35 +1,35 @@
 [package]
 name = "snip-sync"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.81"
+edition = "2024"
+rust-version = "1.88"
 description = "gRPC sync server for snp snippet manager"
 license = "MIT"
 repository = "https://github.com/anomalyco/snip-it"
 authors = ["David Bowman"]
+readme = "README.md"
+keywords = ["grpc", "sync", "snippets", "server", "sqlite"]
+categories = ["command-line-utilities", "web-programming"]
+publish = false
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 axum = "0.7"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tower = "0.5"
-hyper = "1"
-http = "1"
 tower-http = { version = "0.6", features = ["cors"] }
 thiserror = "2"
 tonic = { version = "0.14", features = ["transport"] }
 prost = "0.14"
-async-trait = "0.1"
 prometheus = "0.13"
 base64 = "0.22"
 toml = "0.8"
-snip-proto = { path = "../snip-proto" }
+snip-proto = { version = "0.1.0", path = "../snip-proto" }
 argon2 = "0.5"
 getrandom = "0.2"
 sha2 = "0.10"

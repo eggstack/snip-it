@@ -1,6 +1,6 @@
 # snp - Snippet Manager
 
-![Rust](https://img.shields.io/badge/Rust-1.81+-orange.svg)
+![Rust](https://img.shields.io/badge/Rust-1.88+-orange.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 [![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
 

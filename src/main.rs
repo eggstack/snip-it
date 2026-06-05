@@ -24,6 +24,10 @@ use error::SnipResult;
 use logging::{init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler};
 use utils::config::get_snippets_path;
 
+/// Aggregated data for all snippets passed to the TUI selector.
+///
+/// Contains parallel vectors of snippet metadata where index `i` corresponds
+/// to the same snippet across all fields.
 pub struct SnippetData {
     pub descriptions: Vec<String>,
     pub commands: Vec<String>,
@@ -32,9 +36,13 @@ pub struct SnippetData {
     pub favorites: Vec<bool>,
 }
 
+/// Result of processing a snippet selection from the TUI.
 pub enum ProcessResult {
+    /// User cancelled the selection.
     Cancel,
+    /// No snippet was selected; continue to next prompt.
     Continue,
+    /// A snippet command was selected; contains the expanded command string.
     Done(String),
 }
 
@@ -53,10 +61,14 @@ fn setup_signal_handler() {
 
     let terminate = ui::get_terminate();
 
-    flag::register(signal_hook::consts::signal::SIGINT, terminate.clone())
-        .expect("Failed to set Ctrl+C handler");
-    flag::register(signal_hook::consts::signal::SIGTERM, terminate)
-        .expect("Failed to set SIGTERM handler");
+    if let Err(e) = flag::register(signal_hook::consts::signal::SIGINT, terminate.clone()) {
+        eprintln!("Failed to set Ctrl+C handler: {}", e);
+        std::process::exit(1);
+    }
+    if let Err(e) = flag::register(signal_hook::consts::signal::SIGTERM, terminate) {
+        eprintln!("Failed to set SIGTERM handler: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(windows)]

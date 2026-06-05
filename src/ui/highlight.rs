@@ -1,3 +1,8 @@
+//! Syntax highlighting for shell commands.
+//!
+//! Tokenizes shell commands into keywords, flags, strings, variables,
+//! escape sequences, and comments, applying theme-aware colors to each.
+
 use ratatui::text::{Line, Span};
 
 use crate::utils::shell_keywords::SHELL_KEYWORDS_SET;
@@ -13,10 +18,10 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
     let color_default = style_fg(theme.text);
     let color_variable = style_fg(theme.accent);
     let color_keyword = style_fg(theme.primary);
-    let color_string = style_fg(ratatui::style::Color::Green);
+    let color_string = style_fg(theme.string_color);
     let color_flag = style_fg(theme.secondary);
     let color_comment = style_fg(theme.muted);
-    let color_escape = style_fg(ratatui::style::Color::Magenta);
+    let color_escape = style_fg(theme.escape_color);
 
     let shell_keywords = &*SHELL_KEYWORDS_SET;
 
@@ -78,10 +83,10 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             spans.push(Span::styled(flag, color_flag));
         } else if c == '-' {
             let mut flag = String::from(c);
-            if let Some(&next) = chars.peek() {
-                if next.is_alphabetic() {
-                    flag.push(chars.next().expect("peek confirmed Some"));
-                }
+            if let Some(&next) = chars.peek()
+                && next.is_alphabetic()
+            {
+                flag.push(chars.next().expect("peek confirmed Some"));
             }
             spans.push(Span::styled(flag, color_flag));
         } else if c.is_whitespace() {

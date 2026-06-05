@@ -17,12 +17,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::LazyLock;
+use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — rotate audit log when exceeded
 const AUDIT_LOG_RETENTION_DAYS: u64 = 30; // Keep 30 days of rotated audit logs
@@ -160,15 +160,15 @@ pub fn log_any_error(context: &str, error: &dyn std::error::Error) {
 
 fn self_check() {
     let log_dir = get_default_log_dir();
-    if !log_dir.exists() {
-        if let Err(e) = fs::create_dir_all(&log_dir) {
-            eprintln!(
-                "Warning: Failed to create log directory {}: {}",
-                log_dir.display(),
-                e
-            );
-            return;
-        }
+    if !log_dir.exists()
+        && let Err(e) = fs::create_dir_all(&log_dir)
+    {
+        eprintln!(
+            "Warning: Failed to create log directory {}: {}",
+            log_dir.display(),
+            e
+        );
+        return;
     }
 
     match fs::OpenOptions::new()
@@ -189,14 +189,14 @@ fn self_check() {
     }
 
     let config_dir = crate::utils::config::get_config_dir();
-    if !config_dir.exists() {
-        if let Err(e) = fs::create_dir_all(&config_dir) {
-            eprintln!(
-                "Warning: Failed to create config directory {}: {}",
-                config_dir.display(),
-                e
-            );
-        }
+    if !config_dir.exists()
+        && let Err(e) = fs::create_dir_all(&config_dir)
+    {
+        eprintln!(
+            "Warning: Failed to create config directory {}: {}",
+            config_dir.display(),
+            e
+        );
     }
 }
 
@@ -515,17 +515,16 @@ fn rotate_audit_log_if_needed(
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("rotated") {
-                if let Ok(metadata) = entry.metadata() {
-                    if let Ok(modified) = metadata.modified() {
-                        let age = SystemTime::now()
-                            .duration_since(modified)
-                            .unwrap_or_default()
-                            .as_secs();
-                        if age > retention_secs {
-                            let _ = fs::remove_file(path);
-                        }
-                    }
+            if path.extension().and_then(|s| s.to_str()) == Some("rotated")
+                && let Ok(metadata) = entry.metadata()
+                && let Ok(modified) = metadata.modified()
+            {
+                let age = SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or_default()
+                    .as_secs();
+                if age > retention_secs {
+                    let _ = fs::remove_file(path);
                 }
             }
         }
