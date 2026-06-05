@@ -73,18 +73,17 @@ impl RateLimiter {
             return;
         }
 
-        let rows: Vec<(String, i64, i64)> = match sqlx::query_as(
-            "SELECT peer_ip, window_start, request_count FROM rate_limits",
-        )
-        .fetch_all(pool)
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("Failed to load rate limit state: {}", e);
-                return;
-            }
-        };
+        let rows: Vec<(String, i64, i64)> =
+            match sqlx::query_as("SELECT peer_ip, window_start, request_count FROM rate_limits")
+                .fetch_all(pool)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Failed to load rate limit state: {}", e);
+                    return;
+                }
+            };
 
         let now = now_secs();
         let mut windows = self.windows.lock().await;
@@ -157,10 +156,12 @@ impl RateLimiter {
         let window_secs = window.as_secs();
         let mut windows = self.windows.lock().await;
 
-        let entry = windows.entry(key.to_string()).or_insert_with(|| WindowEntry {
-            window_start: now,
-            count: 0,
-        });
+        let entry = windows
+            .entry(key.to_string())
+            .or_insert_with(|| WindowEntry {
+                window_start: now,
+                count: 0,
+            });
 
         if now.saturating_sub(entry.window_start) >= window_secs {
             entry.window_start = now;
@@ -183,9 +184,21 @@ mod tests {
     #[tokio::test]
     async fn test_allow_within_limit() {
         let limiter = RateLimiter::new();
-        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
-        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
-        assert!(limiter.allow("192.168.1.1", 5, Duration::from_secs(60)).await);
+        assert!(
+            limiter
+                .allow("192.168.1.1", 5, Duration::from_secs(60))
+                .await
+        );
+        assert!(
+            limiter
+                .allow("192.168.1.1", 5, Duration::from_secs(60))
+                .await
+        );
+        assert!(
+            limiter
+                .allow("192.168.1.1", 5, Duration::from_secs(60))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -211,11 +224,23 @@ mod tests {
     async fn test_window_expiry_resets_count() {
         let limiter = RateLimiter::new();
         for _ in 0..2 {
-            assert!(limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+            assert!(
+                limiter
+                    .allow("expire-test", 2, Duration::from_secs(1))
+                    .await
+            );
         }
-        assert!(!limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+        assert!(
+            !limiter
+                .allow("expire-test", 2, Duration::from_secs(1))
+                .await
+        );
         tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(limiter.allow("expire-test", 2, Duration::from_secs(1)).await);
+        assert!(
+            limiter
+                .allow("expire-test", 2, Duration::from_secs(1))
+                .await
+        );
     }
 
     #[tokio::test]

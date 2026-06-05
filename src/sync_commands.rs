@@ -7,8 +7,8 @@
 use crate::config::{SyncDirection, SyncSettings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::{self, Snippet, Snippets};
-use crate::sync;
 use crate::proto::Snippet as ProtoSnippet;
+use crate::sync;
 use std::fs;
 
 impl From<&Snippet> for ProtoSnippet {
@@ -650,7 +650,7 @@ pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
 mod tests {
     use super::*;
     use crate::library::{Snippet, Snippets};
-use crate::proto::Snippet as ProtoSnippet;
+    use crate::proto::Snippet as ProtoSnippet;
 
     fn make_local_snippet(id: &str, desc: &str, cmd: &str, updated_at: i64) -> Snippet {
         Snippet {

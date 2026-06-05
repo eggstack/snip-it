@@ -220,10 +220,10 @@ pub mod snippet_sync_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct SnippetSyncClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -262,14 +262,13 @@ pub mod snippet_sync_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                http::Request<tonic::body::Body>,
-                Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                    http::Request<tonic::body::Body>,
+                    Response = http::Response<
+                        <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                    >,
                 >,
-            >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::Body>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::Body>>>::Error:
+                Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             SnippetSyncClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -297,18 +296,11 @@ pub mod snippet_sync_client {
             &mut self,
             request: impl tonic::IntoRequest<super::GetSnippetsRequest>,
         ) -> std::result::Result<tonic::Response<super::SnippetList>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/GetSnippets",
-            );
+            let path = http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/GetSnippets");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "GetSnippets"));
@@ -317,22 +309,13 @@ pub mod snippet_sync_client {
         pub async fn push_snippets(
             &mut self,
             request: impl tonic::IntoRequest<super::PushSnippetsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::PushSnippetsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::PushSnippetsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/PushSnippets",
-            );
+            let path = http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/PushSnippets");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "PushSnippets"));
@@ -342,18 +325,11 @@ pub mod snippet_sync_client {
             &mut self,
             request: impl tonic::IntoRequest<super::SyncRequest>,
         ) -> std::result::Result<tonic::Response<super::SyncResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/Sync",
-            );
+            let path = http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/Sync");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "Sync"));
@@ -363,18 +339,11 @@ pub mod snippet_sync_client {
             &mut self,
             request: impl tonic::IntoRequest<super::HealthRequest>,
         ) -> std::result::Result<tonic::Response<super::HealthResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/Health",
-            );
+            let path = http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/Health");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "Health"));
@@ -383,22 +352,12 @@ pub mod snippet_sync_client {
         pub async fn register(
             &mut self,
             request: impl tonic::IntoRequest<super::RegisterRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RegisterResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::RegisterResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/Register",
-            );
+            let path = http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/Register");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "Register"));
@@ -407,22 +366,14 @@ pub mod snippet_sync_client {
         pub async fn create_library(
             &mut self,
             request: impl tonic::IntoRequest<super::CreateLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CreateLibraryResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::CreateLibraryResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/CreateLibrary",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/CreateLibrary");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "CreateLibrary"));
@@ -431,22 +382,14 @@ pub mod snippet_sync_client {
         pub async fn list_libraries(
             &mut self,
             request: impl tonic::IntoRequest<super::ListLibrariesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListLibrariesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::ListLibrariesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/ListLibraries",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/ListLibraries");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "ListLibraries"));
@@ -455,22 +398,14 @@ pub mod snippet_sync_client {
         pub async fn delete_library(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DeleteLibraryResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::DeleteLibraryResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/DeleteLibrary",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/DeleteLibrary");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "DeleteLibrary"));
@@ -479,51 +414,38 @@ pub mod snippet_sync_client {
         pub async fn list_premade_libraries(
             &mut self,
             request: impl tonic::IntoRequest<super::ListPremadeLibrariesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListPremadeLibrariesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::ListPremadeLibrariesResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/snip_proto.SnippetSync/ListPremadeLibraries",
             );
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("snip_proto.SnippetSync", "ListPremadeLibraries"),
-                );
+            req.extensions_mut().insert(GrpcMethod::new(
+                "snip_proto.SnippetSync",
+                "ListPremadeLibraries",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_premade_library(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPremadeLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetPremadeLibraryResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::GetPremadeLibraryResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/snip_proto.SnippetSync/GetPremadeLibrary",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/snip_proto.SnippetSync/GetPremadeLibrary");
             let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("snip_proto.SnippetSync", "GetPremadeLibrary"));
+            req.extensions_mut().insert(GrpcMethod::new(
+                "snip_proto.SnippetSync",
+                "GetPremadeLibrary",
+            ));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -535,7 +457,7 @@ pub mod snippet_sync_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value,
+        clippy::let_unit_value
     )]
     use tonic::codegen::*;
     #[async_trait]
@@ -547,10 +469,7 @@ pub mod snippet_sync_server {
         async fn push_snippets(
             &self,
             request: tonic::Request<super::PushSnippetsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::PushSnippetsResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::PushSnippetsResponse>, tonic::Status>;
         async fn sync(
             &self,
             request: tonic::Request<super::SyncRequest>,
@@ -562,45 +481,27 @@ pub mod snippet_sync_server {
         async fn register(
             &self,
             request: tonic::Request<super::RegisterRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RegisterResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::RegisterResponse>, tonic::Status>;
         async fn create_library(
             &self,
             request: tonic::Request<super::CreateLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CreateLibraryResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::CreateLibraryResponse>, tonic::Status>;
         async fn list_libraries(
             &self,
             request: tonic::Request<super::ListLibrariesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListLibrariesResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::ListLibrariesResponse>, tonic::Status>;
         async fn delete_library(
             &self,
             request: tonic::Request<super::DeleteLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DeleteLibraryResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::DeleteLibraryResponse>, tonic::Status>;
         async fn list_premade_libraries(
             &self,
             request: tonic::Request<super::ListPremadeLibrariesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListPremadeLibrariesResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::ListPremadeLibrariesResponse>, tonic::Status>;
         async fn get_premade_library(
             &self,
             request: tonic::Request<super::GetPremadeLibraryRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetPremadeLibraryResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::GetPremadeLibraryResponse>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct SnippetSyncServer<T> {
@@ -623,10 +524,7 @@ pub mod snippet_sync_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -673,15 +571,9 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/GetSnippets" => {
                     #[allow(non_camel_case_types)]
                     struct GetSnippetsSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::GetSnippetsRequest>
-                    for GetSnippetsSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::GetSnippetsRequest> for GetSnippetsSvc<T> {
                         type Response = super::SnippetList;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetSnippetsRequest>,
@@ -718,15 +610,11 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/PushSnippets" => {
                     #[allow(non_camel_case_types)]
                     struct PushSnippetsSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::PushSnippetsRequest>
-                    for PushSnippetsSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::PushSnippetsRequest>
+                        for PushSnippetsSvc<T>
+                    {
                         type Response = super::PushSnippetsResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::PushSnippetsRequest>,
@@ -763,21 +651,16 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/Sync" => {
                     #[allow(non_camel_case_types)]
                     struct SyncSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<T: SnippetSync> tonic::server::UnaryService<super::SyncRequest>
-                    for SyncSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::SyncRequest> for SyncSvc<T> {
                         type Response = super::SyncResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::SyncRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as SnippetSync>::sync(&inner, request).await
-                            };
+                            let fut =
+                                async move { <T as SnippetSync>::sync(&inner, request).await };
                             Box::pin(fut)
                         }
                     }
@@ -806,23 +689,16 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/Health" => {
                     #[allow(non_camel_case_types)]
                     struct HealthSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::HealthRequest>
-                    for HealthSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::HealthRequest> for HealthSvc<T> {
                         type Response = super::HealthResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::HealthRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as SnippetSync>::health(&inner, request).await
-                            };
+                            let fut =
+                                async move { <T as SnippetSync>::health(&inner, request).await };
                             Box::pin(fut)
                         }
                     }
@@ -851,23 +727,16 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/Register" => {
                     #[allow(non_camel_case_types)]
                     struct RegisterSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::RegisterRequest>
-                    for RegisterSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::RegisterRequest> for RegisterSvc<T> {
                         type Response = super::RegisterResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::RegisterRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as SnippetSync>::register(&inner, request).await
-                            };
+                            let fut =
+                                async move { <T as SnippetSync>::register(&inner, request).await };
                             Box::pin(fut)
                         }
                     }
@@ -896,15 +765,11 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/CreateLibrary" => {
                     #[allow(non_camel_case_types)]
                     struct CreateLibrarySvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::CreateLibraryRequest>
-                    for CreateLibrarySvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::CreateLibraryRequest>
+                        for CreateLibrarySvc<T>
+                    {
                         type Response = super::CreateLibraryResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::CreateLibraryRequest>,
@@ -941,15 +806,11 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/ListLibraries" => {
                     #[allow(non_camel_case_types)]
                     struct ListLibrariesSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::ListLibrariesRequest>
-                    for ListLibrariesSvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::ListLibrariesRequest>
+                        for ListLibrariesSvc<T>
+                    {
                         type Response = super::ListLibrariesResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListLibrariesRequest>,
@@ -986,15 +847,11 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/DeleteLibrary" => {
                     #[allow(non_camel_case_types)]
                     struct DeleteLibrarySvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::DeleteLibraryRequest>
-                    for DeleteLibrarySvc<T> {
+                    impl<T: SnippetSync> tonic::server::UnaryService<super::DeleteLibraryRequest>
+                        for DeleteLibrarySvc<T>
+                    {
                         type Response = super::DeleteLibraryResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::DeleteLibraryRequest>,
@@ -1031,23 +888,19 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/ListPremadeLibraries" => {
                     #[allow(non_camel_case_types)]
                     struct ListPremadeLibrariesSvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::ListPremadeLibrariesRequest>
-                    for ListPremadeLibrariesSvc<T> {
+                    impl<T: SnippetSync>
+                        tonic::server::UnaryService<super::ListPremadeLibrariesRequest>
+                        for ListPremadeLibrariesSvc<T>
+                    {
                         type Response = super::ListPremadeLibrariesResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListPremadeLibrariesRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as SnippetSync>::list_premade_libraries(&inner, request)
-                                    .await
+                                <T as SnippetSync>::list_premade_libraries(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -1077,23 +930,19 @@ pub mod snippet_sync_server {
                 "/snip_proto.SnippetSync/GetPremadeLibrary" => {
                     #[allow(non_camel_case_types)]
                     struct GetPremadeLibrarySvc<T: SnippetSync>(pub Arc<T>);
-                    impl<
-                        T: SnippetSync,
-                    > tonic::server::UnaryService<super::GetPremadeLibraryRequest>
-                    for GetPremadeLibrarySvc<T> {
+                    impl<T: SnippetSync>
+                        tonic::server::UnaryService<super::GetPremadeLibraryRequest>
+                        for GetPremadeLibrarySvc<T>
+                    {
                         type Response = super::GetPremadeLibraryResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetPremadeLibraryRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as SnippetSync>::get_premade_library(&inner, request)
-                                    .await
+                                <T as SnippetSync>::get_premade_library(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -1120,25 +969,19 @@ pub mod snippet_sync_server {
                     };
                     Box::pin(fut)
                 }
-                _ => {
-                    Box::pin(async move {
-                        let mut response = http::Response::new(
-                            tonic::body::Body::default(),
-                        );
-                        let headers = response.headers_mut();
-                        headers
-                            .insert(
-                                tonic::Status::GRPC_STATUS,
-                                (tonic::Code::Unimplemented as i32).into(),
-                            );
-                        headers
-                            .insert(
-                                http::header::CONTENT_TYPE,
-                                tonic::metadata::GRPC_CONTENT_TYPE,
-                            );
-                        Ok(response)
-                    })
-                }
+                _ => Box::pin(async move {
+                    let mut response = http::Response::new(tonic::body::Body::default());
+                    let headers = response.headers_mut();
+                    headers.insert(
+                        tonic::Status::GRPC_STATUS,
+                        (tonic::Code::Unimplemented as i32).into(),
+                    );
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        tonic::metadata::GRPC_CONTENT_TYPE,
+                    );
+                    Ok(response)
+                }),
             }
         }
     }

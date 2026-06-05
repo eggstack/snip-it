@@ -1,6 +1,6 @@
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Algorithm, Argon2, Params, Version,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use base64::Engine;
 use chrono::Utc;
@@ -105,18 +105,16 @@ fn saturating_i32(v: i64) -> i32 {
 type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 
 impl Database {
-    pub async fn connect(url: &str) -> DbResult<Self> {
+    pub async fn connect(url: &str, max_connections: u32) -> DbResult<Self> {
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .connect(url)
             .await?;
 
         sqlx::query("PRAGMA journal_mode=WAL")
             .execute(&pool)
             .await?;
-        sqlx::query("PRAGMA foreign_keys=ON")
-            .execute(&pool)
-            .await?;
+        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
 
         sqlx::query(
             "
@@ -183,6 +181,12 @@ impl Database {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_snippets_updated ON snippets(updated_at)")
             .execute(&pool)
             .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_snippets_user_library_updated \
+             ON snippets(user_id, library_id, updated_at, deleted)",
+        )
+        .execute(&pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_libraries_user ON libraries(user_id)")
             .execute(&pool)
             .await?;
@@ -545,6 +549,49 @@ impl Database {
         Ok(())
     }
 
+    pub async fn upsert_snippet_in_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        snippet: &Snippet,
+        user_id: &str,
+        library_id: &str,
+    ) -> DbResult<()> {
+        let tags_json = serde_json::to_string(&snippet.tags).unwrap_or_else(|_| "[]".to_string());
+        let deleted = snippet.deleted as i32;
+        let encrypted = snippet.encrypted as i32;
+
+        sqlx::query(
+            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                description = excluded.description,
+                command = excluded.command,
+                tags = excluded.tags,
+                updated_at = excluded.updated_at,
+                device_id = excluded.device_id,
+                deleted = excluded.deleted,
+                encrypted = excluded.encrypted
+             WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
+           AND (excluded.updated_at > snippets.updated_at \
+                OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id))",
+        )
+        .bind(&snippet.id)
+        .bind(user_id)
+        .bind(library_id)
+        .bind(&snippet.description)
+        .bind(&snippet.command)
+        .bind(&tags_json)
+        .bind(snippet.created_at)
+        .bind(snippet.updated_at)
+        .bind(&snippet.device_id)
+        .bind(deleted)
+        .bind(encrypted)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn get_latest_timestamp(&self, user_id: &str, library_id: &str) -> DbResult<i64> {
         let (timestamp,): (i64,) = sqlx::query_as(
             "SELECT COALESCE(MAX(updated_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
@@ -611,7 +658,7 @@ mod tests {
     use super::*;
 
     async fn setup_db() -> Database {
-        Database::connect("sqlite::memory:").await.unwrap()
+        Database::connect("sqlite::memory:", 5).await.unwrap()
     }
 
     #[tokio::test]
@@ -971,20 +1018,23 @@ mod tests {
         let user2_id = db.create_user("user2-api-key").await.unwrap();
         let lib_id = db.create_library(&user1_id, "private").await.unwrap();
 
-        assert!(db
-            .verify_library_ownership(&user1_id, &lib_id)
-            .await
-            .unwrap());
-        assert!(!db
-            .verify_library_ownership(&user2_id, &lib_id)
-            .await
-            .unwrap());
+        assert!(
+            db.verify_library_ownership(&user1_id, &lib_id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !db.verify_library_ownership(&user2_id, &lib_id)
+                .await
+                .unwrap()
+        );
 
         let nonexistent_lib = Uuid::new_v4().to_string();
-        assert!(!db
-            .verify_library_ownership(&user1_id, &nonexistent_lib)
-            .await
-            .unwrap());
+        assert!(
+            !db.verify_library_ownership(&user1_id, &nonexistent_lib)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1029,16 +1079,18 @@ mod tests {
         let user_id = db.create_user("test-key").await.unwrap();
         let lib_id = db.create_library(&user_id, "temp-lib").await.unwrap();
 
-        assert!(db
-            .verify_library_ownership(&user_id, &lib_id)
-            .await
-            .unwrap());
+        assert!(
+            db.verify_library_ownership(&user_id, &lib_id)
+                .await
+                .unwrap()
+        );
 
         db.delete_library(&user_id, &lib_id).await.unwrap();
 
-        assert!(!db
-            .verify_library_ownership(&user_id, &lib_id)
-            .await
-            .unwrap());
+        assert!(
+            !db.verify_library_ownership(&user_id, &lib_id)
+                .await
+                .unwrap()
+        );
     }
 }

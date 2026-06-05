@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 
 const KEYCHAIN_SERVICE: &str = "snp-sync";
-const KEYCHAIN_USER: &str = "api-key";
 const KEYCHAIN_MARKER: &str = "@keychain";
+const KEYCHAIN_DEFAULT_USER: &str = "api-key";
 
 pub const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 
@@ -143,7 +143,8 @@ fn serialize_api_key<S: serde::Serializer>(
     if api_key.is_empty() {
         return serializer.serialize_str("");
     }
-    match keychain_store(api_key) {
+    // Server URL is not available during serialization, so we use the default user
+    match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
         Err(e) => {
             if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
@@ -168,7 +169,7 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
 ) -> Result<String, D::Error> {
     let raw: String = Deserialize::deserialize(deserializer)?;
     if raw == KEYCHAIN_MARKER {
-        match keychain_retrieve() {
+        match keychain_retrieve(KEYCHAIN_DEFAULT_USER) {
             Ok(key) => Ok(key),
             Err(e) => {
                 tracing::error!(
@@ -186,8 +187,8 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
     }
 }
 
-fn keychain_store(api_key: &str) -> SnipResult<()> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+fn keychain_store(api_key: &str, user: &str) -> SnipResult<()> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, user)
         .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry
         .set_password(api_key)
@@ -195,8 +196,8 @@ fn keychain_store(api_key: &str) -> SnipResult<()> {
     Ok(())
 }
 
-fn keychain_retrieve() -> SnipResult<String> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+fn keychain_retrieve(user: &str) -> SnipResult<String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, user)
         .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry
         .get_password()
@@ -289,6 +290,8 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
         SnipError::io_error("atomic rename sync config", path, e)
     })?;
 
+    crate::clipboard::invalidate_clipboard_settings_cache();
+
     Ok(())
 }
 
@@ -326,7 +329,7 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
 
     // Migrate existing plaintext API key to keychain on first load
     if !settings.api_key.is_empty() && settings.api_key != KEYCHAIN_MARKER {
-        if let Err(e) = keychain_store(&settings.api_key) {
+        if let Err(e) = keychain_store(&settings.api_key, KEYCHAIN_DEFAULT_USER) {
             tracing::error!(
                 "Failed to migrate API key to keychain (keychain unavailable): {}. \
                  API key will remain in plaintext config file.",

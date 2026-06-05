@@ -110,13 +110,14 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             }
 
             if selected < values.len() {
+                use unicode_width::UnicodeWidthStr;
                 let var_chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(vec![Constraint::Length(3); num_vars])
                     .split(chunks[0]);
                 let prefix_len = 2;
                 let cursor_x =
-                    var_chunks[selected].x + 1 + prefix_len + values[selected].len().min(u16::MAX as usize) as u16;
+                    var_chunks[selected].x + 1 + prefix_len + values[selected].width().min(u16::MAX as usize) as u16;
                 let cursor_y = var_chunks[selected].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }

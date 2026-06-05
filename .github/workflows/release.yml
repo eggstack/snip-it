@@ -14,8 +14,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   publish-crates:
     name: Publish to crates.io
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +47,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: snp-macos-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: snp-macos-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: snp-windows-x86_64.exe
@@ -73,9 +82,31 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: target/${{ matrix.target }}/release/snp.exe
 
+  checksums:
+    name: Generate Checksums
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          for dir in snp-*/; do
+            for file in "$dir"*; do
+              sha256sum "$file" >> checksums.txt
+            done
+          done
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: artifacts/checksums.txt
+
   create-release:
     name: Create GitHub Release
-    needs: release
+    needs: [release, checksums]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,7 +118,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/snp-*/snp*
+          files: |
+            artifacts/snp-*/snp*
+            artifacts/checksums/checksums.txt
 
   docker:
     name: Push Docker Image

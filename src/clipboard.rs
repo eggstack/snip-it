@@ -7,6 +7,7 @@
 //! - **Windows**: Uses `clipboard-win` crate
 //! - **macOS/Linux**: Uses `copypasta` crate
 
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -24,6 +25,40 @@ use crate::logging::log_clipboard_operation;
 static CLIPBOARD_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 const DEFAULT_CLIPBOARD_TIMEOUT_SECS: u64 = 5;
+
+struct CachedClipboardSettings {
+    auto_clear_seconds: Option<u32>,
+}
+
+static CACHED_CLIPBOARD_SETTINGS: LazyLock<std::sync::Mutex<Option<CachedClipboardSettings>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+fn get_clipboard_auto_clear_seconds() -> Option<u32> {
+    {
+        let cache = CACHED_CLIPBOARD_SETTINGS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref settings) = *cache {
+            return settings.auto_clear_seconds;
+        }
+    }
+    let settings = crate::config::get_sync_settings();
+    let result = settings.clipboard_auto_clear_seconds;
+    let mut cache = CACHED_CLIPBOARD_SETTINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *cache = Some(CachedClipboardSettings {
+        auto_clear_seconds: result,
+    });
+    result
+}
+
+pub fn invalidate_clipboard_settings_cache() {
+    let mut cache = CACHED_CLIPBOARD_SETTINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *cache = None;
+}
 
 fn get_clipboard_timeout() -> Duration {
     let secs = std::env::var("SNP_CLIPBOARD_TIMEOUT")
@@ -130,8 +165,8 @@ pub fn copy_to_clipboard_with_auto_clear(
 }
 
 pub fn copy_to_clipboard_auto(text: &str) -> SnipResult<()> {
-    let settings = crate::config::get_sync_settings();
-    copy_to_clipboard_with_auto_clear(text, settings.clipboard_auto_clear_seconds)
+    let auto_clear_seconds = get_clipboard_auto_clear_seconds();
+    copy_to_clipboard_with_auto_clear(text, auto_clear_seconds)
 }
 
 /// Copy text to the system clipboard.

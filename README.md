@@ -1,10 +1,16 @@
 # snp - Snippet Manager
 
+[![Crates.io](https://img.shields.io/crates/v/snp.svg)](https://crates.io/crates/snp)
+[![Downloads](https://img.shields.io/crates/d/snp.svg)](https://crates.io/crates/snp)
 ![Rust](https://img.shields.io/badge/Rust-1.88+-orange.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 [![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
 
 A fast, terminal-based snippet manager with fuzzy search, clipboard support, variable expansion, and cloud sync.
+
+## Why snp?
+
+Shell history is unorganized, and dedicated tools like `navi` or `pet` either lack sync or require complex setup. snp gives you a clean TUI with fuzzy search, variable templates, clipboard integration, and encrypted cross-device sync — all in a single binary with zero dependencies.
 
 ## Features
 
@@ -16,6 +22,8 @@ A fast, terminal-based snippet manager with fuzzy search, clipboard support, var
 - **Snippet Libraries** - Organize snippets into multiple collections
 - **Premade Libraries** - Download community-built snippet collections
 - **Cross-Platform** - Works on macOS, Linux, and Windows
+
+<!-- TODO: Add an asciinema recording or GIF showing the TUI fuzzy search in action -->
 
 ## Installation
 
@@ -81,7 +89,7 @@ command = "git commit -m \"<message>\""
 Description = "ssh to server"
 Output = ""
 Tag = ["ssh", "server"]
-command = "ssh <user@host>"
+command = "ssh <user>@<host>"
 
 [[Snippets]]
 Description = "docker cleanup"
@@ -112,7 +120,29 @@ command = "docker run -it <image> /bin/bash"
 ## Usage
 
 ```
-snp --help
+$ snp --help
+A fast, terminal-based snippet manager with TUI, fuzzy search, cloud sync, and encrypted storage
+
+Usage: snp [COMMAND]
+
+Commands:
+  new         Create a new snippet
+  list        List all snippets
+  run         Run a snippet via TUI
+  clip        Copy snippet to clipboard
+  search      Search and view snippet details
+  edit        Edit snippets file in $EDITOR
+  sync        Sync snippets with server
+  cron        Setup automatic sync
+  library     Manage snippet libraries
+  premade     Browse/download premade libraries
+  register    Register sync account
+  keybindings Show TUI keybindings
+  version     Show version
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ### Commands
@@ -280,6 +310,13 @@ Premade libraries are stored in `~/.config/snp/premade/`.
 | `SNP_LOG_LEVEL` | Log level (`trace`, `debug`, `info`, `warn`, `error`) | `info` |
 | `SNP_LOG` | Per-module log filter (e.g., `snp=debug`) | - |
 | `EDITOR` | Editor for `snp edit` command | - |
+
+## Documentation
+
+- [User Guide](USER_GUIDE.md) - Detailed guide covering all features
+- [Contributing](CONTRIBUTING.md) - Development setup and guidelines
+- [Security Policy](SECURITY.md) - Vulnerability reporting and security considerations
+- [Changelog](CHANGELOG.md) - Release history
 
 ## Troubleshooting
 

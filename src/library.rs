@@ -694,6 +694,9 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     fs::create_dir_all(&backup_dir)
         .map_err(|e| SnipError::io_error("create backup directory", backup_dir.clone(), e))?;
 
+    // Clean up old backups (keep at most 10 per library)
+    cleanup_old_backups(&backup_dir, path)?;
+
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let file_stem = path.file_stem().ok_or_else(|| {
         SnipError::runtime_error(
@@ -708,6 +711,46 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
         .map_err(|e| SnipError::io_error("create backup", backup_path.clone(), e))?;
 
     Ok(Some(backup_path))
+}
+
+fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()> {
+    const MAX_BACKUPS_PER_LIBRARY: usize = 10;
+
+    let file_stem = match original_path.file_stem() {
+        Some(s) => s.to_string_lossy().to_string(),
+        None => return Ok(()),
+    };
+
+    let prefix = format!("{}.", file_stem);
+    let mut backups: Vec<_> = fs::read_dir(backup_dir)
+        .map_err(|e| SnipError::io_error("read backup directory", backup_dir.to_path_buf(), e))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.starts_with(&prefix) && name.ends_with(".toml.bak")
+        })
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata.modified().ok()?;
+            Some((entry.path(), modified))
+        })
+        .collect();
+
+    backups.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+    if backups.len() > MAX_BACKUPS_PER_LIBRARY {
+        for (path, _) in backups.into_iter().skip(MAX_BACKUPS_PER_LIBRARY) {
+            if let Err(e) = fs::remove_file(&path) {
+                tracing::warn!(
+                    backup = %path.display(),
+                    error = %e,
+                    "Failed to remove old backup"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

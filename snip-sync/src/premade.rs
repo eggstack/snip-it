@@ -187,14 +187,14 @@ impl PremadeManager {
                         );
                         return false;
                     }
-                    if let Some(ref desc) = s.description {
-                        if desc.len() > 1024 {
-                            tracing::warn!(
-                                "Premade library '{}': skipping snippet with description exceeding 1024 bytes",
-                                filename
-                            );
-                            return false;
-                        }
+                    if let Some(ref desc) = s.description
+                        && desc.len() > 1024
+                    {
+                        tracing::warn!(
+                            "Premade library '{}': skipping snippet with description exceeding 1024 bytes",
+                            filename
+                        );
+                        return false;
                     }
                     true
                 })

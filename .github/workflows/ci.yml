@@ -6,6 +6,7 @@ name: CI
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -85,6 +86,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build MSRV
         run: cargo build --release
+      - name: Test MSRV
+        run: cargo test
 
   coverage:
     name: Coverage
@@ -102,7 +105,7 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: lcov.info
+          files: lcov.info
           fail_ci_if_error: false
 
   docker:

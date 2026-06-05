@@ -185,7 +185,13 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         snippets,
     } = params;
     // Enable mouse capture before initializing terminal
-    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+    // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
+    if let Err(e) = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture) {
+        tracing::warn!(
+            "Mouse capture not available, continuing without mouse support: {}",
+            e
+        );
+    }
     let mut terminal = ratatui::init();
 
     // Pre-compute syntax-highlighted commands once at startup (not inside draw loop)
@@ -252,122 +258,131 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
         let has_incremental_search = !incremental_search.is_empty();
         let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
+        let has_any_filter = has_incremental_search || has_main_filter;
         let current_filter_text = if tag_filter_mode {
             filter_state.tag_filter_text.clone()
         } else {
             filter.clone()
         };
 
-        // should_recompute = false means either: no change, or debounce window not elapsed yet
-        // In both cases, reuse previous filtered results. Only build fresh from all_display
-        // when we actually need to recompute (should_recompute = true).
-        let mut candidates: Vec<(usize, String, Vec<String>, Option<i64>)> = if !should_recompute {
-            if filtered.is_empty() {
-                // First frame or no previous results
-                all_display
-                    .iter()
-                    .enumerate()
-                    .zip(all_tags.iter())
-                    .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
-                    .collect()
-            } else {
-                filtered
-                    .iter()
-                    .map(|(i, d, t)| (*i, d.clone(), t.clone(), None))
-                    .collect()
-            }
+        // Optimization: when no recompute is needed AND no filter is active,
+        // reuse previous filtered results directly without rebuilding candidates
+        if !should_recompute && !has_any_filter && !filtered.is_empty() {
+            sel.update(filtered.len());
         } else {
-            all_display
-                .iter()
-                .enumerate()
-                .zip(all_tags.iter())
-                .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
-                .collect()
-        };
-
-        if has_incremental_search {
-            candidates = candidates
-                .into_iter()
-                .filter_map(|(i, display, tags, _)| {
-                    MATCHER
-                        .fuzzy_match(&display, &incremental_search)
-                        .map(|score| {
-                            let is_exact =
-                                display.to_lowercase() == incremental_search.to_lowercase();
-                            (
-                                i,
-                                display,
-                                tags,
-                                Some(if is_exact { i64::MAX } else { score }),
-                            )
-                        })
-                })
-                .collect();
-        }
-
-        if !has_incremental_search && has_main_filter {
-            let filter_text = &current_filter_text;
-            let filter_lower = filter_text.to_lowercase();
-
-            candidates = candidates
-                .into_iter()
-                .filter_map(|(i, display, snippet_tags, _)| {
-                    let display_match = MATCHER.fuzzy_match(&display, filter_text);
-                    let is_exact_display = display.to_lowercase() == filter_lower;
-                    let tag_match = if tag_filter_mode || !filter_state.tag_filter_text.is_empty() {
-                        snippet_tags
+            // should_recompute = false means either: no change, or debounce window not elapsed yet
+            // In both cases, reuse previous filtered results. Only build fresh from all_display
+            // when we actually need to recompute (should_recompute = true).
+            let mut candidates: Vec<(usize, String, Vec<String>, Option<i64>)> =
+                if !should_recompute {
+                    if filtered.is_empty() {
+                        // First frame or no previous results
+                        all_display
                             .iter()
-                            .any(|t| t.to_lowercase().contains(&filter_lower))
+                            .enumerate()
+                            .zip(all_tags.iter())
+                            .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
+                            .collect()
                     } else {
-                        false
+                        filtered
+                            .iter()
+                            .map(|(i, d, t)| (*i, d.clone(), t.clone(), None))
+                            .collect()
+                    }
+                } else {
+                    all_display
+                        .iter()
+                        .enumerate()
+                        .zip(all_tags.iter())
+                        .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
+                        .collect()
+                };
+
+            if has_incremental_search {
+                candidates = candidates
+                    .into_iter()
+                    .filter_map(|(i, display, tags, _)| {
+                        MATCHER
+                            .fuzzy_match(&display, &incremental_search)
+                            .map(|score| {
+                                let is_exact =
+                                    display.to_lowercase() == incremental_search.to_lowercase();
+                                (
+                                    i,
+                                    display,
+                                    tags,
+                                    Some(if is_exact { i64::MAX } else { score }),
+                                )
+                            })
+                    })
+                    .collect();
+            }
+
+            if !has_incremental_search && has_main_filter {
+                let filter_text = &current_filter_text;
+                let filter_lower = filter_text.to_lowercase();
+
+                candidates = candidates
+                    .into_iter()
+                    .filter_map(|(i, display, snippet_tags, _)| {
+                        let display_match = MATCHER.fuzzy_match(&display, filter_text);
+                        let is_exact_display = display.to_lowercase() == filter_lower;
+                        let tag_match =
+                            if tag_filter_mode || !filter_state.tag_filter_text.is_empty() {
+                                snippet_tags
+                                    .iter()
+                                    .any(|t| t.to_lowercase().contains(&filter_lower))
+                            } else {
+                                false
+                            };
+
+                        if is_exact_display || tag_match {
+                            Some((i, display, snippet_tags, Some(i64::MAX)))
+                        } else {
+                            display_match.map(|score| (i, display, snippet_tags, Some(score)))
+                        }
+                    })
+                    .collect();
+            }
+
+            let has_filter = has_incremental_search || has_main_filter;
+            candidates.sort_by(|a, b| {
+                let score_cmp = match (a.3, b.3) {
+                    (Some(sa), Some(sb)) => sb.cmp(&sa),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                };
+
+                if score_cmp != std::cmp::Ordering::Equal || !has_filter {
+                    let explicit_sort = match filter_state.sort_mode {
+                        SortMode::Newest => Some(b.0.cmp(&a.0)),
+                        SortMode::Oldest => Some(a.0.cmp(&b.0)),
+                        _ => None,
                     };
 
-                    if is_exact_display || tag_match {
-                        Some((i, display, snippet_tags, Some(i64::MAX)))
-                    } else {
-                        display_match.map(|score| (i, display, snippet_tags, Some(score)))
+                    let secondary = match filter_state.sort_mode {
+                        SortMode::AlphaAsc => Some(a.1.to_lowercase().cmp(&b.1.to_lowercase())),
+                        SortMode::AlphaDesc => Some(b.1.to_lowercase().cmp(&a.1.to_lowercase())),
+                        _ => None,
+                    };
+
+                    match explicit_sort {
+                        Some(c) if c != std::cmp::Ordering::Equal => c,
+                        _ => secondary.unwrap_or(score_cmp),
                     }
-                })
-                .collect();
-        }
-
-        let has_filter = has_incremental_search || has_main_filter;
-        candidates.sort_by(|a, b| {
-            let score_cmp = match (a.3, b.3) {
-                (Some(sa), Some(sb)) => sb.cmp(&sa),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            };
-
-            if score_cmp != std::cmp::Ordering::Equal || !has_filter {
-                let explicit_sort = match filter_state.sort_mode {
-                    SortMode::Newest => Some(b.0.cmp(&a.0)),
-                    SortMode::Oldest => Some(a.0.cmp(&b.0)),
-                    _ => None,
-                };
-
-                let secondary = match filter_state.sort_mode {
-                    SortMode::AlphaAsc => Some(a.1.to_lowercase().cmp(&b.1.to_lowercase())),
-                    SortMode::AlphaDesc => Some(b.1.to_lowercase().cmp(&a.1.to_lowercase())),
-                    _ => None,
-                };
-
-                match explicit_sort {
-                    Some(c) if c != std::cmp::Ordering::Equal => c,
-                    _ => secondary.unwrap_or(score_cmp),
+                } else {
+                    score_cmp
                 }
-            } else {
-                score_cmp
-            }
-        });
+            });
 
-        filtered = candidates
-            .into_iter()
-            .map(|(i, d, t, _)| (i, d, t))
-            .collect();
+            filtered = candidates
+                .into_iter()
+                .map(|(i, d, t, _)| (i, d, t))
+                .collect();
 
-        sel.update(filtered.len());
+            sel.update(filtered.len());
+        } // end else (has_any_filter || should_recompute || filtered.is_empty())
 
         // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
         // Main filter text is displayed in the filter input box below, not in the title.
@@ -502,9 +517,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             );
 
             if insert_mode {
+                use unicode_width::UnicodeWidthStr;
                 let cursor_x = chunks[0].x
                     + 1
-                    + input_text.len().min(u16::MAX as usize) as u16;
+                    + input_text.width().min(u16::MAX as usize) as u16;
                 let cursor_y = chunks[0].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }

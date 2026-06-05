@@ -82,6 +82,7 @@ zeroize = { version = "1", features = ["derive"] }
 subtle = "2"
 keyring = "3"
 crc32fast = "1.4"
+unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile = "3.10"

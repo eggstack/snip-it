@@ -11,13 +11,13 @@ use premade::PremadeManager;
 use rate_limiter::RateLimiter;
 use serde::Deserialize;
 use snip_proto::{
-    snippet_sync_server::SnippetSync, CreateLibraryRequest, CreateLibraryResponse,
-    DeleteLibraryRequest, DeleteLibraryResponse, GetPremadeLibraryRequest,
-    GetPremadeLibraryResponse, GetSnippetsRequest, HealthRequest, HealthResponse, Library,
-    ListLibrariesRequest, ListLibrariesResponse, ListPremadeLibrariesRequest,
-    ListPremadeLibrariesResponse, PremadeLibrary as ProtoPremadeLibrary, PushSnippetsRequest,
-    PushSnippetsResponse, RegisterRequest, RegisterResponse, Snippet as ProtoSnippet, SnippetList,
-    SyncRequest, SyncResponse,
+    CreateLibraryRequest, CreateLibraryResponse, DeleteLibraryRequest, DeleteLibraryResponse,
+    GetPremadeLibraryRequest, GetPremadeLibraryResponse, GetSnippetsRequest, HealthRequest,
+    HealthResponse, Library, ListLibrariesRequest, ListLibrariesResponse,
+    ListPremadeLibrariesRequest, ListPremadeLibrariesResponse,
+    PremadeLibrary as ProtoPremadeLibrary, PushSnippetsRequest, PushSnippetsResponse,
+    RegisterRequest, RegisterResponse, Snippet as ProtoSnippet, SnippetList, SyncRequest,
+    SyncResponse, snippet_sync_server::SnippetSync,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -35,6 +35,8 @@ const DEFAULT_MAX_DEVICE_ID_LENGTH: usize = 128;
 const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
+const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
+const DEFAULT_GRPC_MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 const MAX_REQUEST_LIMIT: i32 = 1000;
 
 #[derive(Deserialize, Default)]
@@ -59,6 +61,7 @@ struct ServerConfig {
 #[derive(Deserialize, Default)]
 struct DatabaseConfig {
     path: Option<String>,
+    max_connections: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -75,6 +78,7 @@ struct LimitsConfig {
     max_id_length: Option<usize>,
     max_device_id_length: Option<usize>,
     request_timeout_secs: Option<u64>,
+    grpc_max_message_size: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -102,6 +106,7 @@ struct Config {
     http_host: String,
     http_port: u16,
     db_path: String,
+    db_max_connections: u32,
     premade_dir: PathBuf,
     max_command_length: usize,
     max_description_length: usize,
@@ -110,6 +115,7 @@ struct Config {
     max_id_length: usize,
     max_device_id_length: usize,
     request_timeout_secs: u64,
+    grpc_max_message_size: usize,
     rate_limit_per_minute: u32,
     trusted_proxies: Vec<String>,
     persist_rate_limits: bool,
@@ -171,6 +177,11 @@ impl Config {
                 .ok()
                 .or_else(|| server.database.as_ref().and_then(|d| d.path.clone()))
                 .unwrap_or_else(|| "snippets.db".to_string()),
+            db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(server.database.as_ref().and_then(|d| d.max_connections))
+                .unwrap_or(DEFAULT_DB_MAX_CONNECTIONS),
             premade_dir: std::env::var("PREMADE_DIR")
                 .map(PathBuf::from)
                 .ok()
@@ -213,16 +224,18 @@ impl Config {
             max_device_id_length: std::env::var("MAX_DEVICE_ID_LENGTH")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .or(server
-                    .limits
-                    .as_ref()
-                    .and_then(|l| l.max_device_id_length))
+                .or(server.limits.as_ref().and_then(|l| l.max_device_id_length))
                 .unwrap_or(DEFAULT_MAX_DEVICE_ID_LENGTH),
             request_timeout_secs: std::env::var("REQUEST_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.request_timeout_secs))
                 .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
+            grpc_max_message_size: std::env::var("GRPC_MAX_MESSAGE_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(server.limits.as_ref().and_then(|l| l.grpc_max_message_size))
+                .unwrap_or(DEFAULT_GRPC_MAX_MESSAGE_SIZE),
             rate_limit_per_minute: std::env::var("RATE_LIMIT_PER_MINUTE")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -280,6 +293,7 @@ impl Config {
 struct AppState {
     config: Config,
     metrics: Metrics,
+    db: Arc<Database>,
 }
 
 struct SnipSyncService {
@@ -293,7 +307,13 @@ struct SnipSyncService {
 impl SnipSyncService {
     fn record_request(&self, method: &str) {
         self.metrics.requests_total.inc();
-        tracing::debug!("Request: {}", method);
+        tracing::trace!("Request: {}", method);
+    }
+
+    fn record_request_duration(&self, method: &str, start: std::time::Instant) {
+        let duration = start.elapsed().as_secs_f64();
+        self.metrics.request_duration_seconds.observe(duration);
+        tracing::debug!("Request {} completed in {:.3}s", method, duration);
     }
 
     fn record_rate_limit(&self) {
@@ -330,7 +350,7 @@ impl SnipSyncService {
             .db
             .get_user_by_api_key(api_key)
             .await
-                .map_err(|_| Status::internal("Internal error"))?
+            .map_err(|_| Status::internal("Internal error"))?
             .ok_or_else(|| {
                 self.record_auth_failure();
                 Status::unauthenticated("Invalid API key")
@@ -416,9 +436,11 @@ impl SnippetSync for SnipSyncService {
         _request: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("health");
         tracing::debug!(request_id = %request_id, "Health check");
         let healthy = self.db.ping().await.is_ok();
+        self.record_request_duration("health", start);
         Ok(Response::new(HealthResponse {
             healthy,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -430,6 +452,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("register");
         tracing::info!(request_id = %request_id, "Register request");
 
@@ -483,13 +506,16 @@ impl SnippetSync for SnipSyncService {
                         "Generated device_id is not a valid UUID: {}",
                         device_id
                     );
-                    return Err(Status::internal("Internal error: invalid device ID generated"));
+                    return Err(Status::internal(
+                        "Internal error: invalid device ID generated",
+                    ));
                 }
                 tracing::info!(
                     request_id = %request_id,
                     device_id = %device_id,
                     "Created new user"
                 );
+                self.record_request_duration("register", start);
                 Ok(Response::new(RegisterResponse {
                     success: true,
                     api_key,
@@ -499,6 +525,7 @@ impl SnippetSync for SnipSyncService {
             }
             Err(e) => {
                 tracing::error!(request_id = %request_id, "Failed to create user: {}", e);
+                self.record_request_duration("register", start);
                 Err(Status::internal("Internal error"))
             }
         }
@@ -516,16 +543,19 @@ impl SnippetSync for SnipSyncService {
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
-            self.db
-                .get_default_library(&user_id)
-                .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+            self.db.get_default_library(&user_id).await.map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+                .map_err(|e| {
+                    tracing::error!("Internal error: {}", e);
+                    Status::internal("Internal error")
+                })?
             {
                 tracing::warn!(
                     "User {} attempted to access library {} without ownership",
@@ -548,7 +578,10 @@ impl SnippetSync for SnipSyncService {
             .db
             .get_snippets(&user_id, &library_id, req.since, limit, offset)
             .await
-            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
+            .map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let has_more = (offset + snippets.len() as i32) < total;
 
@@ -586,16 +619,19 @@ impl SnippetSync for SnipSyncService {
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
-            self.db
-                .get_default_library(&user_id)
-                .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+            self.db.get_default_library(&user_id).await.map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+                .map_err(|e| {
+                    tracing::error!("Internal error: {}", e);
+                    Status::internal("Internal error")
+                })?
             {
                 tracing::warn!(
                     "User {} attempted to push to library {} without ownership",
@@ -610,15 +646,20 @@ impl SnippetSync for SnipSyncService {
         let mut accepted = 0;
         let mut rejected = 0;
 
+        let mut tx = self.db.pool().begin().await.map_err(|e| {
+            tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
+            Status::internal("Internal error")
+        })?;
+
         for snippet in req.snippets {
             if let Err(e) = self.validate_snippet(&snippet) {
                 rejected += 1;
-                tracing::warn!("Snippet validation failed: {}", e);
+                tracing::warn!(request_id = %request_id, snippet_id = %snippet.id, reason = %e, "Snippet validation failed");
                 continue;
             }
 
             let db_snippet = db::Snippet {
-                id: snippet.id,
+                id: snippet.id.clone(),
                 description: snippet.description,
                 command: snippet.command,
                 tags: snippet.tags,
@@ -631,13 +672,26 @@ impl SnippetSync for SnipSyncService {
 
             match self
                 .db
-                .upsert_snippet(&db_snippet, &user_id, &library_id)
+                .upsert_snippet_in_tx(&mut tx, &db_snippet, &user_id, &library_id)
                 .await
             {
                 Ok(_) => accepted += 1,
-                Err(_) => rejected += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        reason = %e,
+                        "Snippet upsert failed"
+                    );
+                    rejected += 1;
+                }
             }
         }
+
+        tx.commit().await.map_err(|e| {
+            tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         Ok(Response::new(PushSnippetsResponse {
             success: rejected == 0,
@@ -649,6 +703,7 @@ impl SnippetSync for SnipSyncService {
 
     async fn sync(&self, request: Request<SyncRequest>) -> Result<Response<SyncResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("sync");
         self.record_sync();
         tracing::info!(request_id = %request_id, "Sync request");
@@ -665,16 +720,19 @@ impl SnippetSync for SnipSyncService {
         let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
-            self.db
-                .get_default_library(&user_id)
-                .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+            self.db.get_default_library(&user_id).await.map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?
         } else {
             if !self
                 .db
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
-                .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?
+                .map_err(|e| {
+                    tracing::error!("Internal error: {}", e);
+                    Status::internal("Internal error")
+                })?
             {
                 tracing::warn!(
                     "User {} attempted to sync with library {} without ownership",
@@ -739,13 +797,19 @@ impl SnippetSync for SnipSyncService {
             .db
             .get_snippets(&user_id, &library_id, req.last_sync_timestamp, limit, 0)
             .await
-            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
+            .map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let timestamp = self
             .db
             .get_latest_timestamp(&user_id, &library_id)
             .await
-            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
+            .map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let proto_snippets: Vec<ProtoSnippet> = snippets
             .into_iter()
@@ -770,6 +834,8 @@ impl SnippetSync for SnipSyncService {
             skipped_count = skipped_count,
             "Sync completed"
         );
+
+        self.record_request_duration("sync", start);
 
         Ok(Response::new(SyncResponse {
             success: true,
@@ -838,7 +904,10 @@ impl SnippetSync for SnipSyncService {
             .db
             .list_libraries(&user_id, limit, offset)
             .await
-            .map_err(|e| { tracing::error!("Internal error: {}", e); Status::internal("Internal error") })?;
+            .map_err(|e| {
+                tracing::error!("Internal error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let has_more = (offset + libraries.len() as i32) < total;
 
@@ -1004,7 +1073,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Config::ensure_config_file();
     let config = Config::load();
 
-    let db = Arc::new(Database::connect(&config.db_path).await?);
+    let db = Arc::new(Database::connect(&config.db_path, config.db_max_connections).await?);
     tracing::info!("Database initialized at {}", config.db_path);
 
     match db.migrate_plaintext_api_keys().await {
@@ -1035,8 +1104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rate_limiter.start_persistence_task();
     let cors_allowed_origins = config.cors_allowed_origins.clone();
 
-    tracing::info!("Input validation config: max_command={}, max_description={}, max_tags={}, max_tag_length={}, request_timeout={}s",
-        config.max_command_length, config.max_description_length, config.max_tags, config.max_tag_length, config.request_timeout_secs);
+    tracing::info!(
+        "Input validation config: max_command={}, max_description={}, max_tags={}, max_tag_length={}, request_timeout={}s",
+        config.max_command_length,
+        config.max_description_length,
+        config.max_tags,
+        config.max_tag_length,
+        config.request_timeout_secs
+    );
 
     if cors_allowed_origins.is_empty() {
         tracing::warn!("CORS: no origins configured, requests from any origin will be allowed");
@@ -1047,7 +1122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let metrics = match Metrics::new() {
         Ok(m) => m,
         Err(e) => {
-            tracing::error!("Failed to create metrics: {}. Metrics will be unavailable.", e);
+            tracing::error!(
+                "Failed to create metrics: {}. Metrics will be unavailable.",
+                e
+            );
             Metrics::fallback()
         }
     };
@@ -1078,7 +1156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         config: config.clone(),
         metrics: metrics.clone(),
+        db: db.clone(),
     };
+
+    let grpc_max_message_size = config.grpc_max_message_size;
 
     let grpc_service = SnipSyncService {
         db: db.clone(),
@@ -1174,11 +1255,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = axum::Router::new()
         .route(
             "/health",
-            axum::routing::get(|| async {
-                axum::Json(serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "status": "healthy"
-                }))
+            axum::routing::get(|State(state): State<AppState>| async move {
+                let healthy = state.db.ping().await.is_ok();
+                let status = if healthy { "healthy" } else { "unhealthy" };
+                let code = if healthy {
+                    axum::http::StatusCode::OK
+                } else {
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                };
+                (
+                    code,
+                    axum::Json(serde_json::json!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "status": status
+                    })),
+                )
             }),
         )
         .route("/metrics", axum::routing::get(metrics_handler))
@@ -1188,6 +1279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_handle = tokio::spawn(async move {
         let server = tonic::transport::Server::builder()
             .timeout(timeout)
+            .max_frame_size(grpc_max_message_size as u32)
             .add_service(snip_proto::snippet_sync_server::SnippetSyncServer::new(
                 grpc_service,
             ))
