@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package snip_proto;
 
-option go_package = "github.com/snip-it/snip-proto;snip_proto";
+option go_package = "github.com/anomalyco/snip-it/snip-proto;snip_proto";
 
 service SnippetSync {
     // Get snippets from server (optionally since a timestamp)

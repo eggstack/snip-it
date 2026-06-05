@@ -2,14 +2,14 @@ FROM rust:1.88 AS builder
 
 WORKDIR /build
 
-COPY Cargo.toml Cargo.lock ./
+COPY snip-sync/Cargo.toml snip-sync/Cargo.lock snip-sync/
 COPY snip-proto/Cargo.toml snip-proto/Cargo.lock snip-proto/
 COPY snip-proto/build.rs snip-proto/
 COPY snip-proto/proto snip-proto/proto
 COPY snip-proto/src snip-proto/src
-COPY src ./src
+COPY snip-sync/src snip-sync/src
 
-RUN cargo build --release
+RUN cargo build --release -p snip-sync
 
 FROM debian:bookworm-slim
 

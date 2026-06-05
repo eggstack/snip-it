@@ -370,15 +370,15 @@ pub fn log_clipboard_operation(operation: &str, success: bool) {
 }
 
 pub fn log_startup_info() {
-    tracing::info!("=== SNP Application Starting ===");
-    tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Platform: {}", std::env::consts::OS);
-    tracing::info!("Architecture: {}", std::env::consts::ARCH);
-    tracing::info!(
+    tracing::debug!("=== SNP Application Starting ===");
+    tracing::debug!("Version: {}", env!("CARGO_PKG_VERSION"));
+    tracing::debug!("Platform: {}", std::env::consts::OS);
+    tracing::debug!("Architecture: {}", std::env::consts::ARCH);
+    tracing::debug!(
         "Config directory: {}",
         crate::utils::config::get_config_dir().display()
     );
-    tracing::info!("Log directory: {}", get_default_log_dir().display());
+    tracing::debug!("Log directory: {}", get_default_log_dir().display());
 }
 
 pub fn log_shutdown_info() {

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 mod clipboard;
 mod commands;
@@ -77,10 +78,13 @@ fn setup_signal_handler() {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "snp", about = "Snippet manager", version = env!("CARGO_PKG_VERSION"), disable_version_flag = true)]
+#[command(
+    name = "snp",
+    about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and cloud sync",
+    version = env!("CARGO_PKG_VERSION"),
+    after_help = "Config: ~/.config/snp/snippets.toml | Docs: https://github.com/anomalyco/snip-it"
+)]
 struct Cli {
-    #[arg(short = 'v', long, action = clap::ArgAction::Version)]
-    version: (),
     #[command(subcommand)]
     command: Commands,
 }
@@ -160,17 +164,17 @@ enum Commands {
     /// Sync snippets with server
     #[command(alias = "y")]
     Sync {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Sync a specific library")]
         library: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "List connected servers")]
         servers: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Skip conflict prompts (keeps local)")]
         non_interactive: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Upload local changes only")]
         push_only: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Download remote changes only")]
         pull_only: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Show what would be synced")]
         dry_run: bool,
     },
     /// Setup automatic sync with cron
@@ -197,6 +201,13 @@ enum Commands {
     Premade {
         #[command(subcommand)]
         command: PremadeCommands,
+    },
+    /// Generate shell completions
+    #[command(alias = "g")]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -333,6 +344,10 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             }
             PremadeCommands::Sync => commands::premade_cmd::run_sync(&RUNTIME)?,
         },
+        Commands::Completions { shell } => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            clap_complete::generate(shell, &mut cmd, "snp", &mut std::io::stdout());
+        }
     }
     Ok(())
 }

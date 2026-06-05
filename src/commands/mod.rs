@@ -132,6 +132,9 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
 }
 
 /// Saves snippets to a TOML file, creating directories as needed.
+///
+/// Uses atomic write (temp file + rename) and creates a backup before saving,
+/// matching the safety guarantees of `save_library`.
 pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> SnipResult<()> {
     use std::fs;
 
@@ -142,13 +145,23 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
             .map_err(|e| SnipError::io_error("create config directory", parent, e))?;
     }
 
+    if let Err(e) = crate::library::backup_library(&path) {
+        tracing::warn!(error = %e, "Failed to create backup before save");
+    }
+
     let toml_str =
         toml::to_string_pretty(s).map_err(|e| SnipError::toml_error("serialize config", e))?;
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    fs::write(&path, toml_str)
-        .map_err(|e| SnipError::io_error("write config file", path.clone(), e))?;
+    let tmp_path = path.with_extension("toml.tmp");
+    fs::write(&tmp_path, &toml_str)
+        .map_err(|e| SnipError::io_error("write config temp", &tmp_path, e))?;
+
+    fs::rename(&tmp_path, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        SnipError::io_error("atomic rename config file", path.clone(), e)
+    })?;
 
     crate::logging::log_config_operation("save", &path, &Ok(()));
     Ok(())

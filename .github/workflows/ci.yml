@@ -111,7 +111,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build snip-sync Docker image
-        run: docker build -t snip-sync:test ./snip-sync
+        run: docker build -t snip-sync:test -f snip-sync/Dockerfile .
+
+  proto-check:
+    name: Proto Codegen Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build snip-proto to regenerate code
+        run: cargo build -p snip-proto
+      - name: Check generated code is up to date
+        run: git diff --exit-code snip-proto/src/snip_proto.rs
 
   deny:
     name: Dependency Audit
