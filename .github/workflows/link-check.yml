@@ -1,0 +1,37 @@
+---
+name: Link Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays at 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  markdown-links:
+    name: Markdown link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check links in README and USER_GUIDE
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --exclude-loopback
+            --exclude-link-local
+            --exclude-mail
+            --exclude 'https://github.com/anomalyco/snip-it/(issues|actions|releases).*'
+            --exclude 'https://crates.io/.*'
+            README.md
+            USER_GUIDE.md
+            SECURITY.md
+            CONTRIBUTING.md
+            CODE_OF_CONDUCT.md
+            snip-sync/README.md
+          fail: true
