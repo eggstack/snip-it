@@ -64,10 +64,13 @@ fn needs_regeneration(themes_dir: &Path, out_path: &Path) -> bool {
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
-        if let Ok(meta) = fs::metadata(&path)
-            && let Ok(mtime) = meta.modified()
-            && mtime > out_mtime
-        {
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        let Ok(mtime) = meta.modified() else {
+            continue;
+        };
+        if mtime > out_mtime {
             return true;
         }
     }
