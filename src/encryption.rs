@@ -12,8 +12,8 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use snp::encryption::{encrypt, decrypt};
+//! ```text
+//! use snp_internal::encryption::{encrypt, decrypt};
 //!
 //! let api_key = "your-api-key";
 //! let encrypted = encrypt(api_key, "sensitive data")?;

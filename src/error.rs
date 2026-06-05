@@ -6,8 +6,8 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use snp::error::{SnipError, SnipResult};
+//! ```text
+//! use snp_internal::error::{SnipError, SnipResult};
 //!
 //! fn read_config() -> SnipResult<String> {
 //!     std::fs::read_to_string("config.toml")

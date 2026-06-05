@@ -1,16 +1,17 @@
 [package]
 name = "snp"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.88"
-description = "A fast, terminal-based snippet manager with TUI, fuzzy search, cloud sync, and encrypted storage"
+description = "Fast terminal snippet manager with fuzzy search, TUI, variable expansion, and end-to-end encrypted cross-device sync"
 license = "MIT"
 repository = "https://github.com/anomalyco/snip-it"
+homepage = "https://github.com/anomalyco/snip-it"
+documentation = "https://docs.rs/snp"
 readme = "README.md"
-documentation = "https://github.com/anomalyco/snip-it#readme"
-keywords = ["cli", "snippets", "terminal", "tui", "productivity"]
-categories = ["command-line-utilities", "development-tools"]
-authors = ["David Bowman"]
+keywords = ["cli", "snippets", "terminal", "tui", "productivity", "fuzzy-search", "encryption"]
+categories = ["command-line-utilities", "development-tools", "filesystem"]
+authors = ["David Bowman <dbowman91@proton.me>"]
 exclude = [
     ".github/",
     "architecture/",
@@ -26,6 +27,8 @@ exclude = [
     "snip-sync/",
     "tests/",
     "rustfmt.toml",
+    "rust-toolchain.toml",
+    "Cargo.toml.orig",
     ".gitignore",
     "snip-proto/",
     "CONTRIBUTING.md",
@@ -39,14 +42,16 @@ name = "snp"
 path = "src/main.rs"
 
 [package.metadata.docs.rs]
+all-features = false
 default-target = "x86_64-unknown-linux-gnu"
 targets = [
     "x86_64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
     "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
 ]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "4.5"
