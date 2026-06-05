@@ -16,6 +16,7 @@ pub enum ListFormat {
     Csv,
 }
 
+/// Lists snippets from the library, optionally filtered and in a given format.
 pub fn run(
     filter: Option<String>,
     config: Option<PathBuf>,

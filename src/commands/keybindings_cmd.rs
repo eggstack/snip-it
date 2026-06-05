@@ -1,5 +1,6 @@
 use crate::error::SnipResult;
 
+/// Prints all available TUI keybindings to stdout.
 pub fn run() -> SnipResult<()> {
     println!("Current keybindings:");
     println!();

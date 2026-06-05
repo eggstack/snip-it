@@ -96,6 +96,7 @@ pub struct LibraryMeta {
 }
 
 impl LibraryMeta {
+    /// Creates a new library metadata entry with the given filename.
     pub fn new(filename: &str) -> Self {
         Self {
             filename: filename.to_string(),
@@ -133,6 +134,9 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
 }
 
 impl Snippet {
+    /// Creates a new snippet with the given description, command, and tags.
+    ///
+    /// Returns an error if the command or description is empty/whitespace.
     pub fn new(description: String, command: String, tags: Vec<String>) -> SnipResult<Self> {
         if command.trim().is_empty() {
             return Err(SnipError::runtime_error(
@@ -178,6 +182,10 @@ pub struct LibraryManager {
 }
 
 impl LibraryManager {
+    /// Creates a new `LibraryManager`, loading configuration from disk.
+    ///
+    /// Handles macOS config directory migration and parses `libraries.toml`.
+    /// Returns defaults if the config file is missing or corrupted.
     pub fn new() -> SnipResult<Self> {
         // Migrate legacy macOS config dir if needed
         if let Err(e) = crate::utils::config::migrate_macos_config_dir() {
@@ -229,22 +237,27 @@ impl LibraryManager {
         })
     }
 
+    /// Returns the default path to the legacy single-file snippets TOML.
     pub fn get_default_snippets_path() -> PathBuf {
         get_snippets_path()
     }
 
+    /// Returns a reference to the libraries directory path.
     pub fn get_libraries_dir(&self) -> &PathBuf {
         &self.libraries_dir
     }
 
+    /// Returns `true` if the libraries directory does not exist (legacy single-file mode).
     pub fn is_single_file_mode(&self) -> bool {
         !self.libraries_dir.exists()
     }
 
+    /// Returns the path to the legacy single-file snippets TOML.
     pub fn get_legacy_snippets_path(&self) -> PathBuf {
         Self::get_default_snippets_path()
     }
 
+    /// Ensures the library directory exists, migrating from single-file mode if needed.
     pub fn ensure_library_mode(&mut self) -> SnipResult<()> {
         if self.is_single_file_mode() {
             self.migrate_from_single_file()?;
@@ -252,6 +265,7 @@ impl LibraryManager {
         Ok(())
     }
 
+    /// Creates the libraries directory if it does not exist.
     pub fn init_libraries_dir(&self) -> SnipResult<()> {
         if !self.libraries_dir.exists() {
             fs::create_dir_all(&self.libraries_dir).map_err(|e| {
@@ -261,6 +275,7 @@ impl LibraryManager {
         Ok(())
     }
 
+    /// Migrates the legacy single-file `snippets.toml` into a library subdirectory.
     pub fn migrate_from_single_file(&mut self) -> SnipResult<()> {
         let legacy_path = self.get_legacy_snippets_path();
 
@@ -288,14 +303,17 @@ impl LibraryManager {
         Ok(())
     }
 
+    /// Returns references to all registered libraries.
     pub fn list_libraries(&self) -> Vec<&LibraryMeta> {
         self.config.libraries.iter().collect()
     }
 
+    /// Returns the primary library, or `None` if no library is marked primary.
     pub fn get_primary_library(&self) -> Option<&LibraryMeta> {
         self.config.libraries.iter().find(|l| l.is_primary)
     }
 
+    /// Finds a library by its filename (without `.toml` extension).
     pub fn get_library_by_filename(&self, filename: &str) -> Option<&LibraryMeta> {
         self.config
             .libraries
@@ -303,6 +321,7 @@ impl LibraryManager {
             .find(|l| l.filename == filename)
     }
 
+    /// Finds a library by filename, returning a mutable reference.
     pub fn get_library_by_filename_mut(&mut self, filename: &str) -> Option<&mut LibraryMeta> {
         self.config
             .libraries
@@ -310,6 +329,10 @@ impl LibraryManager {
             .find(|l| l.filename == filename)
     }
 
+    /// Creates a new snippet library file and registers it in the config.
+    ///
+    /// The first library created is automatically marked as primary.
+    /// Returns the path to the newly created library file.
     pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> {
         validate_library_name(filename)
             .map_err(|(msg, detail)| SnipError::runtime_error(msg, Some(detail)))?;
@@ -358,6 +381,10 @@ Snippets = []
         Ok(path)
     }
 
+    /// Deletes a library file and removes it from the config.
+    ///
+    /// If the deleted library was primary, another library is promoted.
+    /// Config is saved before file deletion for crash safety.
     pub fn delete_library(&mut self, filename: &str) -> SnipResult<()> {
         let was_primary = self
             .get_library_by_filename(filename)
@@ -415,6 +442,7 @@ Snippets = []
         Ok(())
     }
 
+    /// Sets the given library as primary, unmarking all others.
     pub fn set_primary(&mut self, filename: &str) -> SnipResult<()> {
         if !self
             .config
@@ -435,6 +463,7 @@ Snippets = []
         Ok(())
     }
 
+    /// Updates the server-side library ID for a local library.
     pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = library_id.to_string();
@@ -444,6 +473,7 @@ Snippets = []
         Ok(())
     }
 
+    /// Registers an existing library file that is not yet tracked in the config.
     pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()> {
         if self.get_library_by_filename(filename).is_some() {
             return Ok(());
@@ -463,6 +493,7 @@ Snippets = []
         Ok(())
     }
 
+    /// Updates the last-sync timestamp for a library.
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.last_sync = Some(timestamp);
@@ -472,6 +503,10 @@ Snippets = []
         Ok(())
     }
 
+    /// Creates or links a library imported from the sync server.
+    ///
+    /// If a library with the same filename already exists, its server ID is updated.
+    /// Otherwise, a new library file and config entry are created.
     pub fn add_server_library(
         &mut self,
         server_name: &str,
@@ -514,6 +549,7 @@ Snippets = []
         Ok(path)
     }
 
+    /// Creates the premade libraries directory if it does not exist.
     pub fn init_premade_dir(&self) -> SnipResult<()> {
         if !self.premade_dir.exists() {
             fs::create_dir_all(&self.premade_dir).map_err(|e| {
@@ -523,10 +559,15 @@ Snippets = []
         Ok(())
     }
 
+    /// Returns `true` if a premade library with the given filename exists on disk.
     pub fn premade_exists(&self, filename: &str) -> bool {
         self.premade_dir.join(format!("{}.toml", filename)).exists()
     }
 
+    /// Saves a premade library file to the premade directory.
+    ///
+    /// Validates the filename against path traversal attacks before writing.
+    /// Returns the path to the saved file.
     pub fn save_premade_library(&self, filename: &str, content: &str) -> SnipResult<PathBuf> {
         self.init_premade_dir()?;
 
@@ -591,6 +632,10 @@ Snippets = []
     }
 }
 
+/// Loads a snippet library from a TOML file.
+///
+/// Returns an empty collection if the file doesn't exist or is empty.
+/// Deduplicates snippet IDs on load and creates backups of corrupted files.
 pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     if !path.exists() {
         return Ok(Snippets::default());
@@ -645,6 +690,9 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     })
 }
 
+/// Saves a snippet library to a TOML file using atomic write.
+///
+/// Creates a backup before saving and sorts snippets by `updated_at` descending.
 pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -677,6 +725,10 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     Ok(())
 }
 
+/// Creates a timestamped backup of a library file.
+///
+/// Stores backups in a `backups/` subdirectory, keeping at most 10 per library.
+/// Returns `None` if the source file doesn't exist.
 pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     if !path.exists() {
         return Ok(None);

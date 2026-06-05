@@ -186,6 +186,7 @@ pub fn get_snippet_data(snippets: &crate::library::Snippets) -> crate::SnippetDa
     }
 }
 
+/// Expands a snippet command, prompting for variables if present.
 pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<ExpandedCommand> {
     use crate::ui;
     use crate::utils::{parse_variables, strip_escape_sequences};
@@ -206,6 +207,11 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
     }
 }
 
+/// Opens the TUI snippet selector and runs the given processing function on selection.
+///
+/// Handles loading the library, extracting snippet data, and optionally running
+/// a background sync after processing. The `process_fn` callback is invoked with
+/// the selected snippet and any copy flag from the TUI.
 pub fn run_snippet_selection<F>(
     filter: Option<String>,
     library: Option<String>,

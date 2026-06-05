@@ -3,6 +3,7 @@ use crate::error::SnipResult;
 use crate::library::LibraryManager;
 use crate::sync::SyncClient;
 
+/// Lists all premade libraries available on the sync server.
 pub fn run_list(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
@@ -141,6 +142,7 @@ pub fn run_get(
     Ok(())
 }
 
+/// Downloads all missing premade libraries from the server.
 pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 

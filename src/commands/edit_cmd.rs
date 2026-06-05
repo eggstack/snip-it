@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Opens the snippets library file in the user's `$EDITOR`.
 pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> {
     let path = if let Some(ref lib_name) = library {
         match get_library_path(library.clone())? {

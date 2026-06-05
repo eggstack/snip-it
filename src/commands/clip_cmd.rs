@@ -28,6 +28,7 @@ fn process_snippet(
     ))
 }
 
+/// Copies the selected snippet's expanded command to the clipboard.
 pub fn run(
     filter: Option<String>,
     do_sync: bool,

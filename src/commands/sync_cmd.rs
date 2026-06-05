@@ -88,6 +88,10 @@ fn link_server_library(
     }
 }
 
+/// Prompts the user to resolve a local/server library conflict.
+///
+/// Returns `"overwrite"`, `"rename"`, or `None` (skip) based on user input.
+/// In non-interactive mode, always returns `None`.
 pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> {
     if non_interactive {
         println!(
@@ -130,6 +134,9 @@ pub struct SyncOptions {
     pub dry_run: bool,
 }
 
+/// Runs the sync command with the given options.
+///
+/// Supports listing servers, push-only, pull-only, bidirectional, and dry-run modes.
 pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = match load_sync_settings() {
         Ok(settings) => settings,

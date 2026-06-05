@@ -1,6 +1,7 @@
 use crate::error::{SnipError, SnipResult};
 use std::io::{self, Write};
 
+/// Displays a crontab entry for periodic sync at the given interval (in minutes).
 pub fn run(interval: u32) -> SnipResult<()> {
     if interval == 0 {
         return Err(SnipError::runtime_error(

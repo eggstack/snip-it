@@ -223,6 +223,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
     }
 }
 
+/// Executes the selected snippet's command in the user's shell.
 pub fn run(
     filter: Option<String>,
     do_sync: bool,

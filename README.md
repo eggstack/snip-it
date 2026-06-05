@@ -23,8 +23,6 @@ Shell history is unorganized, and dedicated tools like `navi` or `pet` either la
 - **Premade Libraries** - Download community-built snippet collections
 - **Cross-Platform** - Works on macOS, Linux, and Windows
 
-<!-- TODO: Add an asciinema recording or GIF showing the TUI fuzzy search in action -->
-
 ## Installation
 
 ### From crates.io

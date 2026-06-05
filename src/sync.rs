@@ -50,6 +50,7 @@ impl Default for SyncRetryConfig {
 }
 
 impl SyncRetryConfig {
+    /// Returns `true` if the gRPC error status code is retryable.
     pub fn is_retryable_grpc_error(status: &tonic::Status) -> bool {
         !matches!(
             status.code(),
@@ -114,6 +115,7 @@ pub struct SyncClient {
 }
 
 impl SyncClient {
+    /// Creates a new sync client connected to the server specified in settings.
     pub async fn create(settings: SyncSettings) -> SnipResult<Self> {
         let server_url = settings.server_url.clone();
 
@@ -127,6 +129,9 @@ impl SyncClient {
         })
     }
 
+    /// Encrypts local snippets, sends them to the server, and decrypts the response.
+    ///
+    /// Snippets that fail encryption/decryption are counted as skipped.
     pub async fn sync_encrypted(
         &mut self,
         local_snippets: Vec<crate::proto::Snippet>,
@@ -224,6 +229,7 @@ impl SyncClient {
         }
     }
 
+    /// Checks server health and returns `true` if the server is reachable.
     pub async fn health_check(&mut self) -> SnipResult<bool> {
         match retry_grpc!(
             self.client.health(tonic::Request::new(HealthRequest {})),
@@ -234,6 +240,7 @@ impl SyncClient {
         }
     }
 
+    /// Registers a new device with the server and returns the API key and device ID.
     pub async fn register(server_url: String) -> SnipResult<(String, String)> {
         let channel = create_tls_channel(&server_url)
             .await
@@ -259,6 +266,7 @@ impl SyncClient {
         }
     }
 
+    /// Lists all libraries on the sync server.
     pub async fn list_libraries(&mut self) -> SnipResult<Vec<Library>> {
         let api_key = self.settings.api_key.clone();
         let response = retry_grpc!(
@@ -273,6 +281,7 @@ impl SyncClient {
         Ok(response.into_inner().libraries)
     }
 
+    /// Creates a new library on the sync server.
     pub async fn create_library(&mut self, name: &str) -> SnipResult<Library> {
         let api_key = self.settings.api_key.clone();
         let name_str = name.to_string();
@@ -377,6 +386,7 @@ impl SyncClient {
         Ok(response.into_inner())
     }
 
+    /// Lists all premade libraries available on the server.
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
         let api_key = self.settings.api_key.clone();
         let response = retry_grpc!(
@@ -389,6 +399,7 @@ impl SyncClient {
         Ok(response.into_inner().libraries)
     }
 
+    /// Downloads a premade library's content from the server.
     pub async fn get_premade_library(&mut self, filename: &str) -> SnipResult<String> {
         let api_key = self.settings.api_key.clone();
         let filename_str = filename.to_string();
@@ -444,6 +455,7 @@ async fn create_tls_channel(
     Ok(channel)
 }
 
+/// Encrypts a snippet's sensitive fields (description, command, tags) for sync.
 pub fn encrypt_snippet(
     api_key: &str,
     snippet: &crate::proto::Snippet,
@@ -473,6 +485,7 @@ pub fn encrypt_snippet(
     })
 }
 
+/// Decrypts a snippet's encrypted fields received from the sync server.
 pub fn decrypt_snippet(
     api_key: &str,
     snippet: &crate::proto::Snippet,

@@ -74,35 +74,31 @@ impl Metrics {
     }
 
     /// Creates a fallback instance with no-op counters for when metrics
-    /// initialization fails. All counters are created with dummy names
-    /// that won't conflict with real metrics.
+    /// initialization fails. Uses a fresh registry so metric names never
+    /// conflict with real metrics.
     pub fn fallback() -> Self {
         let registry = Arc::new(Registry::new());
-        let dummy_counter = || {
-            IntCounter::new("snip_sync_fallback_dummy", "Dummy counter for fallback")
-                .unwrap_or_else(|_| IntCounter::new("snip_sync_fallback", "fallback").unwrap())
-        };
-        let dummy_histogram = || {
-            Histogram::with_opts(HistogramOpts::new(
-                "snip_sync_fallback_duration",
-                "Dummy histogram for fallback",
-            ))
-            .unwrap_or_else(|_| {
-                Histogram::with_opts(HistogramOpts::new(
-                    "snip_sync_fallback_duration_v2",
-                    "fallback",
-                ))
-                .unwrap()
-            })
-        };
+        // All names are valid ASCII identifiers, so these unwraps are safe.
+        // A fresh registry is used each call, avoiding name collisions.
         Self {
             registry,
-            requests_total: dummy_counter(),
-            request_duration_seconds: dummy_histogram(),
-            sync_operations_total: dummy_counter(),
-            library_operations_total: dummy_counter(),
-            rate_limit_hits: dummy_counter(),
-            auth_failures: dummy_counter(),
+            requests_total: IntCounter::new("snip_sync_fallback_requests", "fallback").unwrap(),
+            request_duration_seconds: Histogram::with_opts(
+                HistogramOpts::new("snip_sync_fallback_duration", "fallback"),
+            )
+            .unwrap(),
+            sync_operations_total: IntCounter::new(
+                "snip_sync_fallback_sync_ops",
+                "fallback",
+            )
+            .unwrap(),
+            library_operations_total: IntCounter::new(
+                "snip_sync_fallback_lib_ops",
+                "fallback",
+            )
+            .unwrap(),
+            rate_limit_hits: IntCounter::new("snip_sync_fallback_rate_limit", "fallback").unwrap(),
+            auth_failures: IntCounter::new("snip_sync_fallback_auth_fail", "fallback").unwrap(),
         }
     }
 }

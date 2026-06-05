@@ -62,6 +62,10 @@ fn check_server_health(
     }
 }
 
+/// Synchronizes premade libraries from the server to the local filesystem.
+///
+/// Downloads any premade libraries that don't already exist locally.
+/// Returns an error if the sync client cannot be created or if any downloads fail.
 pub fn run_premade_sync(
     sync_settings: &SyncSettings,
     runtime: &tokio::runtime::Runtime,
@@ -204,6 +208,11 @@ fn merge_and_save(
     Ok((merged, backup_path))
 }
 
+/// Performs a full sync operation across one or more libraries.
+///
+/// Supports push-only, pull-only, and bidirectional modes. Creates server-side
+/// libraries for any unlinked local libraries, then merges snippets using
+/// last-write-wins conflict resolution.
 pub fn run_sync(
     sync_settings: &SyncSettings,
     library_name: Option<&str>,
@@ -641,6 +650,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     }
 }
 
+/// Runs a sync with the default settings (bidirectional, all libraries).
 pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let settings = crate::config::load_sync_settings().unwrap_or_default();
     run_sync(&settings, None, false, false, false, runtime)

@@ -2,6 +2,7 @@ use crate::error::SnipResult;
 use crate::library::LibraryManager;
 use std::io::IsTerminal;
 
+/// Lists all registered snippet libraries.
 pub fn run_list() -> SnipResult<()> {
     let mgr = LibraryManager::new()?;
     let libraries = mgr.list_libraries();
@@ -19,6 +20,7 @@ pub fn run_list() -> SnipResult<()> {
     Ok(())
 }
 
+/// Creates a new snippet library with the given name.
 pub fn run_create(name: String) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
     let path = mgr.create_library(&name)?;
@@ -26,6 +28,7 @@ pub fn run_create(name: String) -> SnipResult<()> {
     Ok(())
 }
 
+/// Deletes a snippet library after optional interactive confirmation.
 pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
 
@@ -57,6 +60,7 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     Ok(())
 }
 
+/// Sets the given library as the primary (default) library.
 pub fn run_set_primary(name: String) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
     mgr.set_primary(&name)?;
@@ -64,6 +68,7 @@ pub fn run_set_primary(name: String) -> SnipResult<()> {
     Ok(())
 }
 
+/// Displays metadata for a specific library or all libraries.
 pub fn run_show(name: Option<String>) -> SnipResult<()> {
     let mgr = LibraryManager::new()?;
 

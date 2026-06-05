@@ -5,6 +5,7 @@ use crossterm::style::{Color, Stylize, style};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+/// Reads a multiline snippet command from stdin (terminated by two blank lines).
 pub fn read_multiline_command() -> io::Result<String> {
     let mut lines = Vec::new();
     let mut prev_was_empty = false;
@@ -24,6 +25,7 @@ pub fn read_multiline_command() -> io::Result<String> {
     Ok(lines.join(""))
 }
 
+/// Creates a new snippet with the given command and optional tags.
 pub fn run(
     command: String,
     tags: bool,

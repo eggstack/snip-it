@@ -3,6 +3,7 @@ use crate::config::{DEFAULT_SERVER_URL, SyncSettings, load_sync_settings, save_s
 use crate::error::SnipResult;
 use crate::library::LibraryManager;
 
+/// Registers this device with a sync server and saves the API key to the OS keychain.
 pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     if !force
         && let Ok(settings) = load_sync_settings()

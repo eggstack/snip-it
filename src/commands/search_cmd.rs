@@ -2,6 +2,7 @@ use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use std::path::PathBuf;
 
+/// Opens the TUI snippet selector and displays the selected snippet's details.
 pub fn run(
     filter: Option<String>,
     do_sync: bool,

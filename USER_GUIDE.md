@@ -68,15 +68,10 @@ snp new --library work
 
 ### Library File Format
 
-Library files are TOML with the `.toml` extension:
+Library files are TOML with the `.toml` extension, stored in `~/.config/snp/libraries/`:
 
 ```toml
 # ~/.config/snp/libraries/work.toml
-
-[meta]
-library_id = "uuid-here"
-is_primary = true
-last_sync = 1705312200
 
 [[Snippets]]
 Description = "Deploy application"
@@ -88,6 +83,8 @@ Description = "Check pod status"
 Tag = ["k8s", "monitoring"]
 command = "kubectl get pods -n <namespace=default>"
 ```
+
+Library metadata (ID, primary status, sync state) is stored separately in `~/.config/snp/libraries.toml`.
 
 ---
 
@@ -405,9 +402,9 @@ cp ~/.config/snp/libraries/work.toml ~/work-snippets.toml
 | File | Purpose |
 |------|---------|
 | `snippets.toml` | Main snippet storage |
-| `snippets.lock` | Lock file for sync |
 | `sync.toml` | Sync server settings |
 | `libraries/` | Snippet libraries |
+| `libraries.toml` | Library metadata and sync state |
 | `premade/` | Downloaded premade libraries |
 | `logs/` | Application logs |
 
@@ -441,7 +438,7 @@ Id = "optional-uuid"
 Description = "Snippet description"
 Output = ""  # For storing command output
 Tag = ["tag1", "tag2"]
-Command = "the command with <variables>"
+command = "the command with <variables>"
 Folders = []  # Future: folder organization
 favorite = false
 created_at = 1705312200

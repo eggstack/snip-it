@@ -48,11 +48,11 @@ request_timeout_secs = 30
 requests_per_minute = 120
 
 [server.metrics]
-username = "admin"
-password = "metrics"
+# username = "admin"      # Uncomment to enable metrics endpoint
+# password = "metrics"
 
 [server.cors]
-allowed_origins = ""  # Comma-separated, empty = allow all
+allowed_origins = ""  # Comma-separated, empty = CORS disabled, "*" = allow all
 ```
 
 ### Environment Variables
@@ -80,7 +80,7 @@ Environment variables override config file settings:
 
 ## Metrics
 
-Metrics are available at the HTTP endpoint with basic authentication:
+When enabled (by setting `username` and `password` in the config), metrics are available at the HTTP endpoint with basic authentication:
 
 ```bash
 curl -u admin:metrics http://127.0.0.1:50050/metrics
