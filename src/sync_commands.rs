@@ -60,10 +60,8 @@ fn ensure_sync_configured(settings: &SyncSettings) -> bool {
 fn create_sync_client(
     runtime: &tokio::runtime::Runtime,
     settings: &SyncSettings,
-) -> Option<sync::SyncClient> {
-    runtime
-        .block_on(sync::SyncClient::create(settings.clone()))
-        .ok()
+) -> SnipResult<sync::SyncClient> {
+    runtime.block_on(sync::SyncClient::create(settings.clone()))
 }
 
 fn check_server_health(
@@ -258,15 +256,9 @@ pub fn run_sync(
         return Err(SnipError::runtime_error("Sync not configured", None));
     }
 
-    let mut client = match create_sync_client(runtime, sync_settings) {
-        Some(c) => c,
-        None => {
-            return Err(SnipError::runtime_error(
-                "Failed to create sync client",
-                None,
-            ));
-        }
-    };
+    let mut client = create_sync_client(runtime, sync_settings).map_err(|e| {
+        SnipError::runtime_error("Failed to create sync client", Some(&e.to_string()))
+    })?;
 
     if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
         return Err(SnipError::runtime_error("Server health check failed", None));
@@ -789,7 +781,25 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         }
 
         if let Some(local_snip) = local_by_id.get(&server_snip.id) {
-            if server_snip.updated_at >= local_snip.updated_at {
+            if local_snip.deleted {
+                // Local snippet was deleted — preserve the deletion even if
+                // the server copy is newer.  A deleted local snippet means the
+                // user explicitly removed it; a newer server copy should not
+                // silently resurrect it.
+                merged_snippets.push(Snippet {
+                    id: local_snip.id.clone(),
+                    description: local_snip.description.clone(),
+                    command: local_snip.command.clone(),
+                    output: local_snip.output.clone(),
+                    tags: local_snip.tags.clone(),
+                    folders: local_snip.folders.clone(),
+                    favorite: local_snip.favorite,
+                    created_at: local_snip.created_at,
+                    updated_at: local_snip.updated_at.max(server_snip.updated_at),
+                    device_id: local_snip.device_id.clone(),
+                    deleted: true,
+                });
+            } else if server_snip.updated_at >= local_snip.updated_at {
                 if server_snip.updated_at != local_snip.updated_at {
                     tracing::warn!(
                         snippet_id = %server_snip.id,
@@ -1067,5 +1077,44 @@ mod tests {
         assert_eq!(merged.snippets[0].updated_at, 300);
         assert_eq!(merged.snippets[1].updated_at, 200);
         assert_eq!(merged.snippets[2].updated_at, 100);
+    }
+
+    #[test]
+    fn test_local_deleted_not_resurrected_by_newer_server() {
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "deleted locally".to_string(),
+                command: "echo 1".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: String::new(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d".to_string(),
+                deleted: true,
+            }],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "server version".to_string(),
+            command: "echo server".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 1);
+        assert!(
+            merged.snippets[0].deleted,
+            "locally deleted snippet should stay deleted even when server has a newer non-deleted copy"
+        );
+        assert_eq!(merged.snippets[0].updated_at, 200);
     }
 }

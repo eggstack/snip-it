@@ -243,7 +243,13 @@ impl AuditLogWriter {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&log_path, perms);
+            if let Err(e) = fs::set_permissions(&log_path, perms) {
+                tracing::warn!(
+                    path = %log_path.display(),
+                    error = %e,
+                    "Failed to set restrictive permissions on log file"
+                );
+            }
         }
 
         file.write_all(log_entry.as_bytes())
@@ -333,8 +339,9 @@ pub fn log_command_execution(
 }
 
 fn redact_command(command: &str) -> String {
-    if command.len() > 80 {
-        format!("{}...", &command[..77])
+    if command.chars().count() > 80 {
+        let truncated: String = command.chars().take(77).collect();
+        format!("{truncated}...")
     } else {
         command.to_string()
     }
@@ -368,8 +375,9 @@ fn redact_sensitive(command: &str) -> String {
             }
         }
     }
-    if result.len() > 80 {
-        format!("{}...", &result[..77])
+    if result.chars().count() > 80 {
+        let truncated: String = result.chars().take(77).collect();
+        format!("{truncated}...")
     } else {
         result
     }

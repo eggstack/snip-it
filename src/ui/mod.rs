@@ -222,6 +222,11 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let all_tags = tags.to_vec();
 
     loop {
+        // Check for signal-induced termination (SIGINT/SIGTERM)
+        if TERMINATE.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+
         // Lazy init theme picker
         if theme_picker_mode && theme_picker_manager.is_none() {
             if let Err(e) = ensure_theme_picker_ready(

@@ -82,7 +82,16 @@ fn run_command_with_timeout(
                     #[cfg(not(windows))]
                     {
                         let pid = child.id();
-                        kill_process_tree(pid as i32);
+                        match i32::try_from(pid) {
+                            Ok(pid_i32) => kill_process_tree(pid_i32),
+                            Err(_) => {
+                                tracing::warn!(
+                                    pid = pid,
+                                    "PID exceeds i32::MAX, falling back to direct child kill"
+                                );
+                                let _ = child.kill();
+                            }
+                        }
                     }
                     #[cfg(windows)]
                     {
@@ -242,7 +251,16 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
                         #[cfg(not(windows))]
                         {
                             let pid = child.id();
-                            kill_process_tree(pid as i32);
+                            match i32::try_from(pid) {
+                                Ok(pid_i32) => kill_process_tree(pid_i32),
+                                Err(_) => {
+                                    tracing::warn!(
+                                        pid = pid,
+                                        "PID exceeds i32::MAX, falling back to direct child kill"
+                                    );
+                                    let _ = child.kill();
+                                }
+                            }
                         }
                         #[cfg(windows)]
                         {

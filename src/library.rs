@@ -130,7 +130,7 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
             "Library name cannot contain null bytes",
         ));
     }
-    if name == ".." || name.contains("..") {
+    if name == "." || name == ".." || name.contains("..") {
         return Err((
             "Invalid library name",
             "Library name cannot contain path traversal sequences",
@@ -378,7 +378,13 @@ Snippets = []
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
+            if let Err(e) = fs::set_permissions(&path, perms) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to set restrictive permissions on library file"
+                );
+            }
         }
 
         let is_first = self.config.libraries.is_empty();
@@ -538,7 +544,13 @@ Snippets = []
             {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = std::fs::Permissions::from_mode(0o600);
-                let _ = fs::set_permissions(&path, perms);
+                if let Err(e) = fs::set_permissions(&path, perms) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to set restrictive permissions on imported library file"
+                    );
+                }
             }
         }
 
@@ -620,7 +632,13 @@ Snippets = []
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
+            if let Err(e) = fs::set_permissions(&path, perms) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to set restrictive permissions on library file"
+                );
+            }
         }
 
         Ok(path)
@@ -643,6 +661,7 @@ Snippets = []
         }
 
         let tmp_path = parent_dir.join("libraries.toml.tmp");
+        let _ = fs::remove_file(&tmp_path);
         fs::write(&tmp_path, &toml_str)
             .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
 
@@ -650,7 +669,13 @@ Snippets = []
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&tmp_path, perms);
+            if let Err(e) = fs::set_permissions(&tmp_path, perms) {
+                tracing::warn!(
+                    path = %tmp_path.display(),
+                    error = %e,
+                    "Failed to set restrictive permissions on config temp file"
+                );
+            }
         }
 
         std::fs::rename(&tmp_path, &config_path)
@@ -742,6 +767,7 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
     let tmp_path = path.with_extension("toml.tmp");
+    let _ = fs::remove_file(&tmp_path);
     fs::write(&tmp_path, &toml_str)
         .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
 
@@ -749,7 +775,13 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        let _ = fs::set_permissions(&tmp_path, perms);
+        if let Err(e) = fs::set_permissions(&tmp_path, perms) {
+            tracing::warn!(
+                path = %tmp_path.display(),
+                error = %e,
+                "Failed to set restrictive permissions on temp file"
+            );
+        }
     }
 
     fs::rename(&tmp_path, path).map_err(|e| {
@@ -1114,6 +1146,13 @@ Command = "sudo iptables-restore \< /path/to/rules"
     #[test]
     fn test_validate_library_name_null_byte() {
         assert!(validate_library_name("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_dot() {
+        assert!(validate_library_name(".").is_err());
+        assert!(validate_library_name("..").is_err());
+        assert!(validate_library_name("my..lib").is_err());
     }
 
     #[test]

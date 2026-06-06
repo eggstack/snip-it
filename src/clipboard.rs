@@ -78,8 +78,7 @@ pub fn schedule_clipboard_clear(seconds: u32) {
         return;
     }
 
-    CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst);
-    let gen_at_spawn = CLIPBOARD_GENERATION.load(Ordering::SeqCst);
+    let gen_at_spawn = CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
     let _handle = thread::spawn(move || {
         thread::sleep(Duration::from_secs(seconds as u64));

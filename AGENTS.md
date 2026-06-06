@@ -153,11 +153,17 @@ snip-it/
 - `~/.config/snp/logs/` — Rolling log files (daily rotation)
 - `~/.config/snp/audit.log` — Audit log for snippet operations
 
+## Design Decisions
+
+### No Command Filtering (by design)
+- Snippet commands are executed as-is via the user's shell — no sanitization, filtering, or guardrails.
+- This is intentional: the tool targets power users who explicitly do not want safety restrictions.
+- Any "safe mode" or metacharacter filtering is explicitly rejected as a design decision.
+- Users are responsible for the commands they store and execute.
+
 ## Deferred Items
 
-- **Command injection warning** (safe mode for snippet execution)
 - **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
-- **API key in gRPC metadata**: Currently sent in request bodies; consider moving to gRPC `authorization` header for better alignment with gRPC security conventions
 
 ## Testing Notes
 

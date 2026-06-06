@@ -26,6 +26,19 @@ use std::time::Duration;
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 
+/// Extract the API key from a gRPC request's `authorization` metadata.
+/// Falls back to the body `api_key` field for backward compatibility.
+fn extract_api_key<T>(request: &Request<T>, body_api_key: &str) -> String {
+    request
+        .metadata()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|v| !v.is_empty())
+        .unwrap_or(body_api_key)
+        .to_string()
+}
+
 const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
 const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 const DEFAULT_MAX_TAGS: usize = 50;
@@ -562,9 +575,10 @@ impl SnippetSync for SnipSyncService {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("get_snippets");
         tracing::info!(request_id = %request_id, "GetSnippets request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
@@ -638,9 +652,10 @@ impl SnippetSync for SnipSyncService {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("push_snippets");
         tracing::info!(request_id = %request_id, "PushSnippets request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
@@ -739,6 +754,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("sync");
         self.record_sync("bidirectional");
         tracing::info!(request_id = %request_id, "Sync request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
@@ -749,7 +765,7 @@ impl SnippetSync for SnipSyncService {
             )));
         }
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
@@ -921,9 +937,10 @@ impl SnippetSync for SnipSyncService {
         self.record_request("create_library");
         self.record_library_op("create");
         tracing::info!(request_id = %request_id, "CreateLibrary request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
@@ -951,9 +968,10 @@ impl SnippetSync for SnipSyncService {
         self.record_request("list_libraries");
         self.record_library_op("list");
         tracing::info!(request_id = %request_id, "ListLibraries request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)
@@ -998,9 +1016,10 @@ impl SnippetSync for SnipSyncService {
         self.record_request("delete_library");
         self.record_library_op("delete");
         tracing::info!(request_id = %request_id, "DeleteLibrary request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         // Prevent deleting default library
         if req.library_id.is_empty() || req.library_id == "default" {
@@ -1030,9 +1049,10 @@ impl SnippetSync for SnipSyncService {
         self.record_request("list_premade_libraries");
         tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
 
-        let req = request.into_inner();
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
+        let _req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         let libraries = self.premade_manager.list();
 
@@ -1069,9 +1089,10 @@ impl SnippetSync for SnipSyncService {
         let request_id = uuid::Uuid::new_v4();
         self.record_request("get_premade_library");
         tracing::info!(request_id = %request_id, "GetPremadeLibrary request");
+        let api_key = extract_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&req.api_key).await?;
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         if req.filename.is_empty() {
             return Err(Status::invalid_argument("Filename is required"));

@@ -162,6 +162,11 @@ fn serialize_api_key<S: serde::Serializer>(
     if api_key.is_empty() {
         return serializer.serialize_str("");
     }
+    // If the key is already the keychain marker, just write the marker
+    // without touching the keychain (avoids overwriting the real key).
+    if api_key == KEYCHAIN_MARKER {
+        return serializer.serialize_str(KEYCHAIN_MARKER);
+    }
     // Server URL is not available during serialization, so we use the default user
     match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
@@ -310,6 +315,7 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     #[cfg(not(unix))]
     {
+        let _ = fs::remove_file(&tmp_path);
         fs::write(&tmp_path, &content_with_integrity)
             .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
     }

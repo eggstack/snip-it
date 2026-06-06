@@ -4,9 +4,9 @@
 [![Downloads](https://img.shields.io/crates/d/snp-cli.svg)](https://crates.io/crates/snp-cli)
 [![docs.rs](https://img.shields.io/docsrs/snp-cli)](https://docs.rs/snp-cli)
 [![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
-![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-blue)
+![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Rust: 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)
+![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88+-orange.svg)
 
 A fast, terminal-based snippet manager. Fuzzy search your command library,
 expand `<variable>` placeholders on the fly, organize snippets into

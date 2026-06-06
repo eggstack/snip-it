@@ -230,15 +230,30 @@ pub const BUNDLED: &[BundledTheme] = &[
 pub fn bundled_themes_decoded() -> std::vec::Vec<(String, String)> {
     BUNDLED
         .iter()
-        .map(|b| {
-            let compressed = base64::engine::general_purpose::STANDARD
-                .decode(b.payload_b64)
-                .expect("bundled theme: invalid base64");
+        .filter_map(|b| {
+            let compressed = match base64::engine::general_purpose::STANDARD.decode(b.payload_b64) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Skipping bundled theme {:?}: invalid base64: {}", b.name, e);
+                    return None;
+                }
+            };
             let mut toml_bytes = std::vec::Vec::new();
-            lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes)
-                .expect("bundled theme: invalid xz stream");
-            let toml_text = String::from_utf8(toml_bytes).expect("bundled theme: non-utf-8 toml");
-            (b.name.to_string(), toml_text)
+            if let Err(e) = lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes) {
+                tracing::warn!(
+                    "Skipping bundled theme {:?}: invalid xz stream: {}",
+                    b.name,
+                    e
+                );
+                return None;
+            }
+            match String::from_utf8(toml_bytes) {
+                Ok(toml_text) => Some((b.name.to_string(), toml_text)),
+                Err(e) => {
+                    tracing::warn!("Skipping bundled theme {:?}: non-utf-8 toml: {}", b.name, e);
+                    None
+                }
+            }
         })
         .collect()
 }

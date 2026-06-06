@@ -94,8 +94,9 @@ impl fmt::Display for SnipError {
                 let args_display: Vec<String> = args
                     .iter()
                     .map(|a| {
-                        if a.len() > 40 {
-                            format!("{}...", &a[..37])
+                        if a.chars().count() > 40 {
+                            let truncated: String = a.chars().take(37).collect();
+                            format!("{truncated}...")
                         } else {
                             a.clone()
                         }

@@ -98,6 +98,13 @@ macro_rules! retry_grpc {
     }};
 }
 
+/// Add the API key as gRPC `authorization` metadata to a request.
+fn add_api_key_metadata<T>(request: &mut tonic::Request<T>, api_key: &str) {
+    if let Ok(val) = format!("Bearer {api_key}").parse() {
+        request.metadata_mut().insert("authorization", val);
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EncryptedSnippetData {
     description: String,
@@ -222,7 +229,8 @@ impl SyncClient {
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
         loop {
-            let grpc_req = tonic::Request::new(request.clone());
+            let mut grpc_req = tonic::Request::new(request.clone());
+            add_api_key_metadata(&mut grpc_req, &request.api_key);
             match self.client.sync(grpc_req).await {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(e) => {
@@ -292,16 +300,30 @@ impl SyncClient {
     /// Lists all libraries on the sync server.
     pub async fn list_libraries(&mut self) -> SnipResult<Vec<Library>> {
         let api_key = self.settings.api_key.clone();
-        let response = retry_grpc!(
-            self.client
-                .list_libraries(tonic::Request::new(ListLibrariesRequest {
-                    api_key: api_key.clone(),
-                    limit: 50,
-                    offset: 0,
-                })),
-            "List libraries"
-        )?;
-        Ok(response.into_inner().libraries)
+        let mut all_libraries = Vec::new();
+        let mut offset = 0i32;
+        loop {
+            let response = retry_grpc!(
+                async {
+                    let mut req = tonic::Request::new(ListLibrariesRequest {
+                        api_key: api_key.clone(),
+                        limit: 50,
+                        offset,
+                    });
+                    add_api_key_metadata(&mut req, &api_key);
+                    self.client.list_libraries(req).await
+                },
+                "List libraries"
+            )?;
+            let inner = response.into_inner();
+            let count = inner.libraries.len() as i32;
+            all_libraries.extend(inner.libraries);
+            if count < 50 {
+                break;
+            }
+            offset += count;
+        }
+        Ok(all_libraries)
     }
 
     /// Creates a new library on the sync server.
@@ -309,11 +331,14 @@ impl SyncClient {
         let api_key = self.settings.api_key.clone();
         let name_str = name.to_string();
         let response = retry_grpc!(
-            self.client
-                .create_library(tonic::Request::new(CreateLibraryRequest {
+            async {
+                let mut req = tonic::Request::new(CreateLibraryRequest {
                     api_key: api_key.clone(),
                     name: name_str.clone(),
-                })),
+                });
+                add_api_key_metadata(&mut req, &api_key);
+                self.client.create_library(req).await
+            },
             "Create library"
         )?;
 
@@ -337,10 +362,13 @@ impl SyncClient {
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
         let api_key = self.settings.api_key.clone();
         let response = retry_grpc!(
-            self.client
-                .list_premade_libraries(tonic::Request::new(ListPremadeLibrariesRequest {
+            async {
+                let mut req = tonic::Request::new(ListPremadeLibrariesRequest {
                     api_key: api_key.clone(),
-                })),
+                });
+                add_api_key_metadata(&mut req, &api_key);
+                self.client.list_premade_libraries(req).await
+            },
             "List premade libraries"
         )?;
         Ok(response.into_inner().libraries)
@@ -351,11 +379,14 @@ impl SyncClient {
         let api_key = self.settings.api_key.clone();
         let filename_str = filename.to_string();
         let response = retry_grpc!(
-            self.client
-                .get_premade_library(tonic::Request::new(GetPremadeLibraryRequest {
+            async {
+                let mut req = tonic::Request::new(GetPremadeLibraryRequest {
                     api_key: api_key.clone(),
                     filename: filename_str.clone(),
-                })),
+                });
+                add_api_key_metadata(&mut req, &api_key);
+                self.client.get_premade_library(req).await
+            },
             "Get premade library"
         )?;
 

@@ -16,7 +16,7 @@ mod encryption;
 mod error;
 mod library;
 mod logging;
-pub mod proto;
+mod proto;
 mod sync;
 mod sync_commands;
 mod ui;
