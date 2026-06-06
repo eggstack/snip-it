@@ -1839,7 +1839,6 @@ dependencies = [
  "dirs",
  "fuzzy-matcher",
  "keyring",
- "libc",
  "lzma-rs",
  "prost",
  "ratatui",

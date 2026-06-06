@@ -17,97 +17,22 @@ fn get_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
-#[cfg(not(windows))]
-fn kill_process_tree(pid: libc::pid_t) {
-    // Send SIGTERM to the entire process group (negative pid = process group)
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
-    }
-    // Give processes a moment to exit, then force-kill
-    std::thread::sleep(Duration::from_millis(100));
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
-}
-
-#[cfg(windows)]
-fn kill_process_tree(_pid: u32) {
-    // On Windows, child.kill() is sufficient — it calls TerminateProcess
-    // which only kills the direct child, but Windows doesn't have process groups the same way
-}
-
 fn run_command_with_timeout(
     shell: &str,
     command: &str,
     timeout: Duration,
-) -> SnipResult<std::process::Output> {
-    let mut cmd = Command::new(shell);
-    cmd.arg("-c")
+) -> SnipResult<std::process::ExitStatus> {
+    let mut child = Command::new(shell)
+        .arg("-c")
         .arg(command)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    #[cfg(not(windows))]
-    {
-        use std::os::unix::process::CommandExt;
-        // Create a new process group so we can kill all children on timeout
-        cmd.process_group(0);
-    }
-
-    let mut child = cmd
         .spawn()
         .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))?;
 
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                use std::io::Read;
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(ref mut out) = child.stdout {
-                    let _ = out.read_to_end(&mut stdout);
-                }
-                if let Some(ref mut err) = child.stderr {
-                    let _ = err.read_to_end(&mut stderr);
-                }
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    #[cfg(not(windows))]
-                    {
-                        let pid = child.id();
-                        match i32::try_from(pid) {
-                            Ok(pid_i32) => kill_process_tree(pid_i32),
-                            Err(_) => {
-                                tracing::warn!(
-                                    pid = pid,
-                                    "PID exceeds i32::MAX, falling back to direct child kill"
-                                );
-                                let _ = child.kill();
-                            }
-                        }
-                    }
-                    #[cfg(windows)]
-                    {
-                        let _ = child.kill();
-                    }
-                    let _ = child.wait();
-                    return Err(SnipError::runtime_error(
-                        "Command timed out",
-                        Some(&format!(
-                            "Command exceeded timeout of {} seconds",
-                            timeout.as_secs()
-                        )),
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
             Err(e) => {
                 return Err(SnipError::runtime_error(
                     "Failed to check command status",
@@ -115,6 +40,19 @@ fn run_command_with_timeout(
                 ));
             }
         }
+
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(SnipError::runtime_error(
+                "Command timed out",
+                Some(&format!(
+                    "Command exceeded timeout of {} seconds",
+                    timeout.as_secs()
+                )),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -183,7 +121,6 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             )
         })?;
 
-        // Check path safety: if file exists, canonicalize it; otherwise check parent dir
         if output_path.exists() {
             let canonical_path = output_path.canonicalize().map_err(|e| {
                 SnipError::runtime_error(
@@ -200,7 +137,6 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
                 ));
             }
         } else {
-            // File doesn't exist yet — verify the parent directory is safe
             let parent = output_path
                 .parent()
                 .unwrap_or(&output_path)
@@ -229,16 +165,10 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
 
         let shell = get_shell();
         let timeout = get_timeout();
-        let mut cmd = Command::new(&shell);
-        cmd.arg("-c").arg(&final_command).stdout(output_file);
-
-        #[cfg(not(windows))]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-
-        let mut child = cmd
+        let mut child = Command::new(&shell)
+            .arg("-c")
+            .arg(&final_command)
+            .stdout(output_file)
             .spawn()
             .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
 
@@ -248,24 +178,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
                 Ok(Some(status)) => break status,
                 Ok(None) => {
                     if start.elapsed() >= timeout {
-                        #[cfg(not(windows))]
-                        {
-                            let pid = child.id();
-                            match i32::try_from(pid) {
-                                Ok(pid_i32) => kill_process_tree(pid_i32),
-                                Err(_) => {
-                                    tracing::warn!(
-                                        pid = pid,
-                                        "PID exceeds i32::MAX, falling back to direct child kill"
-                                    );
-                                    let _ = child.kill();
-                                }
-                            }
-                        }
-                        #[cfg(windows)]
-                        {
-                            let _ = child.kill();
-                        }
+                        let _ = child.kill();
                         let _ = child.wait();
                         return Err(SnipError::runtime_error(
                             "Command timed out",
@@ -295,21 +208,9 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
     } else {
         let shell = get_shell();
         let timeout = get_timeout();
-        let output = run_command_with_timeout(&shell, &final_command, timeout)?;
+        let status = run_command_with_timeout(&shell, &final_command, timeout)?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.is_empty() {
-                eprintln!("Error: {stderr}");
-            }
-        }
-
-        Ok(handle_command_result(
-            &final_command,
-            output.status,
-            snippet,
-            None,
-        ))
+        Ok(handle_command_result(&final_command, status, snippet, None))
     }
 }
 

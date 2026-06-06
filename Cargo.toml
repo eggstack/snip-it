@@ -61,7 +61,6 @@ clipboard-win = "4.5"
 [target.'cfg(not(windows))'.dependencies]
 arboard = "3"
 signal-hook = "0.3"
-libc = "0.2"
 
 [dependencies]
 dirs = "5.0"
