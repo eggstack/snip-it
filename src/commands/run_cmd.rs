@@ -12,7 +12,8 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 fn get_timeout() -> Duration {
     let secs = std::env::var("SNP_COMMAND_TIMEOUT")
         .ok()
-        .and_then(|v| v.parse().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|v| v.max(1))
         .unwrap_or(DEFAULT_TIMEOUT_SECONDS);
     Duration::from_secs(secs)
 }

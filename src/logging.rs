@@ -351,67 +351,6 @@ fn redact_command(command: &str) -> String {
     }
 }
 
-/// Redacts potentially sensitive portions of a command for safe logging.
-/// This truncates and is used in structured logging fields where the full
-/// command is already available in the instrumented function's scope.
-#[allow(dead_code)]
-fn redact_sensitive(command: &str) -> String {
-    let redacted_keywords = ["password", "secret", "token", "key", "api_key", "apikey"];
-    let mut result = command.to_string();
-    for keyword in redacted_keywords {
-        // Find keyword position using case-insensitive search on the original string
-        let keyword_lower = keyword.to_lowercase();
-        if let Some(pos) = find_case_insensitive(&result, &keyword_lower) {
-            let after_keyword = &result[pos + keyword.len()..];
-            if let Some(eq_pos) = after_keyword.find('=') {
-                let value_start = pos + keyword.len() + eq_pos + 1;
-                let value_end = after_keyword[eq_pos + 1..]
-                    .find(|c: char| c.is_whitespace())
-                    .map(|i| value_start + i)
-                    .unwrap_or(result.len());
-                let value = &result[value_start..value_end];
-                if !value.is_empty() && value != "\"\"" && value != "''" {
-                    result = format!(
-                        "{}{}***REDACTED***{}",
-                        &result[..value_start],
-                        &result[value_start..value_start + 1],
-                        &result[value_end..]
-                    );
-                }
-            }
-        }
-    }
-    if result.chars().count() > 80 {
-        let truncated: String = result.chars().take(77).collect();
-        format!("{truncated}...")
-    } else {
-        result
-    }
-}
-
-/// Case-insensitive search for `needle` in `haystack`, returning the byte offset.
-fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    let needle_chars: Vec<char> = needle.chars().collect();
-    let needle_len = needle_chars.len();
-    if needle_len == 0 {
-        return None;
-    }
-    let haystack_chars: Vec<char> = haystack.chars().collect();
-    'outer: for i in 0..haystack_chars.len() {
-        if i + needle_len > haystack_chars.len() {
-            break;
-        }
-        for (j, &nc) in needle_chars.iter().enumerate() {
-            if !haystack_chars[i + j].to_lowercase().eq(nc.to_lowercase()) {
-                continue 'outer;
-            }
-        }
-        // Convert char index back to byte offset
-        return haystack.char_indices().nth(i).map(|(pos, _)| pos);
-    }
-    None
-}
-
 pub fn log_config_operation(operation: &str, path: &Path, result: &Result<(), &str>) {
     match result {
         Ok(()) => {
