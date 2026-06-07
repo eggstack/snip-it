@@ -355,7 +355,9 @@ fn redact_sensitive(command: &str) -> String {
     let redacted_keywords = ["password", "secret", "token", "key", "api_key", "apikey"];
     let mut result = command.to_string();
     for keyword in redacted_keywords {
-        if let Some(pos) = result.to_lowercase().find(keyword) {
+        // Find keyword position using case-insensitive search on the original string
+        let keyword_lower = keyword.to_lowercase();
+        if let Some(pos) = find_case_insensitive(&result, &keyword_lower) {
             let after_keyword = &result[pos + keyword.len()..];
             if let Some(eq_pos) = after_keyword.find('=') {
                 let value_start = pos + keyword.len() + eq_pos + 1;
@@ -381,6 +383,29 @@ fn redact_sensitive(command: &str) -> String {
     } else {
         result
     }
+}
+
+/// Case-insensitive search for `needle` in `haystack`, returning the byte offset.
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let needle_len = needle_chars.len();
+    if needle_len == 0 {
+        return None;
+    }
+    let haystack_chars: Vec<char> = haystack.chars().collect();
+    'outer: for i in 0..haystack_chars.len() {
+        if i + needle_len > haystack_chars.len() {
+            break;
+        }
+        for (j, &nc) in needle_chars.iter().enumerate() {
+            if !haystack_chars[i + j].to_lowercase().eq(nc.to_lowercase()) {
+                continue 'outer;
+            }
+        }
+        // Convert char index back to byte offset
+        return haystack.char_indices().nth(i).map(|(pos, _)| pos);
+    }
+    None
 }
 
 pub fn log_config_operation(operation: &str, path: &Path, result: &Result<(), &str>) {

@@ -48,7 +48,7 @@ pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
                 Ok(path.clone())
             }
         }
-        None => Ok(crate::CONFIG_PATH.clone()),
+        None => Ok(crate::utils::config::get_snippets_path()),
     }
 }
 

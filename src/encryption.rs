@@ -26,6 +26,8 @@ use aes_gcm::{
 };
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -35,6 +37,21 @@ use subtle::ConstantTimeEq;
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
 const ARGON2_TIME_COST: u32 = 3; // 3 iterations — OWASP minimum recommendation
 const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU core count
+
+/// Session-local cache for derived keys to avoid re-running Argon2id
+/// for the same (api_key, salt) pair during a sync operation.
+/// Key: (api_key, base64(salt)), Value: derived key bytes
+static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), [u8; 32]>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Clear the session key cache. Should be called at the end of a sync operation.
+pub fn clear_key_cache() {
+    if let Ok(mut cache) = KEY_CACHE.lock() {
+        for mut key in cache.drain().map(|(_, v)| v) {
+            key.zeroize();
+        }
+    }
+}
 
 #[derive(Zeroize, ZeroizeOnDrop, Default)]
 struct DerivedKey([u8; 32]);
@@ -113,6 +130,18 @@ impl EncryptedPayload {
 }
 
 fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
+    let salt_b64 = BASE64.encode(salt);
+    let cache_key = (api_key.to_string(), salt_b64);
+
+    // Check cache first
+    {
+        if let Ok(cache) = KEY_CACHE.lock() {
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok(DerivedKey::new(*cached));
+            }
+        }
+    }
+
     let salt_string = SaltString::encode_b64(salt)
         .map_err(|e| CryptoError::KeyDerivationFailed(format!("Salt encoding failed: {e}")))?;
 
@@ -142,10 +171,15 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
             "Argon2 output too short for AES-256 key".to_string(),
         ));
     }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&hash_bytes[..32]);
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&hash_bytes[..32]);
 
-    Ok(DerivedKey::new(key))
+    // Cache the derived key for future use with the same (api_key, salt)
+    if let Ok(mut cache) = KEY_CACHE.lock() {
+        cache.insert(cache_key, key_bytes);
+    }
+
+    Ok(DerivedKey::new(key_bytes))
 }
 
 pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {

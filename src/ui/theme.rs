@@ -638,7 +638,7 @@ static ACTIVE_THEME: LazyLock<RwLock<Theme>> = LazyLock::new(|| RwLock::new(load
 /// Returns the current active theme. Cheap: one read-lock acquisition
 /// and a `Copy` of the 10-color struct.
 pub fn get_theme() -> Theme {
-    *ACTIVE_THEME.read().expect("theme lock poisoned")
+    *ACTIVE_THEME.read().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Replace the active theme. The TUI's next draw frame will see the
@@ -646,7 +646,7 @@ pub fn get_theme() -> Theme {
 /// (preview) and when they commit a selection.
 #[allow(dead_code)]
 pub fn set_active_theme(theme: Theme) {
-    *ACTIVE_THEME.write().expect("theme lock poisoned") = theme;
+    *ACTIVE_THEME.write().unwrap_or_else(|e| e.into_inner()) = theme;
 }
 
 /// Initial theme resolution, in priority order:
@@ -702,6 +702,14 @@ fn resolve_legacy_or_filename(value: &str) -> Option<Theme> {
             Some(if is_light { BRIGHT_THEME } else { DARK_THEME })
         }
         other => {
+            // Validate theme name to prevent path traversal
+            if other.contains('/') || other.contains('\\') || other.contains("..") {
+                tracing::warn!(
+                    "Invalid theme name '{}' contains path separators, ignoring",
+                    other
+                );
+                return None;
+            }
             // Treat as a theme filename relative to themes/.
             let themes_dir = get_config_dir().join("themes");
             let path = themes_dir.join(format!("{other}.toml"));

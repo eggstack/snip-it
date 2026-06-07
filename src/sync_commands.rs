@@ -11,6 +11,88 @@ use crate::proto::Snippet as ProtoSnippet;
 use crate::sync;
 use std::fs;
 
+/// Handles "Library not found" recovery by re-creating the server library
+/// and retrying the sync operation.
+fn handle_library_not_found(
+    lib_name: &str,
+    lib_path: &std::path::Path,
+    snippets: &Snippets,
+    sync_settings: &SyncSettings,
+    client: &mut sync::SyncClient,
+    mgr: &mut library::LibraryManager,
+    runtime: &tokio::runtime::Runtime,
+    status: &mut SyncStatus,
+    results: &mut Vec<(String, bool, String)>,
+) {
+    tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
+    let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+    match runtime.block_on(client.create_library(&normalized_name)) {
+        Ok(server_lib) => {
+            if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
+                tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
+            }
+            if let Err(e) = mgr.update_last_sync(lib_name, 0) {
+                tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
+            }
+            tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
+            let local_snippets_for_retry: Vec<ProtoSnippet> =
+                snippets.snippets.iter().map(ProtoSnippet::from).collect();
+            let retry_result = runtime.block_on(client.sync_encrypted(
+                local_snippets_for_retry,
+                0,
+                &server_lib.id,
+            ));
+            match retry_result {
+                Ok(retry_response) if retry_response.success => {
+                    let server_snippets = retry_response.snippets;
+                    match merge_and_save(
+                        lib_path,
+                        lib_name,
+                        snippets,
+                        &server_snippets,
+                        &sync_settings.device_id,
+                    ) {
+                        Ok((_merged, _backup, _conflicts)) => {
+                            if let Err(e) =
+                                mgr.update_last_sync(lib_name, retry_response.server_timestamp)
+                            {
+                                tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                            }
+                            status.pulled += server_snippets.len() as u32;
+                            results.push((
+                                lib_name.to_string(),
+                                true,
+                                "Re-linked and synced".to_string(),
+                            ));
+                        }
+                        Err(e) => {
+                            status.failed += 1;
+                            results.push((lib_name.to_string(), false, e.to_string()));
+                        }
+                    }
+                }
+                Ok(retry_response) => {
+                    status.failed += 1;
+                    results.push((lib_name.to_string(), false, retry_response.message));
+                }
+                Err(e) => {
+                    status.failed += 1;
+                    results.push((lib_name.to_string(), false, e.to_string()));
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
+            status.failed += 1;
+            results.push((
+                lib_name.to_string(),
+                false,
+                format!("Library deleted and re-creation failed: {e}"),
+            ));
+        }
+    }
+}
+
 impl From<&Snippet> for ProtoSnippet {
     fn from(s: &Snippet) -> Self {
         ProtoSnippet {
@@ -361,7 +443,8 @@ pub fn run_sync(
     let mut results: Vec<(String, bool, String)> = Vec::new();
 
     for lib_name in &libraries_to_sync {
-        print!("\r[{}/{}] Syncing {}...", completed + 1, total, lib_name);
+        completed += 1;
+        print!("\r[{completed}/{total}] Syncing {lib_name}...");
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         let lib_path = mgr.get_libraries_dir().join(format!("{lib_name}.toml"));
@@ -434,7 +517,6 @@ pub fn run_sync(
                                 if let Err(e) = mgr.update_last_sync(lib_name, new_timestamp) {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
-                                completed += 1;
                                 status.pushed += 1;
                             } else {
                                 status.conflicts += 1;
@@ -499,84 +581,17 @@ pub fn run_sync(
                 Err(e) => {
                     let err_msg = e.to_string();
                     if err_msg.contains("Library not found") {
-                        // Server library was deleted — re-create it
-                        tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
-                        let normalized_name = lib_name.to_lowercase().replace(' ', "-");
-                        match runtime.block_on(client.create_library(&normalized_name)) {
-                            Ok(server_lib) => {
-                                if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
-                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
-                                }
-                                if let Err(e) = mgr.update_last_sync(lib_name, 0) {
-                                    tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
-                                }
-                                tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
-                                // Retry sync with new library ID — push local snippets to fresh server library
-                                let local_snippets_for_retry: Vec<ProtoSnippet> =
-                                    snippets.snippets.iter().map(ProtoSnippet::from).collect();
-                                let retry_result = runtime.block_on(client.sync_encrypted(
-                                    local_snippets_for_retry,
-                                    0,
-                                    &server_lib.id,
-                                ));
-                                match retry_result {
-                                    Ok(retry_response) if retry_response.success => {
-                                        let server_snippets = retry_response.snippets;
-                                        match merge_and_save(
-                                            &lib_path,
-                                            lib_name,
-                                            &snippets,
-                                            &server_snippets,
-                                            &sync_settings.device_id,
-                                        ) {
-                                            Ok((_merged, _backup, _conflicts)) => {
-                                                if let Err(e) = mgr.update_last_sync(
-                                                    lib_name,
-                                                    retry_response.server_timestamp,
-                                                ) {
-                                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
-                                                }
-                                                status.pulled += server_snippets.len() as u32;
-                                                results.push((
-                                                    lib_name.clone(),
-                                                    true,
-                                                    "Re-linked and synced".to_string(),
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                status.failed += 1;
-                                                results.push((
-                                                    lib_name.clone(),
-                                                    false,
-                                                    e.to_string(),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    Ok(retry_response) => {
-                                        status.failed += 1;
-                                        results.push((
-                                            lib_name.clone(),
-                                            false,
-                                            retry_response.message,
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        status.failed += 1;
-                                        results.push((lib_name.clone(), false, e.to_string()));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
-                                status.failed += 1;
-                                results.push((
-                                    lib_name.clone(),
-                                    false,
-                                    format!("Library deleted and re-creation failed: {e}"),
-                                ));
-                            }
-                        }
+                        handle_library_not_found(
+                            lib_name,
+                            &lib_path,
+                            &snippets,
+                            sync_settings,
+                            &mut client,
+                            &mut mgr,
+                            runtime,
+                            &mut status,
+                            &mut results,
+                        );
                     } else {
                         status.failed += 1;
                         results.push((lib_name.clone(), false, err_msg));
@@ -635,82 +650,17 @@ pub fn run_sync(
                 Err(e) => {
                     let err_msg = e.to_string();
                     if err_msg.contains("Library not found") {
-                        tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
-                        let normalized_name = lib_name.to_lowercase().replace(' ', "-");
-                        match runtime.block_on(client.create_library(&normalized_name)) {
-                            Ok(server_lib) => {
-                                if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
-                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
-                                }
-                                if let Err(e) = mgr.update_last_sync(lib_name, 0) {
-                                    tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
-                                }
-                                tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
-                                let local_snippets_for_retry: Vec<ProtoSnippet> =
-                                    snippets.snippets.iter().map(ProtoSnippet::from).collect();
-                                let retry_result = runtime.block_on(client.sync_encrypted(
-                                    local_snippets_for_retry,
-                                    0,
-                                    &server_lib.id,
-                                ));
-                                match retry_result {
-                                    Ok(retry_response) if retry_response.success => {
-                                        let server_snippets = retry_response.snippets;
-                                        match merge_and_save(
-                                            &lib_path,
-                                            lib_name,
-                                            &snippets,
-                                            &server_snippets,
-                                            &sync_settings.device_id,
-                                        ) {
-                                            Ok((_merged, _backup, _conflicts)) => {
-                                                if let Err(e) = mgr.update_last_sync(
-                                                    lib_name,
-                                                    retry_response.server_timestamp,
-                                                ) {
-                                                    tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
-                                                }
-                                                status.pulled += server_snippets.len() as u32;
-                                                results.push((
-                                                    lib_name.clone(),
-                                                    true,
-                                                    "Re-linked and synced".to_string(),
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                status.failed += 1;
-                                                results.push((
-                                                    lib_name.clone(),
-                                                    false,
-                                                    e.to_string(),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    Ok(retry_response) => {
-                                        status.failed += 1;
-                                        results.push((
-                                            lib_name.clone(),
-                                            false,
-                                            retry_response.message,
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        status.failed += 1;
-                                        results.push((lib_name.clone(), false, e.to_string()));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
-                                status.failed += 1;
-                                results.push((
-                                    lib_name.clone(),
-                                    false,
-                                    format!("Library deleted and re-creation failed: {e}"),
-                                ));
-                            }
-                        }
+                        handle_library_not_found(
+                            lib_name,
+                            &lib_path,
+                            &snippets,
+                            sync_settings,
+                            &mut client,
+                            &mut mgr,
+                            runtime,
+                            &mut status,
+                            &mut results,
+                        );
                     } else {
                         status.failed += 1;
                         results.push((lib_name.clone(), false, err_msg));
@@ -718,8 +668,6 @@ pub fn run_sync(
                 }
             }
         }
-
-        completed += 1;
     }
 
     for (name, _success, msg) in &results {
@@ -727,6 +675,9 @@ pub fn run_sync(
             tracing::info!(library = %name, details = %msg, "Sync result");
         }
     }
+
+    // Clear the session key cache to free memory from derived keys
+    crate::encryption::clear_key_cache();
 
     tracing::info!(
         pushed = status.pushed,

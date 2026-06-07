@@ -18,6 +18,16 @@ use crate::utils::variables::Variable;
 
 use super::theme::{get_theme, style_fg};
 
+/// RAII guard that restores the terminal when dropped.
+/// Ensures the terminal is always restored even on early return or panic.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 /// Result of prompting the user for variable values.
 pub enum VariablePromptResult {
     /// User cancelled the operation (pressed q).
@@ -38,6 +48,7 @@ pub fn prompt_variables(vars: Vec<Variable>) -> io::Result<VariablePromptResult>
 
 fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResult> {
     let mut terminal = ratatui::init();
+    let _guard = TerminalGuard; // Ensures terminal is restored on any exit path
 
     let defaults: Vec<String> = vars
         .iter()
@@ -141,7 +152,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             {
                 match key.code {
                     KeyCode::Char('q') => {
-                        ratatui::restore();
                         return Ok(VariablePromptResult::Cancel);
                     }
                     KeyCode::Esc => {
@@ -186,8 +196,6 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             }
         }
     }
-
-    ratatui::restore();
 
     let result: Vec<(String, String)> = vars
         .iter()

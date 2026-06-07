@@ -161,7 +161,7 @@ impl SyncClient {
         }
 
         let mut request = SyncRequest {
-            api_key: api_key.clone(),
+            api_key: String::new(), // Auth via gRPC metadata, not body
             local_snippets: encrypted_snippets,
             last_sync_timestamp: last_sync,
             library_id: library_id.to_string(),

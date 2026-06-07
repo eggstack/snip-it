@@ -43,13 +43,19 @@ pub fn run(
             .snippets
             .iter()
             .enumerate()
+            .filter(|(_, s)| !s.deleted)
             .filter(|(_, s)| {
                 let display = format!("{} {}", s.description, s.command);
                 matcher.fuzzy_match(&display, filter_str).is_some()
             })
             .collect()
     } else {
-        snippets.snippets.iter().enumerate().collect()
+        snippets
+            .snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.deleted)
+            .collect()
     };
 
     match format {

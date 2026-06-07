@@ -24,7 +24,6 @@ mod utils;
 
 use error::SnipResult;
 use logging::{init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler};
-use utils::config::get_snippets_path;
 
 /// Aggregated data for all snippets passed to the TUI selector.
 ///
@@ -47,8 +46,6 @@ pub enum ProcessResult {
     /// A snippet command was selected; contains the expanded command string.
     Done(String),
 }
-
-static CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(get_snippets_path);
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {

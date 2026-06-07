@@ -444,14 +444,9 @@ Snippets = []
 
         self.save_config()?;
 
-        if path.exists()
-            && let Err(e) = fs::remove_file(&path)
-        {
-            tracing::warn!(
-                library = %filename,
-                error = %e,
-                "Config updated but failed to delete library file"
-            );
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| SnipError::io_error("delete library file", path.clone(), e))?;
         }
 
         Ok(())

@@ -51,7 +51,9 @@ fn verify_integrity(content: &str) -> bool {
             return stored == compute_crc32(&body);
         }
     }
-    true
+    // No integrity header found — treat as corrupt rather than silently passing.
+    // A valid config file should always have an integrity header after save.
+    false
 }
 
 fn strip_integrity_line(content: &str) -> String {
@@ -315,8 +317,13 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     #[cfg(not(unix))]
     {
-        let _ = fs::remove_file(&tmp_path);
-        fs::write(&tmp_path, &content_with_integrity)
+        use std::io::Write;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        let mut file = opts
+            .open(&tmp_path)
+            .map_err(|e| SnipError::io_error("create sync config temp", &tmp_path, e))?;
+        file.write_all(content_with_integrity.as_bytes())
             .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
     }
 

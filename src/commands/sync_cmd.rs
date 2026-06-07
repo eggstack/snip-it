@@ -46,11 +46,27 @@ fn link_server_library(
                         eprintln!("    Failed to create backup: {e}");
                         return false;
                     }
+                    // Move local snippets to the backup library
+                    let local_snippets =
+                        crate::library::load_library(&lib_path).unwrap_or_default();
+                    let backup_path = mgr.get_libraries_dir().join(format!("{new_name}.toml"));
+                    if let Err(e) = crate::library::save_library(&backup_path, &local_snippets) {
+                        eprintln!("    Failed to save backup: {e}");
+                        return false;
+                    }
                     if let Err(e) = mgr.update_library_id(&new_name, &lib.id) {
                         eprintln!("    Failed to link backup: {e}");
                         return false;
                     }
-                    println!("    Created '{new_name}' with local content");
+                    // Clear original library for server content
+                    let empty = crate::library::Snippets::default();
+                    if let Err(e) = crate::library::save_library(&lib_path, &empty) {
+                        eprintln!("    Failed to clear original library: {e}");
+                        return false;
+                    }
+                    println!(
+                        "    Created '{new_name}' with local content, original cleared for server content"
+                    );
                     return true;
                 }
                 _ => {
@@ -209,12 +225,16 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 return Ok(());
             }
 
-            println!("\nPulling snippets from server...");
+            println!("\nSyncing snippets...");
             // Respect config direction when no CLI flags are provided
             let effective_push = options.push_only
-                || (!options.pull_only && sync_settings.sync_direction == SyncDirection::Push);
+                || (!options.pull_only
+                    && (sync_settings.sync_direction == SyncDirection::Push
+                        || sync_settings.sync_direction == SyncDirection::Bidirectional));
             let effective_pull = options.pull_only
-                || (!options.push_only && sync_settings.sync_direction == SyncDirection::Pull);
+                || (!options.push_only
+                    && (sync_settings.sync_direction == SyncDirection::Pull
+                        || sync_settings.sync_direction == SyncDirection::Bidirectional));
             crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),

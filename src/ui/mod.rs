@@ -153,7 +153,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         folders: _folders,
         favorites,
         snippets,
-        original_indices,
+        original_indices: _original_indices,
     } = params;
     // Enable mouse capture before initializing terminal
     // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
@@ -398,8 +398,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                 if score_cmp != std::cmp::Ordering::Equal || !has_filter {
                     let explicit_sort = match filter_state.sort_mode {
-                        SortMode::Newest => Some(b.0.cmp(&a.0)),
-                        SortMode::Oldest => Some(a.0.cmp(&b.0)),
+                        SortMode::Newest => Some(
+                            snippets[b.0]
+                                .created_at
+                                .cmp(&snippets[a.0].created_at)
+                                .then_with(|| b.0.cmp(&a.0)),
+                        ),
+                        SortMode::Oldest => Some(
+                            snippets[a.0]
+                                .created_at
+                                .cmp(&snippets[b.0].created_at)
+                                .then_with(|| a.0.cmp(&b.0)),
+                        ),
                         _ => None,
                     };
 
@@ -1130,8 +1140,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         }
                                     }
                                     if let Some((idx, _, _)) = filtered.get(start) {
-                                        let original_idx =
-                                            original_indices.get(*idx).copied().unwrap_or(*idx);
+                                        let original_idx = *idx;
                                         if original_idx < snippets.len()
                                             && let Err(e) = crate::logging::audit_log(
                                                 "copy",
@@ -1193,7 +1202,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         filter_dirty = true;
                                         last_filter_update = Some(std::time::Instant::now());
                                     } else {
+                                        // Clear filter when exiting insert mode with empty input
+                                        // to avoid stale filter state confusing the user
+                                        filter.clear();
                                         insert_mode = false;
+                                        filter_dirty = true;
+                                        last_filter_update = Some(std::time::Instant::now());
                                     }
                                 }
                                 KeyCode::Down if sel.selected + 1 < filtered.len() => {
