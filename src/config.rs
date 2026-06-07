@@ -51,9 +51,11 @@ fn verify_integrity(content: &str) -> bool {
             return stored == compute_crc32(&body);
         }
     }
-    // No integrity header found — treat as corrupt rather than silently passing.
-    // A valid config file should always have an integrity header after save.
-    false
+    // No integrity header found — this is a legacy config file from before the
+    // integrity feature was added. Treat it as valid rather than silently
+    // replacing with defaults (which would cause data loss on upgrade).
+    // The header will be added on the next save.
+    true
 }
 
 fn strip_integrity_line(content: &str) -> String {

@@ -656,21 +656,24 @@ Snippets = []
         }
 
         let tmp_path = parent_dir.join(format!("libraries.{}.tmp", uuid::Uuid::new_v4()));
-        let _ = fs::remove_file(&tmp_path);
-        fs::write(&tmp_path, &toml_str)
-            .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = fs::set_permissions(&tmp_path, perms) {
-                tracing::warn!(
-                    path = %tmp_path.display(),
-                    error = %e,
-                    "Failed to set restrictive permissions on config temp file"
-                );
-            }
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut opts = fs::OpenOptions::new();
+            opts.write(true).create_new(true).mode(0o600);
+            let mut file = opts
+                .open(&tmp_path)
+                .map_err(|e| SnipError::io_error("create config temp", tmp_path.clone(), e))?;
+            use std::io::Write;
+            file.write_all(toml_str.as_bytes())
+                .map_err(|e| SnipError::io_error("write config temp", tmp_path.clone(), e))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = fs::remove_file(&tmp_path);
+            fs::write(&tmp_path, &toml_str)
+                .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
         }
 
         std::fs::rename(&tmp_path, &config_path)
@@ -768,21 +771,24 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
             .unwrap_or("snippets"),
         uuid::Uuid::new_v4()
     ));
-    let _ = fs::remove_file(&tmp_path);
-    fs::write(&tmp_path, &toml_str)
-        .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        if let Err(e) = fs::set_permissions(&tmp_path, perms) {
-            tracing::warn!(
-                path = %tmp_path.display(),
-                error = %e,
-                "Failed to set restrictive permissions on temp file"
-            );
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true).mode(0o600);
+        let mut file = opts
+            .open(&tmp_path)
+            .map_err(|e| SnipError::io_error("create snippets temp", &tmp_path, e))?;
+        use std::io::Write;
+        file.write_all(toml_str.as_bytes())
+            .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = fs::remove_file(&tmp_path);
+        fs::write(&tmp_path, &toml_str)
+            .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
     }
 
     fs::rename(&tmp_path, path).map_err(|e| {

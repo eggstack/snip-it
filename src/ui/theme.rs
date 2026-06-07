@@ -572,20 +572,23 @@ impl ThemeManager {
                 .unwrap_or("themes"),
             uuid::Uuid::new_v4()
         ));
-        fs::write(&tmp_path, toml_str)
-            .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = fs::set_permissions(&tmp_path, perms) {
-                tracing::warn!(
-                    path = %tmp_path.display(),
-                    error = %e,
-                    "Failed to set restrictive permissions on themes config temp file"
-                );
-            }
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut opts = fs::OpenOptions::new();
+            opts.write(true).create_new(true).mode(0o600);
+            let mut file = opts.open(&tmp_path).map_err(|e| {
+                SnipError::io_error("create themes config temp", tmp_path.clone(), e)
+            })?;
+            use std::io::Write;
+            file.write_all(toml_str.as_bytes())
+                .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&tmp_path, toml_str)
+                .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
         }
 
         fs::rename(&tmp_path, &self.config_path).map_err(|e| {
