@@ -300,7 +300,11 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let checksum = compute_crc32(&content);
     let content_with_integrity = format!("# integrity: {checksum}\n{content}");
 
-    let tmp_path = path.with_extension("toml.tmp");
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_stem().and_then(|s| s.to_str()).unwrap_or("sync"),
+        uuid::Uuid::new_v4()
+    ));
 
     #[cfg(unix)]
     {

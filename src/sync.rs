@@ -347,7 +347,7 @@ impl SyncClient {
             if count < 50 {
                 break;
             }
-            offset += count;
+            offset = offset.saturating_add(count);
         }
         Ok(all_libraries)
     }

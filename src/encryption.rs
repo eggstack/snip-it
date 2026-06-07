@@ -181,7 +181,9 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
 
     // Cache the derived key for future use with the same (api_key, salt)
     if let Ok(mut cache) = KEY_CACHE.lock() {
-        // Evict oldest entries if cache is full
+        // Evict half the entries when cache is full. HashMap iteration order is
+        // arbitrary, but this is acceptable for a session-local cache — re-deriving
+        // a key costs less than the initial Argon2id computation.
         if cache.len() >= MAX_KEY_CACHE_SIZE {
             let keys_to_remove: Vec<_> =
                 cache.keys().take(MAX_KEY_CACHE_SIZE / 2).cloned().collect();

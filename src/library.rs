@@ -655,7 +655,7 @@ Snippets = []
                 .map_err(|e| SnipError::io_error("create config directory", parent_dir, e))?;
         }
 
-        let tmp_path = parent_dir.join("libraries.toml.tmp");
+        let tmp_path = parent_dir.join(format!("libraries.{}.tmp", uuid::Uuid::new_v4()));
         let _ = fs::remove_file(&tmp_path);
         fs::write(&tmp_path, &toml_str)
             .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
@@ -761,7 +761,13 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    let tmp_path = path.with_extension("toml.tmp");
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("snippets"),
+        uuid::Uuid::new_v4()
+    ));
     let _ = fs::remove_file(&tmp_path);
     fs::write(&tmp_path, &toml_str)
         .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
@@ -1180,11 +1186,13 @@ Command = "sudo iptables-restore \< /path/to/rules"
         let loaded = load_library(&path).unwrap();
         assert_eq!(loaded.snippets.len(), 1);
         assert_eq!(loaded.snippets[0].id, "atomic-test");
-        let tmp = path.with_extension("toml.tmp");
-        assert!(
-            !tmp.exists(),
-            "temp file should not remain after atomic rename"
-        );
+        // Verify no .tmp files remain after atomic rename
+        let parent = path.parent().unwrap();
+        let has_tmp = std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().is_some_and(|ext| ext == "tmp"));
+        assert!(!has_tmp, "temp files should not remain after atomic rename");
     }
 
     #[test]
