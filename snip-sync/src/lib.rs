@@ -399,7 +399,10 @@ impl SnipSyncService {
     fn capture_auth_header<T>(&self, request: &Request<T>, body_api_key: &str) -> String {
         let api_key = extract_api_key(request, body_api_key);
         if !api_key.is_empty() {
-            let mut slot = self.captured_auth_header.lock().unwrap();
+            let mut slot = self
+                .captured_auth_header
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if slot.is_none() {
                 *slot = Some(format!("Bearer {api_key}"));
             }
@@ -674,7 +677,7 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more = (offset + snippets.len() as i32) < total;
+        let has_more = offset.saturating_add(snippets.len() as i32) < total;
 
         let proto_snippets: Vec<ProtoSnippet> = snippets
             .into_iter()
@@ -924,7 +927,7 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more = (offset + snippets.len() as i32) < total;
+        let has_more = offset.saturating_add(snippets.len() as i32) < total;
 
         let timestamp = if has_more {
             // Don't advance timestamp when paginating — client needs to fetch remaining pages
@@ -1042,7 +1045,7 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more = (offset + libraries.len() as i32) < total;
+        let has_more = offset.saturating_add(libraries.len() as i32) < total;
 
         let proto_libraries: Vec<Library> = libraries
             .into_iter()

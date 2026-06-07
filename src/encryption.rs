@@ -39,6 +39,10 @@ const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Arg
 const ARGON2_TIME_COST: u32 = 3; // 3 iterations — OWASP minimum recommendation
 const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU core count
 
+/// Maximum number of derived keys to cache. Each entry is ~100 bytes (32-byte key
+/// + string keys + HashMap overhead), so 10K entries ≈ 1 MB.
+const MAX_KEY_CACHE_SIZE: usize = 10_000;
+
 /// Session-local cache for derived keys to avoid re-running Argon2id
 /// for the same (api_key, salt) pair during a sync operation.
 /// Key: (api_key, base64(salt)), Value: derived key bytes
@@ -177,6 +181,16 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
 
     // Cache the derived key for future use with the same (api_key, salt)
     if let Ok(mut cache) = KEY_CACHE.lock() {
+        // Evict oldest entries if cache is full
+        if cache.len() >= MAX_KEY_CACHE_SIZE {
+            let keys_to_remove: Vec<_> =
+                cache.keys().take(MAX_KEY_CACHE_SIZE / 2).cloned().collect();
+            for key in keys_to_remove {
+                if let Some(mut old_key) = cache.remove(&key) {
+                    old_key.zeroize();
+                }
+            }
+        }
         cache.insert(cache_key, key_bytes);
     }
 

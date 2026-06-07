@@ -210,7 +210,9 @@ impl SyncClient {
 
             // Prepare next page request — don't re-send local snippets
             request.local_snippets.clear();
-            request.offset += response.snippets.len() as i32;
+            request.offset = request
+                .offset
+                .saturating_add(response.snippets.len() as i32);
         }
 
         let total_skipped = all_skipped_ids.len();

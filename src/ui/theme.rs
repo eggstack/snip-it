@@ -564,7 +564,14 @@ impl ThemeManager {
         }
         let toml_str = toml::to_string_pretty(&self.config)
             .map_err(|e| SnipError::toml_error("serialize themes config", e))?;
-        let tmp_path = self.config_path.with_extension("toml.tmp");
+        let tmp_path = self.config_path.with_file_name(format!(
+            "{}.{}.tmp",
+            self.config_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("themes"),
+            uuid::Uuid::new_v4()
+        ));
         fs::write(&tmp_path, toml_str)
             .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
 

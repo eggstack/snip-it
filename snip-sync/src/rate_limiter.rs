@@ -3,6 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
+/// Maximum number of rate limiter entries to prevent memory exhaustion
+/// from requests with many distinct API keys.
+const MAX_ENTRIES: usize = 100_000;
+
 #[derive(Clone)]
 struct WindowEntry {
     window_start: u64,
@@ -172,6 +176,23 @@ impl RateLimiter {
         let now = now_secs();
         let window_secs = window.as_secs();
         let mut windows = self.windows.lock().await;
+
+        // Evict expired entries if map is getting too large
+        if windows.len() >= MAX_ENTRIES {
+            windows.retain(|_, entry| now.saturating_sub(entry.window_start) < window_secs);
+        }
+        // If still over limit after eviction, drop oldest half
+        if windows.len() >= MAX_ENTRIES {
+            let mut entries: Vec<_> = windows
+                .iter()
+                .map(|(k, e)| (k.clone(), e.window_start))
+                .collect();
+            entries.sort_by_key(|(_, start)| *start);
+            let drop_count = entries.len() / 2;
+            for (k, _) in entries.into_iter().take(drop_count) {
+                windows.remove(&k);
+            }
+        }
 
         let entry = windows
             .entry(key.to_string())
