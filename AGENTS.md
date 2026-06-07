@@ -183,4 +183,4 @@ snip-it/
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
 - Utils tests cover escape sequences, nested brackets, chained backslashes
 - Sync tests cover device conflict detection
-- Total: 168 unit tests + 20 integration tests + 30 server tests = 218 tests passing
+- Total: 236 unit tests + 20 integration tests + 30 server tests = 286 tests passing

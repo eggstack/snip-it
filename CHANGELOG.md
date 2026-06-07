@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Harden crates.io release.** Remove `themes/` from published package (embeds default theme directly in generated Rust source). Shrink public API surface to 9 modules. Replace `getrandom` jitter with `SystemTime::now().subsec_nanos()`. Split `get_config_dir()` into pure getter + `ensure_config_dir()` — fixes macOS legacy migration (could never run because `get_config_dir()` eagerly created the new directory). Harden `list_libraries` pagination loop against buggy servers. Use `fs::rename` instead of `fs::copy` for atomic backup restore.
+- Move `subtle` to `[dev-dependencies]` (only used in tests).
+
 ### Removed
 - Remove inert --non-interactive sync flag
 
