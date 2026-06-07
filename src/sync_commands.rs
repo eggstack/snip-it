@@ -288,7 +288,11 @@ fn merge_and_save(
 
     if let Err(e) = library::save_library(lib_path, &merged) {
         if let Some(ref backup) = backup_path {
-            if let Err(restore_err) = fs::copy(backup, lib_path) {
+            // `fs::rename` is atomic and replaces the target. Prefer it over
+            // `fs::copy` because the partial write that triggered this branch
+            // may have left the file in an unreadable state; a copy could
+            // itself fail and leave the user with a corrupted library.
+            if let Err(restore_err) = fs::rename(backup, lib_path) {
                 tracing::error!(
                     "Failed to restore backup after merge save failure: {}",
                     restore_err

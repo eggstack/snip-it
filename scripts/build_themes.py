@@ -112,6 +112,19 @@ def generate_rust(themes: list[Path]) -> str:
     lines.append(
         "// Decoded at runtime by the `lzma-rs` crate (xz_decompress)."
     )
+    lines.append("//")
+    lines.append(
+        "// The default theme is embedded as a Rust raw string literal so the"
+    )
+    lines.append(
+        "// published crate does not need the source `themes/` directory at"
+    )
+    lines.append(
+        "// build time. All other themes are LZMA-compressed in the table"
+    )
+    lines.append(
+        "// below and decoded on first launch."
+    )
     lines.append("")
     # Silence the dead_code lint for items that may not all be referenced
     # during a particular build (e.g. tests vs. release).
@@ -120,20 +133,35 @@ def generate_rust(themes: list[Path]) -> str:
     lines.append("use base64::Engine as _;")
     lines.append("")
     lines.append(
-        '/// Uncompressed hardcoded fallback theme. Embedded at compile time'
+        '/// Uncompressed hardcoded fallback theme. Embedded as a Rust raw'
     )
     lines.append(
-        "/// via `include_str!` so the binary always has a usable theme on"
+        "/// string literal so the binary always has a usable theme on the"
     )
     lines.append(
-        "/// the very first launch, before the user's `themes/` directory has"
+        "/// very first launch, before the user's `themes/` directory has"
     )
     lines.append(
-        "/// been seeded from the compressed bundle. Must remain"
+        "/// been seeded from the compressed bundle. The original file is"
     )
-    lines.append(f"/// `themes/{DEFAULT_THEME_FILENAME}` on disk.")
+    lines.append(f"/// `themes/{DEFAULT_THEME_FILENAME}` — editing that file and")
     lines.append(
-        f'pub const DEFAULT_BUNDLED: &str = include_str!("../../themes/{DEFAULT_THEME_FILENAME}");'
+        "/// re-running this script will update the embedded copy."
+    )
+
+    # Embed the default theme as a Rust raw string literal. Pick a
+    # delimiter (`#` count) that cannot appear inside the file content.
+    raw_default = default_path.read_text(encoding="utf-8")
+    delim_count = 1
+    needle_open = '"' + ("#" * delim_count)
+    needle_close = ("#" * delim_count) + '"'
+    while needle_open in raw_default or needle_close in raw_default:
+        delim_count += 1
+        needle_open = '"' + ("#" * delim_count)
+        needle_close = ("#" * delim_count) + '"'
+    delim = "#" * delim_count
+    lines.append(
+        f'pub const DEFAULT_BUNDLED: &str = r{delim}"{raw_default}"{delim};'
     )
     lines.append("")
     lines.append("/// One bundled theme: a name and a base64-encoded LZMA-compressed TOML body.")

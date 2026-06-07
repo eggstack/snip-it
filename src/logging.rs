@@ -135,6 +135,13 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 }
 
 pub fn init_default_logging() {
+    // Ensure the config directory exists (and is permission-tightened on
+    // Unix) before we try to create the logs subdirectory or the audit
+    // log. `ensure_config_dir` is idempotent and cheap on subsequent
+    // calls.
+    if let Err(e) = crate::utils::config::ensure_config_dir() {
+        eprintln!("Warning: Failed to ensure config directory: {e}");
+    }
     let config = LogConfig::default();
     if let Err(e) = init_logging(&config) {
         eprintln!("Warning: Failed to initialize logging: {e}");

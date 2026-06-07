@@ -6,8 +6,12 @@
 
 use std::path::{Path, PathBuf};
 
+/// Returns the path to the user's snp config directory without touching
+/// the filesystem. Callers that need the directory to exist (and to have
+/// restrictive permissions on Unix) should call [`ensure_config_dir`]
+/// once at startup.
 pub fn get_config_dir() -> PathBuf {
-    let dir = std::env::var("XDG_CONFIG_HOME")
+    std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
@@ -19,49 +23,41 @@ pub fn get_config_dir() -> PathBuf {
                 })
                 .join(".config")
         })
-        .join("snp");
+        .join("snp")
+}
+
+/// Creates the config directory (if missing) and tightens its permissions
+/// to `0o700` on Unix. Idempotent and safe to call multiple times.
+///
+/// Callers should invoke this once during startup before performing any
+/// I/O inside the config directory. Individual I/O helpers (logging
+/// initialization, library creation, premade downloads, audit logging)
+/// also call this defensively in case the startup hook was skipped.
+pub fn ensure_config_dir() -> std::io::Result<PathBuf> {
+    let dir = get_config_dir();
 
     if dir.exists() {
-        // Fix permissions on existing directory if needed
+        // Tighten permissions on existing directory if needed
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(metadata) = std::fs::metadata(&dir) {
                 let mode = metadata.permissions().mode();
-                if mode & 0o077 != 0
-                    && let Err(e) =
-                        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                {
-                    tracing::warn!(
-                        directory = %dir.display(),
-                        error = %e,
-                        "Could not fix permissions on config directory"
-                    );
+                if mode & 0o077 != 0 {
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
                 }
             }
         }
     } else {
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::error!(
-                directory = %dir.display(),
-                error = %e,
-                "Could not create config directory"
-            );
-        }
+        std::fs::create_dir_all(&dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
-                tracing::warn!(
-                    directory = %dir.display(),
-                    error = %e,
-                    "Could not set permissions on config directory"
-                );
-            }
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
     }
 
-    dir
+    Ok(dir)
 }
 
 /// Returns the old macOS platform-specific config directory
@@ -178,5 +174,29 @@ mod tests {
     fn test_get_sync_config_path_ends_with_sync_toml() {
         let path = get_sync_config_path();
         assert!(path.to_string_lossy().ends_with("sync.toml"));
+    }
+
+    #[test]
+    fn test_get_config_dir_is_deterministic() {
+        // Calling get_config_dir() must return the same path on repeated
+        // calls. This is the contract that lets callers use it as a cheap
+        // path builder without worrying about I/O.
+        let a = get_config_dir();
+        let b = get_config_dir();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_ensure_config_dir_is_idempotent() {
+        // Call twice — both should succeed without error and return the
+        // same path. The second call exercises the "dir already exists"
+        // branch (including the permission-tightening check on Unix).
+        let a = ensure_config_dir().expect("first ensure_config_dir");
+        let b = ensure_config_dir().expect("second ensure_config_dir");
+        assert_eq!(a, b);
+        assert!(
+            a.exists(),
+            "config dir should exist after ensure_config_dir"
+        );
     }
 }

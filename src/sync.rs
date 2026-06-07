@@ -83,10 +83,16 @@ macro_rules! retry_grpc {
                     }
                     // Add jitter: random value in [0.5, 1.5) × delay_ms to avoid
                     // thundering-herd when multiple clients retry simultaneously.
+                    // We use the low 32 bits of the current time as a cheap
+                    // pseudo-random source — jitter does not need cryptographic
+                    // randomness and the OS clock provides enough variation to
+                    // de-correlate retries.
                     let jitter_ms = {
-                        let mut buf = [0u8; 1];
-                        let _ = getrandom::getrandom(&mut buf);
-                        0.5 + (buf[0] as f64 / 256.0)
+                        let nanos = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.subsec_nanos())
+                            .unwrap_or(0);
+                        0.5 + ((nanos as u64 % 1000) as f64 / 1000.0)
                     };
                     let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
                     tracing::warn!(
@@ -268,11 +274,14 @@ impl SyncClient {
                         e,
                         delay_ms
                     );
-                    // Add jitter: random value in [0.5, 1.5) × delay_ms
+                    // Add jitter: random value in [0.5, 1.5) × delay_ms.
+                    // Same cheap pseudo-random source as in the macro path.
                     let jitter_ms = {
-                        let mut buf = [0u8; 1];
-                        let _ = getrandom::getrandom(&mut buf);
-                        0.5 + (buf[0] as f64 / 256.0)
+                        let nanos = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.subsec_nanos())
+                            .unwrap_or(0);
+                        0.5 + ((nanos as u64 % 1000) as f64 / 1000.0)
                     };
                     let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
                     tokio::time::sleep(Duration::from_millis(actual_delay)).await;
@@ -328,12 +337,13 @@ impl SyncClient {
         let api_key = self.settings.api_key.clone();
         let mut all_libraries = Vec::new();
         let mut offset = 0i32;
+        const PAGE_LIMIT: i32 = 50;
         loop {
             let response = retry_grpc!(
                 async {
                     let mut req = tonic::Request::new(ListLibrariesRequest {
                         api_key: api_key.clone(),
-                        limit: 50,
+                        limit: PAGE_LIMIT,
                         offset,
                     });
                     add_api_key_metadata(&mut req, &api_key);
@@ -344,7 +354,13 @@ impl SyncClient {
             let inner = response.into_inner();
             let count = inner.libraries.len() as i32;
             all_libraries.extend(inner.libraries);
-            if count < 50 {
+            // Server signals end-of-stream with `!has_more` (preferred).
+            // `count < PAGE_LIMIT` is a fallback when the server returns
+            // fewer than the limit (which is the last page by construction).
+            // The `count == 0 && has_more` guard is paranoia against a
+            // buggy server that returns empty pages without setting
+            // `has_more = false` — without it, we'd loop forever.
+            if !inner.has_more || count < PAGE_LIMIT || count == 0 {
                 break;
             }
             offset = offset.saturating_add(count);

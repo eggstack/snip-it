@@ -6,18 +6,29 @@
 //! public API (notably `sync::SyncClient` and the proto types) against a
 //! real `snip-sync` server.
 
-pub mod clipboard;
+// Public modules form the stable API surface for crates.io consumers.
+// Anything marked `pub(crate)` is internal implementation and may change
+// without a semver bump.
+//
+// The `snp` binary lives in the same package as this library but is a
+// separate crate, so it can only see `pub` items here. The CLI uses
+// `commands`, `config`, `error`, `logging`, and `ui` directly. The
+// truly internal modules (`clipboard`, `library`, `sync_commands`,
+// `utils`) are accessed only via `crate::` from sibling modules, so
+// they can be hidden from external consumers.
 pub mod commands;
 pub mod config;
 pub mod encryption;
 pub mod error;
-pub mod library;
 pub mod logging;
 pub mod proto;
 pub mod sync;
-pub mod sync_commands;
 pub mod ui;
-pub mod utils;
+
+pub(crate) mod clipboard;
+pub(crate) mod library;
+pub(crate) mod sync_commands;
+pub(crate) mod utils;
 
 pub use error::{SnipError, SnipResult};
 

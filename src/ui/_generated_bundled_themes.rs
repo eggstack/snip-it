@@ -4,17 +4,65 @@
 //
 // LZMA compression (XZ container) via Python's stdlib `lzma`.
 // Decoded at runtime by the `lzma-rs` crate (xz_decompress).
+//
+// The default theme is embedded as a Rust raw string literal so the
+// published crate does not need the source `themes/` directory at
+// build time. All other themes are LZMA-compressed in the table
+// below and decoded on first launch.
 
 #![allow(dead_code, unused_imports)]
 
 use base64::Engine as _;
 
-/// Uncompressed hardcoded fallback theme. Embedded at compile time
-/// via `include_str!` so the binary always has a usable theme on
-/// the very first launch, before the user's `themes/` directory has
-/// been seeded from the compressed bundle. Must remain
-/// `themes/Cyber Red.toml` on disk.
-pub const DEFAULT_BUNDLED: &str = include_str!("../../themes/Cyber Red.toml");
+/// Uncompressed hardcoded fallback theme. Embedded as a Rust raw
+/// string literal so the binary always has a usable theme on the
+/// very first launch, before the user's `themes/` directory has
+/// been seeded from the compressed bundle. The original file is
+/// `themes/Cyber Red.toml` — editing that file and
+/// re-running this script will update the embedded copy.
+pub const DEFAULT_BUNDLED: &str = r##"[general]
+background = "#0A0000"
+border = "#E41951"
+horizontal_rule = "#3E0101"
+unread_indicator = "#C1DEFF"
+
+[text]
+primary = "#E41951"
+secondary = "#8F1134"
+tertiary = "#7D3F50"
+success = "#D7053F"
+error = "#C1DEFF"
+
+[buffer]
+action = "#5BA4DB"
+background = "#090808"
+background_text_input = "#160E0E"
+background_title_bar = "#1F040B"
+border = "#000000"
+border_selected = "#E41951"
+code = "#EA9995"
+highlight = "#122C38"
+nickname = "#76ABEC"
+selection = "#73000054"
+timestamp = "#750D2A"
+topic = "#E41951"
+url = "#FFADAD"
+
+  [buffer.server_messages]
+  default = "#5BA4DB"
+
+[buttons.primary]
+background = "#000000"
+background_hover = "#4B0A1C"
+background_selected = "#230202"
+background_selected_hover = "#1C0606"
+
+[buttons.secondary]
+background = "#310000"
+background_hover = "#610B0B"
+background_selected = "#701414"
+background_selected_hover = "#882828"
+"##;
 
 /// One bundled theme: a name and a base64-encoded LZMA-compressed TOML body.
 #[derive(Debug, Clone, Copy)]
@@ -230,30 +278,15 @@ pub const BUNDLED: &[BundledTheme] = &[
 pub fn bundled_themes_decoded() -> std::vec::Vec<(String, String)> {
     BUNDLED
         .iter()
-        .filter_map(|b| {
-            let compressed = match base64::engine::general_purpose::STANDARD.decode(b.payload_b64) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Skipping bundled theme {:?}: invalid base64: {}", b.name, e);
-                    return None;
-                }
-            };
+        .map(|b| {
+            let compressed = base64::engine::general_purpose::STANDARD
+                .decode(b.payload_b64)
+                .expect("bundled theme: invalid base64");
             let mut toml_bytes = std::vec::Vec::new();
-            if let Err(e) = lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes) {
-                tracing::warn!(
-                    "Skipping bundled theme {:?}: invalid xz stream: {}",
-                    b.name,
-                    e
-                );
-                return None;
-            }
-            match String::from_utf8(toml_bytes) {
-                Ok(toml_text) => Some((b.name.to_string(), toml_text)),
-                Err(e) => {
-                    tracing::warn!("Skipping bundled theme {:?}: non-utf-8 toml: {}", b.name, e);
-                    None
-                }
-            }
+            lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes)
+                .expect("bundled theme: invalid xz stream");
+            let toml_text = String::from_utf8(toml_bytes).expect("bundled theme: non-utf-8 toml");
+            (b.name.to_string(), toml_text)
         })
         .collect()
 }
