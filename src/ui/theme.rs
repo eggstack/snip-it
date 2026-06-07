@@ -592,6 +592,7 @@ impl ThemeManager {
         }
 
         fs::rename(&tmp_path, &self.config_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
             SnipError::io_error("rename themes config", self.config_path.clone(), e)
         })?;
         Ok(())

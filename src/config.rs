@@ -462,4 +462,36 @@ mod tests {
         assert!(toml_str.contains("auto_sync = true"));
         assert!(toml_str.contains("sync_direction = \"Bidirectional\""));
     }
+
+    #[test]
+    fn test_verify_integrity_no_header_returns_true() {
+        // Legacy config files without an integrity header should be accepted
+        // to prevent data loss on upgrade from older versions.
+        let content = "[sync]\nenabled = true\n";
+        assert!(verify_integrity(content));
+    }
+
+    #[test]
+    fn test_verify_integrity_valid_header() {
+        let body = "[sync]\nenabled = true";
+        let checksum = compute_crc32(body);
+        let content = format!("# integrity: {checksum}\n{body}");
+        assert!(verify_integrity(&content));
+    }
+
+    #[test]
+    fn test_verify_integrity_invalid_header() {
+        let body = "[sync]\nenabled = true";
+        let content = format!("# integrity: 999999\n{body}");
+        assert!(!verify_integrity(&content));
+    }
+
+    #[test]
+    fn test_verify_integrity_tampered_body() {
+        let original = "[sync]\nenabled = true";
+        let checksum = compute_crc32(original);
+        let tampered = "[sync]\nenabled = false";
+        let content = format!("# integrity: {checksum}\n{tampered}");
+        assert!(!verify_integrity(&content));
+    }
 }

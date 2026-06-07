@@ -676,8 +676,10 @@ Snippets = []
                 .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
         }
 
-        std::fs::rename(&tmp_path, &config_path)
-            .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
+        std::fs::rename(&tmp_path, &config_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            SnipError::io_error("atomic rename config", config_path.clone(), e)
+        })?;
 
         Ok(())
     }
