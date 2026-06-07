@@ -252,6 +252,8 @@ impl Database {
         let prefix = compute_api_key_prefix(api_key);
 
         // Use prefix to narrow candidate set; prefix may be NULL for legacy rows
+        // that were already hashed before the prefix optimization was added.
+        // The IS NULL fallback ensures these users can still authenticate.
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT id, api_key FROM users WHERE api_key_prefix = ? OR api_key_prefix IS NULL",
         )

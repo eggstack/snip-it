@@ -29,7 +29,7 @@ pub fn run(interval: u32) -> SnipResult<()> {
         .unwrap_or_else(|_| "snp".to_string());
 
     let cron_entry = format!(
-        "*/{} * * * * {} sync --non-interactive",
+        "*/{} * * * * {} sync",
         interval,
         shell_escape_path(&binary_path)
     );
@@ -54,7 +54,7 @@ pub fn run(interval: u32) -> SnipResult<()> {
         println!("  3. Set trigger: Daily, repeat every {} minutes", interval);
         println!("  4. Action: Start a program");
         println!("  5. Program: {}", binary_path);
-        println!("  6. Arguments: sync --non-interactive");
+        println!("  6. Arguments: sync");
     }
 
     println!();

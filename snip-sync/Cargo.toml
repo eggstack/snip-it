@@ -12,6 +12,17 @@ keywords = ["grpc", "sync", "snippets", "server", "sqlite"]
 categories = ["command-line-utilities", "web-programming"]
 publish = false
 
+[lib]
+name = "snip_sync"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enables the `test_helpers` module, which is used by integration tests
+# to spin up the server in-process and observe gRPC metadata. Not used
+# in production builds.
+test-helpers = []
+
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 axum = "0.7"
@@ -22,6 +33,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 thiserror = "2"
 tonic = { version = "0.14", features = ["transport"] }
@@ -35,6 +47,7 @@ argon2 = "0.5"
 getrandom = "0.2"
 sha2 = "0.10"
 subtle = "2"
+tokio-stream = { version = "0.1", features = ["net"] }
 
 [[bin]]
 name = "snip-sync"
@@ -42,9 +55,3 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3.10"
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
-strip = true

@@ -66,7 +66,7 @@ fn default_retry_config() -> SyncRetryConfig {
     SyncRetryConfig::default()
 }
 
-/// Retry an async gRPC operation with exponential backoff.
+/// Retry an async gRPC operation with exponential backoff and jitter.
 macro_rules! retry_grpc {
     ($op:expr, $name:expr) => {{
         let config = default_retry_config();
@@ -81,15 +81,23 @@ macro_rules! retry_grpc {
                     {
                         break Err(SnipError::runtime_error($name, Some(&e.to_string())));
                     }
+                    // Add jitter: random value in [0.5, 1.5) × delay_ms to avoid
+                    // thundering-herd when multiple clients retry simultaneously.
+                    let jitter_ms = {
+                        let mut buf = [0u8; 1];
+                        let _ = getrandom::getrandom(&mut buf);
+                        0.5 + (buf[0] as f64 / 256.0)
+                    };
+                    let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
                     tracing::warn!(
                         "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
                         $name,
                         attempt + 1,
                         config.max_retries + 1,
                         e,
-                        delay_ms
+                        actual_delay
                     );
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    tokio::time::sleep(Duration::from_millis(actual_delay)).await;
                     delay_ms = (delay_ms * 2).min(config.max_delay_ms);
                     attempt += 1;
                 }
@@ -99,8 +107,11 @@ macro_rules! retry_grpc {
 }
 
 /// Add the API key as gRPC `authorization` metadata to a request.
-fn add_api_key_metadata<T>(request: &mut tonic::Request<T>, api_key: &str) {
-    if let Ok(val) = format!("Bearer {api_key}").parse() {
+pub(crate) fn add_api_key_metadata<T>(request: &mut tonic::Request<T>, api_key: &str) {
+    debug_assert!(!api_key.is_empty(), "api_key must not be empty");
+    if !api_key.is_empty()
+        && let Ok(val) = format!("Bearer {api_key}").parse()
+    {
         request.metadata_mut().insert("authorization", val);
     }
 }
@@ -176,7 +187,7 @@ impl SyncClient {
         let mut final_total_count;
 
         loop {
-            let mut response = self.sync_with_retry(request.clone()).await?;
+            let mut response = self.sync_with_retry(request.clone(), &api_key).await?;
 
             // Decrypt server snippets from this page
             for s in &response.snippets {
@@ -221,16 +232,22 @@ impl SyncClient {
     /// borrows `&mut self`, and the macro requires the operation to be a standalone
     /// future expression. This method implements the same exponential backoff strategy.
     /// The request is cloned on retry to avoid re-cloning on every attempt.
+    ///
+    /// `api_key` is passed explicitly rather than read from `request.api_key` so
+    /// callers can leave the body field empty (avoiding leaking the key over the
+    /// wire in the request body) while still authenticating via `authorization`
+    /// metadata.
     async fn sync_with_retry(
         &mut self,
         request: SyncRequest,
+        api_key: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
         let config = default_retry_config();
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
         loop {
             let mut grpc_req = tonic::Request::new(request.clone());
-            add_api_key_metadata(&mut grpc_req, &request.api_key);
+            add_api_key_metadata(&mut grpc_req, api_key);
             match self.client.sync(grpc_req).await {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(e) => {
@@ -249,7 +266,14 @@ impl SyncClient {
                         e,
                         delay_ms
                     );
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    // Add jitter: random value in [0.5, 1.5) × delay_ms
+                    let jitter_ms = {
+                        let mut buf = [0u8; 1];
+                        let _ = getrandom::getrandom(&mut buf);
+                        0.5 + (buf[0] as f64 / 256.0)
+                    };
+                    let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
+                    tokio::time::sleep(Duration::from_millis(actual_delay)).await;
                     delay_ms = (delay_ms * 2).min(config.max_delay_ms);
                     attempt += 1;
                 }
@@ -406,13 +430,12 @@ async fn create_tls_channel(
     server_url: &str,
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let uri: Uri = server_url.parse()?;
-
-    let host = uri.host().ok_or("No host in URI")?;
-
-    let tls_config = ClientTlsConfig::new()
-        .with_enabled_roots()
-        .domain_name(host)
-        .assume_http2(true);
+    let scheme = uri.scheme_str().unwrap_or("https").to_ascii_lowercase();
+    let host = if scheme == "https" {
+        Some(uri.host().ok_or("No host in URI")?.to_string())
+    } else {
+        None
+    };
 
     let connect_timeout_secs = std::env::var("SNP_SYNC_CONNECT_TIMEOUT")
         .ok()
@@ -423,13 +446,21 @@ async fn create_tls_channel(
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
 
-    let channel = Endpoint::new(uri)?
-        .tls_config(tls_config)?
+    let endpoint = Endpoint::new(uri)?
         .connect_timeout(Duration::from_secs(connect_timeout_secs))
-        .timeout(Duration::from_secs(request_timeout_secs))
-        .connect()
-        .await?;
+        .timeout(Duration::from_secs(request_timeout_secs));
 
+    let endpoint = if let Some(host) = host {
+        let tls_config = ClientTlsConfig::new()
+            .with_enabled_roots()
+            .domain_name(host)
+            .assume_http2(true);
+        endpoint.tls_config(tls_config)?
+    } else {
+        endpoint
+    };
+
+    let channel = endpoint.connect().await?;
     Ok(channel)
 }
 
@@ -447,8 +478,7 @@ pub fn encrypt_snippet(
     let json = serde_json::to_string(&data)
         .map_err(|e| SnipError::runtime_error("Serialize snippet data", Some(&e.to_string())))?;
 
-    let encrypted = encryption::encrypt(api_key, &json)
-        .map_err(|e| SnipError::runtime_error("Encrypt snippet", Some(&e.to_string())))?;
+    let encrypted = encryption::encrypt(api_key, &json)?;
 
     Ok(crate::proto::Snippet {
         id: snippet.id.clone(),
@@ -472,8 +502,7 @@ pub fn decrypt_snippet(
         return Ok(snippet.clone());
     }
 
-    let decrypted = encryption::decrypt(api_key, &snippet.command)
-        .map_err(|e| SnipError::runtime_error("Decrypt snippet", Some(&e.to_string())))?;
+    let decrypted = encryption::decrypt(api_key, &snippet.command)?;
 
     let data: EncryptedSnippetData = serde_json::from_str(&decrypted)
         .map_err(|e| SnipError::runtime_error("Deserialize snippet data", Some(&e.to_string())))?;

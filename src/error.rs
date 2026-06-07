@@ -6,8 +6,8 @@
 //!
 //! # Example
 //!
-//! ```text
-//! use snp_internal::error::{SnipError, SnipResult};
+//! ```no_run
+//! use snip_it::error::{SnipError, SnipResult};
 //!
 //! fn read_config() -> SnipResult<String> {
 //!     std::fs::read_to_string("config.toml")
@@ -199,6 +199,15 @@ impl SnipError {
 
 /// Convenient Result type
 pub type SnipResult<T> = Result<T, SnipError>;
+
+impl From<crate::encryption::CryptoError> for SnipError {
+    fn from(e: crate::encryption::CryptoError) -> Self {
+        SnipError::Runtime {
+            message: "Encryption operation failed".to_string(),
+            detail: Some(e.to_string()),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

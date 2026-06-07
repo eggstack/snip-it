@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- Remove inert --non-interactive sync flag
+
 ### Added
 - **Halloy theme support.** `snp` now ships 50 themes adapted from [Halloy](https://themes.halloy.chat). Press `e` in normal mode to open the theme picker; use `j`/`k` (or arrow keys) to preview themes live, `i` to filter, and `Enter` to save. Bundled themes are extracted to `~/.config/snp/themes/` on first launch; the active theme is persisted to `~/.config/snp/themes.toml`. The `SNP_THEME` env var is still honored for backward compatibility.
 - **Build pipeline for bundled themes.** `scripts/build_themes.py` LZMA-compresses and base64-encodes every `.toml` under `themes/`, emitting `src/ui/_generated_bundled_themes.rs`. The build hook in `build.rs` re-invokes the script when the source themes are newer than the generated file, keeping the binary lean.
@@ -61,32 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Library: `delete_library` now saves config before deleting file (atomicity improvement)
 - Signal handlers now log errors gracefully instead of panicking with `expect()`
 - Removed `.github/.DS_Store` from tracking, added recursive .DS_Store to .gitignore
-
-## [1.1.0] - 2026-06-05
-
-### Added
-- Environment variables documentation in README
-- Security warning about snippet command execution
-- Development setup instructions in CONTRIBUTING.md
-
-### Changed
-- Bump version to 1.1.0 (1.0.0 already published on crates.io)
-- Add version requirement to snip-proto dependency for crates.io publishing
-- Expand Cargo.toml exclude list for smaller published crate
-- Refactor TUI select_snippet_inner into smaller functions
-- Replace expect() with unwrap() + safety comments in variable parsing
-- Use std::thread::scope in clipboard operations instead of thread-per-op
-- Extend audit log escaping to cover all ASCII control characters
-- Fix variable prompt to fill all defaults on Enter
-
-### Fixed
-- Formatting issues in sync_commands.rs
-- Dead code removal (unused 'p' handler, #[allow(dead_code)] annotations)
-- Audit log channel overflow now logs warning instead of silently dropping
-- Audit log rotation uses symlink_metadata to prevent symlink attacks
-
-### Removed
-- Invalid `changelog` key from Cargo.toml
 
 ## [1.0.0] - 2026-06-04
 

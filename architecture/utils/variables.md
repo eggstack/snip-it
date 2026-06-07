@@ -57,9 +57,10 @@ Converts escaped angle brackets:
 
 This allows literal angle brackets in commands without triggering variable substitution.
 
-## Known Edge Case
+## Edge Cases
 
-Unmatched `<` without `>` creates a phantom variable and drops the `<` character. For example, `echo <hello` would interpret `hello` as a variable name.
+- Unmatched `<` without a matching `>` is treated as a literal `<` in the output (no variable substitution, character preserved). For example, `echo <hello` expands to `echo <hello`.
+- Escape sequences (`\<`, `\>`) inside a variable name are stripped during parsing: `<x\>foo` expands to `<x>foo` — the backslash is silently dropped because the `>` is consumed as the variable terminator.
 
 ## Usage in Commands
 

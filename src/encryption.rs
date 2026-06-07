@@ -12,12 +12,13 @@
 //!
 //! # Example
 //!
-//! ```text
-//! use snp_internal::encryption::{encrypt, decrypt};
+//! ```no_run
+//! use snip_it::encryption::{decrypt, encrypt};
 //!
 //! let api_key = "your-api-key";
-//! let encrypted = encrypt(api_key, "sensitive data")?;
-//! let decrypted = decrypt(api_key, &encrypted)?;
+//! let encrypted = encrypt(api_key, "sensitive data").unwrap();
+//! let decrypted = decrypt(api_key, &encrypted).unwrap();
+//! assert_eq!(decrypted, "sensitive data");
 //! ```
 
 use aes_gcm::{

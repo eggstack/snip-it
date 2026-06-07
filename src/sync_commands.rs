@@ -314,7 +314,6 @@ fn merge_and_save(
 pub fn run_sync(
     sync_settings: &SyncSettings,
     library_name: Option<&str>,
-    _non_interactive: bool,
     push_only: bool,
     pull_only: bool,
     runtime: &tokio::runtime::Runtime,
@@ -809,7 +808,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
 /// Runs a sync with the default settings (bidirectional, all libraries).
 pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let settings = crate::config::load_sync_settings().unwrap_or_default();
-    run_sync(&settings, None, false, false, false, runtime)
+    run_sync(&settings, None, false, false, runtime)
 }
 
 #[cfg(test)]

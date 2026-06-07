@@ -140,7 +140,10 @@ impl RateLimiter {
         }
     }
 
-    pub fn start_persistence_task(self: &Arc<Self>) {
+    pub fn start_persistence_task(
+        self: &Arc<Self>,
+        shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
         if !self.persist || self.db_pool.is_none() {
             return;
         }
@@ -148,9 +151,19 @@ impl RateLimiter {
         let limiter = Arc::clone(self);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
+            tokio::pin!(shutdown);
             loop {
-                interval.tick().await;
-                limiter.save_state().await;
+                tokio::select! {
+                    _ = interval.tick() => {
+                        limiter.save_state().await;
+                    }
+                    _ = &mut shutdown => {
+                        tracing::debug!("Rate limiter persistence task shutting down");
+                        // Final save before shutdown
+                        limiter.save_state().await;
+                        break;
+                    }
+                }
             }
         });
     }

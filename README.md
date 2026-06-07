@@ -1,8 +1,8 @@
 # snp
 
-[![Crates.io](https://img.shields.io/crates/v/snp-cli.svg)](https://crates.io/crates/snp-cli)
-[![Downloads](https://img.shields.io/crates/d/snp-cli.svg)](https://crates.io/crates/snp-cli)
-[![docs.rs](https://img.shields.io/docsrs/snp-cli)](https://docs.rs/snp-cli)
+[![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
+[![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
+[![docs.rs](https://img.shields.io/docsrs/snip-it)](https://docs.rs/snip-it)
 [![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
 ![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
@@ -33,7 +33,7 @@ plaintext.
 ### From crates.io (recommended)
 
 ```bash
-cargo install snp-cli
+cargo install snip-it
 ```
 
 ### From source
@@ -117,7 +117,7 @@ command = "ssh <user=root>@<host> -p <port=22>"
 - **Multiple libraries** — separate collections per project, environment, or client.
 - **Premade libraries** — download community-built snippet packs (`snp premade sync`).
 - **End-to-end encrypted sync** — AES-256-GCM + Argon2id; the server never sees plaintext.
-- **Cron-friendly** — `snp sync --non-interactive` for headless setups.
+- **Cron-friendly** — `snp sync` is non-interactive by default; safe for headless setups.
 - **TOML you can grep** — snippets are plain files; version-control them, edit them, diff them.
 - **Cross-platform** — macOS, Linux, Windows; uses the system clipboard and keychain.
 - **Shell keyword expansion** — `$HOME`, `~`, `$(date)`, etc. expand at copy time.
@@ -211,7 +211,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — Development setup, code style, testing, release process.
 - **[SECURITY.md](SECURITY.md)** — Vulnerability disclosure policy and threat model.
 - **[CHANGELOG.md](CHANGELOG.md)** — Release history.
-- **[docs.rs/snp](https://docs.rs/snp)** — API reference (this is a binary crate; doc-comments are for contributor reference).
+- **[docs.rs/snip-it](https://docs.rs/snip-it)** — API reference (this is a binary crate; doc-comments are for contributor reference).
 - **[snip-sync/README.md](snip-sync/README.md)** — Sync server setup, configuration, deployment.
 
 ## Contributing

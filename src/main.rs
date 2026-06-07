@@ -9,43 +9,13 @@ use std::sync::LazyLock;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
-mod clipboard;
-mod commands;
-mod config;
-mod encryption;
-mod error;
-mod library;
-mod logging;
-mod proto;
-mod sync;
-mod sync_commands;
-mod ui;
-mod utils;
-
-use error::SnipResult;
-use logging::{init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler};
-
-/// Aggregated data for all snippets passed to the TUI selector.
-///
-/// Contains parallel vectors of snippet metadata where index `i` corresponds
-/// to the same snippet across all fields.
-pub struct SnippetData {
-    pub descriptions: Vec<String>,
-    pub commands: Vec<String>,
-    pub tags: Vec<Vec<String>>,
-    pub folders: Vec<Vec<String>>,
-    pub favorites: Vec<bool>,
-}
-
-/// Result of processing a snippet selection from the TUI.
-pub enum ProcessResult {
-    /// User cancelled the selection.
-    Cancel,
-    /// No snippet was selected; continue to next prompt.
-    Continue,
-    /// A snippet command was selected; contains the expanded command string.
-    Done(String),
-}
+use snip_it::commands;
+use snip_it::config;
+use snip_it::error::SnipResult;
+use snip_it::logging::{
+    init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
+};
+use snip_it::ui;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {
@@ -168,8 +138,6 @@ enum Commands {
         library: Option<String>,
         #[arg(long, action = clap::ArgAction::SetTrue, help = "List connected servers")]
         servers: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue, help = "Skip conflict prompts (keeps local)")]
-        non_interactive: bool,
         #[arg(long, action = clap::ArgAction::SetTrue, help = "Upload local changes only")]
         #[arg(conflicts_with = "pull_only")]
         push_only: bool,
@@ -309,7 +277,6 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
         Commands::Sync {
             library,
             servers,
-            non_interactive,
             push_only,
             pull_only,
             dry_run,
@@ -317,7 +284,6 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             let options = commands::sync_cmd::SyncOptions {
                 library,
                 servers,
-                non_interactive,
                 push_only,
                 pull_only,
                 dry_run,

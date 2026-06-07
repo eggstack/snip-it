@@ -6,8 +6,14 @@
 # Build release binary
 cargo build --release
 
-# Run all tests (unit + integration)
-cargo test
+# Build the entire workspace (snip-it, snip-proto, snip-sync)
+cargo build --workspace
+
+# Run all tests across the workspace (unit + integration + server)
+cargo test --workspace
+
+# Run only the main snp crate's tests
+cargo test -p snip-it
 
 # Run only integration tests
 cargo test --test integration
@@ -15,11 +21,14 @@ cargo test --test integration
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
-# Lint with clippy
-cargo clippy --all-targets -- -D warnings
+# Run only snip-proto tests
+cargo test -p snip-proto
 
-# Format check
-cargo fmt --check
+# Lint with clippy (across the workspace)
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Format check (all crates)
+cargo fmt --all -- --check
 
 # Auto-format
 cargo fmt
@@ -28,9 +37,10 @@ cargo fmt
 cargo llvm-cov --workspace --html
 ```
 
-**Note:** `cargo test --lib` does not work because this is a binary-only crate.
-To run unit tests without integration tests, the project would need to be restructured
-as a workspace with a library crate.
+**Note:** The main `snip-it` crate is still a binary-only crate, so `cargo test --lib -p snip-it`
+does not work. Use `cargo test --workspace` (or `cargo test -p snip-it` for the binary's
+unit + integration tests) instead. The `snip-proto` and `snip-sync` crates are proper
+library / binary crates and can be tested individually with `-p`.
 
 ## Project Structure
 
@@ -114,7 +124,7 @@ snip-it/
 - Parsed by `utils/variables.rs::parse_variables()` and `extract_variable_tokens()`
 - Expanded by `utils/variables.rs::expand_command()`
 - UI prompt in `ui/variables.rs::prompt_variables_inner()`
-- **Known edge case:** Unmatched `<` without `>` creates phantom variable and drops the `<` character
+- **Edge case:** Unmatched `<` without a matching `>` is treated as a literal `<` in the output (no variable substitution, character preserved).
 
 ### TUI Architecture
 - Single-loop event-driven TUI in `ui/mod.rs::select_snippet_inner()`

@@ -7,6 +7,7 @@ name: CI
   pull_request:
     branches: [main]
   workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,7 +38,7 @@ jobs:
         with:
           components: rustfmt
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy
@@ -49,7 +50,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -62,7 +63,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test
+        run: cargo test --workspace
 
   build:
     name: Build
@@ -75,7 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --workspace
       - name: Upload binary (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
@@ -97,9 +98,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
       - name: Build MSRV
-        run: cargo build --release
+        run: cargo build --release --workspace
       - name: Test MSRV
-        run: cargo test
+        run: cargo test --workspace
 
   coverage:
     name: Coverage
@@ -148,6 +149,16 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      - name: Audit snip-sync dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: snip-sync/Cargo.toml
+      - name: Audit snip-proto dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: snip-proto/Cargo.toml
 
   server-test:
     name: Server Tests

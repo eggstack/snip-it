@@ -567,6 +567,20 @@ impl ThemeManager {
         let tmp_path = self.config_path.with_extension("toml.tmp");
         fs::write(&tmp_path, toml_str)
             .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = fs::set_permissions(&tmp_path, perms) {
+                tracing::warn!(
+                    path = %tmp_path.display(),
+                    error = %e,
+                    "Failed to set restrictive permissions on themes config temp file"
+                );
+            }
+        }
+
         fs::rename(&tmp_path, &self.config_path).map_err(|e| {
             SnipError::io_error("rename themes config", self.config_path.clone(), e)
         })?;

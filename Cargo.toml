@@ -28,7 +28,6 @@ exclude = [
     "tests/",
     "rustfmt.toml",
     "rust-toolchain.toml",
-    "Cargo.toml.orig",
     ".gitignore",
     "snip-proto/",
     "assets/",
@@ -53,7 +52,6 @@ targets = [
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 ]
-rustdoc-args = ["--cfg", "docsrs"]
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "4.5"
@@ -69,17 +67,17 @@ clap_complete = "4.5"
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json = "1.0"
 toml = "0.8"
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 fuzzy-matcher = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 chrono = "0.4"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
-tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
+tonic = { version = "0.14", features = ["tls-ring"] }
 prost = "0.14"
 tonic-prost = "0.14"
 aes-gcm = "0.10"
@@ -89,6 +87,7 @@ base64 = "0.22"
 regex = "1.11"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2"
+getrandom = "0.2"
 keyring = "3"
 crc32fast = "1.4"
 unicode-width = "0.2"
@@ -96,9 +95,15 @@ lzma-rs = "0.3"
 
 [dev-dependencies]
 tempfile = "3.10"
+snip-proto = { path = "snip-proto" }
+snip-sync = { path = "snip-sync", features = ["test-helpers"] }
 
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = 3
 strip = true
+
+[workspace]
+members = ["snip-proto", "snip-sync"]
+resolver = "2"

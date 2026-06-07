@@ -5,12 +5,7 @@ use crate::library::LibraryManager;
 use crate::proto::Library;
 use std::io::{self, Write};
 
-fn link_server_library(
-    lib: &Library,
-    mgr: &mut LibraryManager,
-    non_interactive: bool,
-    print_linked: bool,
-) -> bool {
+fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bool) -> bool {
     let filename = lib.name.to_lowercase().replace(' ', "-");
     let existing_lib_id = mgr
         .get_library_by_filename(&filename)
@@ -35,7 +30,7 @@ fn link_server_library(
 
         if existing_id.is_empty() && local_has_content {
             println!("\n  Local library '{filename}' has snippets. Server also has snippets.");
-            match prompt_conflict(&filename, non_interactive).as_deref() {
+            match prompt_conflict(&filename).as_deref() {
                 Some("overwrite") => {
                     println!("  Will overwrite with server version");
                 }
@@ -104,15 +99,7 @@ fn link_server_library(
 /// Prompts the user to resolve a local/server library conflict.
 ///
 /// Returns `"overwrite"`, `"rename"`, or `None` (skip) based on user input.
-/// In non-interactive mode, always returns `None`.
-pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> {
-    if non_interactive {
-        println!(
-            "  Conflict: '{lib_name}' has different content, keeping local (non-interactive mode)"
-        );
-        return None;
-    }
-
+pub fn prompt_conflict(lib_name: &str) -> Option<String> {
     println!("\nConflict: Local library '{lib_name}' has different content than server");
     println!("  (s)kip - keep local version");
     println!("  (o)verwrite - replace with server version");
@@ -137,7 +124,6 @@ pub fn prompt_conflict(lib_name: &str, non_interactive: bool) -> Option<String> 
 pub struct SyncOptions {
     pub library: Option<String>,
     pub servers: bool,
-    pub non_interactive: bool,
     pub push_only: bool,
     pub pull_only: bool,
     pub dry_run: bool,
@@ -195,7 +181,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             })?;
 
             for lib in libs {
-                link_server_library(&lib, &mut mgr, options.non_interactive, true);
+                link_server_library(&lib, &mut mgr, true);
             }
 
             if options.dry_run {
@@ -238,7 +224,6 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),
-                options.non_interactive,
                 effective_push,
                 effective_pull,
                 runtime,
@@ -260,12 +245,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_prompt_conflict_non_interactive() {
-        let result = prompt_conflict("test-lib", true);
-        assert!(result.is_none());
-    }
-
-    #[test]
     fn test_library_filename_slug() {
         // link_server_library derives filenames by lowercasing and replacing spaces.
         // The function takes a &mut LibraryManager, but the slug transformation
@@ -285,7 +264,6 @@ mod tests {
         let opts = SyncOptions {
             library: None,
             servers: false,
-            non_interactive: false,
             push_only: false,
             pull_only: false,
             dry_run: false,

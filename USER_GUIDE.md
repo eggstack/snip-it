@@ -175,13 +175,17 @@ WantedBy=default.target
 EOF
 
 # Create service
+# NOTE: replace 'your-username' below with the actual username, or use
+# systemd template syntax (%i expands to the user instance name) for a
+# per-user service.
 cat > ~/.config/systemd/user/snp-sync.service << 'EOF'
 [Unit]
 Description=Snippet sync
 
 [Service]
 Type=oneshot
-ExecStart=/home/user/.local/bin/snp sync --non-interactive
+User=%i
+ExecStart=/home/%i/.local/bin/snp sync
 
 [Install]
 WantedBy=default.target
@@ -362,7 +366,7 @@ you're done:
 
 ```bash
 # Typical pet config location: ~/.config/pet/snippets.toml
-cp ~/.config/pet/snippets.toml ~/.config/snp/lippets.toml
+cp ~/.config/pet/snippets.toml ~/.config/snp/snippets.toml
 # (note: file is renamed, but the inner TOML is read as-is)
 ```
 
@@ -528,7 +532,7 @@ snp run --filter "deploy"
 snp clip --filter "ssh"
 
 # Sync programmatically
-snp sync --non-interactive
+snp sync
 ```
 
 ### Shell Integration
@@ -551,7 +555,7 @@ eval "$SNIPPET"
 1. Check server is running: `curl localhost:50050/health` or equivalent
 2. Verify API key: `cat ~/.config/snp/sync.toml`
 3. Check logs: `tail -f ~/.config/snp/logs/snp.log`
-4. Test connection: `snp sync --servers`
+4. Test connection: `snp sync --dry-run`
 
 ### TUI Rendering Issues
 

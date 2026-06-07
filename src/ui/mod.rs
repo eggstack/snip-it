@@ -117,7 +117,16 @@ fn commit_theme_picker(
     Ok(())
 }
 
-fn cancel_theme_picker(manager: &Option<theme::ThemeManager>) {
+fn cancel_theme_picker(manager: &Option<theme::ThemeManager>, original: Option<theme::Theme>) {
+    // Restore the in-memory theme that was active before the picker opened.
+    // We snapshot the actual `Theme` (not the persisted name) so cancellation
+    // works even when no theme has ever been saved to `themes.toml`.
+    if let Some(t) = original {
+        theme::set_active_theme(t);
+        return;
+    }
+    // Fallback: if the original was never captured (shouldn't happen in the
+    // real code path), try to restore from the persisted name.
     if let Some(mgr) = manager
         && let Some(name) = mgr.get_active_theme_name()
         && let Ok(t) = mgr.load_theme(&name)
@@ -199,6 +208,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut theme_active_idx: usize = 0;
     let mut theme_picker_manager: Option<theme::ThemeManager> = None;
     let mut theme_picker_list: Vec<theme::ThemeInfo> = Vec::new();
+    // Snapshot of the in-memory theme captured when the picker opens, so
+    // `cancel_theme_picker` can restore the user's previewed-from state
+    // unconditionally (even if no theme was ever persisted to `themes.toml`).
+    let mut theme_picker_original: Option<theme::Theme> = None;
     let mut pending_rehighlight = false;
     let mut last_theme_update: Option<std::time::Instant> = None;
     const THEME_DEBOUNCE_MS: u64 = 150;
@@ -237,13 +250,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             ) {
                 tracing::warn!("theme picker init failed: {e}");
                 theme_picker_mode = false;
-            } else if apply_theme_from_picker(
-                &theme_picker_manager,
-                &theme_picker_list,
-                &theme_filtered,
-                theme_active_idx,
-            ) {
-                pending_rehighlight = true;
+            } else {
+                // Snapshot the current in-memory theme so cancel can restore it
+                // even when no theme is persisted to `themes.toml`.
+                theme_picker_original = Some(theme::get_theme());
+                if apply_theme_from_picker(
+                    &theme_picker_manager,
+                    &theme_picker_list,
+                    &theme_filtered,
+                    theme_active_idx,
+                ) {
+                    pending_rehighlight = true;
+                }
             }
         }
 
@@ -948,13 +966,19 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         theme_input_text = theme_filter.clone();
                                     }
                                     KeyCode::Char('q') | KeyCode::Esc => {
-                                        cancel_theme_picker(&theme_picker_manager);
+                                        cancel_theme_picker(
+                                            &theme_picker_manager,
+                                            theme_picker_original,
+                                        );
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
                                         pending_rehighlight = true;
                                     }
                                     KeyCode::Char('e') => {
-                                        cancel_theme_picker(&theme_picker_manager);
+                                        cancel_theme_picker(
+                                            &theme_picker_manager,
+                                            theme_picker_original,
+                                        );
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
                                         pending_rehighlight = true;
@@ -1053,19 +1077,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
                             let idx = filtered[sel.selected].0;
-                            let cmd = strip_escape_sequences(&commands[idx]);
-                            match clipboard::copy_to_clipboard_auto(&cmd) {
-                                Ok(()) => {
-                                    should_copy = Some(descriptions[idx].clone());
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Clipboard copy failed: {}", e);
-                                    copied_message = Some((
-                                        format!("Copy failed: {e}"),
-                                        std::time::Instant::now(),
-                                    ));
-                                }
-                            }
+                            should_copy = Some(descriptions[idx].clone());
                             if !is_search {
                                 break;
                             }
@@ -1288,19 +1300,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 KeyCode::Char('y') => {
                                     if sel.selected < filtered.len() {
                                         let idx = filtered[sel.selected].0;
-                                        let cmd = strip_escape_sequences(&commands[idx]);
-                                        match clipboard::copy_to_clipboard_auto(&cmd) {
-                                            Ok(()) => {
-                                                should_copy = Some(descriptions[idx].clone());
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("Clipboard copy failed: {}", e);
-                                                copied_message = Some((
-                                                    format!("Copy failed: {e}"),
-                                                    std::time::Instant::now(),
-                                                ));
-                                            }
-                                        }
+                                        should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;
                                         }
@@ -1405,7 +1405,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         tracing::warn!("Failed to disable mouse capture: {}", e);
     }
     ratatui::restore();
-    Ok(if sel.selected < filtered.len() {
+    Ok(if !filtered.is_empty() && sel.selected < filtered.len() {
         Some((filtered[sel.selected].0, should_copy))
     } else {
         None

@@ -615,4 +615,15 @@ mod tests {
         let result = expand_command("<host>", &[("host".to_string(), "".to_string())]);
         assert_eq!(result, "");
     }
+
+    #[test]
+    fn test_expand_escaped_closing_bracket_inside_var_silently_drops_backslash() {
+        // Quirk: `<x\>foo` — the `\>` is treated as an escape sequence inside
+        // the variable body, so the `>` ends up terminating the variable and
+        // the backslash is silently dropped. The result is `<x>foo`. The
+        // `foo` becomes a separate literal (no closing `>`), so it stays as
+        // plain text. Documenting the current behavior here.
+        let result = expand_command(r"<x\>foo", &[]);
+        assert_eq!(result, "<x>foo");
+    }
 }

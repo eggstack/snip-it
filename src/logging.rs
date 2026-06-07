@@ -299,6 +299,10 @@ pub fn setup_panic_handler() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Best-effort: explicitly disable mouse capture before restoring
+            // the terminal, since some terminals leave the mouse in a weird
+            // state if `ratatui::restore()` runs alone.
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
             ratatui::restore();
         }));
 

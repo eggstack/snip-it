@@ -121,5 +121,5 @@ Unix signals (`SIGINT`, `SIGTERM`) restore terminal state before exit.
 
 ## Known Edge Cases
 
-- Unmatched `<` without `>` creates a phantom variable and drops the `<` character
+- Unmatched `<` without `>` is treated as a literal `<` in the output (no variable substitution, character preserved).
 - Long command strings may not wrap correctly in constrained terminal widths

@@ -44,6 +44,10 @@ desktop.ini
 # snip-sync server binary
 snip-sync/snip-sync
 
+# Per-subcrate Cargo.lock files (workspace root Cargo.lock is the source of truth)
+/snip-proto/Cargo.lock
+/snip-sync/Cargo.lock
+
 # Coverage reports
 lcov.info
 coverage/

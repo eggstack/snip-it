@@ -470,8 +470,12 @@ fn test_cron_output() {
         "Expected crontab entry header: {stdout}"
     );
     assert!(
-        stdout.contains("sync --non-interactive"),
+        stdout.contains(" sync\n") || stdout.contains(" sync\r\n") || stdout.ends_with(" sync"),
         "Expected sync command: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--non-interactive"),
+        "Cron entry should not contain removed --non-interactive flag: {stdout}"
     );
 }
 
