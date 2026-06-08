@@ -251,6 +251,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 tracing::warn!("theme picker init failed: {e}");
                 theme_picker_mode = false;
                 theme_picker_insert_mode = false;
+                theme_filter.clear();
+                theme_input_text.clear();
+                theme_dirty = false;
             } else {
                 // Snapshot the current in-memory theme so cancel can restore it
                 // even when no theme is persisted to `themes.toml`.
@@ -956,6 +959,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         }
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
+                                        theme_filter.clear();
+                                        theme_input_text.clear();
+                                        theme_dirty = false;
                                         pending_rehighlight = true;
                                     }
                                     _ => {}
@@ -973,6 +979,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         );
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
+                                        theme_filter.clear();
+                                        theme_input_text.clear();
+                                        theme_dirty = false;
                                         pending_rehighlight = true;
                                     }
                                     KeyCode::Char('e') => {
@@ -982,6 +991,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         );
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
+                                        theme_filter.clear();
+                                        theme_input_text.clear();
+                                        theme_dirty = false;
                                         pending_rehighlight = true;
                                     }
                                     KeyCode::Enter => {
@@ -995,6 +1007,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         }
                                         theme_picker_mode = false;
                                         theme_picker_insert_mode = false;
+                                        theme_filter.clear();
+                                        theme_input_text.clear();
+                                        theme_dirty = false;
                                         pending_rehighlight = true;
                                     }
                                     KeyCode::Char('j') | KeyCode::Down

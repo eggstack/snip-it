@@ -24,6 +24,8 @@ struct CachedToml {
     content: String,
 }
 
+const MAX_TOML_CACHE_SIZE: usize = 100;
+
 static TOML_CACHE: LazyLock<Mutex<HashMap<String, CachedToml>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -90,6 +92,18 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     {
         return Ok(entry.content.clone());
     }
+
+    if cache.len() >= MAX_TOML_CACHE_SIZE {
+        let keys_to_remove: Vec<_> = cache
+            .keys()
+            .take(MAX_TOML_CACHE_SIZE / 2)
+            .cloned()
+            .collect();
+        for key in keys_to_remove {
+            cache.remove(&key);
+        }
+    }
+
     cache.insert(
         key,
         CachedToml {
