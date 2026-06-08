@@ -123,24 +123,40 @@ impl RateLimiter {
             return;
         }
 
-        let windows = self.windows.lock().await;
+        // Snapshot data under the lock, then release before doing DB I/O.
+        let snapshot: Vec<(String, u64, usize)> = {
+            let windows = self.windows.lock().await;
+            windows
+                .iter()
+                .filter(|(_, entry)| entry.count > 0)
+                .map(|(k, e)| (k.clone(), e.window_start, e.count))
+                .collect()
+        };
+        // Lock released — allow() calls can proceed during DB writes.
 
-        for (key, entry) in windows.iter() {
-            if entry.count == 0 {
-                continue;
-            }
+        let now = now_secs();
+        for (key, window_start, count) in &snapshot {
             if let Err(e) = sqlx::query(
                 "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)
                  ON CONFLICT(peer_ip) DO UPDATE SET window_start = excluded.window_start, request_count = excluded.request_count",
             )
             .bind(key)
-            .bind(entry.window_start as i64)
-            .bind(entry.count as i64)
+            .bind(*window_start as i64)
+            .bind(*count as i64)
             .execute(pool)
             .await
             {
                 tracing::warn!("Failed to save rate limit entry for {}: {}", key, e);
             }
+        }
+
+        // Prune expired entries from the database to prevent unbounded growth.
+        if let Err(e) = sqlx::query("DELETE FROM rate_limits WHERE ? - window_start > 120")
+            .bind(now as i64)
+            .execute(pool)
+            .await
+        {
+            tracing::warn!("Failed to prune expired rate limit entries: {}", e);
         }
     }
 

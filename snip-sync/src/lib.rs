@@ -1106,10 +1106,17 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
-        // Prevent deleting default library
+        // Prevent deleting default library — resolve the actual UUID, not
+        // the literal string "default" which is just the library name.
         if req.library_id.is_empty() || req.library_id == "default" {
             self.record_request_duration("delete_library", start);
             return Err(Status::invalid_argument("Cannot delete default library"));
+        }
+        if let Ok(default_id) = self.db.get_default_library(&user_id).await {
+            if req.library_id == default_id {
+                self.record_request_duration("delete_library", start);
+                return Err(Status::invalid_argument("Cannot delete default library"));
+            }
         }
 
         let result = match self.db.delete_library(&user_id, &req.library_id).await {

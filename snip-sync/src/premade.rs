@@ -50,6 +50,9 @@ fn fix_invalid_toml_escapes(toml_str: &str) -> String {
                     if ch == '\\' {
                         result.push('\\');
                         result.push('\\');
+                    } else if ch == '"' {
+                        result.push('\\');
+                        result.push('"');
                     } else {
                         result.push(ch);
                     }
