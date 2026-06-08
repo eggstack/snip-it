@@ -315,6 +315,10 @@ pub fn setup_panic_handler() {
 
         log_panic_info(panic_info);
 
+        // Flush the audit log before the process exits. The 100ms sleep in
+        // shutdown_logging gives the writer thread time to process the panic event.
+        shutdown_logging();
+
         let (location, message) = extract_panic_info(panic_info);
 
         eprintln!("PANIC at {location}: {message}");
