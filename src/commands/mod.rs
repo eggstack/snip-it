@@ -37,8 +37,16 @@ pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
 
     match config {
         Some(path) => {
-            if path.exists() {
+            if path.is_file() {
                 Ok(path.clone())
+            } else if path.exists() {
+                Err(SnipError::runtime_error(
+                    "Config path is not a file",
+                    Some(&format!(
+                        "'{}' exists but is not a regular file",
+                        path.display()
+                    )),
+                ))
             } else {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)

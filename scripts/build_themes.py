@@ -130,6 +130,7 @@ def generate_rust(themes: list[Path]) -> str:
     # during a particular build (e.g. tests vs. release).
     lines.append("#![allow(dead_code, unused_imports)]")
     lines.append("")
+    lines.append("use crate::error::SnipResult;")
     lines.append("use base64::Engine as _;")
     lines.append("")
     lines.append(
@@ -198,29 +199,42 @@ def generate_rust(themes: list[Path]) -> str:
         "/// ~50 KiB of LZMA data."
     )
     lines.append(
-        "pub fn bundled_themes_decoded() -> std::vec::Vec<(String, String)> {"
+        "pub fn bundled_themes_decoded() -> SnipResult<std::vec::Vec<(String, String)>> {"
     )
     lines.append("    BUNDLED")
     lines.append("        .iter()")
     lines.append("        .map(|b| {")
     lines.append("            let compressed = base64::engine::general_purpose::STANDARD")
     lines.append("                .decode(b.payload_b64)")
-    lines.append('                .expect("bundled theme: invalid base64");')
+    lines.append("                .map_err(|_| {")
+    lines.append(
+        '                    crate::SnipError::runtime_error("bundled theme: invalid base64", None)'
+    )
+    lines.append("                })?;")
     lines.append("            let mut toml_bytes = std::vec::Vec::new();")
     lines.append("            lzma_rs::xz_decompress(")
     lines.append("                &mut compressed.as_slice(),")
     lines.append("                &mut toml_bytes,")
-    lines.append('            )')
-    lines.append('            .expect("bundled theme: invalid xz stream");')
+    lines.append("            )")
+    lines.append("            .map_err(|_| {")
     lines.append(
-        "            let toml_text = String::from_utf8(toml_bytes)"
+        '                crate::SnipError::runtime_error("bundled theme: invalid xz stream", None)'
+    )
+    lines.append("            })?;")
+    lines.append(
+        "            let toml_text = String::from_utf8(toml_bytes).map_err(|_| {"
     )
     lines.append(
-        '                .expect("bundled theme: non-utf-8 toml");'
+        '                crate::SnipError::runtime_error("bundled theme: non-utf-8 toml", None)'
     )
-    lines.append("            (b.name.to_string(), toml_text)")
+    lines.append("            })?;")
+    lines.append(
+        "            Ok::<(String, String), crate::SnipError>((b.name.to_string(), toml_text))"
+    )
     lines.append("        })")
-    lines.append("        .collect()")
+    lines.append(
+        "        .collect::<Result<Vec<(String, String)>, crate::SnipError>>()"
+    )
     lines.append("}")
     lines.append("")
     return "\n".join(lines)
