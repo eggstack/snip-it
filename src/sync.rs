@@ -20,9 +20,12 @@ use crate::proto::{
     CreateLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library, ListLibrariesRequest,
     ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
 };
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tonic::Code;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
+
+static JITTER_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const DEFAULT_MAX_RETRIES: u32 = 3; // Total attempts: 1 initial + 3 retries = 4
 const DEFAULT_INITIAL_DELAY_MS: u64 = 100; // Initial backoff before first retry
@@ -81,18 +84,14 @@ macro_rules! retry_grpc {
                     {
                         break Err(SnipError::runtime_error($name, Some(&e.to_string())));
                     }
-                    // Add jitter: random value in [0.5, 1.5) × delay_ms to avoid
-                    // thundering-herd when multiple clients retry simultaneously.
-                    // We use the low 32 bits of the current time as a cheap
-                    // pseudo-random source — jitter does not need cryptographic
-                    // randomness and the OS clock provides enough variation to
-                    // de-correlate retries.
                     let jitter_ms = {
+                        let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
                         let nanos = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.subsec_nanos())
                             .unwrap_or(0);
-                        0.5 + ((nanos as u64 % 1000) as f64 / 1000.0)
+                        let combined = nanos.wrapping_add(counter.wrapping_mul(31));
+                        0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
                     };
                     let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
                     tracing::warn!(
@@ -179,20 +178,30 @@ impl SyncClient {
 
         let mut request = SyncRequest {
             api_key: String::new(), // Auth via gRPC metadata, not body
-            local_snippets: encrypted_snippets,
+            local_snippets: Vec::new(),
             last_sync_timestamp: last_sync,
             library_id: library_id.to_string(),
             limit: self.settings.sync_limit_value(),
             offset: 0,
         };
 
+        let local_snippets_for_push = encrypted_snippets.clone();
+        let encrypt_failed_count = encrypt_failed_ids.len();
         let mut all_server_snippets = Vec::new();
         let mut all_skipped_ids = encrypt_failed_ids;
         let mut final_timestamp;
         let mut final_message;
         let mut final_total_count;
+        let mut offset = 0;
 
         loop {
+            if offset == 0 {
+                request.local_snippets = local_snippets_for_push.clone();
+            } else {
+                request.local_snippets.clear();
+            }
+            request.offset = offset;
+
             let mut response = self.sync_with_retry(request.clone(), &api_key).await?;
 
             // Decrypt server snippets from this page
@@ -214,16 +223,16 @@ impl SyncClient {
                 break;
             }
 
-            // Prepare next page request — don't re-send local snippets
-            request.local_snippets.clear();
-            request.offset = request
-                .offset
-                .saturating_add(response.snippets.len() as i32);
+            offset = offset.saturating_add(response.snippets.len() as i32);
         }
 
         let total_skipped = all_skipped_ids.len();
+        let all_skipped_local = encrypt_failed_count > 0 && encrypted_snippets.is_empty();
+        let all_skipped_server = all_server_snippets.is_empty() && !all_skipped_ids.is_empty();
+        let overall_success = !(all_skipped_local || all_skipped_server);
+
         Ok(crate::proto::SyncResponse {
-            success: true,
+            success: overall_success,
             message: final_message,
             snippets: all_server_snippets,
             server_timestamp: final_timestamp,
@@ -267,6 +276,7 @@ impl SyncClient {
                             Some(&e.to_string()),
                         ));
                     }
+                    let is_rate_limited = e.code() == Code::ResourceExhausted;
                     tracing::warn!(
                         "Sync request failed (attempt {}/{}): {}. Retrying in {}ms...",
                         attempt + 1,
@@ -274,18 +284,24 @@ impl SyncClient {
                         e,
                         delay_ms
                     );
-                    // Add jitter: random value in [0.5, 1.5) × delay_ms.
-                    // Same cheap pseudo-random source as in the macro path.
                     let jitter_ms = {
+                        let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
                         let nanos = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.subsec_nanos())
                             .unwrap_or(0);
-                        0.5 + ((nanos as u64 % 1000) as f64 / 1000.0)
+                        let combined = nanos.wrapping_add(counter.wrapping_mul(31));
+                        0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
                     };
                     let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
                     tokio::time::sleep(Duration::from_millis(actual_delay)).await;
-                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
+                    let backoff_multiplier = if is_rate_limited { 4.0 } else { 2.0 };
+                    let max_delay = if is_rate_limited {
+                        120_000u64
+                    } else {
+                        config.max_delay_ms
+                    };
+                    delay_ms = ((delay_ms as f64 * backoff_multiplier) as u64).min(max_delay);
                     attempt += 1;
                 }
             }
@@ -595,6 +611,7 @@ mod tests {
             tonic::Status::internal("test"),
             tonic::Status::unavailable("test"),
             tonic::Status::deadline_exceeded("test"),
+            tonic::Status::resource_exhausted("rate limited"), // 429 - should be retryable
         ];
         for status in &retryable {
             assert!(

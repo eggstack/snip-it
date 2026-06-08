@@ -10,6 +10,7 @@ use crate::library::{self, Snippet, Snippets};
 use crate::proto::Snippet as ProtoSnippet;
 use crate::sync;
 use std::fs;
+use std::path::Path;
 
 /// Handles "Library not found" recovery by re-creating the server library
 /// and retrying the sync operation.
@@ -26,6 +27,20 @@ fn handle_library_not_found(
 ) {
     tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
     let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+
+    let recovery_marker = lib_path
+        .parent()
+        .unwrap()
+        .join(format!("{lib_name}.sync_recovery"));
+    let marker_content = format!(
+        r#"{{"library":"{}","attempted_at":"{}"}}"#,
+        lib_name,
+        chrono::Utc::now().to_rfc3339()
+    );
+    if let Err(e) = fs::write(&recovery_marker, &marker_content) {
+        tracing::warn!(library = %lib_name, error = %e, "Failed to write recovery marker");
+    }
+
     match runtime.block_on(client.create_library(&normalized_name)) {
         Ok(server_lib) => {
             if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
@@ -57,6 +72,11 @@ fn handle_library_not_found(
                                 mgr.update_last_sync(lib_name, retry_response.server_timestamp)
                             {
                                 tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                            }
+                            if recovery_marker.exists() {
+                                if let Err(e) = fs::remove_file(&recovery_marker) {
+                                    tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
+                                }
                             }
                             status.pulled += server_snippets.len() as u32;
                             results.push((
@@ -91,6 +111,27 @@ fn handle_library_not_found(
             ));
         }
     }
+}
+
+fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
+    let Ok(entries) = fs::read_dir(libraries_dir) else {
+        return Ok(());
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "sync_recovery") {
+            let Some(stem) = path.file_stem() else {
+                continue;
+            };
+            let lib_name = stem.to_string_lossy();
+            tracing::info!(library = %lib_name, "Found incomplete recovery marker, will retry on next sync");
+            if let Err(e) = fs::remove_file(&path) {
+                tracing::warn!(library = %lib_name, error = %e, "Failed to remove stale recovery marker");
+            }
+        }
+    }
+    Ok(())
 }
 
 impl From<&Snippet> for ProtoSnippet {
@@ -366,6 +407,10 @@ pub fn run_sync(
         ));
     }
 
+    if let Err(e) = check_and_complete_recovery_markers(mgr.get_libraries_dir()) {
+        tracing::warn!("Recovery marker check failed: {}", e);
+    }
+
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
         vec![name.to_string()]
     } else {
@@ -464,31 +509,13 @@ pub fn run_sync(
             continue;
         }
 
-        let mut snippets = match library::load_library(&lib_path) {
+        let snippets = match library::load_library(&lib_path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(library = %lib_name, error = %e, "Failed to load library");
                 continue;
             }
         };
-
-        let mut snippets_needing_ids: Vec<usize> = Vec::new();
-        let now = chrono::Utc::now().timestamp();
-
-        for (idx, s) in snippets.snippets.iter_mut().enumerate() {
-            if s.id.is_empty() {
-                s.id = uuid::Uuid::new_v4().to_string();
-                s.created_at = now;
-                s.updated_at = now;
-                snippets_needing_ids.push(idx);
-            }
-        }
-
-        if !snippets_needing_ids.is_empty()
-            && let Err(e) = library::save_library(&lib_path, &snippets)
-        {
-            tracing::warn!(library = %lib_name, error = %e, "Failed to save generated IDs");
-        }
 
         if direction == SyncDirection::Push || direction == SyncDirection::Bidirectional {
             let local_snippets: Vec<ProtoSnippet> = snippets

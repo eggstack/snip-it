@@ -487,7 +487,7 @@ impl ThemeManager {
             super::_generated_bundled_themes::DEFAULT_BUNDLED,
         )?;
 
-        for (name, toml_text) in super::_generated_bundled_themes::bundled_themes_decoded() {
+        for (name, toml_text) in super::_generated_bundled_themes::bundled_themes_decoded()? {
             write_theme_if_missing(&self.themes_dir, &name, &toml_text)?;
         }
         Ok(())

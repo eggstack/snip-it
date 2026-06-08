@@ -1429,7 +1429,7 @@ mod tests {
     #[test]
     fn bundled_themes_decoder_roundtrip() {
         use super::_generated_bundled_themes::bundled_themes_decoded;
-        let decoded = bundled_themes_decoded();
+        let decoded = bundled_themes_decoded().unwrap();
         assert!(
             decoded.len() >= 40,
             "expected ~50 bundled themes, got {}",

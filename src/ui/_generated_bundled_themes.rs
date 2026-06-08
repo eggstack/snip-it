@@ -12,6 +12,7 @@
 
 #![allow(dead_code, unused_imports)]
 
+use crate::error::SnipResult;
 use base64::Engine as _;
 
 /// Uncompressed hardcoded fallback theme. Embedded as a Rust raw
@@ -275,18 +276,23 @@ pub const BUNDLED: &[BundledTheme] = &[
 /// Intended for the one-time `ThemeManager::init_themes_dir`
 /// extraction. Do not call in hot paths — each call decodes
 /// ~50 KiB of LZMA data.
-pub fn bundled_themes_decoded() -> std::vec::Vec<(String, String)> {
+pub fn bundled_themes_decoded() -> SnipResult<std::vec::Vec<(String, String)>> {
     BUNDLED
         .iter()
         .map(|b| {
             let compressed = base64::engine::general_purpose::STANDARD
                 .decode(b.payload_b64)
-                .expect("bundled theme: invalid base64");
+                .map_err(|_| {
+                    crate::SnipError::runtime_error("bundled theme: invalid base64", None)
+                })?;
             let mut toml_bytes = std::vec::Vec::new();
-            lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes)
-                .expect("bundled theme: invalid xz stream");
-            let toml_text = String::from_utf8(toml_bytes).expect("bundled theme: non-utf-8 toml");
-            (b.name.to_string(), toml_text)
+            lzma_rs::xz_decompress(&mut compressed.as_slice(), &mut toml_bytes).map_err(|_| {
+                crate::SnipError::runtime_error("bundled theme: invalid xz stream", None)
+            })?;
+            let toml_text = String::from_utf8(toml_bytes).map_err(|_| {
+                crate::SnipError::runtime_error("bundled theme: non-utf-8 toml", None)
+            })?;
+            Ok::<(String, String), crate::SnipError>((b.name.to_string(), toml_text))
         })
-        .collect()
+        .collect::<Result<Vec<(String, String)>, crate::SnipError>>()
 }
