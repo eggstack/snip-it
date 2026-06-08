@@ -7,6 +7,10 @@ use tokio::sync::Mutex;
 /// from requests with many distinct API keys.
 const MAX_ENTRIES: usize = 100_000;
 
+/// Rate limiter window duration in seconds. Matches the "per minute" semantics
+/// of the `rate_limit_per_minute` config field.
+const WINDOW_SECS: u64 = 60;
+
 #[derive(Clone)]
 struct WindowEntry {
     window_start: u64,
@@ -50,10 +54,10 @@ impl RateLimiter {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(60)) => {
+                    _ = tokio::time::sleep(Duration::from_secs(WINDOW_SECS)) => {
                         let mut windows = windows_clone.lock().await;
                         let now = now_secs();
-                        windows.retain(|_, entry| now.saturating_sub(entry.window_start) < 60);
+                        windows.retain(|_, entry| now.saturating_sub(entry.window_start) < WINDOW_SECS);
                     }
                     _ = &mut shutdown_rx => {
                         tracing::debug!("Rate limiter cleanup task shutting down");
@@ -98,7 +102,7 @@ impl RateLimiter {
 
         for (peer_ip, window_start, request_count) in rows {
             let ws = window_start as u64;
-            if now.saturating_sub(ws) >= 60 {
+            if now.saturating_sub(ws) >= WINDOW_SECS {
                 continue;
             }
             windows.insert(
@@ -151,8 +155,9 @@ impl RateLimiter {
         }
 
         // Prune expired entries from the database to prevent unbounded growth.
-        if let Err(e) = sqlx::query("DELETE FROM rate_limits WHERE ? - window_start > 120")
+        if let Err(e) = sqlx::query("DELETE FROM rate_limits WHERE ? - window_start > ?")
             .bind(now as i64)
+            .bind((WINDOW_SECS * 2) as i64)
             .execute(pool)
             .await
         {

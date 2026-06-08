@@ -268,7 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_handle = tokio::spawn(async move {
         let server = tonic::transport::Server::builder()
             .timeout(timeout)
-            .max_frame_size(grpc_max_message_size as u32)
+            .max_frame_size(grpc_max_message_size)
             .add_service(SnippetSyncServer::new(grpc_service))
             .serve(grpc_addr);
 

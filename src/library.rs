@@ -657,6 +657,7 @@ Snippets = []
         }
 
         let tmp_path = parent_dir.join(format!("libraries.{}.tmp", uuid::Uuid::new_v4()));
+        let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
 
         #[cfg(unix)]
         {
@@ -677,10 +678,9 @@ Snippets = []
                 .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
         }
 
-        std::fs::rename(&tmp_path, &config_path).map_err(|e| {
-            let _ = fs::remove_file(&tmp_path);
-            SnipError::io_error("atomic rename config", config_path.clone(), e)
-        })?;
+        std::fs::rename(&tmp_path, &config_path)
+            .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
+        guard.persist();
 
         Ok(())
     }
@@ -774,6 +774,7 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
             .unwrap_or("snippets"),
         uuid::Uuid::new_v4()
     ));
+    let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
 
     #[cfg(unix)]
     {
@@ -794,10 +795,9 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
             .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
     }
 
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        SnipError::io_error("atomic rename snippets file", path, e)
-    })?;
+    fs::rename(&tmp_path, path)
+        .map_err(|e| SnipError::io_error("atomic rename snippets file", path, e))?;
+    guard.persist();
 
     invalidate_toml_cache(path);
 

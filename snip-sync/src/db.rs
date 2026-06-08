@@ -21,6 +21,10 @@ pub enum DbError {
     NotFound(String),
     #[error("Conflict: {0}")]
     Conflict(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -54,21 +58,21 @@ pub struct Database {
 fn hash_api_key(api_key: &str) -> DbResult<String> {
     let mut salt_bytes = [0u8; 16];
     getrandom::getrandom(&mut salt_bytes)
-        .map_err(|e| DbError::Conflict(format!("Failed to generate salt: {}", e)))?;
+        .map_err(|e| DbError::Internal(format!("Failed to generate salt: {}", e)))?;
     let salt_b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(salt_bytes);
     let salt = SaltString::from_b64(&salt_b64)
-        .map_err(|e| DbError::Conflict(format!("Failed to create salt: {}", e)))?;
+        .map_err(|e| DbError::Internal(format!("Failed to create salt: {}", e)))?;
     let params = Params::new(
         ARGON2_MEMORY_KIB,
         ARGON2_ITERATIONS,
         ARGON2_PARALLELISM,
         None,
     )
-    .map_err(|e| DbError::Conflict(format!("Invalid Argon2 params: {}", e)))?;
+    .map_err(|e| DbError::Internal(format!("Invalid Argon2 params: {}", e)))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let hash = argon2
         .hash_password(api_key.as_bytes(), &salt)
-        .map_err(|e| DbError::Conflict(format!("Failed to hash API key: {}", e)))?
+        .map_err(|e| DbError::Internal(format!("Failed to hash API key: {}", e)))?
         .to_string();
     Ok(hash)
 }
@@ -279,13 +283,13 @@ impl Database {
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
         {
-            return Err(DbError::Conflict(
+            return Err(DbError::Validation(
                 "Invalid library name. Use only letters, numbers, dash, and underscore."
                     .to_string(),
             ));
         }
         if name.is_empty() || name.len() > 64 {
-            return Err(DbError::Conflict(
+            return Err(DbError::Validation(
                 "Library name must be 1-64 characters".to_string(),
             ));
         }

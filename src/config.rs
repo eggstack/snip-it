@@ -343,6 +343,7 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
         path.file_stem().and_then(|s| s.to_str()).unwrap_or("sync"),
         uuid::Uuid::new_v4()
     ));
+    let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
 
     #[cfg(unix)]
     {
@@ -369,10 +370,9 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
             .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
     }
 
-    fs::rename(&tmp_path, &path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        SnipError::io_error("atomic rename sync config", path.clone(), e)
-    })?;
+    fs::rename(&tmp_path, &path)
+        .map_err(|e| SnipError::io_error("atomic rename sync config", path.clone(), e))?;
+    guard.persist();
 
     invalidate_toml_cache(&path);
     crate::clipboard::invalidate_clipboard_settings_cache();

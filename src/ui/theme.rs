@@ -572,6 +572,7 @@ impl ThemeManager {
                 .unwrap_or("themes"),
             uuid::Uuid::new_v4()
         ));
+        let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
 
         #[cfg(unix)]
         {
@@ -592,9 +593,9 @@ impl ThemeManager {
         }
 
         fs::rename(&tmp_path, &self.config_path).map_err(|e| {
-            let _ = fs::remove_file(&tmp_path);
             SnipError::io_error("rename themes config", self.config_path.clone(), e)
         })?;
+        guard.persist();
         Ok(())
     }
 }

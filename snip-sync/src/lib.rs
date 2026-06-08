@@ -80,7 +80,7 @@ pub const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
-pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
+pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: u32 = 4 * 1024 * 1024; // 4 MiB
 pub const MAX_REQUEST_LIMIT: i32 = 1000;
 
 #[derive(Deserialize, Default)]
@@ -123,7 +123,7 @@ pub struct LimitsConfig {
     pub max_device_id_length: Option<usize>,
     pub max_api_key_length: Option<usize>,
     pub request_timeout_secs: Option<u64>,
-    pub grpc_max_message_size: Option<usize>,
+    pub grpc_max_message_size: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -161,7 +161,7 @@ pub struct Config {
     pub max_device_id_length: usize,
     pub max_api_key_length: usize,
     pub request_timeout_secs: u64,
-    pub grpc_max_message_size: usize,
+    pub grpc_max_message_size: u32,
     pub rate_limit_per_minute: u32,
     pub trusted_proxies: Vec<String>,
     pub persist_rate_limits: bool,
@@ -518,6 +518,10 @@ impl SnipSyncService {
                 "Command exceeds maximum length of {} bytes",
                 self.config.max_command_length
             )));
+        }
+
+        if snippet.command.trim().is_empty() {
+            return Err(Status::invalid_argument("Snippet command is required"));
         }
 
         if snippet.description.len() > self.config.max_description_length {
@@ -1091,9 +1095,18 @@ impl SnippetSync for SnipSyncService {
                 self.record_request_duration("create_library", start);
                 Err(Status::already_exists(msg))
             }
+            Err(db::DbError::Validation(msg)) => {
+                self.record_request_duration("create_library", start);
+                Err(Status::invalid_argument(msg))
+            }
             Err(db::DbError::NotFound(msg)) => {
                 self.record_request_duration("create_library", start);
                 Err(Status::invalid_argument(msg))
+            }
+            Err(db::DbError::Internal(msg)) => {
+                tracing::error!("Internal error creating library: {}", msg);
+                self.record_request_duration("create_library", start);
+                Err(Status::internal("Internal error"))
             }
             Err(db::DbError::Database(e)) => {
                 tracing::error!("Database error creating library: {}", e);
@@ -1196,6 +1209,11 @@ impl SnippetSync for SnipSyncService {
             }
             Err(db::DbError::NotFound(msg)) => Err(Status::not_found(msg)),
             Err(db::DbError::Conflict(msg)) => Err(Status::failed_precondition(msg)),
+            Err(db::DbError::Validation(msg)) => Err(Status::invalid_argument(msg)),
+            Err(db::DbError::Internal(msg)) => {
+                tracing::error!("Internal error deleting library: {}", msg);
+                Err(Status::internal("Internal error"))
+            }
             Err(db::DbError::Database(e)) => {
                 tracing::error!("Failed to delete library: {}", e);
                 Err(Status::internal("Internal error"))

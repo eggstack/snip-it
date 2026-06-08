@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod shell_keywords;
+pub mod tempfile_guard;
 pub mod toml_helpers;
 pub mod variables;
 
