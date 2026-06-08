@@ -236,8 +236,13 @@ impl PremadeManager {
     pub fn get(&self, filename: &str) -> Result<String, Status> {
         let path = self.dir.join(format!("{}.toml", filename));
 
-        let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let canonical_dir = self
+            .dir
+            .canonicalize()
+            .map_err(|_| Status::internal("failed to canonicalize premade directory"))?;
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|_| Status::invalid_argument("Invalid filename: cannot canonicalize path"))?;
 
         if !canonical_path.starts_with(&canonical_dir) {
             return Err(Status::invalid_argument(
@@ -299,7 +304,8 @@ Description = "Say hello"
         let result = manager.get("../../etc/passwd");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.message().contains("path traversal"));
+        // When canonicalize fails, we reject for safety (can't verify path is safe)
+        assert!(err.message().contains("cannot canonicalize"));
     }
 
     #[test]
