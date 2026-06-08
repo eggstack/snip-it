@@ -27,7 +27,9 @@ use aes_gcm::{
 };
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use crc32fast::Hasher as Crc32Hasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{LazyLock, Mutex};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -43,9 +45,19 @@ const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU 
 /// + string keys + HashMap overhead), so 10K entries ≈ 1 MB.
 const MAX_KEY_CACHE_SIZE: usize = 10_000;
 
+/// Fast non-cryptographic hash for API key cache keys.
+///
+/// Not used for security — only for cache lookup efficiency and avoiding
+/// plaintext API key storage in process memory.
+fn hash_api_key(api_key: &str) -> String {
+    let mut hasher = Crc32Hasher::new();
+    api_key.hash(&mut hasher);
+    format!("{:08x}", hasher.finish())
+}
+
 /// Session-local cache for derived keys to avoid re-running Argon2id
 /// for the same (api_key, salt) pair during a sync operation.
-/// Key: (api_key, base64(salt)), Value: derived key bytes
+/// Key: (hashed_api_key, base64(salt)), Value: derived key bytes
 static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), [u8; 32]>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -136,7 +148,7 @@ impl EncryptedPayload {
 
 fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
     let salt_b64 = BASE64.encode(salt);
-    let cache_key = (api_key.to_string(), salt_b64);
+    let cache_key = (hash_api_key(api_key), salt_b64);
 
     // Check cache first
     {

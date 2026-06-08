@@ -105,19 +105,20 @@ fn extract_variable_tokens(command: &str) -> Vec<(String, Option<String>)> {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
+                    if let Some(c) = chars.next() {
+                        var_content.push(c);
+                    }
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
-                } else {
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
+                    if let Some(c) = chars.next() {
+                        var_content.push(c);
+                    }
+                } else if let Some(c) = chars.next() {
+                    var_content.push(c);
                 }
             }
 
@@ -261,19 +262,20 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                     }
                 } else if next == '<' {
                     depth += 1;
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
+                    if let Some(c) = chars.next() {
+                        var_content.push(c);
+                    }
                 } else if next == '>' {
                     depth -= 1;
                     if depth == 0 {
                         chars.next();
                         break;
                     }
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
-                } else {
-                    // peek() confirmed Some above
-                    var_content.push(chars.next().unwrap());
+                    if let Some(c) = chars.next() {
+                        var_content.push(c);
+                    }
+                } else if let Some(c) = chars.next() {
+                    var_content.push(c);
                 }
             }
 

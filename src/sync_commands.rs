@@ -31,9 +31,9 @@ fn handle_library_not_found(
     let Some(recovery_dir) = lib_path.parent() else {
         tracing::error!(library = %lib_name, "Cannot create recovery marker: path has no parent");
         // Continue without recovery marker - sync will still work
-        runtime
-            .block_on(client.create_library(&normalized_name))
-            .ok();
+        if let Err(e) = runtime.block_on(client.create_library(&normalized_name)) {
+            tracing::warn!(library = %lib_name, error = %e, "Failed to re-create library on server");
+        }
         return;
     };
     let recovery_marker = recovery_dir.join(format!("{lib_name}.sync_recovery"));
@@ -119,8 +119,12 @@ fn handle_library_not_found(
 }
 
 fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
-    let Ok(entries) = fs::read_dir(libraries_dir) else {
-        return Ok(());
+    let entries = match fs::read_dir(libraries_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %libraries_dir.display(), "Failed to read libraries directory for recovery marker check");
+            return Ok(());
+        }
     };
 
     for entry in entries.filter_map(|e| e.ok()) {
@@ -228,59 +232,65 @@ pub fn run_premade_sync(
         }
     };
 
-    if let Ok(libs) = runtime.block_on(client.list_premade_libraries()) {
-        if libs.is_empty() {
+    let libs = match runtime.block_on(client.list_premade_libraries()) {
+        Ok(libs) => libs,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list premade libraries");
             return Ok(());
         }
+    };
 
-        let mgr = match library::LibraryManager::new() {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(SnipError::runtime_error(
-                    "Failed to initialize library manager",
-                    Some(&e.to_string()),
-                ));
-            }
-        };
+    if libs.is_empty() {
+        return Ok(());
+    }
 
-        let mut premade_results: Vec<(String, bool, String)> = Vec::new();
+    let mgr = match library::LibraryManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(SnipError::runtime_error(
+                "Failed to initialize library manager",
+                Some(&e.to_string()),
+            ));
+        }
+    };
 
-        for lib in libs {
-            if mgr.premade_exists(&lib.filename) {
-                continue;
-            }
+    let mut premade_results: Vec<(String, bool, String)> = Vec::new();
 
-            match runtime.block_on(client.get_premade_library(&lib.filename)) {
-                Ok(content) => match mgr.save_premade_library(&lib.filename, &content) {
-                    Ok(path) => {
-                        premade_results.push((lib.filename, true, path.display().to_string()));
-                    }
-                    Err(e) => {
-                        premade_results.push((lib.filename, false, e.to_string()));
-                    }
-                },
+    for lib in libs {
+        if mgr.premade_exists(&lib.filename) {
+            continue;
+        }
+
+        match runtime.block_on(client.get_premade_library(&lib.filename)) {
+            Ok(content) => match mgr.save_premade_library(&lib.filename, &content) {
+                Ok(path) => {
+                    premade_results.push((lib.filename, true, path.display().to_string()));
+                }
                 Err(e) => {
                     premade_results.push((lib.filename, false, e.to_string()));
                 }
+            },
+            Err(e) => {
+                premade_results.push((lib.filename, false, e.to_string()));
+            }
+        }
+    }
+
+    if !premade_results.is_empty() {
+        println!("\nPremade libraries:");
+        for (name, success, msg) in &premade_results {
+            if *success {
+                println!("  + {name} → {msg}");
+            } else {
+                println!("  ✗ {name}: {msg}");
             }
         }
 
-        if !premade_results.is_empty() {
-            println!("\nPremade libraries:");
-            for (name, success, msg) in &premade_results {
-                if *success {
-                    println!("  + {name} → {msg}");
-                } else {
-                    println!("  ✗ {name}: {msg}");
-                }
-            }
-
-            if premade_results.iter().any(|(_, success, _)| !success) {
-                return Err(SnipError::runtime_error(
-                    "Some premade libraries failed to sync",
-                    None,
-                ));
-            }
+        if premade_results.iter().any(|(_, success, _)| !success) {
+            return Err(SnipError::runtime_error(
+                "Some premade libraries failed to sync",
+                None,
+            ));
         }
     }
 
