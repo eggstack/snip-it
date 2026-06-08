@@ -27,9 +27,8 @@ use aes_gcm::{
 };
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use crc32fast::Hasher as Crc32Hasher;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::{LazyLock, Mutex};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -45,14 +44,13 @@ const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU 
 /// + string keys + HashMap overhead), so 10K entries ≈ 1 MB.
 const MAX_KEY_CACHE_SIZE: usize = 10_000;
 
-/// Fast non-cryptographic hash for API key cache keys.
+/// Cryptographic hash for API key cache keys.
 ///
-/// Not used for security — only for cache lookup efficiency and avoiding
-/// plaintext API key storage in process memory.
+/// Uses SHA-256 to avoid cache-key collisions that could cause one user's
+/// derived key to be served from another user's cache entry.
 fn hash_api_key(api_key: &str) -> String {
-    let mut hasher = Crc32Hasher::new();
-    api_key.hash(&mut hasher);
-    format!("{:08x}", hasher.finish())
+    let hash = Sha256::digest(api_key.as_bytes());
+    format!("{:016x}", u64::from_le_bytes(hash[..8].try_into().unwrap()))
 }
 
 /// Session-local cache for derived keys to avoid re-running Argon2id
@@ -392,5 +390,14 @@ mod tests {
         assert!(ct_eq(a, b));
         assert!(!ct_eq(a, c));
         assert!(!ct_eq(a, b""));
+    }
+
+    #[test]
+    fn test_cache_keys_unique() {
+        let key1 = hash_api_key("test-api-key-12345");
+        let key2 = hash_api_key("test-api-key-12346");
+        let key3 = hash_api_key("test-api-key-12345");
+        assert_ne!(key1, key2, "different keys must produce different hashes");
+        assert_eq!(key1, key3, "same key must produce same hash");
     }
 }

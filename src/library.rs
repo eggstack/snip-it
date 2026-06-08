@@ -486,6 +486,9 @@ Snippets = []
 
     /// Registers an existing library file that is not yet tracked in the config.
     pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()> {
+        validate_library_name(filename)
+            .map_err(|(title, detail)| SnipError::runtime_error(title, Some(detail)))?;
+
         if self.get_library_by_filename(filename).is_some() {
             return Ok(());
         }

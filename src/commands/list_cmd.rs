@@ -124,7 +124,7 @@ pub fn run(
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',')
+    let escaped = if s.contains(',')
         || s.contains('"')
         || s.contains('\n')
         || s.contains('\r')
@@ -133,5 +133,14 @@ fn csv_escape(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
+    };
+
+    // Prefix formula-triggering characters to prevent CSV injection in spreadsheets.
+    if let Some(first) = escaped.chars().next() {
+        if first == '=' || first == '+' || first == '-' || first == '@' {
+            return format!("\t{escaped}");
+        }
     }
+
+    escaped
 }

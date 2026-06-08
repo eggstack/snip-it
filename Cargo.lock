@@ -2965,6 +2965,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "snip-proto",
  "snip-sync",
