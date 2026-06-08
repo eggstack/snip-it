@@ -27,6 +27,13 @@ struct CachedToml {
 static TOML_CACHE: LazyLock<Mutex<HashMap<String, CachedToml>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub fn invalidate_toml_cache(path: &std::path::Path) {
+    let key = path.to_string_lossy().to_string();
+    if let Ok(mut cache) = TOML_CACHE.lock() {
+        cache.remove(&key);
+    }
+}
+
 fn compute_crc32(data: &str) -> u32 {
     crc32fast::hash(data.as_bytes())
 }
@@ -99,7 +106,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
 /// including server URL, authentication, and sync behavior preferences.
 ///
 /// The API key is zeroized on drop to minimize exposure in process memory.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SyncSettings {
     pub enabled: bool,
     pub server_url: String,
@@ -145,6 +152,22 @@ impl Drop for SyncSettings {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.api_key.zeroize();
+    }
+}
+
+impl Clone for SyncSettings {
+    fn clone(&self) -> Self {
+        SyncSettings {
+            enabled: self.enabled,
+            server_url: self.server_url.clone(),
+            api_key: self.api_key.clone(),
+            device_id: self.device_id.clone(),
+            sync_interval_minutes: self.sync_interval_minutes,
+            auto_sync: self.auto_sync,
+            sync_direction: self.sync_direction.clone(),
+            clipboard_auto_clear_seconds: self.clipboard_auto_clear_seconds,
+            sync_limit: self.sync_limit,
+        }
     }
 }
 
@@ -333,9 +356,10 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     fs::rename(&tmp_path, &path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
-        SnipError::io_error("atomic rename sync config", path, e)
+        SnipError::io_error("atomic rename sync config", path.clone(), e)
     })?;
 
+    invalidate_toml_cache(&path);
     crate::clipboard::invalidate_clipboard_settings_cache();
 
     Ok(())

@@ -14,7 +14,7 @@
 //! command = "git commit -m \"<msg>\""
 //! ```
 
-use crate::config::cached_read_toml;
+use crate::config::{cached_read_toml, invalidate_toml_cache};
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::{get_config_dir, get_snippets_path};
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
@@ -797,6 +797,8 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
         let _ = fs::remove_file(&tmp_path);
         SnipError::io_error("atomic rename snippets file", path, e)
     })?;
+
+    invalidate_toml_cache(path);
 
     Ok(())
 }

@@ -3,7 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
 [![docs.rs](https://img.shields.io/docsrs/snip-it)](https://docs.rs/snip-it)
-[![CI](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/snip-it/actions/workflows/ci.yml)
 ![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88+-orange.svg)
@@ -39,7 +38,7 @@ cargo install snip-it
 ### From source
 
 ```bash
-git clone https://github.com/anomalyco/snip-it.git
+git clone <repository-url>
 cd snip-it
 cargo build --release
 ./target/release/snp --version
@@ -47,7 +46,7 @@ cargo build --release
 
 ### Pre-built binaries
 
-Download from the [latest release](https://github.com/anomalyco/snip-it/releases/latest):
+Download from the latest release (available after first crates.io publish):
 
 | Platform       | Asset                                    |
 | -------------- | ---------------------------------------- |

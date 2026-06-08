@@ -5,7 +5,6 @@ edition = "2024"
 rust-version = "1.88"
 description = "gRPC sync server for snp snippet manager"
 license = "MIT"
-repository = "https://github.com/anomalyco/snip-it"
 authors = ["David Bowman <dbowman91@proton.me>"]
 readme = "README.md"
 keywords = ["grpc", "sync", "snippets", "server", "sqlite"]

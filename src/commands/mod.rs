@@ -16,6 +16,7 @@ pub mod run_cmd;
 pub mod search_cmd;
 pub mod sync_cmd;
 
+use crate::config::invalidate_toml_cache;
 use crate::error::{SnipError, SnipResult};
 use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
 use std::path::PathBuf;
@@ -187,6 +188,8 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
         let _ = fs::remove_file(&tmp_path);
         SnipError::io_error("atomic rename config file", path.clone(), e)
     })?;
+
+    invalidate_toml_cache(&path);
 
     crate::logging::log_config_operation("save", &path, &Ok(()));
     Ok(())
