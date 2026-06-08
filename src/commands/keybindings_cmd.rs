@@ -18,7 +18,6 @@ pub fn run() -> SnipResult<()> {
     println!("  v     : visual mode (character)");
     println!("  V     : visual mode (line)");
     println!("  y     : copy and quit");
-    println!("  p     : preview command");
     println!("  i     : insert mode");
     println!("  e     : open theme picker");
     println!("  q     : quit");
@@ -29,7 +28,7 @@ pub fn run() -> SnipResult<()> {
     println!("  o     : sort by oldest");
     println!("  a     : sort a-z");
     println!("  z     : sort z-a");
-    println!("  d     : clear filter");
+    println!("  x/c   : clear filter");
     println!();
     println!("Insert Mode:");
     println!("  j/k   : alternative navigation");

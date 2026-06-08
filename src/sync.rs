@@ -189,6 +189,7 @@ impl SyncClient {
         let encrypt_failed_count = encrypt_failed_ids.len();
         let mut all_server_snippets = Vec::new();
         let mut all_skipped_ids = encrypt_failed_ids;
+        let mut server_decrypt_failed_count = 0usize;
         let mut final_timestamp;
         let mut final_message;
         let mut final_total_count;
@@ -209,6 +210,7 @@ impl SyncClient {
                 match decrypt_snippet(&api_key, s) {
                     Ok(ds) => all_server_snippets.push(ds),
                     Err(e) => {
+                        server_decrypt_failed_count += 1;
                         all_skipped_ids.push(s.id.clone());
                         tracing::warn!("Failed to decrypt snippet {}: {}", s.id, e);
                     }
@@ -228,7 +230,10 @@ impl SyncClient {
 
         let total_skipped = all_skipped_ids.len();
         let all_skipped_local = encrypt_failed_count > 0 && encrypted_snippets.is_empty();
-        let all_skipped_server = all_server_snippets.is_empty() && !all_skipped_ids.is_empty();
+        // Failure only if ALL server snippets failed to decrypt (not just some)
+        let all_skipped_server = server_decrypt_failed_count > 0
+            && all_server_snippets.is_empty()
+            && server_decrypt_failed_count >= encrypt_failed_count;
         let overall_success = !(all_skipped_local || all_skipped_server);
 
         Ok(crate::proto::SyncResponse {

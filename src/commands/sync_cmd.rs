@@ -49,8 +49,11 @@ fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bo
                         eprintln!("    Failed to save backup: {e}");
                         return false;
                     }
-                    if let Err(e) = mgr.update_library_id(&new_name, &lib.id) {
-                        eprintln!("    Failed to link backup: {e}");
+                    // Link the original library to the server ID so server
+                    // content syncs into it. The backup stays unlinked (created
+                    // by create_library with empty library_id).
+                    if let Err(e) = mgr.update_library_id(&filename, &lib.id) {
+                        eprintln!("    Failed to link original: {e}");
                         return false;
                     }
                     // Clear original library for server content

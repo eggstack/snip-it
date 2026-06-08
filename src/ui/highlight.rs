@@ -56,7 +56,12 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             continue;
         }
 
-        if c == '#' && spans.last().map(|s| s.content.is_empty()).unwrap_or(true) {
+        if c == '#'
+            && spans
+                .last()
+                .map(|s| s.content.chars().all(char::is_whitespace))
+                .unwrap_or(true)
+        {
             let mut comment = String::from(c);
             for next in chars.by_ref() {
                 comment.push(next);

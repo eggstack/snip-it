@@ -345,37 +345,16 @@ fn merge_and_save(
 
     let merged = merge_snippets(snippets, server_snippets);
 
-    let backup_path = match library::backup_library(lib_path) {
-        Ok(Some(p)) => Some(p.display().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!("Backup failed before merge save: {}", e);
-            None
-        }
-    };
-
+    // save_library uses atomic rename, so the original file is always safe
+    // on failure. No explicit backup/restore is needed here.
     if let Err(e) = library::save_library(lib_path, &merged) {
-        if let Some(ref backup) = backup_path {
-            // `fs::rename` is atomic and replaces the target. Prefer it over
-            // `fs::copy` because the partial write that triggered this branch
-            // may have left the file in an unreadable state; a copy could
-            // itself fail and leave the user with a corrupted library.
-            if let Err(restore_err) = fs::rename(backup, lib_path) {
-                tracing::error!(
-                    "Failed to restore backup after merge save failure: {}",
-                    restore_err
-                );
-            } else {
-                tracing::info!("Restored library from backup after merge save failure");
-            }
-        }
         return Err(SnipError::runtime_error(
             "Failed to save merged library",
             Some(&e.to_string()),
         ));
     }
 
-    Ok((merged, backup_path, conflicting_ids))
+    Ok((merged, None, conflicting_ids))
 }
 
 /// Performs a full sync operation across one or more libraries.
@@ -834,7 +813,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                     favorite: local_snip.favorite,
                     created_at: local_snip.created_at.min(server_snip.created_at),
                     updated_at: server_snip.updated_at,
-                    device_id: local_snip.device_id.clone(),
+                    device_id: server_snip.device_id.clone(),
                     deleted: false,
                 });
             } else {
