@@ -428,10 +428,27 @@ impl SnipSyncService {
     }
 
     pub async fn authenticate_and_rate_limit(&self, api_key: &str) -> Result<String, Status> {
+        self.authenticate_and_rate_limit_with_duration(api_key, None)
+            .await
+    }
+
+    /// Like `authenticate_and_rate_limit`, but records request duration on
+    /// failure so the histogram captures latency for error responses.
+    pub async fn authenticate_and_rate_limit_with_duration(
+        &self,
+        api_key: &str,
+        start: Option<std::time::Instant>,
+    ) -> Result<String, Status> {
         if api_key.is_empty() {
+            if let Some(s) = start {
+                self.record_request_duration("auth", s);
+            }
             return Err(Status::unauthenticated("API key is required"));
         }
         if api_key.len() > self.config.max_api_key_length {
+            if let Some(s) = start {
+                self.record_request_duration("auth", s);
+            }
             return Err(Status::invalid_argument(format!(
                 "API key exceeds maximum length of {} bytes",
                 self.config.max_api_key_length
@@ -448,6 +465,9 @@ impl SnipSyncService {
             .await
         {
             self.record_rate_limit();
+            if let Some(s) = start {
+                self.record_request_duration("auth", s);
+            }
             return Err(Status::resource_exhausted("Rate limit exceeded"));
         }
 
@@ -455,9 +475,17 @@ impl SnipSyncService {
             .db
             .get_user_by_api_key(api_key)
             .await
-            .map_err(|_| Status::internal("Internal error"))?
+            .map_err(|_| {
+                if let Some(s) = start {
+                    self.record_request_duration("auth", s);
+                }
+                Status::internal("Internal error")
+            })?
             .ok_or_else(|| {
                 self.record_auth_failure();
+                if let Some(s) = start {
+                    self.record_request_duration("auth", s);
+                }
                 Status::unauthenticated("Invalid API key")
             })?;
 
@@ -597,6 +625,7 @@ impl SnippetSync for SnipSyncService {
             .await
         {
             self.record_rate_limit();
+            self.record_request_duration("register", start);
             return Err(Status::resource_exhausted(
                 "Rate limit exceeded for registration",
             ));
@@ -614,6 +643,7 @@ impl SnippetSync for SnipSyncService {
                         "Generated device_id is not a valid UUID: {}",
                         device_id
                     );
+                    self.record_request_duration("register", start);
                     return Err(Status::internal(
                         "Internal error: invalid device ID generated",
                     ));
@@ -650,10 +680,13 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
+                self.record_request_duration("get_snippets", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -663,6 +696,7 @@ impl SnippetSync for SnipSyncService {
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
                 .map_err(|e| {
+                    self.record_request_duration("get_snippets", start);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -672,6 +706,7 @@ impl SnippetSync for SnipSyncService {
                     user_id,
                     req.library_id
                 );
+                self.record_request_duration("get_snippets", start);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
@@ -689,6 +724,7 @@ impl SnippetSync for SnipSyncService {
             .get_snippets(&user_id, &library_id, req.since, limit, offset, false)
             .await
             .map_err(|e| {
+                self.record_request_duration("get_snippets", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -730,10 +766,13 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
+                self.record_request_duration("push_snippets", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -743,6 +782,7 @@ impl SnippetSync for SnipSyncService {
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
                 .map_err(|e| {
+                    self.record_request_duration("push_snippets", start);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -752,12 +792,14 @@ impl SnippetSync for SnipSyncService {
                     user_id,
                     req.library_id
                 );
+                self.record_request_duration("push_snippets", start);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
         };
 
         if req.snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
+            self.record_request_duration("push_snippets", start);
             return Err(Status::invalid_argument(format!(
                 "Too many snippets in push request (max {}), got {}",
                 DEFAULT_MAX_SYNC_SNIPPETS,
@@ -769,6 +811,7 @@ impl SnippetSync for SnipSyncService {
         let mut rejected = 0;
 
         let mut tx = self.db.pool().begin().await.map_err(|e| {
+            self.record_request_duration("push_snippets", start);
             tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -811,6 +854,7 @@ impl SnippetSync for SnipSyncService {
         }
 
         tx.commit().await.map_err(|e| {
+            self.record_request_duration("push_snippets", start);
             tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -833,9 +877,12 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
+            self.record_request_duration("sync", start);
             return Err(Status::invalid_argument(format!(
                 "Too many snippets in sync request (max {}), got {}",
                 DEFAULT_MAX_SYNC_SNIPPETS,
@@ -847,6 +894,7 @@ impl SnippetSync for SnipSyncService {
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
+                self.record_request_duration("sync", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -856,6 +904,7 @@ impl SnippetSync for SnipSyncService {
                 .verify_library_ownership(&user_id, &req.library_id)
                 .await
                 .map_err(|e| {
+                    self.record_request_duration("sync", start);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -865,6 +914,7 @@ impl SnippetSync for SnipSyncService {
                     user_id,
                     req.library_id
                 );
+                self.record_request_duration("sync", start);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
@@ -873,6 +923,7 @@ impl SnippetSync for SnipSyncService {
         let mut skipped_ids = Vec::new();
 
         let mut tx = self.db.pool().begin().await.map_err(|e| {
+            self.record_request_duration("sync", start);
             tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -921,6 +972,7 @@ impl SnippetSync for SnipSyncService {
         }
 
         tx.commit().await.map_err(|e| {
+            self.record_request_duration("sync", start);
             tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -945,6 +997,7 @@ impl SnippetSync for SnipSyncService {
             )
             .await
             .map_err(|e| {
+                self.record_request_duration("sync", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -959,6 +1012,7 @@ impl SnippetSync for SnipSyncService {
                 .get_latest_timestamp(&user_id, &library_id)
                 .await
                 .map_err(|e| {
+                    self.record_request_duration("sync", start);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -1019,7 +1073,9 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
@@ -1031,8 +1087,14 @@ impl SnippetSync for SnipSyncService {
                     message: format!("Library '{}' created successfully", req.name),
                 }))
             }
-            Err(db::DbError::Conflict(msg)) => Err(Status::already_exists(msg)),
-            Err(db::DbError::NotFound(msg)) => Err(Status::invalid_argument(msg)),
+            Err(db::DbError::Conflict(msg)) => {
+                self.record_request_duration("create_library", start);
+                Err(Status::already_exists(msg))
+            }
+            Err(db::DbError::NotFound(msg)) => {
+                self.record_request_duration("create_library", start);
+                Err(Status::invalid_argument(msg))
+            }
             Err(db::DbError::Database(e)) => {
                 tracing::error!("Database error creating library: {}", e);
                 self.record_request_duration("create_library", start);
@@ -1053,7 +1115,9 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)
@@ -1067,6 +1131,7 @@ impl SnippetSync for SnipSyncService {
             .list_libraries(&user_id, limit, offset)
             .await
             .map_err(|e| {
+                self.record_request_duration("list_libraries", start);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -1104,7 +1169,9 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         // Prevent deleting default library — resolve the actual UUID, not
         // the literal string "default" which is just the library name.
@@ -1146,11 +1213,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("list_premade_libraries");
         tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
-
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let _req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         let libraries = self.premade_manager.list();
 
@@ -1193,7 +1261,9 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+        let user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
 
         if req.filename.is_empty() {
             self.record_request_duration("get_premade_library", start);

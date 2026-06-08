@@ -45,7 +45,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             let masked_key = if api_key.len() > 8 {
                 let chars: Vec<char> = api_key.chars().collect();
                 let prefix: String = chars.iter().take(4).collect();
-                let suffix: String = chars.iter().rev().take(4).collect();
+                let suffix: String = chars.iter().skip(chars.len() - 4).collect();
                 format!("{prefix}...{suffix}")
             } else {
                 "****".to_string()

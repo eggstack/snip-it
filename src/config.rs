@@ -48,17 +48,18 @@ fn compute_crc32(data: &str) -> u32 {
 /// model assumes local-only access — if an attacker can write to the config
 /// directory, they can already replace the entire file or binary.
 fn verify_integrity(content: &str) -> bool {
-    for line in content.lines() {
-        if let Some(stripped) = line.strip_prefix("# integrity:")
-            && let Ok(stored) = stripped.trim().parse::<u32>()
-        {
-            let body: String = content
-                .lines()
-                .filter(|l| !l.starts_with("# integrity:"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            return stored == compute_crc32(&body);
-        }
+    // The integrity header must be the very first line to avoid matching
+    // user-authored TOML comments like "# integrity: 42".
+    let first_line = content.lines().next().unwrap_or("");
+    if let Some(stripped) = first_line.strip_prefix("# integrity:")
+        && let Ok(stored) = stripped.trim().parse::<u32>()
+    {
+        let body: String = content
+            .lines()
+            .filter(|l| !l.starts_with("# integrity:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return stored == compute_crc32(&body);
     }
     // No integrity header found — this is a legacy config file from before the
     // integrity feature was added. Treat it as valid rather than silently

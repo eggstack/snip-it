@@ -33,8 +33,12 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
                 result.push_str(&escaped);
                 result.push('"');
             } else {
+                // Unescape TOML double-quote escapes so single-quoted output
+                // preserves the original literal content. Single-quoted TOML
+                // strings are raw, so \\ must become \ and \" must become ".
+                let unescaped = content.replace("\\\\", "\\").replace("\\\"", "\"");
                 result.push('\'');
-                result.push_str(content);
+                result.push_str(&unescaped);
                 result.push('\'');
             }
         } else {
@@ -123,7 +127,7 @@ mod tests {
     fn test_escaped_backslash_in_double_quotes() {
         let input = r#"path = "C:\\Users\\test""#;
         let result = quote_strings_containing_backslashes(input);
-        assert_eq!(result, r#"path = 'C:\\Users\\test'"#);
+        assert_eq!(result, r#"path = 'C:\Users\test'"#);
     }
 
     #[test]

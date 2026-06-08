@@ -230,10 +230,8 @@ impl SyncClient {
 
         let total_skipped = all_skipped_ids.len();
         let all_skipped_local = encrypt_failed_count > 0 && encrypted_snippets.is_empty();
-        // Failure only if ALL server snippets failed to decrypt (not just some)
-        let all_skipped_server = server_decrypt_failed_count > 0
-            && all_server_snippets.is_empty()
-            && server_decrypt_failed_count >= encrypt_failed_count;
+        // Failure only if ALL server snippets failed to decrypt and none were usable
+        let all_skipped_server = server_decrypt_failed_count > 0 && all_server_snippets.is_empty();
         let overall_success = !(all_skipped_local || all_skipped_server);
 
         Ok(crate::proto::SyncResponse {

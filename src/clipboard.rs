@@ -156,13 +156,10 @@ pub fn copy_to_clipboard_with_auto_clear(
     text: &str,
     auto_clear_seconds: Option<u32>,
 ) -> SnipResult<()> {
-    // Increment generation BEFORE writing to clipboard so that any
-    // previously-scheduled clear thread sees the new generation and
-    // skips clearing this fresh clipboard content.
+    copy_to_clipboard(text)?;
     if let Some(seconds) = auto_clear_seconds {
         schedule_clipboard_clear(seconds);
     }
-    copy_to_clipboard(text)?;
     Ok(())
 }
 
