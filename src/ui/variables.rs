@@ -82,7 +82,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(2)
-                .constraints([Constraint::Length(var_height as u16), Constraint::Length(1)])
+                .constraints([Constraint::Length(var_height.min(u16::MAX as usize) as u16), Constraint::Length(1)])
                 .split(size);
 
             f.render_widget(block, size);

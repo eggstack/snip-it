@@ -1,5 +1,5 @@
 use crate::commands::init_library_manager;
-use crate::config::{SyncDirection, SyncSettings, load_sync_settings};
+use crate::config::{SyncDirection, load_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use crate::proto::Library;
@@ -133,13 +133,10 @@ pub struct SyncOptions {
 ///
 /// Supports listing servers, push-only, pull-only, bidirectional, and dry-run modes.
 pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    let sync_settings = match load_sync_settings() {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!("Failed to load sync settings: {e}");
-            SyncSettings::default()
-        }
-    };
+    let sync_settings = load_sync_settings().map_err(|e| {
+        eprintln!("Failed to load sync settings: {e}");
+        e
+    })?;
 
     if options.servers {
         if !sync_settings.enabled {

@@ -2,8 +2,9 @@ FROM rust:1.88 AS builder
 
 WORKDIR /build
 
-COPY snip-sync/Cargo.toml snip-sync/Cargo.lock snip-sync/
-COPY snip-proto/Cargo.toml snip-proto/Cargo.lock snip-proto/
+COPY Cargo.toml Cargo.lock ./
+COPY snip-sync/Cargo.toml snip-sync/
+COPY snip-proto/Cargo.toml snip-proto/
 COPY snip-proto/build.rs snip-proto/
 COPY snip-proto/proto snip-proto/proto
 COPY snip-proto/src snip-proto/src

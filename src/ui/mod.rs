@@ -33,6 +33,17 @@ use crate::utils::extract_variables_for_display;
 use crate::utils::has_unmatched_angle_bracket;
 use crate::utils::strip_escape_sequences;
 
+/// RAII guard that disables mouse capture and restores the terminal when dropped.
+/// Ensures the terminal is always restored even on early return or panic.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        ratatui::restore();
+    }
+}
+
 use highlight::highlight_command;
 use state::{FilterState, SelectState, SortMode, is_ctrl_key};
 use theme::{style_fg, style_fg_bg};
@@ -173,6 +184,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         );
     }
     let mut terminal = ratatui::init();
+    let _guard = TerminalGuard; // Ensures terminal is restored on any exit path
 
     // Pre-compute syntax-highlighted commands once at startup (not inside draw loop)
     // This avoids the closure-capture issues that cause TUI to hang
@@ -420,18 +432,28 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                 if score_cmp != std::cmp::Ordering::Equal || !has_filter {
                     let explicit_sort = match filter_state.sort_mode {
-                        SortMode::Newest => Some(
-                            snippets[b.0]
-                                .created_at
-                                .cmp(&snippets[a.0].created_at)
-                                .then_with(|| b.0.cmp(&a.0)),
-                        ),
-                        SortMode::Oldest => Some(
-                            snippets[a.0]
-                                .created_at
-                                .cmp(&snippets[b.0].created_at)
-                                .then_with(|| a.0.cmp(&b.0)),
-                        ),
+                        SortMode::Newest => {
+                            snippets
+                                .get(b.0)
+                                .zip(snippets.get(a.0))
+                                .map(|(b_snip, a_snip)| {
+                                    b_snip
+                                        .created_at
+                                        .cmp(&a_snip.created_at)
+                                        .then_with(|| b.0.cmp(&a.0))
+                                })
+                        }
+                        SortMode::Oldest => {
+                            snippets
+                                .get(a.0)
+                                .zip(snippets.get(b.0))
+                                .map(|(a_snip, b_snip)| {
+                                    a_snip
+                                        .created_at
+                                        .cmp(&b_snip.created_at)
+                                        .then_with(|| a.0.cmp(&b.0))
+                                })
+                        }
                         _ => None,
                     };
 
@@ -1417,10 +1439,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             }
         }
     }
-    if let Err(e) = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture) {
-        tracing::warn!("Failed to disable mouse capture: {}", e);
-    }
-    ratatui::restore();
     Ok(if !filtered.is_empty() && sel.selected < filtered.len() {
         Some((filtered[sel.selected].0, should_copy))
     } else {

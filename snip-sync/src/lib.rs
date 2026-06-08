@@ -562,12 +562,14 @@ impl SnippetSync for SnipSyncService {
         tracing::info!(request_id = %request_id, "Register request");
 
         // Use peer IP address for rate limiting (device_id is client-controlled)
-        // Only trust x-forwarded-for if it comes from a trusted proxy
-        let rate_limit_key = if let Some(proxy_ip) = request
+        // tonic populates request.extensions() with the peer SocketAddr
+        let peer_ip = request
             .extensions()
-            .get::<axum::extract::ConnectInfo<SocketAddr>>()
-            .map(|info| info.0.ip().to_string())
-            .filter(|ip| self.config.trusted_proxies.contains(ip))
+            .get::<SocketAddr>()
+            .map(|addr| addr.ip().to_string());
+
+        let rate_limit_key = if let Some(ref ip) = peer_ip
+            && self.config.trusted_proxies.contains(ip)
         {
             request
                 .metadata()
@@ -575,13 +577,9 @@ impl SnippetSync for SnipSyncService {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|header| header.split(',').next())
                 .map(|s| strip_port(s.trim()))
-                .unwrap_or(proxy_ip)
+                .unwrap_or_else(|| ip.clone())
         } else {
-            request
-                .extensions()
-                .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                .map(|info| info.0.ip().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
+            peer_ip.unwrap_or_else(|| "unknown".to_string())
         };
 
         if !self
@@ -718,6 +716,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<PushSnippetsRequest>,
     ) -> Result<Response<PushSnippetsResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("push_snippets");
         tracing::info!(request_id = %request_id, "PushSnippets request");
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
@@ -808,6 +807,8 @@ impl SnippetSync for SnipSyncService {
             Status::internal("Internal error")
         })?;
 
+        self.record_request_duration("push_snippets", start);
+
         Ok(Response::new(PushSnippetsResponse {
             success: rejected == 0,
             message: format!("Accepted {}, rejected {}", accepted, rejected),
@@ -820,7 +821,6 @@ impl SnippetSync for SnipSyncService {
         let request_id = uuid::Uuid::new_v4();
         let start = std::time::Instant::now();
         self.record_request("sync");
-        self.record_sync("bidirectional");
         tracing::info!(request_id = %request_id, "Sync request");
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
@@ -834,6 +834,8 @@ impl SnippetSync for SnipSyncService {
         }
 
         let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+
+        self.record_sync("bidirectional");
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
@@ -1102,9 +1104,11 @@ impl SnippetSync for SnipSyncService {
                     message: "Library deleted successfully".to_string(),
                 }))
             }
-            Err(e) => {
+            Err(db::DbError::NotFound(msg)) => Err(Status::not_found(msg)),
+            Err(db::DbError::Conflict(msg)) => Err(Status::failed_precondition(msg)),
+            Err(db::DbError::Database(e)) => {
                 tracing::error!("Failed to delete library: {}", e);
-                Err(Status::not_found("Library not found"))
+                Err(Status::internal("Internal error"))
             }
         }
     }
