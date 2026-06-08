@@ -467,7 +467,9 @@ impl Database {
                     deleted,
                     encrypted,
                 )| {
-                    let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                    let tags: Vec<String> = serde_json::from_str(&tags_str).inspect_err(|e| {
+                        tracing::warn!(snippet_id = %id, error = %e, "Failed to parse tags JSON, using empty list");
+                    }).unwrap_or_default();
                     Snippet {
                         id,
                         description,

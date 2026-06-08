@@ -52,6 +52,18 @@ pub fn extract_api_key<T>(request: &Request<T>, body_api_key: &str) -> String {
         .to_string()
 }
 
+fn strip_port(addr: &str) -> String {
+    if let Some(close_bracket) = addr.find("]:") {
+        return addr[1..close_bracket].to_string();
+    }
+    if let Some(colon_pos) = addr.rfind(':') {
+        if !addr.starts_with('[') {
+            return addr[..colon_pos].to_string();
+        }
+    }
+    addr.to_string()
+}
+
 pub const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
 pub const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 pub const DEFAULT_MAX_TAGS: usize = 50;
@@ -562,7 +574,7 @@ impl SnippetSync for SnipSyncService {
                 .get("x-forwarded-for")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|header| header.split(',').next())
-                .map(|s| s.trim().to_string())
+                .map(|s| strip_port(s.trim()))
                 .unwrap_or(proxy_ip)
         } else {
             request
