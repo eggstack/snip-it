@@ -67,26 +67,22 @@ fn strip_integrity_line(content: &str) -> String {
 }
 
 pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
-    let meta = fs::metadata(path)
-        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
-    let mtime = meta
-        .modified()
-        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
     let key = path.to_string_lossy().to_string();
-
-    {
-        let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(&key)
-            && entry.mtime == mtime
-        {
-            return Ok(entry.content.clone());
-        }
-    }
 
     let content = fs::read_to_string(path)
         .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
 
+    let mtime = fs::metadata(path)
+        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?
+        .modified()
+        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
+
     let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = cache.get(&key)
+        && entry.mtime == mtime
+    {
+        return Ok(entry.content.clone());
+    }
     cache.insert(
         key,
         CachedToml {
@@ -186,7 +182,9 @@ fn serialize_api_key<S: serde::Serializer>(
                     "Keychain unavailable, refusing to store API key in plaintext. \
                      Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow."
                 );
-                serializer.serialize_str("")
+                Err(serde::ser::Error::custom(format!(
+                    "keychain unavailable: {e}. Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow plaintext storage."
+                )))
             }
         }
     }

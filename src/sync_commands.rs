@@ -28,10 +28,15 @@ fn handle_library_not_found(
     tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
     let normalized_name = lib_name.to_lowercase().replace(' ', "-");
 
-    let recovery_marker = lib_path
-        .parent()
-        .unwrap()
-        .join(format!("{lib_name}.sync_recovery"));
+    let Some(recovery_dir) = lib_path.parent() else {
+        tracing::error!(library = %lib_name, "Cannot create recovery marker: path has no parent");
+        // Continue without recovery marker - sync will still work
+        runtime
+            .block_on(client.create_library(&normalized_name))
+            .ok();
+        return;
+    };
+    let recovery_marker = recovery_dir.join(format!("{lib_name}.sync_recovery"));
     let marker_content = format!(
         r#"{{"library":"{}","attempted_at":"{}"}}"#,
         lib_name,
