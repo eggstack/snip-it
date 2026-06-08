@@ -550,6 +550,14 @@ pub fn run_sync(
                                 status.pushed += 1;
                             } else {
                                 status.conflicts += 1;
+                                results.push((
+                                    lib_name.clone(),
+                                    true,
+                                    format!(
+                                        "{} snippets skipped (will retry)",
+                                        response.skipped_count
+                                    ),
+                                ));
                             }
                             continue;
                         }
