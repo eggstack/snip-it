@@ -56,6 +56,11 @@ fn strip_port(addr: &str) -> String {
     if let Some(close_bracket) = addr.find("]:") {
         return addr[1..close_bracket].to_string();
     }
+    // Bare IPv6 addresses contain multiple colons but no brackets.
+    // They have no port to strip, so return as-is.
+    if !addr.starts_with('[') && addr.matches(':').count() > 1 {
+        return addr.to_string();
+    }
     if let Some(colon_pos) = addr.rfind(':') {
         if !addr.starts_with('[') {
             return addr[..colon_pos].to_string();
@@ -1007,6 +1012,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<CreateLibraryRequest>,
     ) -> Result<Response<CreateLibraryResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("create_library");
         self.record_library_op("create");
         tracing::info!(request_id = %request_id, "CreateLibrary request");
@@ -1018,6 +1024,7 @@ impl SnippetSync for SnipSyncService {
         match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
                 tracing::info!("Created library '{}' for user {}", req.name, user_id);
+                self.record_request_duration("create_library", start);
                 Ok(Response::new(CreateLibraryResponse {
                     success: true,
                     library_id: lib_id,
@@ -1028,6 +1035,7 @@ impl SnippetSync for SnipSyncService {
             Err(db::DbError::NotFound(msg)) => Err(Status::invalid_argument(msg)),
             Err(db::DbError::Database(e)) => {
                 tracing::error!("Database error creating library: {}", e);
+                self.record_request_duration("create_library", start);
                 Err(Status::internal("Internal error"))
             }
         }
@@ -1038,6 +1046,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<ListLibrariesRequest>,
     ) -> Result<Response<ListLibrariesResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("list_libraries");
         self.record_library_op("list");
         tracing::info!(request_id = %request_id, "ListLibraries request");
@@ -1074,6 +1083,8 @@ impl SnippetSync for SnipSyncService {
             })
             .collect();
 
+        self.record_request_duration("list_libraries", start);
+
         Ok(Response::new(ListLibrariesResponse {
             libraries: proto_libraries,
             total_count: total,
@@ -1086,6 +1097,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<DeleteLibraryRequest>,
     ) -> Result<Response<DeleteLibraryResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("delete_library");
         self.record_library_op("delete");
         tracing::info!(request_id = %request_id, "DeleteLibrary request");
@@ -1096,10 +1108,11 @@ impl SnippetSync for SnipSyncService {
 
         // Prevent deleting default library
         if req.library_id.is_empty() || req.library_id == "default" {
+            self.record_request_duration("delete_library", start);
             return Err(Status::invalid_argument("Cannot delete default library"));
         }
 
-        match self.db.delete_library(&user_id, &req.library_id).await {
+        let result = match self.db.delete_library(&user_id, &req.library_id).await {
             Ok(_) => {
                 tracing::info!("Deleted library {} for user {}", req.library_id, user_id);
                 Ok(Response::new(DeleteLibraryResponse {
@@ -1113,7 +1126,9 @@ impl SnippetSync for SnipSyncService {
                 tracing::error!("Failed to delete library: {}", e);
                 Err(Status::internal("Internal error"))
             }
-        }
+        };
+        self.record_request_duration("delete_library", start);
+        result
     }
 
     async fn list_premade_libraries(
@@ -1121,6 +1136,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<ListPremadeLibrariesRequest>,
     ) -> Result<Response<ListPremadeLibrariesResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("list_premade_libraries");
         tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
 
@@ -1150,6 +1166,8 @@ impl SnippetSync for SnipSyncService {
 
         let count = proto_libraries.len() as i32;
 
+        self.record_request_duration("list_premade_libraries", start);
+
         Ok(Response::new(ListPremadeLibrariesResponse {
             libraries: proto_libraries,
             has_more: false,
@@ -1162,6 +1180,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<GetPremadeLibraryRequest>,
     ) -> Result<Response<GetPremadeLibraryResponse>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("get_premade_library");
         tracing::info!(request_id = %request_id, "GetPremadeLibrary request");
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
@@ -1170,11 +1189,13 @@ impl SnippetSync for SnipSyncService {
         let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         if req.filename.is_empty() {
+            self.record_request_duration("get_premade_library", start);
             return Err(Status::invalid_argument("Filename is required"));
         }
 
         if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\')
         {
+            self.record_request_duration("get_premade_library", start);
             return Err(Status::invalid_argument("Invalid filename"));
         }
 
@@ -1185,15 +1206,21 @@ impl SnippetSync for SnipSyncService {
             .collect();
 
         if sanitized.is_empty() || sanitized.len() > 64 {
+            self.record_request_duration("get_premade_library", start);
             return Err(Status::invalid_argument("Invalid filename"));
         }
 
         let content = match self.premade_manager.get(&sanitized) {
             Ok(c) => c,
-            Err(e) => return Err(e),
+            Err(e) => {
+                self.record_request_duration("get_premade_library", start);
+                return Err(e);
+            }
         };
 
         tracing::info!("User {} fetched premade library '{}'", user_id, sanitized);
+
+        self.record_request_duration("get_premade_library", start);
 
         Ok(Response::new(GetPremadeLibraryResponse {
             success: true,

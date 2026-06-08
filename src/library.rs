@@ -156,6 +156,7 @@ impl Snippet {
                 Some("Snippet description cannot be empty"),
             ));
         }
+        let now = chrono::Utc::now().timestamp();
         Ok(Self {
             id: String::new(),
             description,
@@ -164,8 +165,8 @@ impl Snippet {
             output: String::new(),
             folders: Vec::new(),
             favorite: false,
-            created_at: 0,
-            updated_at: 0,
+            created_at: now,
+            updated_at: now,
             device_id: String::new(),
             deleted: false,
         })

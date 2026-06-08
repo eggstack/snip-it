@@ -26,7 +26,6 @@ async fn security_headers_middleware(
     response
 }
 
-#[allow(dead_code)]
 async fn metrics_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
