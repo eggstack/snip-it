@@ -33,6 +33,18 @@ fn handle_library_not_found(
         // Continue without recovery marker - sync will still work
         if let Err(e) = runtime.block_on(client.create_library(&normalized_name)) {
             tracing::warn!(library = %lib_name, error = %e, "Failed to re-create library on server");
+            status.failed += 1;
+            results.push((
+                lib_name.to_string(),
+                false,
+                format!("Re-creation failed: {e}"),
+            ));
+        } else {
+            results.push((
+                lib_name.to_string(),
+                true,
+                "Re-linked (no recovery marker)".to_string(),
+            ));
         }
         return;
     };

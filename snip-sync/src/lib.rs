@@ -639,6 +639,7 @@ impl SnippetSync for SnipSyncService {
         request: Request<GetSnippetsRequest>,
     ) -> Result<Response<SnippetList>, Status> {
         let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
         self.record_request("get_snippets");
         tracing::info!(request_id = %request_id, "GetSnippets request");
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
@@ -703,6 +704,8 @@ impl SnippetSync for SnipSyncService {
                 encrypted: s.encrypted,
             })
             .collect();
+
+        self.record_request_duration("get_snippets", start);
 
         Ok(Response::new(SnippetList {
             snippets: proto_snippets,
@@ -825,6 +828,8 @@ impl SnippetSync for SnipSyncService {
         let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
+        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
+
         if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
             return Err(Status::invalid_argument(format!(
                 "Too many snippets in sync request (max {}), got {}",
@@ -832,8 +837,6 @@ impl SnippetSync for SnipSyncService {
                 req.local_snippets.len()
             )));
         }
-
-        let user_id = self.authenticate_and_rate_limit(&api_key).await?;
 
         self.record_sync("bidirectional");
 

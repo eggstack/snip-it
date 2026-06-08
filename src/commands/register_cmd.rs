@@ -43,7 +43,10 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
 
             println!("Registration successful!");
             let masked_key = if api_key.len() > 8 {
-                format!("{}...{}", &api_key[..4], &api_key[api_key.len() - 4..])
+                let chars: Vec<char> = api_key.chars().collect();
+                let prefix: String = chars.iter().take(4).collect();
+                let suffix: String = chars.iter().rev().take(4).collect();
+                format!("{prefix}...{suffix}")
             } else {
                 "****".to_string()
             };

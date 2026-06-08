@@ -221,13 +221,15 @@ impl Database {
         let api_key_hash = hash_api_key(api_key)?;
         let api_key_prefix = compute_api_key_prefix(api_key);
 
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("INSERT INTO users (id, api_key, api_key_prefix, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
             .bind(&user_id)
             .bind(&api_key_hash)
             .bind(&api_key_prefix)
             .bind(now)
             .bind(now)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
 
         let default_lib_id = Uuid::new_v4().to_string();
@@ -236,8 +238,10 @@ impl Database {
             .bind(&user_id)
             .bind("default")
             .bind(now)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
 
         tracing::info!(
             "Created user {} with default library {}",
@@ -440,7 +444,7 @@ impl Database {
             "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
              FROM snippets \
              WHERE user_id = ? AND library_id = ? AND updated_at > ?{} \
-             ORDER BY updated_at DESC \
+             ORDER BY updated_at DESC, id DESC \
              LIMIT ? OFFSET ?",
             deleted_filter
         );

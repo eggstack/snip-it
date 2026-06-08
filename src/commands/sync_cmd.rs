@@ -210,14 +210,12 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
 
             println!("\nSyncing snippets...");
             // Respect config direction when no CLI flags are provided
+            // When both push and pull are effective (bidirectional), pass neither
+            // so run_sync defaults to Bidirectional instead of Push-only.
             let effective_push = options.push_only
-                || (!options.pull_only
-                    && (sync_settings.sync_direction == SyncDirection::Push
-                        || sync_settings.sync_direction == SyncDirection::Bidirectional));
+                || (!options.pull_only && sync_settings.sync_direction == SyncDirection::Push);
             let effective_pull = options.pull_only
-                || (!options.push_only
-                    && (sync_settings.sync_direction == SyncDirection::Pull
-                        || sync_settings.sync_direction == SyncDirection::Bidirectional));
+                || (!options.push_only && sync_settings.sync_direction == SyncDirection::Pull);
             crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),

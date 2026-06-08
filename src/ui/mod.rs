@@ -1163,6 +1163,13 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     }
                                 }
                                 KeyCode::Char('y') => {
+                                    if filtered.is_empty() {
+                                        visual_mode = false;
+                                        if !is_search {
+                                            break;
+                                        }
+                                        continue;
+                                    }
                                     let start = std::cmp::min(visual_start, visual_end)
                                         .min(filtered.len().saturating_sub(1));
                                     let end = std::cmp::max(visual_start, visual_end)
