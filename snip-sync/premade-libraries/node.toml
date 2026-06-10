@@ -1,0 +1,192 @@
+# Node.js - Node.js and npm development commands
+Description = "Commands for Node.js development, npm/yarn/pnpm, and debugging."
+
+[[Snippets]]
+  Description = "Initialize npm project"
+  Tag = ["node", "npm"]
+  command = "npm init -y"
+
+[[Snippets]]
+  Description = "Install dependencies"
+  Tag = ["node", "npm"]
+  command = "npm install"
+
+[[Snippets]]
+  Description = "Install package"
+  Tag = ["node", "npm"]
+  command = "npm install <package>"
+
+[[Snippets]]
+  Description = "Install dev dependency"
+  Tag = ["node", "npm"]
+  command = "npm install --save-dev <package>"
+
+[[Snippets]]
+  Description = "Install globally"
+  Tag = ["node", "npm"]
+  command = "npm install -g <package>"
+
+[[Snippets]]
+  Description = "Uninstall package"
+  Tag = ["node", "npm"]
+  command = "npm uninstall <package>"
+
+[[Snippets]]
+  Description = "Update package"
+  Tag = ["node", "npm"]
+  command = "npm update <package>"
+
+[[Snippets]]
+  Description = "Run npm script"
+  Tag = ["node", "npm"]
+  command = "npm run <script>"
+
+[[Snippets]]
+  Description = "List npm scripts"
+  Tag = ["node", "npm"]
+  command = "npm run"
+
+[[Snippets]]
+  Description = "List outdated packages"
+  Tag = ["node", "npm"]
+  command = "npm outdated"
+
+[[Snippets]]
+  Description = "Audit for vulnerabilities"
+  Tag = ["node", "npm"]
+  command = "npm audit"
+
+[[Snippets]]
+  Description = "Fix audit vulnerabilities"
+  Tag = ["node", "npm"]
+  command = "npm audit fix"
+
+[[Snippets]]
+  Description = "Clear npm cache"
+  Tag = ["node", "npm"]
+  command = "npm cache clean --force"
+
+[[Snippets]]
+  Description = "Check npm version"
+  Tag = ["node", "npm"]
+  command = "npm --version"
+
+[[Snippets]]
+  Description = "Check Node.js version"
+  Tag = ["node", "version"]
+  command = "node --version"
+
+[[Snippets]]
+  Description = "Run Node.js script"
+  Tag = ["node", "run"]
+  command = "node <script.js>"
+
+[[Snippets]]
+  Description = "Run Node.js with inspector"
+  Tag = ["node", "debug"]
+  command = "node --inspect <script.js>"
+
+[[Snippets]]
+  Description = "Debug Node.js"
+  Tag = ["node", "debug"]
+  command = "node --inspect-brk <script.js>"
+
+[[Snippets]]
+  Description = "Start REPL"
+  Tag = ["node", "run"]
+  command = "node"
+
+[[Snippets]]
+  Description = "Npx run package binary"
+  Tag = ["node", "npm"]
+  command = "npx <package>"
+
+[[Snippets]]
+  Description = "Npx create project"
+  Tag = ["node", "npm"]
+  command = "npx create-@latest <project_name>"
+
+[[Snippets]]
+  Description = "Yarn install"
+  Tag = ["node", "yarn"]
+  command = "yarn install"
+
+[[Snippets]]
+  Description = "Yarn add dependency"
+  Tag = ["node", "yarn"]
+  command = "yarn add <package>"
+
+[[Snippets]]
+  Description = "Yarn run script"
+  Tag = ["node", "yarn"]
+  command = "yarn <script>"
+
+[[Snippets]]
+  Description = "Pnpm install"
+  Tag = ["node", "pnpm"]
+  command = "pnpm install"
+
+[[Snippets]]
+  Description = "Pnpm add dependency"
+  Tag = ["node", "pnpm"]
+  command = "pnpm add <package>"
+
+[[Snippets]]
+  Description = "TypeScript compile"
+  Tag = ["node", "typescript"]
+  command = "tsc"
+
+[[Snippets]]
+  Description = "TypeScript watch mode"
+  Tag = ["node", "typescript"]
+  command = "tsc --watch"
+
+[[Snippets]]
+  Description = "TypeScript check only"
+  Tag = ["node", "typescript"]
+  command = "tsc --noEmit"
+
+[[Snippets]]
+  Description = "ESLint check"
+  Tag = ["node", "lint"]
+  command = "eslint ."
+
+[[Snippets]]
+  Description = "ESLint fix"
+  Tag = ["node", "lint"]
+  command = "eslint --fix ."
+
+[[Snippets]]
+  Description = "Prettier format"
+  Tag = ["node", "lint"]
+  command = "prettier --write ."
+
+[[Snippets]]
+  Description = "Prettier check"
+  Tag = ["node", "lint"]
+  command = "prettier --check ."
+
+[[Snippets]]
+  Description = "Vitest run tests"
+  Tag = ["node", "test"]
+  command = "vitest run"
+
+[[Snippets]]
+  Description = "Vitest watch mode"
+  Tag = ["node", "test"]
+  command = "vitest"
+
+[[Snippets]]
+  Description = "Jest run tests"
+  Tag = ["node", "test"]
+  command = "jest"
+
+[[Snippets]]
+  Description = "Nodemon dev server"
+  Tag = ["node", "dev"]
+  command = "nodemon <script.js>"
+
+[[Snippets]]
+  Description = "Kill Node.js process"
+  Tag = ["node", "debug"]
+  command = "killall node"

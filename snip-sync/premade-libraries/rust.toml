@@ -1,0 +1,202 @@
+# Rust - Rust development commands
+Description = "Commands for Rust development, cargo, testing, and debugging."
+
+[[Snippets]]
+  Description = "Create new Rust project"
+  Tag = ["rust", "cargo"]
+  command = "cargo new <project_name>"
+
+[[Snippets]]
+  Description = "Create new library project"
+  Tag = ["rust", "cargo"]
+  command = "cargo new <project_name> --lib"
+
+[[Snippets]]
+  Description = "Initialize Cargo project in current directory"
+  Tag = ["rust", "cargo"]
+  command = "cargo init"
+
+[[Snippets]]
+  Description = "Build project"
+  Tag = ["rust", "cargo"]
+  command = "cargo build"
+
+[[Snippets]]
+  Description = "Build in release mode"
+  Tag = ["rust", "cargo"]
+  command = "cargo build --release"
+
+[[Snippets]]
+  Description = "Build workspace"
+  Tag = ["rust", "cargo"]
+  command = "cargo build --workspace"
+
+[[Snippets]]
+  Description = "Run project"
+  Tag = ["rust", "cargo"]
+  command = "cargo run"
+
+[[Snippets]]
+  Description = "Run in release mode"
+  Tag = ["rust", "cargo"]
+  command = "cargo run --release"
+
+[[Snippets]]
+  Description = "Run with arguments"
+  Tag = ["rust", "cargo"]
+  command = "cargo run -- <args>"
+
+[[Snippets]]
+  Description = "Run specific binary"
+  Tag = ["rust", "cargo"]
+  command = "cargo run --bin <binary_name>"
+
+[[Snippets]]
+  Description = "Run tests"
+  Tag = ["rust", "test"]
+  command = "cargo test"
+
+[[Snippets]]
+  Description = "Run workspace tests"
+  Tag = ["rust", "test"]
+  command = "cargo test --workspace"
+
+[[Snippets]]
+  Description = "Run specific test"
+  Tag = ["rust", "test"]
+  command = "cargo test <test_name>"
+
+[[Snippets]]
+  Description = "Run tests showing output"
+  Tag = ["rust", "test"]
+  command = "cargo test -- --nocapture"
+
+[[Snippets]]
+  Description = "Run doc tests"
+  Tag = ["rust", "test"]
+  command = "cargo test --doc"
+
+[[Snippets]]
+  Description = "Run integration tests"
+  Tag = ["rust", "test"]
+  command = "cargo test --test <test_name>"
+
+[[Snippets]]
+  Description = "Check code without building"
+  Tag = ["rust", "check"]
+  command = "cargo check"
+
+[[Snippets]]
+  Description = "Check workspace"
+  Tag = ["rust", "check"]
+  command = "cargo check --workspace"
+
+[[Snippets]]
+  Description = "Run clippy lints"
+  Tag = ["rust", "lint"]
+  command = "cargo clippy -- -D warnings"
+
+[[Snippets]]
+  Description = "Run clippy on workspace"
+  Tag = ["rust", "lint"]
+  command = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[[Snippets]]
+  Description = "Check formatting"
+  Tag = ["rust", "fmt"]
+  command = "cargo fmt --all -- --check"
+
+[[Snippets]]
+  Description = "Auto-format code"
+  Tag = ["rust", "fmt"]
+  command = "cargo fmt"
+
+[[Snippets]]
+  Description = "Generate documentation"
+  Tag = ["rust", "docs"]
+  command = "cargo doc --no-deps --open"
+
+[[Snippets]]
+  Description = "Watch and rebuild"
+  Tag = ["rust", "dev"]
+  command = "cargo watch -x run"
+
+[[Snippets]]
+  Description = "Watch and test"
+  Tag = ["rust", "dev"]
+  command = "cargo watch -x test"
+
+[[Snippets]]
+  Description = "Watch and check"
+  Tag = ["rust", "dev"]
+  command = "cargo watch -x check"
+
+[[Snippets]]
+  Description = "Add dependency"
+  Tag = ["rust", "cargo"]
+  command = "cargo add <crate>"
+
+[[Snippets]]
+  Description = "Add dev dependency"
+  Tag = ["rust", "cargo"]
+  command = "cargo add <crate> --dev"
+
+[[Snippets]]
+  Description = "Update dependencies"
+  Tag = ["rust", "cargo"]
+  command = "cargo update"
+
+[[Snippets]]
+  Description = "Show dependency tree"
+  Tag = ["rust", "cargo"]
+  command = "cargo tree"
+
+[[Snippets]]
+  Description = "Audit for vulnerabilities"
+  Tag = ["rust", "cargo"]
+  command = "cargo audit"
+
+[[Snippets]]
+  Description = "Clean build artifacts"
+  Tag = ["rust", "cargo"]
+  command = "cargo clean"
+
+[[Snippets]]
+  Description = "Bench tests"
+  Tag = ["rust", "test"]
+  command = "cargo bench"
+
+[[Snippets]]
+  Description = "Install binary crate"
+  Tag = ["rust", "cargo"]
+  command = "cargo install <crate>"
+
+[[Snippets]]
+  Description = "Expand macros"
+  Tag = ["rust", "debug"]
+  command = "cargo expand"
+
+[[Snippets]]
+  Description = "Build with all features"
+  Tag = ["rust", "cargo"]
+  command = "cargo build --all-features"
+
+[[Snippets]]
+  Description = "Build with specific feature"
+  Tag = ["rust", "cargo"]
+  command = "cargo build --features <feature>"
+
+[[Snippets]]
+  Description = "Publish to crates.io"
+  Tag = ["rust", "cargo"]
+  command = "cargo publish"
+
+[[Snippets]]
+  Description = "Package for publishing"
+  Tag = ["rust", "cargo"]
+  command = "cargo package"
+
+[[Snippets]]
+  Description = "Check code coverage"
+  Tag = ["rust", "test"]
+  command = "cargo llvm-cov --workspace --html"

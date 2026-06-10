@@ -204,6 +204,8 @@ pub struct PremadeLibrary {
     pub description: ::prost::alloc::string::String,
     #[prost(int32, tag = "4")]
     pub snippet_count: i32,
+    #[prost(string, repeated, tag = "5")]
+    pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPremadeLibraryRequest {
@@ -222,6 +224,20 @@ pub struct GetPremadeLibraryResponse {
     pub content: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]
     pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SearchPremadeLibrariesRequest {
+    #[prost(string, tag = "1")]
+    pub api_key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub query: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SearchPremadeLibrariesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub libraries: ::prost::alloc::vec::Vec<PremadeLibrary>,
+    #[prost(int32, tag = "2")]
+    pub total_count: i32,
 }
 /// Generated client implementations.
 pub mod snippet_sync_client {
@@ -554,6 +570,32 @@ pub mod snippet_sync_client {
                 .insert(GrpcMethod::new("snip_proto.SnippetSync", "GetPremadeLibrary"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn search_premade_libraries(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SearchPremadeLibrariesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SearchPremadeLibrariesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/snip_proto.SnippetSync/SearchPremadeLibraries",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("snip_proto.SnippetSync", "SearchPremadeLibraries"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -635,6 +677,13 @@ pub mod snippet_sync_server {
             request: tonic::Request<super::GetPremadeLibraryRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetPremadeLibraryResponse>,
+            tonic::Status,
+        >;
+        async fn search_premade_libraries(
+            &self,
+            request: tonic::Request<super::SearchPremadeLibrariesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SearchPremadeLibrariesResponse>,
             tonic::Status,
         >;
     }
@@ -1149,6 +1198,55 @@ pub mod snippet_sync_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetPremadeLibrarySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/snip_proto.SnippetSync/SearchPremadeLibraries" => {
+                    #[allow(non_camel_case_types)]
+                    struct SearchPremadeLibrariesSvc<T: SnippetSync>(pub Arc<T>);
+                    impl<
+                        T: SnippetSync,
+                    > tonic::server::UnaryService<super::SearchPremadeLibrariesRequest>
+                    for SearchPremadeLibrariesSvc<T> {
+                        type Response = super::SearchPremadeLibrariesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SearchPremadeLibrariesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as SnippetSync>::search_premade_libraries(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SearchPremadeLibrariesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

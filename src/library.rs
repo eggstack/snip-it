@@ -585,6 +585,11 @@ Snippets = []
         Ok(())
     }
 
+    /// Returns the path to the premade libraries directory.
+    pub fn get_premade_dir(&self) -> &PathBuf {
+        &self.premade_dir
+    }
+
     /// Returns `true` if a premade library with the given filename exists on disk.
     pub fn premade_exists(&self, filename: &str) -> bool {
         self.premade_dir.join(format!("{filename}.toml")).exists()

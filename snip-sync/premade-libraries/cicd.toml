@@ -1,0 +1,207 @@
+# CI/CD - Continuous integration and deployment commands
+Description = "Commands for GitHub Actions, GitLab CI, Jenkins, and CI/CD pipelines."
+
+[[Snippets]]
+  Description = "List GitHub Actions workflows"
+  Tag = ["cicd", "github"]
+  command = "gh workflow list"
+
+[[Snippets]]
+  Description = "View GitHub Actions workflow runs"
+  Tag = ["cicd", "github"]
+  command = "gh run list"
+
+[[Snippets]]
+  Description = "View a specific GitHub Actions run"
+  Tag = ["cicd", "github"]
+  command = "gh run view <run_id>"
+
+[[Snippets]]
+  Description = "View GitHub Actions run logs"
+  Tag = ["cicd", "github"]
+  command = "gh run view <run_id> --log"
+
+[[Snippets]]
+  Description = "Trigger a GitHub Actions workflow"
+  Tag = ["cicd", "github"]
+  command = "gh workflow run <workflow> -f <key>=<value>"
+
+[[Snippets]]
+  Description = "Cancel a GitHub Actions run"
+  Tag = ["cicd", "github"]
+  command = "gh run cancel <run_id>"
+
+[[Snippets]]
+  Description = "Watch a GitHub Actions run"
+  Tag = ["cicd", "github"]
+  command = "gh run watch <run_id>"
+
+[[Snippets]]
+  Description = "Download GitHub Actions artifacts"
+  Tag = ["cicd", "github"]
+  command = "gh run download <run_id>"
+
+[[Snippets]]
+  Description = "List GitHub Actions secrets"
+  Tag = ["cicd", "github"]
+  command = "gh secret list"
+
+[[Snippets]]
+  Description = "Set GitHub Actions secret"
+  Tag = ["cicd", "github"]
+  command = "gh secret set <secret_name> --body '<value>'"
+
+[[Snippets]]
+  Description = "Run GitLab CI pipeline locally"
+  Tag = ["cicd", "gitlab"]
+  command = "gitlab-runner exec docker <job_name>"
+
+[[Snippets]]
+  Description = "List GitLab CI runners"
+  Tag = ["cicd", "gitlab"]
+  command = "gitlab-runner list"
+
+[[Snippets]]
+  Description = "Check GitLab CI runner status"
+  Tag = ["cicd", "gitlab"]
+  command = "gitlab-runner status"
+
+[[Snippets]]
+  Description = "Verify GitLab CI runner registration"
+  Tag = ["cicd", "gitlab"]
+  command = "gitlab-runner verify"
+
+[[Snippets]]
+  Description = "Run Jenkins CLI command"
+  Tag = ["cicd", "jenkins"]
+  command = "java -jar jenkins-cli.jar -s <url> <command>"
+
+[[Snippets]]
+  Description = "Build Jenkins job"
+  Tag = ["cicd", "jenkins"]
+  command = "java -jar jenkins-cli.jar -s <url> build <job_name>"
+
+[[Snippets]]
+  Description = "Check Jenkins job status"
+  Tag = ["cicd", "jenkins"]
+  command = "java -jar jenkins-cli.jar -s <url> console <job_name>"
+
+[[Snippets]]
+  Description = "List Jenkins jobs"
+  Tag = ["cicd", "jenkins"]
+  command = "java -jar jenkins-cli.jar -s <url> list-jobs"
+
+[[Snippets]]
+  Description = "View GitHub repo CI status"
+  Tag = ["cicd", "github"]
+  command = "gh api repos/<owner>/<repo>/actions/runs --jq '.workflow_runs[:5] | .[] | {name, status, conclusion}'"
+
+[[Snippets]]
+  Description = "Docker build with tag"
+  Tag = ["cicd", "docker"]
+  command = "docker build -t <image>:<tag> ."
+
+[[Snippets]]
+  Description = "Docker build and push"
+  Tag = ["cicd", "docker"]
+  command = "docker build -t <registry>/<image>:<tag> . && docker push <registry>/<image>:<tag>"
+
+[[Snippets]]
+  Description = "Tag Docker image for registry"
+  Tag = ["cicd", "docker"]
+  command = "docker tag <image>:<tag> <registry>/<image>:<tag>"
+
+[[Snippets]]
+  Description = "Login to container registry"
+  Tag = ["cicd", "docker"]
+  command = "docker login <registry>"
+
+[[Snippets]]
+  Description = "Run test suite with cargo"
+  Tag = ["cicd", "rust"]
+  command = "cargo test --workspace"
+
+[[Snippets]]
+  Description = "Run clippy lint checks"
+  Tag = ["cicd", "rust"]
+  command = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[[Snippets]]
+  Description = "Check formatting"
+  Tag = ["cicd", "rust"]
+  command = "cargo fmt --all -- --check"
+
+[[Snippets]]
+  Description = "Run npm test"
+  Tag = ["cicd", "node"]
+  command = "npm test"
+
+[[Snippets]]
+  Description = "Run npm build"
+  Tag = ["cicd", "node"]
+  command = "npm run build"
+
+[[Snippets]]
+  Description = "Run Go tests"
+  Tag = ["cicd", "go"]
+  command = "go test ./..."
+
+[[Snippets]]
+  Description = "Go test with coverage"
+  Tag = ["cicd", "go"]
+  command = "go test -coverprofile=coverage.out ./..."
+
+[[Snippets]]
+  Description = "Python test with pytest"
+  Tag = ["cicd", "python"]
+  command = "pytest --tb=short"
+
+[[Snippets]]
+  Description = "Python test with coverage"
+  Tag = ["cicd", "python"]
+  command = "pytest --cov=<module> --cov-report=html"
+
+[[Snippets]]
+  Description = "Maven build"
+  Tag = ["cicd", "java"]
+  command = "mvn clean package"
+
+[[Snippets]]
+  Description = "Maven skip tests"
+  Tag = ["cicd", "java"]
+  command = "mvn clean package -DskipTests"
+
+[[Snippets]]
+  Description = "Gradle build"
+  Tag = ["cicd", "java"]
+  command = "./gradlew build"
+
+[[Snippets]]
+  Description = "Gradle clean build"
+  Tag = ["cicd", "java"]
+  command = "./gradlew clean build"
+
+[[Snippets]]
+  Description = "Terraform plan"
+  Tag = ["cicd", "terraform"]
+  command = "terraform plan"
+
+[[Snippets]]
+  Description = "Terraform apply"
+  Tag = ["cicd", "terraform"]
+  command = "terraform apply"
+
+[[Snippets]]
+  Description = "Helm install"
+  Tag = ["cicd", "kubernetes"]
+  command = "helm install <release_name> <chart>"
+
+[[Snippets]]
+  Description = "Helm upgrade"
+  Tag = ["cicd", "kubernetes"]
+  command = "helm upgrade <release_name> <chart>"
+
+[[Snippets]]
+  Description = "Helm list releases"
+  Tag = ["cicd", "kubernetes"]
+  command = "helm list"

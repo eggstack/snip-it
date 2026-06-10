@@ -77,6 +77,7 @@ pub struct PremadeLibrary {
     pub filename: String,
     pub description: String,
     pub snippet_count: i32,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +86,8 @@ struct Snippet {
     command: Option<String>,
     #[serde(rename = "Description", default)]
     description: Option<String>,
+    #[serde(rename = "Tag", default)]
+    tags: Vec<String>,
     #[serde(flatten, default)]
     _extra: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -220,11 +223,21 @@ impl PremadeManager {
 
             let description = snippet_file.description.unwrap_or_else(|| filename.clone());
 
+            let mut all_tags: Vec<String> = Vec::new();
+            for s in &valid_snippets {
+                for tag in &s.tags {
+                    if !all_tags.contains(tag) {
+                        all_tags.push(tag.clone());
+                    }
+                }
+            }
+
             libraries.push(PremadeLibrary {
                 name: filename.clone(),
                 filename,
                 description,
                 snippet_count,
+                tags: all_tags,
             });
         }
 
@@ -234,6 +247,21 @@ impl PremadeManager {
 
     pub fn list(&self) -> Vec<PremadeLibrary> {
         self.libraries.clone()
+    }
+
+    /// Search premade libraries by query string.
+    /// Matches against library name, description, and tags.
+    pub fn search(&self, query: &str) -> Vec<PremadeLibrary> {
+        let q = query.to_lowercase();
+        self.libraries
+            .iter()
+            .filter(|lib| {
+                lib.name.to_lowercase().contains(&q)
+                    || lib.description.to_lowercase().contains(&q)
+                    || lib.tags.iter().any(|t| t.to_lowercase().contains(&q))
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn get(&self, filename: &str) -> Result<String, Status> {
@@ -377,5 +405,130 @@ Description = "Empty command"
         fs::write(dir.path().join("empty.toml"), toml_content).unwrap();
         let manager = PremadeManager::new(dir.path().to_path_buf());
         assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn test_search_by_name() {
+        let dir = TempDir::new().unwrap();
+        let toml1 = r#"
+Description = "Docker containers"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List containers"
+Tag = ["docker"]
+"#;
+        let toml2 = r#"
+Description = "Git commands"
+
+[[Snippets]]
+Command = "git status"
+Description = "Check status"
+Tag = ["git"]
+"#;
+        fs::write(dir.path().join("docker.toml"), toml1).unwrap();
+        fs::write(dir.path().join("git.toml"), toml2).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let results = manager.search("docker");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "docker");
+    }
+
+    #[test]
+    fn test_search_by_description() {
+        let dir = TempDir::new().unwrap();
+        let toml1 = r#"
+Description = "Container orchestration"
+
+[[Snippets]]
+Command = "docker compose up"
+Description = "Start services"
+Tag = ["docker"]
+"#;
+        fs::write(dir.path().join("docker.toml"), toml1).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let results = manager.search("container");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "docker");
+    }
+
+    #[test]
+    fn test_search_by_tag() {
+        let dir = TempDir::new().unwrap();
+        let toml1 = r#"
+Description = "Docker basics"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List"
+Tag = ["docker", "containers"]
+"#;
+        fs::write(dir.path().join("docker.toml"), toml1).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let results = manager.search("containers");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "docker");
+        assert!(results[0].tags.contains(&"docker".to_string()));
+        assert!(results[0].tags.contains(&"containers".to_string()));
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+        let toml1 = r#"
+Description = "Docker commands"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List"
+Tag = ["docker"]
+"#;
+        fs::write(dir.path().join("docker.toml"), toml1).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let results = manager.search("DOCKER");
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_no_results() {
+        let dir = TempDir::new().unwrap();
+        let toml1 = r#"
+Description = "Docker commands"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List"
+Tag = ["docker"]
+"#;
+        fs::write(dir.path().join("docker.toml"), toml1).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let results = manager.search("nonexistent");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_scan_collects_tags() {
+        let dir = TempDir::new().unwrap();
+        let toml_content = r#"
+Description = "Multi-tag library"
+
+[[Snippets]]
+Command = "docker ps"
+Description = "List"
+Tag = ["docker", "containers"]
+
+[[Snippets]]
+Command = "docker images"
+Description = "Images"
+Tag = ["docker", "images"]
+"#;
+        fs::write(dir.path().join("multi.toml"), toml_content).unwrap();
+        let manager = PremadeManager::new(dir.path().to_path_buf());
+        let libs = manager.list();
+        assert_eq!(libs.len(), 1);
+        assert!(libs[0].tags.contains(&"docker".to_string()));
+        assert!(libs[0].tags.contains(&"containers".to_string()));
+        assert!(libs[0].tags.contains(&"images".to_string()));
+        assert_eq!(libs[0].snippet_count, 2);
     }
 }

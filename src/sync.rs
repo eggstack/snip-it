@@ -18,7 +18,7 @@ use crate::proto::PremadeLibrary;
 use crate::proto::snippet_sync_client::SnippetSyncClient;
 use crate::proto::{
     CreateLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library, ListLibrariesRequest,
-    ListPremadeLibrariesRequest, RegisterRequest, SyncRequest,
+    ListPremadeLibrariesRequest, RegisterRequest, SearchPremadeLibrariesRequest, SyncRequest,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -460,6 +460,27 @@ impl SyncClient {
                 Some(&response.message),
             ))
         }
+    }
+
+    /// Searches premade libraries on the server by query string.
+    pub async fn search_premade_libraries(
+        &mut self,
+        query: &str,
+    ) -> SnipResult<Vec<PremadeLibrary>> {
+        let api_key = self.settings.api_key.clone();
+        let query_str = query.to_string();
+        let response = retry_grpc!(
+            async {
+                let mut req = tonic::Request::new(SearchPremadeLibrariesRequest {
+                    api_key: api_key.clone(),
+                    query: query_str.clone(),
+                });
+                add_api_key_metadata(&mut req, &api_key);
+                self.client.search_premade_libraries(req).await
+            },
+            "Search premade libraries"
+        )?;
+        Ok(response.into_inner().libraries)
     }
 }
 

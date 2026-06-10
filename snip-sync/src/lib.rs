@@ -30,7 +30,8 @@ use snip_proto::{
     HealthResponse, Library, ListLibrariesRequest, ListLibrariesResponse,
     ListPremadeLibrariesRequest, ListPremadeLibrariesResponse,
     PremadeLibrary as ProtoPremadeLibrary, PushSnippetsRequest, PushSnippetsResponse,
-    RegisterRequest, RegisterResponse, Snippet as ProtoSnippet, SnippetList, SyncRequest,
+    RegisterRequest, RegisterResponse, SearchPremadeLibrariesRequest,
+    SearchPremadeLibrariesResponse, Snippet as ProtoSnippet, SnippetList, SyncRequest,
     SyncResponse, snippet_sync_server::SnippetSync,
 };
 use std::net::SocketAddr;
@@ -1247,6 +1248,7 @@ impl SnippetSync for SnipSyncService {
                 filename: l.filename,
                 description: l.description,
                 snippet_count: l.snippet_count,
+                tags: l.tags,
             })
             .collect();
 
@@ -1322,6 +1324,56 @@ impl SnippetSync for SnipSyncService {
             name: sanitized.clone(),
             content,
             message: "Library fetched successfully".to_string(),
+        }))
+    }
+
+    async fn search_premade_libraries(
+        &self,
+        request: Request<SearchPremadeLibrariesRequest>,
+    ) -> Result<Response<SearchPremadeLibrariesResponse>, Status> {
+        let request_id = uuid::Uuid::new_v4();
+        let start = std::time::Instant::now();
+        self.record_request("search_premade_libraries");
+        tracing::info!(request_id = %request_id, "SearchPremadeLibraries request");
+        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let req = request.into_inner();
+
+        let _user_id = self
+            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .await?;
+
+        if req.query.is_empty() {
+            self.record_request_duration("search_premade_libraries", start);
+            return Err(Status::invalid_argument("Query is required"));
+        }
+
+        let results = self.premade_manager.search(&req.query);
+
+        let proto_libraries: Vec<ProtoPremadeLibrary> = results
+            .into_iter()
+            .map(|l| ProtoPremadeLibrary {
+                name: l.name,
+                filename: l.filename,
+                description: l.description,
+                snippet_count: l.snippet_count,
+                tags: l.tags,
+            })
+            .collect();
+
+        let count = proto_libraries.len() as i32;
+
+        tracing::info!(
+            request_id = %request_id,
+            query = %req.query,
+            count = count,
+            "SearchPremadeLibraries completed"
+        );
+
+        self.record_request_duration("search_premade_libraries", start);
+
+        Ok(Response::new(SearchPremadeLibrariesResponse {
+            libraries: proto_libraries,
+            total_count: count,
         }))
     }
 }

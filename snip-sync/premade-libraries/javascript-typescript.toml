@@ -1,0 +1,202 @@
+# JavaScript & TypeScript - Frontend and backend development commands
+Description = "Commands for JavaScript/TypeScript development with modern frameworks and tooling."
+
+[[Snippets]]
+  Description = "Create Next.js project"
+  Tag = ["javascript", "nextjs"]
+  command = "npx create-next-app@latest <project_name>"
+
+[[Snippets]]
+  Description = "Create React project"
+  Tag = ["javascript", "react"]
+  command = "npx create-react-app <project_name>"
+
+[[Snippets]]
+  Description = "Create Vite project"
+  Tag = ["javascript", "vite"]
+  command = "npm create vite@latest <project_name>"
+
+[[Snippets]]
+  Description = "Run Vite dev server"
+  Tag = ["javascript", "vite"]
+  command = "npm run dev"
+
+[[Snippets]]
+  Description = "Build Vite project"
+  Tag = ["javascript", "vite"]
+  command = "npm run build"
+
+[[Snippets]]
+  Description = "Preview production build"
+  Tag = ["javascript", "vite"]
+  command = "npm run preview"
+
+[[Snippets]]
+  Description = "Install Next.js"
+  Tag = ["javascript", "nextjs"]
+  command = "npm install next react react-dom"
+
+[[Snippets]]
+  Description = "Next.js dev server"
+  Tag = ["javascript", "nextjs"]
+  command = "npm run dev"
+
+[[Snippets]]
+  Description = "Next.js build"
+  Tag = ["javascript", "nextjs"]
+  command = "npm run build"
+
+[[Snippets]]
+  Description = "Next.js start production"
+  Tag = ["javascript", "nextjs"]
+  command = "npm start"
+
+[[Snippets]]
+  Description = "Install Vue.js project"
+  Tag = ["javascript", "vue"]
+  command = "npm create vue@latest <project_name>"
+
+[[Snippets]]
+  Description = "Vue dev server"
+  Tag = ["javascript", "vue"]
+  command = "npm run dev"
+
+[[Snippets]]
+  Description = "Vue build"
+  Tag = ["javascript", "vue"]
+  command = "npm run build"
+
+[[Snippets]]
+  Description = "Install SvelteKit project"
+  Tag = ["javascript", "svelte"]
+  command = "npm create svelte@latest <project_name>"
+
+[[Snippets]]
+  Description = "TypeScript compile"
+  Tag = ["typescript", "build"]
+  command = "tsc"
+
+[[Snippets]]
+  Description = "TypeScript watch mode"
+  Tag = ["typescript", "build"]
+  command = "tsc --watch"
+
+[[Snippets]]
+  Description = "TypeScript type check only"
+  Tag = ["typescript", "check"]
+  command = "tsc --noEmit"
+
+[[Snippets]]
+  Description = "ESLint check"
+  Tag = ["javascript", "lint"]
+  command = "eslint ."
+
+[[Snippets]]
+  Description = "ESLint fix"
+  Tag = ["javascript", "lint"]
+  command = "eslint --fix ."
+
+[[Snippets]]
+  Description = "Prettier format all"
+  Tag = ["javascript", "lint"]
+  command = "prettier --write ."
+
+[[Snippets]]
+  Description = "Prettier check"
+  Tag = ["javascript", "lint"]
+  command = "prettier --check ."
+
+[[Snippets]]
+  Description = "Run Jest tests"
+  Tag = ["javascript", "test"]
+  command = "jest"
+
+[[Snippets]]
+  Description = "Run Jest in watch mode"
+  Tag = ["javascript", "test"]
+  command = "jest --watch"
+
+[[Snippets]]
+  Description = "Run Vitest tests"
+  Tag = ["javascript", "test"]
+  command = "vitest run"
+
+[[Snippets]]
+  Description = "Run Vitest watch mode"
+  Tag = ["javascript", "test"]
+  command = "vitest"
+
+[[Snippets]]
+  Description = "Run Cypress tests"
+  Tag = ["javascript", "test"]
+  command = "npx cypress open"
+
+[[Snippets]]
+  Description = "Run Cypress headless"
+  Tag = ["javascript", "test"]
+  command = "npx cypress run"
+
+[[Snippets]]
+  Description = "Run Playwright tests"
+  Tag = ["javascript", "test"]
+  command = "npx playwright test"
+
+[[Snippets]]
+  Description = "Install npm dependency"
+  Tag = ["javascript", "npm"]
+  command = "npm install <package>"
+
+[[Snippets]]
+  Description = "Install dev dependency"
+  Tag = ["javascript", "npm"]
+  command = "npm install --save-dev <package>"
+
+[[Snippets]]
+  Description = "Run npm script"
+  Tag = ["javascript", "npm"]
+  command = "npm run <script>"
+
+[[Snippets]]
+  Description = "Check npm outdated"
+  Tag = ["javascript", "npm"]
+  command = "npm outdated"
+
+[[Snippets]]
+  Description = "Audit npm vulnerabilities"
+  Tag = ["javascript", "npm"]
+  command = "npm audit"
+
+[[Snippets]]
+  Description = "Bundle with esbuild"
+  Tag = ["javascript", "bundler"]
+  command = "esbuild <entry> --bundle --outfile=<output>"
+
+[[Snippets]]
+  Description = "Bundle with webpack"
+  Tag = ["javascript", "bundler"]
+  command = "npx webpack --mode production"
+
+[[Snippets]]
+  Description = "Tailwind CSS build"
+  Tag = ["javascript", "css"]
+  command = "npx tailwindcss -i <input> -o <output> --minify"
+
+[[Snippets]]
+  Description = "Storybook start"
+  Tag = ["javascript", "storybook"]
+  command = "npm run storybook"
+
+[[Snippets]]
+  Description = "Prisma generate"
+  Tag = ["javascript", "database"]
+  command = "npx prisma generate"
+
+[[Snippets]]
+  Description = "Prisma migrate"
+  Tag = ["javascript", "database"]
+  command = "npx prisma migrate dev"
+
+[[Snippets]]
+  Description = "Prisma studio"
+  Tag = ["javascript", "database"]
+  command = "npx prisma studio"

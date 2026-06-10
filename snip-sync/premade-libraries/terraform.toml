@@ -1,0 +1,157 @@
+# Terraform - Infrastructure as Code commands
+Description = "Terraform commands for managing cloud infrastructure as code."
+
+[[Snippets]]
+  Description = "Initialize Terraform"
+  Tag = ["terraform", "init"]
+  command = "terraform init"
+
+[[Snippets]]
+  Description = "Plan infrastructure changes"
+  Tag = ["terraform", "plan"]
+  command = "terraform plan"
+
+[[Snippets]]
+  Description = "Apply infrastructure changes"
+  Tag = ["terraform", "apply"]
+  command = "terraform apply"
+
+[[Snippets]]
+  Description = "Apply with auto-approve"
+  Tag = ["terraform", "apply"]
+  command = "terraform apply -auto-approve"
+
+[[Snippets]]
+  Description = "Destroy infrastructure"
+  Tag = ["terraform", "destroy"]
+  command = "terraform destroy"
+
+[[Snippets]]
+  Description = "Show current state"
+  Tag = ["terraform", "state"]
+  command = "terraform show"
+
+[[Snippets]]
+  Description = "List resources in state"
+  Tag = ["terraform", "state"]
+  command = "terraform state list"
+
+[[Snippets]]
+  Description = "Show resource details"
+  Tag = ["terraform", "state"]
+  command = "terraform state show <resource>"
+
+[[Snippets]]
+  Description = "Move resource in state"
+  Tag = ["terraform", "state"]
+  command = "terraform state mv <source> <destination>"
+
+[[Snippets]]
+  Description = "Remove resource from state"
+  Tag = ["terraform", "state"]
+  command = "terraform state rm <resource>"
+
+[[Snippets]]
+  Description = "Import existing resource"
+  Tag = ["terraform", "import"]
+  command = "terraform import <resource> <id>"
+
+[[Snippets]]
+  Description = "Validate configuration"
+  Tag = ["terraform", "validate"]
+  command = "terraform validate"
+
+[[Snippets]]
+  Description = "Format configuration files"
+  Tag = ["terraform", "fmt"]
+  command = "terraform fmt"
+
+[[Snippets]]
+  Description = "Format and check"
+  Tag = ["terraform", "fmt"]
+  command = "terraform fmt -check"
+
+[[Snippets]]
+  Description = "Recursively format"
+  Tag = ["terraform", "fmt"]
+  command = "terraform fmt -recursive"
+
+[[Snippets]]
+  Description = "Update dependencies"
+  Tag = ["terraform", "init"]
+  command = "terraform get --update"
+
+[[Snippets]]
+  Description = "Output values"
+  Tag = ["terraform", "output"]
+  command = "terraform output"
+
+[[Snippets]]
+  Description = "Output as JSON"
+  Tag = ["terraform", "output"]
+  command = "terraform output -json"
+
+[[Snippets]]
+  Description = "Taint a resource"
+  Tag = ["terraform", "state"]
+  command = "terraform taint <resource>"
+
+[[Snippets]]
+  Description = "Untaint a resource"
+  Tag = ["terraform", "state"]
+  command = "terraform untaint <resource>"
+
+[[Snippets]]
+  Description = "View Terraform version"
+  Tag = ["terraform", "version"]
+  command = "terraform version"
+
+[[Snippets]]
+  Description = "Lock dependencies"
+  Tag = ["terraform", "init"]
+  command = "terraform providers lock"
+
+[[Snippets]]
+  Description = "Graph dependencies"
+  Tag = ["terraform", "graph"]
+  command = "terraform graph"
+
+[[Snippets]]
+  Description = "Refresh state"
+  Tag = ["terraform", "state"]
+  command = "terraform refresh"
+
+[[Snippets]]
+  Description = "Replace specific resource"
+  Tag = ["terraform", "apply"]
+  command = "terraform apply -replace=<resource>"
+
+[[Snippets]]
+  Description = "Plan with target"
+  Tag = ["terraform", "plan"]
+  command = "terraform plan -target=<resource>"
+
+[[Snippets]]
+  Description = "Workspace list"
+  Tag = ["terraform", "workspace"]
+  command = "terraform workspace list"
+
+[[Snippets]]
+  Description = "Workspace select"
+  Tag = ["terraform", "workspace"]
+  command = "terraform workspace select <name>"
+
+[[Snippets]]
+  Description = "Workspace new"
+  Tag = ["terraform", "workspace"]
+  command = "terraform workspace new <name>"
+
+[[Snippets]]
+  Description = "Console (interactive)"
+  Tag = ["terraform", "console"]
+  command = "terraform console"
+
+[[Snippets]]
+  Description = "Show Terraform providers"
+  Tag = ["terraform", "providers"]
+  command = "terraform providers"

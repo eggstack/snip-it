@@ -1,0 +1,172 @@
+# Java - Java development commands
+Description = "Commands for Java development with Maven, Gradle, and common debugging."
+
+[[Snippets]]
+  Description = "Maven compile"
+  Tag = ["java", "maven"]
+  command = "mvn compile"
+
+[[Snippets]]
+  Description = "Maven clean build"
+  Tag = ["java", "maven"]
+  command = "mvn clean package"
+
+[[Snippets]]
+  Description = "Maven skip tests build"
+  Tag = ["java", "maven"]
+  command = "mvn clean package -DskipTests"
+
+[[Snippets]]
+  Description = "Maven run tests"
+  Tag = ["java", "maven"]
+  command = "mvn test"
+
+[[Snippets]]
+  Description = "Maven run specific test"
+  Tag = ["java", "maven"]
+  command = "mvn test -Dtest=<TestName>"
+
+[[Snippets]]
+  Description = "Maven install to local repo"
+  Tag = ["java", "maven"]
+  command = "mvn install"
+
+[[Snippets]]
+  Description = "Maven dependency tree"
+  Tag = ["java", "maven"]
+  command = "mvn dependency:tree"
+
+[[Snippets]]
+  Description = "Maven dependency update"
+  Tag = ["java", "maven"]
+  command = "mvn versions:display-dependency-updates"
+
+[[Snippets]]
+  Description = "Maven clean install"
+  Tag = ["java", "maven"]
+  command = "mvn clean install"
+
+[[Snippets]]
+  Description = "Maven spring-boot run"
+  Tag = ["java", "maven", "spring"]
+  command = "mvn spring-boot:run"
+
+[[Snippets]]
+  Description = "Gradle build"
+  Tag = ["java", "gradle"]
+  command = "./gradlew build"
+
+[[Snippets]]
+  Description = "Gradle clean build"
+  Tag = ["java", "gradle"]
+  command = "./gradlew clean build"
+
+[[Snippets]]
+  Description = "Gradle run tests"
+  Tag = ["java", "gradle"]
+  command = "./gradlew test"
+
+[[Snippets]]
+  Description = "Gradle run specific test"
+  Tag = ["java", "gradle"]
+  command = "./gradlew test --tests <TestName>"
+
+[[Snippets]]
+  Description = "Gradle clean"
+  Tag = ["java", "gradle"]
+  command = "./gradlew clean"
+
+[[Snippets]]
+  Description = "Gradle dependencies"
+  Tag = ["java", "gradle"]
+  command = "./gradlew dependencies"
+
+[[Snippets]]
+  Description = "Gradle bootRun (Spring)"
+  Tag = ["java", "gradle", "spring"]
+  command = "./gradlew bootRun"
+
+[[Snippets]]
+  Description = "Compile Java file"
+  Tag = ["java", "compile"]
+  command = "javac <File.java>"
+
+[[Snippets]]
+  Description = "Run Java class"
+  Tag = ["java", "run"]
+  command = "java <ClassName>"
+
+[[Snippets]]
+  Description = "Run JAR file"
+  Tag = ["java", "run"]
+  command = "java -jar <file>.jar"
+
+[[Snippets]]
+  Description = "Run JAR with arguments"
+  Tag = ["java", "run"]
+  command = "java -jar <file>.jar <args>"
+
+[[Snippets]]
+  Description = "Run with classpath"
+  Tag = ["java", "run"]
+  command = "java -cp <classpath> <ClassName>"
+
+[[Snippets]]
+  Description = "Check Java version"
+  Tag = ["java", "version"]
+  command = "java --version"
+
+[[Snippets]]
+  Description = "Check javac version"
+  Tag = ["java", "version"]
+  command = "javac --version"
+
+[[Snippets]]
+  Description = "List Java processes"
+  Tag = ["java", "debug"]
+  command = "jps -l"
+
+[[Snippets]]
+  Description = "Thread dump"
+  Tag = ["java", "debug"]
+  command = "jstack <pid>"
+
+[[Snippets]]
+  Description = "Heap dump"
+  Tag = ["java", "debug"]
+  command = "jmap -dump:live,format=b,file=heap.hprof <pid>"
+
+[[Snippets]]
+  Description = "Java Flight Recorder"
+  Tag = ["java", "debug"]
+  command = "jcmd <pid> JFR.start duration=60s filename=recording.jfr"
+
+[[Snippets]]
+  Description = "Check JVM flags"
+  Tag = ["java", "debug"]
+  command = "java -XX:+PrintFlagsFinal -version"
+
+[[Snippets]]
+  Description = "Maven wrapper install"
+  Tag = ["java", "maven"]
+  command = "mvn -N wrapper:wrapper"
+
+[[Snippets]]
+  Description = "Gradle wrapper install"
+  Tag = ["java", "gradle"]
+  command = "gradle wrapper"
+
+[[Snippets]]
+  Description = "Spotless format"
+  Tag = ["java", "fmt"]
+  command = "./gradlew spotlessApply"
+
+[[Snippets]]
+  Description = "Checkstyle"
+  Tag = ["java", "lint"]
+  command = "mvn checkstyle:check"
+
+[[Snippets]]
+  Description = "SpotBugs analysis"
+  Tag = ["java", "lint"]
+  command = "mvn spotbugs:check"

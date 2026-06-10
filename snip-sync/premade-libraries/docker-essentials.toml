@@ -50,3 +50,238 @@ Description = "Essential Docker commands for managing containers, images, and co
   Description = "Remove unused Docker images"
   Tag = ["docker", "images"]
   command = "docker image prune -a -f"
+
+[[Snippets]]
+  Description = "Build image from Dockerfile"
+  Tag = ["docker", "build"]
+  command = "docker build -t <image_name>:<tag> ."
+
+[[Snippets]]
+  Description = "Build with no cache"
+  Tag = ["docker", "build"]
+  command = "docker build --no-cache -t <image_name>:<tag> ."
+
+[[Snippets]]
+  Description = "Tag Docker image"
+  Tag = ["docker", "images"]
+  command = "docker tag <source>:<tag> <target>:<tag>"
+
+[[Snippets]]
+  Description = "Push image to registry"
+  Tag = ["docker", "images"]
+  command = "docker push <image_name>:<tag>"
+
+[[Snippets]]
+  Description = "Stop a container"
+  Tag = ["docker", "containers"]
+  command = "docker stop <container_name>"
+
+[[Snippets]]
+  Description = "Start a stopped container"
+  Tag = ["docker", "containers"]
+  command = "docker start <container_name>"
+
+[[Snippets]]
+  Description = "Restart a container"
+  Tag = ["docker", "containers"]
+  command = "docker restart <container_name>"
+
+[[Snippets]]
+  Description = "Remove a container"
+  Tag = ["docker", "containers"]
+  command = "docker rm <container_name>"
+
+[[Snippets]]
+  Description = "Force remove a container"
+  Tag = ["docker", "containers"]
+  command = "docker rm -f <container_name>"
+
+[[Snippets]]
+  Description = "Remove a Docker image"
+  Tag = ["docker", "images"]
+  command = "docker rmi <image_name>"
+
+[[Snippets]]
+  Description = "Inspect container details"
+  Tag = ["docker", "containers"]
+  command = "docker inspect <container_name>"
+
+[[Snippets]]
+  Description = "Copy file from container"
+  Tag = ["docker", "containers"]
+  command = "docker cp <container_name>:<path> <local_path>"
+
+[[Snippets]]
+  Description = "Copy file to container"
+  Tag = ["docker", "containers"]
+  command = "docker cp <local_path> <container_name>:<path>"
+
+[[Snippets]]
+  Description = "View container resource usage"
+  Tag = ["docker", "monitoring"]
+  command = "docker stats"
+
+[[Snippets]]
+  Description = "View container resource usage (snapshot)"
+  Tag = ["docker", "monitoring"]
+  command = "docker stats --no-stream"
+
+[[Snippets]]
+  Description = "List container processes"
+  Tag = ["docker", "containers"]
+  command = "docker top <container_name>"
+
+[[Snippets]]
+  Description = "View port mappings"
+  Tag = ["docker", "networking"]
+  command = "docker port <container_name>"
+
+[[Snippets]]
+  Description = "Create Docker network"
+  Tag = ["docker", "networking"]
+  command = "docker network create <network_name>"
+
+[[Snippets]]
+  Description = "List Docker networks"
+  Tag = ["docker", "networking"]
+  command = "docker network ls"
+
+[[Snippets]]
+  Description = "Inspect Docker network"
+  Tag = ["docker", "networking"]
+  command = "docker network inspect <network_name>"
+
+[[Snippets]]
+  Description = "Connect container to network"
+  Tag = ["docker", "networking"]
+  command = "docker network connect <network_name> <container_name>"
+
+[[Snippets]]
+  Description = "Disconnect container from network"
+  Tag = ["docker", "networking"]
+  command = "docker network disconnect <network_name> <container_name>"
+
+[[Snippets]]
+  Description = "List Docker volumes"
+  Tag = ["docker", "volumes"]
+  command = "docker volume ls"
+
+[[Snippets]]
+  Description = "Create Docker volume"
+  Tag = ["docker", "volumes"]
+  command = "docker volume create <volume_name>"
+
+[[Snippets]]
+  Description = "Remove Docker volume"
+  Tag = ["docker", "volumes"]
+  command = "docker volume rm <volume_name>"
+
+[[Snippets]]
+  Description = "Prune unused volumes"
+  Tag = ["docker", "volumes"]
+  command = "docker volume prune -f"
+
+[[Snippets]]
+  Description = "Inspect Docker volume"
+  Tag = ["docker", "volumes"]
+  command = "docker volume inspect <volume_name>"
+
+[[Snippets]]
+  Description = "Compose up and rebuild"
+  Tag = ["docker", "compose"]
+  command = "docker compose up -d --build"
+
+[[Snippets]]
+  Description = "Compose down (stop and remove)"
+  Tag = ["docker", "compose"]
+  command = "docker compose down"
+
+[[Snippets]]
+  Description = "Compose down with volumes"
+  Tag = ["docker", "compose"]
+  command = "docker compose down -v"
+
+[[Snippets]]
+  Description = "Compose logs"
+  Tag = ["docker", "compose"]
+  command = "docker compose logs"
+
+[[Snippets]]
+  Description = "Compose logs (follow)"
+  Tag = ["docker", "compose"]
+  command = "docker compose logs -f"
+
+[[Snippets]]
+  Description = "Compose ps (list services)"
+  Tag = ["docker", "compose"]
+  command = "docker compose ps"
+
+[[Snippets]]
+  Description = "Compose exec in service"
+  Tag = ["docker", "compose"]
+  command = "docker compose exec <service> sh"
+
+[[Snippets]]
+  Description = "Compose restart services"
+  Tag = ["docker", "compose"]
+  command = "docker compose restart"
+
+[[Snippets]]
+  Description = "Compose pull images"
+  Tag = ["docker", "compose"]
+  command = "docker compose pull"
+
+[[Snippets]]
+  Description = "Full Docker cleanup"
+  Tag = ["docker", "cleanup"]
+  command = "docker system prune -a -f --volumes"
+
+[[Snippets]]
+  Description = "Docker disk usage"
+  Tag = ["docker", "cleanup"]
+  command = "docker system df"
+
+[[Snippets]]
+  Description = "Docker system info"
+  Tag = ["docker", "info"]
+  command = "docker info"
+
+[[Snippets]]
+  Description = "Docker version"
+  Tag = ["docker", "info"]
+  command = "docker version"
+
+[[Snippets]]
+  Description = "Search Docker Hub"
+  Tag = ["docker", "images"]
+  command = "docker search <query>"
+
+[[Snippets]]
+  Description = "Save image to tar file"
+  Tag = ["docker", "export"]
+  command = "docker save <image>:<tag> -o <file>.tar"
+
+[[Snippets]]
+  Description = "Load image from tar file"
+  Tag = ["docker", "export"]
+  command = "docker load -i <file>.tar"
+
+[[Snippets]]
+  Description = "Export container filesystem"
+  Tag = ["docker", "export"]
+  command = "docker export <container_name> > <file>.tar"
+
+[[Snippets]]
+  Description = "Import tar to image"
+  Tag = ["docker", "export"]
+  command = "docker import <file>.tar <image>:<tag>"
+
+[[Snippets]]
+  Description = "Docker login to registry"
+  Tag = ["docker", "registry"]
+  command = "docker login <registry>"
+
+[[Snippets]]
+  Description = "Docker logout"
+  Tag = ["docker", "registry"]
+  command = "docker logout"

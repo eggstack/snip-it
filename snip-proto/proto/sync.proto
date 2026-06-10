@@ -28,6 +28,7 @@ service SnippetSync {
     // Premade libraries (server->client only)
     rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
     rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
+    rpc SearchPremadeLibraries (SearchPremadeLibrariesRequest) returns (SearchPremadeLibrariesResponse);
 }
 
 message GetSnippetsRequest {
@@ -162,6 +163,7 @@ message PremadeLibrary {
     string filename = 2;
     string description = 3;
     int32 snippet_count = 4;
+    repeated string tags = 5;
 }
 
 message GetPremadeLibraryRequest {
@@ -174,4 +176,14 @@ message GetPremadeLibraryResponse {
     string name = 2;
     string content = 3;
     string message = 4;
+}
+
+message SearchPremadeLibrariesRequest {
+    string api_key = 1;
+    string query = 2;
+}
+
+message SearchPremadeLibrariesResponse {
+    repeated PremadeLibrary libraries = 1;
+    int32 total_count = 2;
 }

@@ -1,0 +1,152 @@
+# Database - Database management commands
+Description = "Commands for PostgreSQL, MySQL, and SQLite database management."
+
+[[Snippets]]
+  Description = "Connect to PostgreSQL"
+  Tag = ["database", "postgresql"]
+  command = "psql -U <user> -d <database>"
+
+[[Snippets]]
+  Description = "List PostgreSQL databases"
+  Tag = ["database", "postgresql"]
+  command = "psql -U <user> -l"
+
+[[Snippets]]
+  Description = "List PostgreSQL tables"
+  Tag = ["database", "postgresql"]
+  command = "psql -U <user> -d <database> -c '\\dt'"
+
+[[Snippets]]
+  Description = "Show PostgreSQL table schema"
+  Tag = ["database", "postgresql"]
+  command = "psql -U <user> -d <database> -c '\\d <table>'"
+
+[[Snippets]]
+  Description = "Backup PostgreSQL database"
+  Tag = ["database", "postgresql", "backup"]
+  command = "pg_dump -U <user> -d <database> > <backup_file>.sql"
+
+[[Snippets]]
+  Description = "Restore PostgreSQL database"
+  Tag = ["database", "postgresql", "restore"]
+  command = "psql -U <user> -d <database> < <backup_file>.sql"
+
+[[Snippets]]
+  Description = "Backup PostgreSQL database (custom format)"
+  Tag = ["database", "postgresql", "backup"]
+  command = "pg_dump -U <user> -d <database> -Fc > <backup_file>.dump"
+
+[[Snippets]]
+  Description = "Create PostgreSQL database"
+  Tag = ["database", "postgresql"]
+  command = "createdb -U <user> <database>"
+
+[[Snippets]]
+  Description = "Drop PostgreSQL database"
+  Tag = ["database", "postgresql"]
+  command = "dropdb -U <user> <database>"
+
+[[Snippets]]
+  Description = "PostgreSQL continuous backup (WAL archiving)"
+  Tag = ["database", "postgresql"]
+  command = "pg_basebackup -U <user> -D <backup_dir> -Fp -Xs -P"
+
+[[Snippets]]
+  Description = "Connect to MySQL"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p <database>"
+
+[[Snippets]]
+  Description = "List MySQL databases"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p -e 'SHOW DATABASES;'"
+
+[[Snippets]]
+  Description = "List MySQL tables"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p <database> -e 'SHOW TABLES;'"
+
+[[Snippets]]
+  Description = "Show MySQL table schema"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p <database> -e 'DESCRIBE <table>;'"
+
+[[Snippets]]
+  Description = "Backup MySQL database"
+  Tag = ["database", "mysql", "backup"]
+  command = "mysqldump -u <user> -p <database> > <backup_file>.sql"
+
+[[Snippets]]
+  Description = "Restore MySQL database"
+  Tag = ["database", "mysql", "restore"]
+  command = "mysql -u <user> -p <database> < <backup_file>.sql"
+
+[[Snippets]]
+  Description = "Create MySQL database"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p -e 'CREATE DATABASE <database>;'"
+
+[[Snippets]]
+  Description = "Show MySQL process list"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p -e 'SHOW PROCESSLIST;'"
+
+[[Snippets]]
+  Description = "Show MySQL status"
+  Tag = ["database", "mysql"]
+  command = "mysql -u <user> -p -e 'SHOW STATUS;'"
+
+[[Snippets]]
+  Description = "SQLite interactive shell"
+  Tag = ["database", "sqlite"]
+  command = "sqlite3 <database_file>"
+
+[[Snippets]]
+  Description = "List SQLite tables"
+  Tag = ["database", "sqlite"]
+  command = "sqlite3 <database_file> '.tables'"
+
+[[Snippets]]
+  Description = "Show SQLite table schema"
+  Tag = ["database", "sqlite"]
+  command = "sqlite3 <database_file> '.schema <table>'"
+
+[[Snippets]]
+  Description = "Export SQLite to SQL"
+  Tag = ["database", "sqlite", "backup"]
+  command = "sqlite3 <database_file> '.dump' > <backup_file>.sql"
+
+[[Snippets]]
+  Description = "Import SQL into SQLite"
+  Tag = ["database", "sqlite", "restore"]
+  command = "sqlite3 <database_file> < <backup_file>.sql"
+
+[[Snippets]]
+  Description = "SQLite integrity check"
+  Tag = ["database", "sqlite"]
+  command = "sqlite3 <database_file> 'PRAGMA integrity_check;'"
+
+[[Snippets]]
+  Description = "Show SQLite database size"
+  Tag = ["database", "sqlite"]
+  command = "ls -lh <database_file>"
+
+[[Snippets]]
+  Description = "Compact SQLite database"
+  Tag = ["database", "sqlite"]
+  command = "sqlite3 <database_file> 'VACUUM;'"
+
+[[Snippets]]
+  Description = "Run Redis CLI"
+  Tag = ["database", "redis"]
+  command = "redis-cli"
+
+[[Snippets]]
+  Description = "Check Redis info"
+  Tag = ["database", "redis"]
+  command = "redis-cli INFO"
+
+[[Snippets]]
+  Description = "Flush Redis database"
+  Tag = ["database", "redis"]
+  command = "redis-cli FLUSHDB"

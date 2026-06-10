@@ -1,0 +1,172 @@
+# Python - Python development commands
+Description = "Commands for Python development, virtual environments, packaging, and debugging."
+
+[[Snippets]]
+  Description = "Create virtual environment"
+  Tag = ["python", "venv"]
+  command = "python3 -m venv <venv_name>"
+
+[[Snippets]]
+  Description = "Activate virtual environment"
+  Tag = ["python", "venv"]
+  command = "source <venv_name>/bin/activate"
+
+[[Snippets]]
+  Description = "Deactivate virtual environment"
+  Tag = ["python", "venv"]
+  command = "deactivate"
+
+[[Snippets]]
+  Description = "Install packages"
+  Tag = ["python", "pip"]
+  command = "pip install <package>"
+
+[[Snippets]]
+  Description = "Install from requirements file"
+  Tag = ["python", "pip"]
+  command = "pip install -r requirements.txt"
+
+[[Snippets]]
+  Description = "Install package in development mode"
+  Tag = ["python", "pip"]
+  command = "pip install -e ."
+
+[[Snippets]]
+  Description = "Freeze dependencies"
+  Tag = ["python", "pip"]
+  command = "pip freeze > requirements.txt"
+
+[[Snippets]]
+  Description = "Upgrade package"
+  Tag = ["python", "pip"]
+  command = "pip install --upgrade <package>"
+
+[[Snippets]]
+  Description = "Uninstall package"
+  Tag = ["python", "pip"]
+  command = "pip uninstall <package>"
+
+[[Snippets]]
+  Description = "List installed packages"
+  Tag = ["python", "pip"]
+  command = "pip list"
+
+[[Snippets]]
+  Description = "Show package info"
+  Tag = ["python", "pip"]
+  command = "pip show <package>"
+
+[[Snippets]]
+  Description = "Run Python module"
+  Tag = ["python", "run"]
+  command = "python3 -m <module>"
+
+[[Snippets]]
+  Description = "Run Python script"
+  Tag = ["python", "run"]
+  command = "python3 <script.py>"
+
+[[Snippets]]
+  Description = "Python interactive shell"
+  Tag = ["python", "run"]
+  command = "python3"
+
+[[Snippets]]
+  Description = "IPython interactive shell"
+  Tag = ["python", "run"]
+  command = "ipython"
+
+[[Snippets]]
+  Description = "Run pytest"
+  Tag = ["python", "test"]
+  command = "pytest"
+
+[[Snippets]]
+  Description = "Run pytest with verbose output"
+  Tag = ["python", "test"]
+  command = "pytest -v"
+
+[[Snippets]]
+  Description = "Run pytest with coverage"
+  Tag = ["python", "test"]
+  command = "pytest --cov=<module>"
+
+[[Snippets]]
+  Description = "Run specific pytest test"
+  Tag = ["python", "test"]
+  command = "pytest <test_file>::<test_function>"
+
+[[Snippets]]
+  Description = "Check code style (black)"
+  Tag = ["python", "lint"]
+  command = "black --check ."
+
+[[Snippets]]
+  Description = "Format code (black)"
+  Tag = ["python", "lint"]
+  command = "black ."
+
+[[Snippets]]
+  Description = "Lint with ruff"
+  Tag = ["python", "lint"]
+  command = "ruff check ."
+
+[[Snippets]]
+  Description = "Lint and fix with ruff"
+  Tag = ["python", "lint"]
+  command = "ruff check --fix ."
+
+[[Snippets]]
+  Description = "Type check with mypy"
+  Tag = ["python", "lint"]
+  command = "mypy <package>"
+
+[[Snippets]]
+  Description = "Build package"
+  Tag = ["python", "build"]
+  command = "python3 -m build"
+
+[[Snippets]]
+  Description = "Check package with twine"
+  Tag = ["python", "build"]
+  command = "twine check dist/*"
+
+[[Snippets]]
+  Description = "Upload to PyPI"
+  Tag = ["python", "build"]
+  command = "twine upload dist/*"
+
+[[Snippets]]
+  Description = "Profile script execution"
+  Tag = ["python", "debug"]
+  command = "python3 -m cProfile <script.py>"
+
+[[Snippets]]
+  Description = "Memory profile"
+  Tag = ["python", "debug"]
+  command = "python3 -m memory_profiler <script.py>"
+
+[[Snippets]]
+  Description = "Python compile check"
+  Tag = ["python", "debug"]
+  command = "python3 -m py_compile <script.py>"
+
+[[Snippets]]
+  Description = "Show Python version"
+  Tag = ["python", "version"]
+  command = "python3 --version"
+
+[[Snippets]]
+  Description = "Poetry install"
+  Tag = ["python", "poetry"]
+  command = "poetry install"
+
+[[Snippets]]
+  Description = "Poetry add dependency"
+  Tag = ["python", "poetry"]
+  command = "poetry add <package>"
+
+[[Snippets]]
+  Description = "Poetry run command"
+  Tag = ["python", "poetry"]
+  command = "poetry run <command>"

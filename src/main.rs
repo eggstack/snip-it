@@ -215,6 +215,12 @@ enum PremadeCommands {
     /// Sync all premade libraries with server (download missing)
     #[command(alias = "s")]
     Sync,
+    /// Search premade libraries by query
+    #[command(alias = "se")]
+    Search { query: String },
+    /// Update a premade library (show diff and re-download)
+    #[command(alias = "u")]
+    Update { name: String },
 }
 
 fn dispatch_command(cli: Commands) -> SnipResult<()> {
@@ -312,6 +318,12 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
                 commands::premade_cmd::run_get(name, all, &RUNTIME)?;
             }
             PremadeCommands::Sync => commands::premade_cmd::run_sync(&RUNTIME)?,
+            PremadeCommands::Search { query } => {
+                commands::premade_cmd::run_search(query, &RUNTIME)?;
+            }
+            PremadeCommands::Update { name } => {
+                commands::premade_cmd::run_update(name, &RUNTIME)?;
+            }
         },
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();

@@ -75,3 +75,123 @@ Description = "Useful bash functions, aliases, and scripts for daily tasks."
   Description = "URL encode"
   Tag = ["script", "encode"]
   command = "urlencode() { python3 -c \"import urllib.parse; print(urllib.parse.quote('${1}'))\" ; }"
+
+[[Snippets]]
+  Description = "URL decode"
+  Tag = ["script", "decode"]
+  command = "urldecode() { python3 -c \"import urllib.parse; print(urllib.parse.unquote('${1}'))\" ; }"
+
+[[Snippets]]
+  Description = "Colorize grep output"
+  Tag = ["script", "grep"]
+  command = "cgrep() { grep --color=always -i \"$1\" ${2:-.}; }"
+
+[[Snippets]]
+  Description = "Count files by extension"
+  Tag = ["script", "count"]
+  command = "countext() { find . -type f | sed 's/.*\\.//' | sort | uniq -c | sort -rn; }"
+
+[[Snippets]]
+  Description = "Show listening ports"
+  Tag = ["script", "network"]
+  command = "ports() { ss -tulpn | grep LISTEN; }"
+
+[[Snippets]]
+  Description = "Quick JSON pretty print"
+  Tag = ["script", "json"]
+  command = "jsonpp() { python3 -m json.tool; }"
+
+[[Snippets]]
+  Description = "Generate random password"
+  Tag = ["script", "security"]
+  command = "genpass() { openssl rand -base64 ${1:-32}; }"
+
+[[Snippets]]
+  Description = "Show file sizes in human form"
+  Tag = ["script", "disk"]
+  command = "fsize() { ls -lhS ${1:-.}; }"
+
+[[Snippets]]
+  Description = "Find large files"
+  Tag = ["script", "disk"]
+  command = "bigfiles() { find . -type f -exec ls -lhS {} + | sort -k5 -h | tail -n ${1:-10}; }"
+
+[[Snippets]]
+  Description = "Watch a command"
+  Tag = ["script", "monitor"]
+  command = "watchcmd() { watch -n ${1:-2} \"${2:-date}\"; }"
+
+[[Snippets]]
+  Description = "Repeat command N times"
+  Tag = ["script", "loop"]
+  command = "repeat() { for i in $(seq 1 ${1:-1}); do ${2:-echo \"iteration $i\"}; done; }"
+
+[[Snippets]]
+  Description = "Backup directory with timestamp"
+  Tag = ["script", "backup"]
+  command = "backup() { tar -czf \"${1}_$(date +%Y%m%d_%H%M%S).tar.gz\" \"$1\"; }"
+
+[[Snippets]]
+  Description = "Show environmental variables"
+  Tag = ["script", "env"]
+  command = "envlist() { env | sort; }"
+
+[[Snippets]]
+  Description = "Git log with graph"
+  Tag = ["script", "git"]
+  command = "gitgraph() { git log --oneline --graph --all -n ${1:-20}; }"
+
+[[Snippets]]
+  Description = "Git commit all with message"
+  Tag = ["script", "git"]
+  command = "gitam() { git add -A && git commit -m \"$*\"; }"
+
+[[Snippets]]
+  Description = "Git undo last commit (keep changes)"
+  Tag = ["script", "git"]
+  command = "gitundo() { git reset --soft HEAD~1; }"
+
+[[Snippets]]
+  Description = "Show path directories"
+  Tag = ["script", "env"]
+  command = "pathlist() { echo \"$PATH\" | tr ':' '\\n'; }"
+
+[[Snippets]]
+  Description = "Quick HTTP server with CORS"
+  Tag = ["script", "server"]
+  command = "cors-serve() { python3 -c \"from http.server import HTTPServer, SimpleHTTPRequestHandler; CORS=lambda: type('CORS', (SimpleHTTPRequestHandler,), {'end_headers':lambda s:s.send_header('Access-Control-Allow-Origin','*')}); HTTPServer(('',${1:-8000}),CORS).serve_forever()\" ; }"
+
+[[Snippets]]
+  Description = "Convert timestamp to date"
+  Tag = ["script", "time"]
+  command = "ts2date() { date -d @${1} 2>/dev/null || date -r ${1}; }"
+
+[[Snippets]]
+  Description = "Get file hash (SHA256)"
+  Tag = ["script", "hash"]
+  command = "fhash() { sha256sum ${1:-/dev/stdin}; }"
+
+[[Snippets]]
+  Description = "Show most used commands"
+  Tag = ["script", "history"]
+  command = "topcmds() { history | awk '{print \$2}' | sort | uniq -c | sort -rn | head -n ${1:-20}; }"
+
+[[Snippets]]
+  Description = "Extract URLs from text"
+  Tag = ["script", "text"]
+  command = "extracturls() { grep -oP 'https?://[^\\s\"<>]+' ${1:-/dev/stdin}; }"
+
+[[Snippets]]
+  Description = "Convert line endings to Unix"
+  Tag = ["script", "text"]
+  command = "tounix() { sed -i 's/\\r$//' \"$1\"; }"
+
+[[Snippets]]
+  Description = "Show top 10 largest directories"
+  Tag = ["script", "disk"]
+  command = "topdirs() { du -h --max-depth=2 2>/dev/null | sort -h | tail -n 10; }"
+
+[[Snippets]]
+  Description = "Monitor file changes"
+  Tag = ["script", "monitor"]
+  command = "watchfile() { inotifywait -m ${1:-.} 2>/dev/null || fswatch ${1:-.}; }"

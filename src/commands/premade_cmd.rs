@@ -137,11 +137,7 @@ pub fn run_get(
 
     let mgr = LibraryManager::new()?;
     let path = mgr.save_premade_library(&name, &content)?;
-    println!(
-        "Downloaded premade library '{}' to {}",
-        name,
-        path.display()
-    );
+    println!("Downloaded premade library '{name}' to {}", path.display());
     Ok(())
 }
 
@@ -155,5 +151,109 @@ pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     }
 
     crate::sync_commands::run_premade_sync(&sync_settings, runtime)?;
+    Ok(())
+}
+
+/// Searches premade libraries on the server by query string.
+pub fn run_search(query: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    let sync_settings = get_sync_settings();
+
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return Ok(());
+    }
+
+    let mut client = runtime
+        .block_on(SyncClient::create(sync_settings.clone()))
+        .map_err(|e| {
+            crate::error::SnipError::runtime_error(
+                "Failed to create sync client",
+                Some(&e.to_string()),
+            )
+        })?;
+
+    let libs = runtime
+        .block_on(client.search_premade_libraries(&query))
+        .map_err(|e| {
+            crate::error::SnipError::runtime_error(
+                "Failed to search premade libraries",
+                Some(&e.to_string()),
+            )
+        })?;
+
+    if libs.is_empty() {
+        println!("No premade libraries found matching '{query}'.");
+    } else {
+        println!("Found {} premade libraries matching '{query}':", libs.len(),);
+        for lib in &libs {
+            let tags_display = if lib.tags.is_empty() {
+                String::new()
+            } else {
+                let tags = lib.tags.join(", ");
+                format!(" [{tags}]")
+            };
+            println!(
+                "  {}: {} ({} snippets){tags_display}",
+                lib.filename, lib.description, lib.snippet_count
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Updates a premade library by re-downloading it and showing the diff.
+pub fn run_update(name: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    let sync_settings = get_sync_settings();
+
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return Ok(());
+    }
+
+    let mut client = runtime
+        .block_on(SyncClient::create(sync_settings.clone()))
+        .map_err(|e| {
+            crate::error::SnipError::runtime_error(
+                "Failed to create sync client",
+                Some(&e.to_string()),
+            )
+        })?;
+
+    let mgr = crate::library::LibraryManager::new()?;
+
+    let old_content = if mgr.premade_exists(&name) {
+        let premade_path = mgr.get_premade_dir().join(format!("{name}.toml"));
+        std::fs::read_to_string(&premade_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let new_content = runtime
+        .block_on(client.get_premade_library(&name))
+        .map_err(|e| {
+            crate::error::SnipError::runtime_error(
+                "Failed to get premade library",
+                Some(&e.to_string()),
+            )
+        })?;
+
+    if old_content == new_content {
+        println!("Premade library '{name}' is already up to date.");
+        return Ok(());
+    }
+
+    if old_content.is_empty() {
+        println!("Installing new premade library '{name}':");
+        println!("  {} new lines", new_content.lines().count());
+    } else {
+        let old_lines: Vec<&str> = old_content.lines().collect();
+        let new_lines: Vec<&str> = new_content.lines().collect();
+        let added = new_lines.iter().filter(|l| !old_lines.contains(l)).count();
+        let removed = old_lines.iter().filter(|l| !new_lines.contains(l)).count();
+        println!("Updating premade library '{name}': +{added} / -{removed} lines",);
+    }
+
+    let path = mgr.save_premade_library(&name, &new_content)?;
+    println!("Updated '{name}' → {}", path.display());
     Ok(())
 }

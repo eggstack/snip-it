@@ -1,0 +1,182 @@
+# C# / .NET - .NET development commands
+Description = "Commands for C# and .NET development, dotnet CLI, and common frameworks."
+
+[[Snippets]]
+  Description = "Create new console project"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet new console -n <project_name>"
+
+[[Snippets]]
+  Description = "Create new web API project"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet new webapi -n <project_name>"
+
+[[Snippets]]
+  Description = "Create new class library"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet new classlib -n <project_name>"
+
+[[Snippets]]
+  Description = "Create new Blazor project"
+  Tag = ["csharp", "dotnet", "blazor"]
+  command = "dotnet new blazorserver -n <project_name>"
+
+[[Snippets]]
+  Description = "Create new xUnit test project"
+  Tag = ["csharp", "dotnet", "test"]
+  command = "dotnet new xunit -n <project_name>"
+
+[[Snippets]]
+  Description = "Build project"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet build"
+
+[[Snippets]]
+  Description = "Build solution"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet build <solution>.sln"
+
+[[Snippets]]
+  Description = "Build in release mode"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet build -c Release"
+
+[[Snippets]]
+  Description = "Run project"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet run"
+
+[[Snippets]]
+  Description = "Run with arguments"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet run -- <args>"
+
+[[Snippets]]
+  Description = "Run specific project"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet run --project <project_dir>"
+
+[[Snippets]]
+  Description = "Test project"
+  Tag = ["csharp", "dotnet", "test"]
+  command = "dotnet test"
+
+[[Snippets]]
+  Description = "Test with verbose output"
+  Tag = ["csharp", "dotnet", "test"]
+  command = "dotnet test --verbosity normal"
+
+[[Snippets]]
+  Description = "Test with coverage"
+  Tag = ["csharp", "dotnet", "test"]
+  command = "dotnet test --collect:'XPlat Code Coverage'"
+
+[[Snippets]]
+  Description = "Test specific filter"
+  Tag = ["csharp", "dotnet", "test"]
+  command = "dotnet test --filter <filter_expression>"
+
+[[Snippets]]
+  Description = "Restore NuGet packages"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet restore"
+
+[[Snippets]]
+  Description = "Add NuGet package"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet add <project> package <package_name>"
+
+[[Snippets]]
+  Description = "Add project reference"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet add <project> reference <reference_project>"
+
+[[Snippets]]
+  Description = "List NuGet packages"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet list <project> package"
+
+[[Snippets]]
+  Description = "Clean build artifacts"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet clean"
+
+[[Snippets]]
+  Description = "Publish application"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet publish -c Release"
+
+[[Snippets]]
+  Description = "Publish self-contained"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet publish -c Release --self-contained true -r <rid>"
+
+[[Snippets]]
+  Description = "Watch and rebuild"
+  Tag = ["csharp", "dotnet", "dev"]
+  command = "dotnet watch run"
+
+[[Snippets]]
+  Description = "Watch and test"
+  Tag = ["csharp", "dotnet", "dev"]
+  command = "dotnet watch test"
+
+[[Snippets]]
+  Description = "Check .NET version"
+  Tag = ["csharp", "dotnet", "version"]
+  command = "dotnet --version"
+
+[[Snippets]]
+  Description = "List installed SDKs"
+  Tag = ["csharp", "dotnet", "version"]
+  command = "dotnet --list-sdks"
+
+[[Snippets]]
+  Description = "List installed runtimes"
+  Tag = ["csharp", "dotnet", "version"]
+  command = "dotnet --list-runtimes"
+
+[[Snippets]]
+  Description = "Create solution file"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet new sln -n <solution_name>"
+
+[[Snippets]]
+  Description = "Add project to solution"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet sln <solution>.sln add <project>"
+
+[[Snippets]]
+  Description = "Format code"
+  Tag = ["csharp", "dotnet", "fmt"]
+  command = "dotnet format"
+
+[[Snippets]]
+  Description = "Format check only"
+  Tag = ["csharp", "dotnet", "fmt"]
+  command = "dotnet format --verify-no-changes"
+
+[[Snippets]]
+  Description = "Run migrations (EF Core)"
+  Tag = ["csharp", "dotnet", "database"]
+  command = "dotnet ef migrations add <MigrationName>"
+
+[[Snippets]]
+  Description = "Update database (EF Core)"
+  Tag = ["csharp", "dotnet", "database"]
+  command = "dotnet ef database update"
+
+[[Snippets]]
+  Description = "Remove package"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet remove <project> package <package_name>"
+
+[[Snippets]]
+  Description = "Tool install"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet tool install --global <tool_name>"
+
+[[Snippets]]
+  Description = "Tool update"
+  Tag = ["csharp", "dotnet"]
+  command = "dotnet tool update --global <tool_name>"

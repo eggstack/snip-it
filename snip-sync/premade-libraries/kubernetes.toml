@@ -1,0 +1,232 @@
+# Kubernetes - kubectl and cluster management commands
+Description = "Essential Kubernetes commands for managing clusters, pods, services, and deployments."
+
+[[Snippets]]
+  Description = "Get all pods in current namespace"
+  Tag = ["kubernetes", "pods"]
+  command = "kubectl get pods"
+
+[[Snippets]]
+  Description = "Get all pods across all namespaces"
+  Tag = ["kubernetes", "pods"]
+  command = "kubectl get pods -A"
+
+[[Snippets]]
+  Description = "Describe a pod"
+  Tag = ["kubernetes", "pods"]
+  command = "kubectl describe pod <pod_name>"
+
+[[Snippets]]
+  Description = "View pod logs"
+  Tag = ["kubernetes", "logs"]
+  command = "kubectl logs <pod_name>"
+
+[[Snippets]]
+  Description = "Follow pod logs"
+  Tag = ["kubernetes", "logs"]
+  command = "kubectl logs -f <pod_name>"
+
+[[Snippets]]
+  Description = "View logs from previous container"
+  Tag = ["kubernetes", "logs"]
+  command = "kubectl logs <pod_name> --previous"
+
+[[Snippets]]
+  Description = "Execute command in pod"
+  Tag = ["kubernetes", "pods"]
+  command = "kubectl exec -it <pod_name> -- sh"
+
+[[Snippets]]
+  Description = "Port forward to pod"
+  Tag = ["kubernetes", "networking"]
+  command = "kubectl port-forward <pod_name> <local_port>:<remote_port>"
+
+[[Snippets]]
+  Description = "Get all services"
+  Tag = ["kubernetes", "services"]
+  command = "kubectl get svc"
+
+[[Snippets]]
+  Description = "Describe a service"
+  Tag = ["kubernetes", "services"]
+  command = "kubectl describe svc <service_name>"
+
+[[Snippets]]
+  Description = "Get all deployments"
+  Tag = ["kubernetes", "deployments"]
+  command = "kubectl get deployments"
+
+[[Snippets]]
+  Description = "Rollout restart deployment"
+  Tag = ["kubernetes", "deployments"]
+  command = "kubectl rollout restart deployment/<deployment_name>"
+
+[[Snippets]]
+  Description = "Check rollout status"
+  Tag = ["kubernetes", "deployments"]
+  command = "kubectl rollout status deployment/<deployment_name>"
+
+[[Snippets]]
+  Description = "Scale deployment"
+  Tag = ["kubernetes", "deployments"]
+  command = "kubectl scale deployment <deployment_name> --replicas=<count>"
+
+[[Snippets]]
+  Description = "Get all nodes"
+  Tag = ["kubernetes", "nodes"]
+  command = "kubectl get nodes"
+
+[[Snippets]]
+  Description = "Describe a node"
+  Tag = ["kubernetes", "nodes"]
+  command = "kubectl describe node <node_name>"
+
+[[Snippets]]
+  Description = "Get all namespaces"
+  Tag = ["kubernetes", "namespaces"]
+  command = "kubectl get namespaces"
+
+[[Snippets]]
+  Description = "Create namespace"
+  Tag = ["kubernetes", "namespaces"]
+  command = "kubectl create namespace <namespace>"
+
+[[Snippets]]
+  Description = "Get all configmaps"
+  Tag = ["kubernetes", "config"]
+  command = "kubectl get configmaps"
+
+[[Snippets]]
+  Description = "Get all secrets"
+  Tag = ["kubernetes", "config"]
+  command = "kubectl get secrets"
+
+[[Snippets]]
+  Description = "Apply manifest file"
+  Tag = ["kubernetes", "resources"]
+  command = "kubectl apply -f <filename>"
+
+[[Snippets]]
+  Description = "Delete resources from manifest"
+  Tag = ["kubernetes", "resources"]
+  command = "kubectl delete -f <filename>"
+
+[[Snippets]]
+  Description = "Get all resources in namespace"
+  Tag = ["kubernetes", "resources"]
+  command = "kubectl get all -n <namespace>"
+
+[[Snippets]]
+  Description = "Delete pod"
+  Tag = ["kubernetes", "pods"]
+  command = "kubectl delete pod <pod_name>"
+
+[[Snippets]]
+  Description = "Get events sorted by timestamp"
+  Tag = ["kubernetes", "debug"]
+  command = "kubectl get events --sort-by='.lastTimestamp'"
+
+[[Snippets]]
+  Description = "Check cluster info"
+  Tag = ["kubernetes", "cluster"]
+  command = "kubectl cluster-info"
+
+[[Snippets]]
+  Description = "Get component statuses"
+  Tag = ["kubernetes", "cluster"]
+  command = "kubectl get cs"
+
+[[Snippets]]
+  Description = "Context switch"
+  Tag = ["kubernetes", "cluster"]
+  command = "kubectl config use-context <context_name>"
+
+[[Snippets]]
+  Description = "List contexts"
+  Tag = ["kubernetes", "cluster"]
+  command = "kubectl config get-contexts"
+
+[[Snippets]]
+  Description = "Set default namespace"
+  Tag = ["kubernetes", "namespaces"]
+  command = "kubectl config set-context --current --namespace=<namespace>"
+
+[[Snippets]]
+  Description = "Dry run resource creation"
+  Tag = ["kubernetes", "debug"]
+  command = "kubectl run <name> --image=<image> --dry-run=client -o yaml"
+
+[[Snippets]]
+  Description = "Get pod resource usage"
+  Tag = ["kubernetes", "monitoring"]
+  command = "kubectl top pods"
+
+[[Snippets]]
+  Description = "Get node resource usage"
+  Tag = ["kubernetes", "monitoring"]
+  command = "kubectl top nodes"
+
+[[Snippets]]
+  Description = "Port forward to service"
+  Tag = ["kubernetes", "networking"]
+  command = "kubectl port-forward svc/<service_name> <local_port>:<remote_port>"
+
+[[Snippets]]
+  Description = "Get ingress resources"
+  Tag = ["kubernetes", "networking"]
+  command = "kubectl get ingress"
+
+[[Snippets]]
+  Description = "Get persistent volume claims"
+  Tag = ["kubernetes", "storage"]
+  command = "kubectl get pvc"
+
+[[Snippets]]
+  Description = "Get persistent volumes"
+  Tag = ["kubernetes", "storage"]
+  command = "kubectl get pv"
+
+[[Snippets]]
+  Description = "Get storage classes"
+  Tag = ["kubernetes", "storage"]
+  command = "kubectl get storageclass"
+
+[[Snippets]]
+  Description = "Cordon a node (unschedulable)"
+  Tag = ["kubernetes", "nodes"]
+  command = "kubectl cordon <node_name>"
+
+[[Snippets]]
+  Description = "Drain a node"
+  Tag = ["kubernetes", "nodes"]
+  command = "kubectl drain <node_name> --ignore-daemonsets --delete-emptydir-data"
+
+[[Snippets]]
+  Description = "Uncordon a node"
+  Tag = ["kubernetes", "nodes"]
+  command = "kubectl uncordon <node_name>"
+
+[[Snippets]]
+  Description = "Get all stateful sets"
+  Tag = ["kubernetes", "statefulsets"]
+  command = "kubectl get statefulsets"
+
+[[Snippets]]
+  Description = "Get all daemon sets"
+  Tag = ["kubernetes", "daemonsets"]
+  command = "kubectl get daemonsets"
+
+[[Snippets]]
+  Description = "Get all cron jobs"
+  Tag = ["kubernetes", "jobs"]
+  command = "kubectl get cronjobs"
+
+[[Snippets]]
+  Description = "Get all jobs"
+  Tag = ["kubernetes", "jobs"]
+  command = "kubectl get jobs"
+
+[[Snippets]]
+  Description = "Create job from cronjob"
+  Tag = ["kubernetes", "jobs"]
+  command = "kubectl create job --from=cronjob/<cronjob_name> <job_name>"

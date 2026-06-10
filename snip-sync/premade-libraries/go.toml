@@ -1,0 +1,172 @@
+# Go - Go development commands
+Description = "Commands for Go development, go modules, testing, and debugging."
+
+[[Snippets]]
+  Description = "Initialize Go module"
+  Tag = ["go", "modules"]
+  command = "go mod init <module_path>"
+
+[[Snippets]]
+  Description = "Download dependencies"
+  Tag = ["go", "modules"]
+  command = "go mod download"
+
+[[Snippets]]
+  Description = "Tidy module dependencies"
+  Tag = ["go", "modules"]
+  command = "go mod tidy"
+
+[[Snippets]]
+  Description = "Show dependency graph"
+  Tag = ["go", "modules"]
+  command = "go mod graph"
+
+[[Snippets]]
+  Description = "Vendor dependencies"
+  Tag = ["go", "modules"]
+  command = "go mod vendor"
+
+[[Snippets]]
+  Description = "Add dependency"
+  Tag = ["go", "modules"]
+  command = "go get <package>"
+
+[[Snippets]]
+  Description = "Update dependency"
+  Tag = ["go", "modules"]
+  command = "go get -u <package>"
+
+[[Snippets]]
+  Description = "Run Go program"
+  Tag = ["go", "run"]
+  command = "go run <file.go>"
+
+[[Snippets]]
+  Description = "Run package"
+  Tag = ["go", "run"]
+  command = "go run ."
+
+[[Snippets]]
+  Description = "Build binary"
+  Tag = ["go", "build"]
+  command = "go build"
+
+[[Snippets]]
+  Description = "Build with output name"
+  Tag = ["go", "build"]
+  command = "go build -o <output>"
+
+[[Snippets]]
+  Description = "Build for specific OS/arch"
+  Tag = ["go", "build"]
+  command = "GOOS=<os> GOARCH=<arch> go build"
+
+[[Snippets]]
+  Description = "Install binary"
+  Tag = ["go", "build"]
+  command = "go install"
+
+[[Snippets]]
+  Description = "Run all tests"
+  Tag = ["go", "test"]
+  command = "go test ./..."
+
+[[Snippets]]
+  Description = "Run tests verbose"
+  Tag = ["go", "test"]
+  command = "go test -v ./..."
+
+[[Snippets]]
+  Description = "Run tests with coverage"
+  Tag = ["go", "test"]
+  command = "go test -coverprofile=coverage.out ./..."
+
+[[Snippets]]
+  Description = "Show coverage HTML"
+  Tag = ["go", "test"]
+  command = "go tool cover -html=coverage.out"
+
+[[Snippets]]
+  Description = "Run specific test"
+  Tag = ["go", "test"]
+  command = "go test -run <TestName>"
+
+[[Snippets]]
+  Description = "Run benchmarks"
+  Tag = ["go", "test"]
+  command = "go test -bench=."
+
+[[Snippets]]
+  Description = "Run tests in race detector mode"
+  Tag = ["go", "test"]
+  command = "go test -race ./..."
+
+[[Snippets]]
+  Description = "Check code formatting"
+  Tag = ["go", "fmt"]
+  command = "gofmt -l ."
+
+[[Snippets]]
+  Description = "Auto-format code"
+  Tag = ["go", "fmt"]
+  command = "gofmt -w ."
+
+[[Snippets]]
+  Description = "Run goimports"
+  Tag = ["go", "fmt"]
+  command = "goimports -w ."
+
+[[Snippets]]
+  Description = "Lint with golangci-lint"
+  Tag = ["go", "lint"]
+  command = "golangci-lint run"
+
+[[Snippets]]
+  Description = "Vet code for bugs"
+  Tag = ["go", "lint"]
+  command = "go vet ./..."
+
+[[Snippets]]
+  Description = "Generate code (go generate)"
+  Tag = ["go", "generate"]
+  command = "go generate ./..."
+
+[[Snippets]]
+  Description = "List Go environment"
+  Tag = ["go", "info"]
+  command = "go env"
+
+[[Snippets]]
+  Description = "Check Go version"
+  Tag = ["go", "version"]
+  command = "go version"
+
+[[Snippets]]
+  Description = "Show dependency list"
+  Tag = ["go", "modules"]
+  command = "go list -m all"
+
+[[Snippets]]
+  Description = "Clean build cache"
+  Tag = ["go", "cache"]
+  command = "go clean -cache"
+
+[[Snippets]]
+  Description = "Clean test cache"
+  Tag = ["go", "cache"]
+  command = "go clean -testcache"
+
+[[Snippets]]
+  Description = "Cross-compile for Linux"
+  Tag = ["go", "build"]
+  command = "GOOS=linux GOARCH=amd64 go build -o <binary>"
+
+[[Snippets]]
+  Description = "Cross-compile for macOS"
+  Tag = ["go", "build"]
+  command = "GOOS=darwin GOARCH=arm64 go build -o <binary>"
+
+[[Snippets]]
+  Description = "Cross-compile for Windows"
+  Tag = ["go", "build"]
+  command = "GOOS=windows GOARCH=amd64 go build -o <binary>.exe"
