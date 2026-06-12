@@ -18,7 +18,7 @@ use std::io;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::text::{Line, Span};
@@ -1301,7 +1301,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         sel.move_to_top();
                                     }
                                 }
-                                KeyCode::Char(c) => {
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     if tag_filter_mode {
                                         filter_state.tag_filter_text.push(c);
                                         filter_dirty = true;

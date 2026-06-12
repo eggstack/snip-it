@@ -49,5 +49,31 @@ pub fn run() -> SnipResult<()> {
     println!("  Enter : save & apply theme");
     println!("  e/q   : cancel & revert to previous theme");
     println!("  Esc   : leave filter (back to picker normal mode)");
+    println!();
+    println!("Variable Prompt (modal INS/NOR, starts in INS):");
+    println!("  Insert Mode (default):");
+    println!("    type        : insert at cursor (all printable chars incl. q)");
+    println!("    ←/→         : move cursor within field");
+    println!("    ↑/↓         : move between variables");
+    println!("    Tab/ctrl+d  : next variable (Tab wraps, ctrl+d clamps)");
+    println!("    ctrl+u      : previous variable (clamps)");
+    println!("    Backspace   : delete char before cursor");
+    println!("    Enter       : save values");
+    println!("    Esc         : switch to normal mode");
+    println!();
+    println!("  Normal Mode:");
+    println!("    h/←         : move cursor left");
+    println!("    l/→         : move cursor right");
+    println!("    0 / $       : move cursor to start / end of field");
+    println!("    j/↓         : next variable");
+    println!("    k/↑         : previous variable");
+    println!("    Tab         : next variable (wraps)");
+    println!("    x / Delete  : delete char at cursor");
+    println!("    Backspace   : delete char before cursor");
+    println!("    a / A / I   : insert mode (after / at end / at start)");
+    println!("    d           : toggle default-value hint");
+    println!("    Enter       : save values");
+    println!("    q           : back to snippet selector (NOT quit)");
+    println!("    Ctrl+c      : exit program");
     Ok(())
 }

@@ -249,6 +249,7 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
 
     match ui::prompt_variables(vars)? {
         ui::VariablePromptResult::Cancel => Ok(ExpandedCommand::Cancel),
+        ui::VariablePromptResult::Back => Ok(ExpandedCommand::Skip),
         ui::VariablePromptResult::Skip => Ok(ExpandedCommand::Skip),
         ui::VariablePromptResult::Values(values) => Ok(ExpandedCommand::Expanded(
             crate::utils::expand_command(&snippet.command, &values),
