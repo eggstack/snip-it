@@ -1,6 +1,6 @@
 use ratatui::widgets::ScrollbarState;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) enum SortMode {
     #[default]
     None,

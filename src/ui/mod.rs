@@ -57,6 +57,98 @@ pub fn get_terminate() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
 
 static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FilterRequest {
+    text: String,
+    include_tags: bool,
+    incremental: bool,
+}
+
+impl FilterRequest {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    fn can_narrow_from(&self, previous: &Self) -> bool {
+        !previous.text.is_empty()
+            && self.incremental == previous.incremental
+            && self.include_tags == previous.include_tags
+            && self.text.starts_with(&previous.text)
+    }
+}
+
+fn current_filter_request(
+    filter: &str,
+    incremental_search: &str,
+    filter_state: &FilterState,
+    tag_filter_mode: bool,
+) -> FilterRequest {
+    if !incremental_search.is_empty() {
+        return FilterRequest {
+            text: incremental_search.to_string(),
+            include_tags: false,
+            incremental: true,
+        };
+    }
+
+    let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
+    if !has_main_filter {
+        return FilterRequest {
+            text: String::new(),
+            include_tags: false,
+            incremental: false,
+        };
+    }
+
+    let text = if tag_filter_mode {
+        &filter_state.tag_filter_text
+    } else {
+        filter
+    };
+    FilterRequest {
+        text: text.to_string(),
+        include_tags: tag_filter_mode || !filter_state.tag_filter_text.is_empty(),
+        incremental: false,
+    }
+}
+
+fn rebuild_filter_candidates<'a>(
+    candidates: &mut Vec<(usize, Option<i64>)>,
+    source_indices: impl Iterator<Item = &'a usize>,
+    request: &FilterRequest,
+    all_display: &[String],
+    all_display_lower: &[String],
+    all_tags_lower: &[Vec<String>],
+) {
+    candidates.clear();
+
+    if request.is_empty() {
+        candidates.extend((0..all_display.len()).map(|i| (i, None)));
+        return;
+    }
+
+    let filter_lower = request.text.to_lowercase();
+    for &i in source_indices {
+        let Some(display) = all_display.get(i) else {
+            continue;
+        };
+        let display_match = MATCHER.fuzzy_match(display, &request.text);
+        let is_exact_display = all_display_lower
+            .get(i)
+            .is_some_and(|display| display == &filter_lower);
+        let tag_match = request.include_tags
+            && all_tags_lower.get(i).is_some_and(|snippet_tags| {
+                snippet_tags.iter().any(|tag| tag.contains(&filter_lower))
+            });
+
+        if is_exact_display || tag_match {
+            candidates.push((i, Some(i64::MAX)));
+        } else if let Some(score) = display_match {
+            candidates.push((i, Some(score)));
+        }
+    }
+}
+
 fn sort_filtered_indices(
     filtered: &mut [(usize, Option<i64>)],
     filter_state: &FilterState,
@@ -315,6 +407,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         .iter()
         .map(|snippet_tags| snippet_tags.iter().map(|tag| tag.to_lowercase()).collect())
         .collect();
+    let mut filter_candidates: Vec<(usize, Option<i64>)> =
+        (0..all_display.len()).map(|i| (i, None)).collect();
+    let all_filter_indices: Vec<usize> = (0..all_display.len()).collect();
+    let mut last_filter_request: Option<FilterRequest> = None;
     sel.update(filtered.len());
 
     loop {
@@ -403,62 +499,51 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             false
         };
 
-        let has_incremental_search = !incremental_search.is_empty();
-        let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
-        let current_filter_text: &str = if tag_filter_mode {
-            &filter_state.tag_filter_text
-        } else {
-            &filter
-        };
-
         if should_recompute {
-            let mut candidates: Vec<(usize, Option<i64>)> = Vec::with_capacity(all_display.len());
-            if has_incremental_search {
-                let incremental_lower = incremental_search.to_lowercase();
-                for (i, display) in all_display.iter().enumerate() {
-                    if let Some(score) = MATCHER.fuzzy_match(display, &incremental_search) {
-                        let is_exact = all_display_lower
-                            .get(i)
-                            .is_some_and(|display| display == &incremental_lower);
-                        candidates.push((i, Some(if is_exact { i64::MAX } else { score })));
-                    }
+            let filter_request = current_filter_request(
+                &filter,
+                &incremental_search,
+                &filter_state,
+                tag_filter_mode,
+            );
+            if last_filter_request.as_ref() != Some(&filter_request) {
+                if last_filter_request
+                    .as_ref()
+                    .is_some_and(|previous| filter_request.can_narrow_from(previous))
+                {
+                    let previous_filtered = filtered.clone();
+                    rebuild_filter_candidates(
+                        &mut filter_candidates,
+                        previous_filtered.iter(),
+                        &filter_request,
+                        &all_display,
+                        &all_display_lower,
+                        &all_tags_lower,
+                    );
+                } else {
+                    rebuild_filter_candidates(
+                        &mut filter_candidates,
+                        all_filter_indices.iter(),
+                        &filter_request,
+                        &all_display,
+                        &all_display_lower,
+                        &all_tags_lower,
+                    );
                 }
-            } else if has_main_filter {
-                let filter_lower = current_filter_text.to_lowercase();
-
-                for (i, display) in all_display.iter().enumerate() {
-                    let display_match = MATCHER.fuzzy_match(display, current_filter_text);
-                    let is_exact_display = all_display_lower
-                        .get(i)
-                        .is_some_and(|display| display == &filter_lower);
-                    let tag_match = if tag_filter_mode || !filter_state.tag_filter_text.is_empty() {
-                        all_tags_lower.get(i).is_some_and(|snippet_tags| {
-                            snippet_tags.iter().any(|tag| tag.contains(&filter_lower))
-                        })
-                    } else {
-                        false
-                    };
-
-                    if is_exact_display || tag_match {
-                        candidates.push((i, Some(i64::MAX)));
-                    } else if let Some(score) = display_match {
-                        candidates.push((i, Some(score)));
-                    }
-                }
-            } else {
-                candidates.extend((0..all_display.len()).map(|i| (i, None)));
             }
 
-            let has_filter = has_incremental_search || has_main_filter;
+            let has_filter = !filter_request.is_empty();
             sort_filtered_indices(
-                &mut candidates,
+                &mut filter_candidates,
                 &filter_state,
                 snippets,
                 &all_display_lower,
                 has_filter,
             );
 
-            filtered = candidates.into_iter().map(|(i, _)| i).collect();
+            filtered.clear();
+            filtered.extend(filter_candidates.iter().map(|(i, _)| *i));
+            last_filter_request = Some(filter_request);
 
             sel.update(filtered.len());
         } else {
@@ -1491,6 +1576,89 @@ mod tests {
 
         terminate.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(terminate.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn filter_request_detects_incremental_narrowing() {
+        let previous = FilterRequest {
+            text: "git".to_string(),
+            include_tags: false,
+            incremental: false,
+        };
+        let current = FilterRequest {
+            text: "git st".to_string(),
+            include_tags: false,
+            incremental: false,
+        };
+        assert!(current.can_narrow_from(&previous));
+
+        let changed_mode = FilterRequest {
+            text: "git st".to_string(),
+            include_tags: true,
+            incremental: false,
+        };
+        assert!(!changed_mode.can_narrow_from(&previous));
+    }
+
+    #[test]
+    fn rebuild_filter_candidates_matches_display_and_tags() {
+        let all_display = vec![
+            "[status]: git status".to_string(),
+            "[logs]: journalctl -u snip".to_string(),
+            "[deploy]: ./release".to_string(),
+        ];
+        let all_display_lower: Vec<String> = all_display.iter().map(|d| d.to_lowercase()).collect();
+        let all_tags_lower = vec![
+            vec!["git".to_string()],
+            vec!["systemd".to_string()],
+            vec!["release".to_string()],
+        ];
+        let all_indices = [0, 1, 2];
+        let mut candidates = Vec::new();
+
+        rebuild_filter_candidates(
+            &mut candidates,
+            all_indices.iter(),
+            &FilterRequest {
+                text: "systemd".to_string(),
+                include_tags: true,
+                incremental: false,
+            },
+            &all_display,
+            &all_display_lower,
+            &all_tags_lower,
+        );
+
+        assert_eq!(candidates, vec![(1, Some(i64::MAX))]);
+    }
+
+    #[test]
+    fn current_filter_request_prefers_incremental_search() {
+        let mut filter_state = FilterState {
+            sort_mode: SortMode::None,
+            tag_filter_text: "tag".to_string(),
+        };
+
+        let request = current_filter_request("main", "inc", &filter_state, true);
+        assert_eq!(
+            request,
+            FilterRequest {
+                text: "inc".to_string(),
+                include_tags: false,
+                incremental: true,
+            }
+        );
+
+        filter_state.tag_filter_text.clear();
+        let request = current_filter_request("main", "", &filter_state, false);
+        assert_eq!(
+            request,
+            FilterRequest {
+                text: "main".to_string(),
+                include_tags: false,
+                incremental: false,
+            }
+        );
     }
 
     #[test]
