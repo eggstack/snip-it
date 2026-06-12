@@ -309,8 +309,9 @@ fn warm_visible_highlights(
     highlighted_commands: &mut [Option<Line<'static>>],
     visible_indices: &[usize],
     budget: Duration,
-) {
+) -> bool {
     let started = Instant::now();
+    let mut warmed_any = false;
     for &idx in visible_indices {
         let Some(command) = commands.get(idx) else {
             continue;
@@ -323,14 +324,43 @@ fn warm_visible_highlights(
         }
 
         *slot = Some(highlight_command(command));
+        warmed_any = true;
         if started.elapsed() >= budget {
             break;
         }
     }
+    warmed_any
 }
 
 fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
+}
+
+#[derive(Clone, Debug)]
+struct SnippetPreview {
+    content: String,
+}
+
+impl SnippetPreview {
+    fn from_command(command: &str) -> Self {
+        let vars = extract_variables(command);
+        let has_unmatched = has_unmatched_angle_bracket(command);
+        let content = if !vars.is_empty() || has_unmatched {
+            let mut content = format!(
+                "{}\n\nVars: {}",
+                strip_escape_sequences(command),
+                vars.join(", ")
+            );
+            if has_unmatched {
+                content.push_str("\n\nWarning: unmatched '<' found - will be treated as literal");
+            }
+            content
+        } else {
+            strip_escape_sequences(command)
+        };
+
+        Self { content }
+    }
 }
 
 fn ensure_theme_picker_ready(
@@ -461,6 +491,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     // Highlight commands lazily so large libraries do not pay the full syntax
     // highlighting cost before the first frame is shown.
     let mut highlighted_commands: Vec<Option<Line<'static>>> = vec![None; commands.len()];
+    let mut snippet_previews: Vec<Option<SnippetPreview>> = vec![None; commands.len()];
 
     let mut sel = SelectState::new();
     let mut filter = initial_filter.map(String::from).unwrap_or_default();
@@ -523,6 +554,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut filter_candidates: Vec<(usize, Option<i64>)> =
         (0..all_display.len()).map(|i| (i, None)).collect();
     let mut last_filter_request: Option<FilterRequest> = None;
+    let mut needs_redraw = true;
     sel.update(filtered.len());
 
     loop {
@@ -545,6 +577,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 theme_filter.clear();
                 theme_input_text.clear();
                 theme_dirty = false;
+                needs_redraw = true;
             } else {
                 // Snapshot the current in-memory theme so cancel can restore it
                 // even when no theme is persisted to `themes.toml`.
@@ -557,6 +590,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 ) {
                     pending_rehighlight = true;
                 }
+                needs_redraw = true;
             }
         }
 
@@ -564,6 +598,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         if pending_rehighlight {
             highlighted_commands.fill_with(|| None);
             pending_rehighlight = false;
+            needs_redraw = true;
         }
 
         // Debounced theme filter rebuild
@@ -589,6 +624,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             }
             theme_dirty = false;
             last_theme_update = None;
+            needs_redraw = true;
         }
 
         // Debounce: only recompute filtered list if enough time has passed since last filter change
@@ -655,28 +691,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             last_filter_request = Some(filter_request);
 
             sel.update(filtered.len());
+            needs_redraw = true;
         } else {
             sel.update(filtered.len());
         } // end filter recompute
-
-        // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
-        // Main filter text is displayed in the filter input box below, not in the title.
-        // This ensures the input field position remains stable and text appears in the correct location.
-        let filter_indicator = if tag_filter_mode {
-            format!("[tag: {}]", filter_state.tag_filter_text)
-        } else if !insert_mode && !incremental_search.is_empty() {
-            format!("/{incremental_search}")
-        } else {
-            String::new()
-        };
-
-        let sort_indicator = match filter_state.sort_mode {
-            SortMode::None => String::new(),
-            SortMode::Newest => "[new]".to_string(),
-            SortMode::Oldest => "[old]".to_string(),
-            SortMode::AlphaAsc => "[a-z]".to_string(),
-            SortMode::AlphaDesc => "[z-a]".to_string(),
-        };
 
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let terminal_size = ratatui::layout::Rect::new(0, 0, cols, rows);
@@ -700,16 +718,39 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 .saturating_sub(list_visible_rows.saturating_sub(1))
         };
         let list_end = (list_offset + list_visible_rows).min(filtered.len());
-        if let Err(e) = terminal.draw(|f| {
-            let size = f.area();
-            if size.width < 10 || size.height < 10 {
-                let error_msg = "Terminal too small - resize to at least 10x10";
-                let paragraph = Paragraph::new(error_msg)
-                    .centered()
-                    .block(Block::default().title("Error").borders(Borders::ALL));
-                f.render_widget(paragraph, size);
-                return;
-            }
+        if needs_redraw {
+            needs_redraw = false;
+
+            // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
+            // Main filter text is displayed in the filter input box below, not in the title.
+            // This ensures the input field position remains stable and text appears in the correct location.
+            let filter_indicator = if tag_filter_mode {
+                format!("[tag: {}]", filter_state.tag_filter_text)
+            } else if !insert_mode && !incremental_search.is_empty() {
+                format!("/{incremental_search}")
+            } else {
+                String::new()
+            };
+
+            let sort_indicator = match filter_state.sort_mode {
+                SortMode::None => String::new(),
+                SortMode::Newest => "[new]".to_string(),
+                SortMode::Oldest => "[old]".to_string(),
+                SortMode::AlphaAsc => "[a-z]".to_string(),
+                SortMode::AlphaDesc => "[z-a]".to_string(),
+            };
+
+            let draw_result = terminal.draw(|f| {
+                let size = f.area();
+                if size.width < 10 || size.height < 10 {
+                    let error_msg = "Terminal too small - resize to at least 10x10";
+                    let paragraph = Paragraph::new(error_msg)
+                        .centered()
+                        .block(Block::default().title("Error").borders(Borders::ALL));
+                    f.render_widget(paragraph, size);
+                    return;
+                }
+                {
             let picker_mode = theme_picker_mode;
             let picker_ins = theme_picker_insert_mode;
             let picker_filter_text: &str = if picker_ins {
@@ -982,9 +1023,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                     let snippet_cmd = &commands[idx];
                     let snippet_desc = &descriptions[idx];
 
-                    let vars = extract_variables(snippet_cmd);
-                    let has_vars = !vars.is_empty();
-
                     let preview_title = format!("Preview: {snippet_desc}");
                     let preview_block = Block::default()
                         .title(preview_title)
@@ -993,16 +1031,17 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                         .title_style(style_fg(theme.secondary))
                         .style(TuiStyle::default().bg(theme.background));
 
-                    let has_unmatched = has_unmatched_angle_bracket(snippet_cmd);
-                    let preview_content = if has_vars || has_unmatched {
-                        let mut content = format!("{}\n\nVars: {}", strip_escape_sequences(snippet_cmd), vars.join(", "));
-                        if has_unmatched {
-                            content.push_str("\n\nWarning: unmatched '<' found - will be treated as literal");
-                        }
-                        content
-                    } else {
-                        strip_escape_sequences(snippet_cmd)
-                    };
+                    let preview = snippet_previews
+                        .get_mut(idx)
+                        .and_then(|slot| {
+                            if slot.is_none() {
+                                *slot = Some(SnippetPreview::from_command(snippet_cmd));
+                            }
+                            slot.as_ref()
+                        });
+                    let preview_content = preview
+                        .map(|preview| preview.content.as_str())
+                        .unwrap_or(snippet_cmd.as_str());
 
                     let preview_widget = Paragraph::new(preview_content)
                         .block(preview_block)
@@ -1052,20 +1091,28 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 1,
             );
             f.render_widget(status_widget, status_area);
-        }) {
-            tracing::warn!("Terminal draw error: {}", e);
-        }
+                }
+            });
+            if let Err(e) = draw_result {
+                tracing::warn!("Terminal draw error: {}", e);
+            }
 
-        if !theme_picker_mode
-            && !event::poll(Duration::from_millis(0)).unwrap_or(false)
-            && list_offset < list_end
-        {
-            warm_visible_highlights(
-                commands,
-                &mut highlighted_commands,
-                &filtered[list_offset..list_end],
-                HIGHLIGHT_WARM_BUDGET,
-            );
+            if !theme_picker_mode
+                && !event::poll(Duration::from_millis(0)).unwrap_or(false)
+                && list_offset < list_end
+                && warm_visible_highlights(
+                    commands,
+                    &mut highlighted_commands,
+                    &filtered[list_offset..list_end],
+                    HIGHLIGHT_WARM_BUDGET,
+                )
+            {
+                needs_redraw = true;
+            }
+
+            if needs_redraw {
+                continue;
+            }
         }
 
         let poll_timeout = next_event_poll_timeout(
@@ -1080,6 +1127,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         if polled {
             match event::read() {
                 Ok(CEvent::Mouse(mouse_event)) => {
+                    needs_redraw = true;
                     if !theme_picker_mode {
                         // Check for scroll events
                         if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
@@ -1134,6 +1182,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 }
                 Ok(CEvent::Key(key)) => {
                     if key.kind == KeyEventKind::Press {
+                        needs_redraw = true;
                         if let Some((_, instant)) = copied_message
                             && instant.elapsed().as_secs() >= 3
                         {
@@ -1677,6 +1726,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 }
                 Ok(CEvent::Resize(_, _)) => {
                     // Terminal resize - redraw will happen on next iteration
+                    needs_redraw = true;
                 }
                 Ok(_) => {}
                 Err(e) => {
