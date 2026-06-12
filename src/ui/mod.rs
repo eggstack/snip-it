@@ -21,7 +21,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::Style as TuiStyle,
@@ -537,11 +537,15 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             };
             let separator = "─".repeat((size.width as usize).saturating_sub(title_part.len() + 8));
             let theme = get_theme();
+            let title = Line::from(vec![
+                Span::styled(title_part.clone(), style_fg(theme.secondary)),
+                Span::raw(" "),
+                Span::styled(separator, style_fg(theme.border)),
+            ]);
             let block = Block::default()
-                .title(format!("{title_part} {separator}"))
+                .title(title)
                 .borders(Borders::ALL)
                 .border_style(style_fg(theme.border))
-                .title_style(style_fg(theme.secondary))
                 .style(TuiStyle::default().bg(theme.background));
             let input_block_title = if picker_mode {
                 "Theme Filter"
