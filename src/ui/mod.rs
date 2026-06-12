@@ -60,6 +60,7 @@ static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FilterRequest {
     text: String,
+    text_lower: String,
     include_tags: bool,
     incremental: bool,
 }
@@ -86,6 +87,7 @@ fn current_filter_request(
     if !incremental_search.is_empty() {
         return FilterRequest {
             text: incremental_search.to_string(),
+            text_lower: incremental_search.to_lowercase(),
             include_tags: false,
             incremental: true,
         };
@@ -95,6 +97,7 @@ fn current_filter_request(
     if !has_main_filter {
         return FilterRequest {
             text: String::new(),
+            text_lower: String::new(),
             include_tags: false,
             incremental: false,
         };
@@ -107,8 +110,42 @@ fn current_filter_request(
     };
     FilterRequest {
         text: text.to_string(),
+        text_lower: text.to_lowercase(),
         include_tags: tag_filter_mode || !filter_state.tag_filter_text.is_empty(),
         incremental: false,
+    }
+}
+
+fn filter_request_would_narrow(
+    filter: &str,
+    incremental_search: &str,
+    filter_state: &FilterState,
+    tag_filter_mode: bool,
+    last_filter_request: Option<&FilterRequest>,
+) -> bool {
+    let request = current_filter_request(filter, incremental_search, filter_state, tag_filter_mode);
+    last_filter_request.is_some_and(|previous| request.can_narrow_from(previous))
+}
+
+fn filter_update_deadline_for_insert(
+    filter: &str,
+    incremental_search: &str,
+    filter_state: &FilterState,
+    tag_filter_mode: bool,
+    last_filter_request: Option<&FilterRequest>,
+) -> Option<Instant> {
+    if last_filter_request.is_none()
+        || filter_request_would_narrow(
+            filter,
+            incremental_search,
+            filter_state,
+            tag_filter_mode,
+            last_filter_request,
+        )
+    {
+        None
+    } else {
+        Some(Instant::now())
     }
 }
 
@@ -127,18 +164,17 @@ fn rebuild_filter_candidates(
         return;
     }
 
-    let filter_lower = request.text.to_lowercase();
     for i in source_indices {
         let Some(display) = all_display.get(i) else {
             continue;
         };
         let is_exact_display = all_display_lower
             .get(i)
-            .is_some_and(|display| display == &filter_lower);
+            .is_some_and(|display| display == &request.text_lower);
         let tag_match = request.include_tags
             && all_tags_search
                 .get(i)
-                .is_some_and(|snippet_tags| snippet_tags.contains(&filter_lower));
+                .is_some_and(|snippet_tags| snippet_tags.contains(&request.text_lower));
 
         if is_exact_display || tag_match {
             candidates.push((i, Some(i64::MAX)));
@@ -1485,21 +1521,24 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                     if tag_filter_mode {
                                         filter_state.tag_filter_text.push(c);
                                         filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else if insert_mode {
                                         input_text.push(c);
                                         filter.push(c);
                                         filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else if !incremental_search.is_empty() {
                                         incremental_search.push(c);
                                         filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else {
                                         filter.push(c);
                                         filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     }
+                                    last_filter_update = filter_update_deadline_for_insert(
+                                        &filter,
+                                        &incremental_search,
+                                        &filter_state,
+                                        tag_filter_mode,
+                                        last_filter_request.as_ref(),
+                                    );
                                     if !filtered.is_empty() {
                                         sel.move_to_top();
                                     }
@@ -1671,11 +1710,13 @@ mod tests {
     fn filter_request_detects_incremental_narrowing() {
         let previous = FilterRequest {
             text: "git".to_string(),
+            text_lower: "git".to_string(),
             include_tags: false,
             incremental: false,
         };
         let current = FilterRequest {
             text: "git st".to_string(),
+            text_lower: "git st".to_string(),
             include_tags: false,
             incremental: false,
         };
@@ -1683,6 +1724,7 @@ mod tests {
 
         let changed_mode = FilterRequest {
             text: "git st".to_string(),
+            text_lower: "git st".to_string(),
             include_tags: true,
             incremental: false,
         };
@@ -1710,6 +1752,7 @@ mod tests {
             all_indices.iter().copied(),
             &FilterRequest {
                 text: "systemd".to_string(),
+                text_lower: "systemd".to_string(),
                 include_tags: true,
                 incremental: false,
             },
@@ -1733,6 +1776,7 @@ mod tests {
             request,
             FilterRequest {
                 text: "inc".to_string(),
+                text_lower: "inc".to_string(),
                 include_tags: false,
                 incremental: true,
             }
@@ -1744,10 +1788,37 @@ mod tests {
             request,
             FilterRequest {
                 text: "main".to_string(),
+                text_lower: "main".to_string(),
                 include_tags: false,
                 incremental: false,
             }
         );
+    }
+
+    #[test]
+    fn filter_request_would_narrow_detects_typing_extension() {
+        let filter_state = FilterState::default();
+        let previous = FilterRequest {
+            text: "git".to_string(),
+            text_lower: "git".to_string(),
+            include_tags: false,
+            incremental: false,
+        };
+
+        assert!(filter_request_would_narrow(
+            "git s",
+            "",
+            &filter_state,
+            false,
+            Some(&previous)
+        ));
+        assert!(!filter_request_would_narrow(
+            "gi",
+            "",
+            &filter_state,
+            false,
+            Some(&previous)
+        ));
     }
 
     #[test]
