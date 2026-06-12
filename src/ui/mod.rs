@@ -16,7 +16,7 @@ pub use variables::{VariablePromptResult, prompt_variables};
 
 use std::io;
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use fuzzy_matcher::FuzzyMatcher;
@@ -112,13 +112,13 @@ fn current_filter_request(
     }
 }
 
-fn rebuild_filter_candidates<'a>(
+fn rebuild_filter_candidates(
     candidates: &mut Vec<(usize, Option<i64>)>,
-    source_indices: impl Iterator<Item = &'a usize>,
+    source_indices: impl Iterator<Item = usize>,
     request: &FilterRequest,
     all_display: &[String],
     all_display_lower: &[String],
-    all_tags_lower: &[Vec<String>],
+    all_tags_search: &[String],
 ) {
     candidates.clear();
 
@@ -128,22 +128,21 @@ fn rebuild_filter_candidates<'a>(
     }
 
     let filter_lower = request.text.to_lowercase();
-    for &i in source_indices {
+    for i in source_indices {
         let Some(display) = all_display.get(i) else {
             continue;
         };
-        let display_match = MATCHER.fuzzy_match(display, &request.text);
         let is_exact_display = all_display_lower
             .get(i)
             .is_some_and(|display| display == &filter_lower);
         let tag_match = request.include_tags
-            && all_tags_lower.get(i).is_some_and(|snippet_tags| {
-                snippet_tags.iter().any(|tag| tag.contains(&filter_lower))
-            });
+            && all_tags_search
+                .get(i)
+                .is_some_and(|snippet_tags| snippet_tags.contains(&filter_lower));
 
         if is_exact_display || tag_match {
             candidates.push((i, Some(i64::MAX)));
-        } else if let Some(score) = display_match {
+        } else if let Some(score) = MATCHER.fuzzy_match(display, &request.text) {
             candidates.push((i, Some(score)));
         }
     }
@@ -160,7 +159,7 @@ fn sort_filtered_indices(
         return;
     }
 
-    filtered.sort_by(|a, b| {
+    filtered.sort_unstable_by(|a, b| {
         let score_cmp = match (a.1, b.1) {
             (Some(sa), Some(sb)) => sb.cmp(&sa),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -215,6 +214,83 @@ fn sort_filtered_indices(
             score_cmp
         }
     });
+}
+
+fn debounce_elapsed(last_update: Option<Instant>, debounce_ms: u64) -> bool {
+    last_update.is_none_or(|t| t.elapsed() >= Duration::from_millis(debounce_ms))
+}
+
+fn pending_debounce_timeout(
+    dirty: bool,
+    last_update: Option<Instant>,
+    debounce_ms: u64,
+) -> Option<Duration> {
+    if !dirty {
+        return None;
+    }
+
+    let last_update = last_update?;
+    let debounce = Duration::from_millis(debounce_ms);
+    Some(debounce.saturating_sub(last_update.elapsed()))
+}
+
+fn next_event_poll_timeout(
+    filter_dirty: bool,
+    last_filter_update: Option<Instant>,
+    filter_debounce_ms: u64,
+    theme_dirty: bool,
+    last_theme_update: Option<Instant>,
+    theme_debounce_ms: u64,
+) -> Duration {
+    [
+        pending_debounce_timeout(filter_dirty, last_filter_update, filter_debounce_ms),
+        pending_debounce_timeout(theme_dirty, last_theme_update, theme_debounce_ms),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or_else(|| Duration::from_millis(200))
+}
+
+fn command_line_for_display(
+    idx: usize,
+    commands: &[String],
+    highlighted_commands: &[Option<Line<'static>>],
+    style: TuiStyle,
+) -> Line<'static> {
+    if let Some(Some(line)) = highlighted_commands.get(idx) {
+        return line.clone();
+    }
+
+    Line::from(Span::styled(
+        commands.get(idx).cloned().unwrap_or_default(),
+        style,
+    ))
+}
+
+fn warm_visible_highlights(
+    commands: &[String],
+    highlighted_commands: &mut [Option<Line<'static>>],
+    visible_indices: &[usize],
+    budget: Duration,
+) {
+    let started = Instant::now();
+    for &idx in visible_indices {
+        let Some(command) = commands.get(idx) else {
+            continue;
+        };
+        let Some(slot) = highlighted_commands.get_mut(idx) else {
+            continue;
+        };
+        if slot.is_some() {
+            continue;
+        }
+
+        *slot = Some(highlight_command(command));
+        if started.elapsed() >= budget {
+            break;
+        }
+    }
 }
 
 fn extract_variables(command: &str) -> Vec<String> {
@@ -385,12 +461,13 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut theme_picker_original: Option<theme::Theme> = None;
     let mut pending_rehighlight = false;
     let mut last_theme_update: Option<std::time::Instant> = None;
-    const THEME_DEBOUNCE_MS: u64 = 150;
+    const THEME_DEBOUNCE_MS: u64 = 100;
 
     // Debounce filter updates to avoid fuzzy matching on every keystroke
     let mut filter_dirty = !filter.is_empty();
     let mut last_filter_update: Option<std::time::Instant> = None;
-    const FILTER_DEBOUNCE_MS: u64 = 150;
+    const FILTER_DEBOUNCE_MS: u64 = 35;
+    const HIGHLIGHT_WARM_BUDGET: Duration = Duration::from_millis(2);
 
     // Mouse double-click tracking
     let mut last_click_row: Option<u16> = None;
@@ -403,13 +480,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         .map(|(i, _)| format!("[{}]: {}", descriptions[i], commands[i]))
         .collect();
     let all_display_lower: Vec<String> = all_display.iter().map(|d| d.to_lowercase()).collect();
-    let all_tags_lower: Vec<Vec<String>> = tags
+    let all_tags_search: Vec<String> = tags
         .iter()
-        .map(|snippet_tags| snippet_tags.iter().map(|tag| tag.to_lowercase()).collect())
+        .map(|snippet_tags| snippet_tags.join("\n").to_lowercase())
         .collect();
     let mut filter_candidates: Vec<(usize, Option<i64>)> =
         (0..all_display.len()).map(|i| (i, None)).collect();
-    let all_filter_indices: Vec<usize> = (0..all_display.len()).collect();
     let mut last_filter_request: Option<FilterRequest> = None;
     sel.update(filtered.len());
 
@@ -455,8 +531,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         }
 
         // Debounced theme filter rebuild
-        let theme_debounce_elapsed =
-            last_theme_update.is_none_or(|t| t.elapsed().as_millis() >= THEME_DEBOUNCE_MS as u128);
+        let theme_debounce_elapsed = debounce_elapsed(last_theme_update, THEME_DEBOUNCE_MS);
         if theme_dirty && theme_debounce_elapsed {
             theme_filtered = if theme_filter.is_empty() {
                 (0..theme_picker_list.len()).collect()
@@ -481,11 +556,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         }
 
         // Debounce: only recompute filtered list if enough time has passed since last filter change
-        let debounce_elapsed = last_filter_update
-            .is_none_or(|t| t.elapsed().as_millis() >= FILTER_DEBOUNCE_MS as u128);
+        let debounce_elapsed = debounce_elapsed(last_filter_update, FILTER_DEBOUNCE_MS);
         let should_recompute = if filter_dirty {
             // Always recompute immediately when filter becomes empty (backspace cleared filter)
-            // to avoid 150ms delay showing stale filtered results
+            // to avoid showing stale filtered results after the user clears input.
             let filter_is_empty = filter.is_empty() && filter_state.tag_filter_text.is_empty();
             if filter_is_empty || debounce_elapsed {
                 filter_dirty = false;
@@ -511,23 +585,22 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                     .as_ref()
                     .is_some_and(|previous| filter_request.can_narrow_from(previous))
                 {
-                    let previous_filtered = filtered.clone();
                     rebuild_filter_candidates(
                         &mut filter_candidates,
-                        previous_filtered.iter(),
+                        filtered.iter().copied(),
                         &filter_request,
                         &all_display,
                         &all_display_lower,
-                        &all_tags_lower,
+                        &all_tags_search,
                     );
                 } else {
                     rebuild_filter_candidates(
                         &mut filter_candidates,
-                        all_filter_indices.iter(),
+                        0..all_display.len(),
                         &filter_request,
                         &all_display,
                         &all_display_lower,
-                        &all_tags_lower,
+                        &all_tags_search,
                     );
                 }
             }
@@ -591,14 +664,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 .saturating_sub(list_visible_rows.saturating_sub(1))
         };
         let list_end = (list_offset + list_visible_rows).min(filtered.len());
-        if !theme_picker_mode {
-            for &idx in &filtered[list_offset..list_end] {
-                if highlighted_commands.get(idx).is_some_and(Option::is_none) {
-                    highlighted_commands[idx] = Some(highlight_command(&commands[idx]));
-                }
-            }
-        }
-
         if let Err(e) = terminal.draw(|f| {
             let size = f.area();
             if size.width < 10 || size.height < 10 {
@@ -828,11 +893,13 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                         let line = if list_display_mode == 1 {
                             let desc = &descriptions[*idx];
-                            let cmd_spans = highlighted_commands
-                                .get(*idx)
-                                .and_then(|line| line.clone())
-                                .map(|line| line.spans)
-                                .unwrap_or_default();
+                            let cmd_spans = command_line_for_display(
+                                *idx,
+                                commands,
+                                &highlighted_commands,
+                                style_fg(theme.text),
+                            )
+                            .spans;
 
                             let mut combined: Vec<ratatui::text::Span<'static>> =
                                 vec![ratatui::text::Span::styled(
@@ -842,10 +909,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             combined.extend(cmd_spans);
                             Line::from(combined)
                         } else {
-                            highlighted_commands
-                                .get(*idx)
-                                .and_then(|line| line.clone())
-                                .unwrap_or_else(|| Line::from(""))
+                            command_line_for_display(
+                                *idx,
+                                commands,
+                                &highlighted_commands,
+                                style_fg(theme.text),
+                            )
                         };
 
                         let mut spans = vec![ratatui::text::Span::raw(fav_indicator)];
@@ -951,7 +1020,27 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             tracing::warn!("Terminal draw error: {}", e);
         }
 
-        let polled = event::poll(Duration::from_millis(200)).unwrap_or(false);
+        if !theme_picker_mode
+            && !event::poll(Duration::from_millis(0)).unwrap_or(false)
+            && list_offset < list_end
+        {
+            warm_visible_highlights(
+                commands,
+                &mut highlighted_commands,
+                &filtered[list_offset..list_end],
+                HIGHLIGHT_WARM_BUDGET,
+            );
+        }
+
+        let poll_timeout = next_event_poll_timeout(
+            filter_dirty,
+            last_filter_update,
+            FILTER_DEBOUNCE_MS,
+            theme_dirty,
+            last_theme_update,
+            THEME_DEBOUNCE_MS,
+        );
+        let polled = event::poll(poll_timeout).unwrap_or(false);
         if polled {
             match event::read() {
                 Ok(CEvent::Mouse(mouse_event)) => {
@@ -1608,17 +1697,17 @@ mod tests {
             "[deploy]: ./release".to_string(),
         ];
         let all_display_lower: Vec<String> = all_display.iter().map(|d| d.to_lowercase()).collect();
-        let all_tags_lower = vec![
-            vec!["git".to_string()],
-            vec!["systemd".to_string()],
-            vec!["release".to_string()],
+        let all_tags_search = vec![
+            "git".to_string(),
+            "systemd".to_string(),
+            "release".to_string(),
         ];
         let all_indices = [0, 1, 2];
         let mut candidates = Vec::new();
 
         rebuild_filter_candidates(
             &mut candidates,
-            all_indices.iter(),
+            all_indices.iter().copied(),
             &FilterRequest {
                 text: "systemd".to_string(),
                 include_tags: true,
@@ -1626,7 +1715,7 @@ mod tests {
             },
             &all_display,
             &all_display_lower,
-            &all_tags_lower,
+            &all_tags_search,
         );
 
         assert_eq!(candidates, vec![(1, Some(i64::MAX))]);
@@ -1659,6 +1748,14 @@ mod tests {
                 incremental: false,
             }
         );
+    }
+
+    #[test]
+    fn next_event_poll_timeout_uses_pending_debounce_deadline() {
+        let last_update = Instant::now();
+        let timeout = next_event_poll_timeout(true, Some(last_update), 35, false, None, 100);
+
+        assert!(timeout <= Duration::from_millis(35));
     }
 
     #[test]
