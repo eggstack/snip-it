@@ -194,7 +194,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 | Variable                          | Description                                            | Default     |
 | --------------------------------- | ------------------------------------------------------ | ----------- |
 | `SNP_CONFIG_HOME`                 | Override config directory                              | `~/.config/snp` |
-| `SNP_COMMAND_TIMEOUT`             | Command execution timeout (seconds)                    | `300`       |
+| `SNP_COMMAND_TIMEOUT`             | Command execution timeout in seconds (`0` disables; direct terminal runs default to no timeout, output-capture runs default to 300s) | - |
 | `SNP_CLIPBOARD_TIMEOUT`           | Clipboard operation timeout (seconds)                  | `5`         |
 | `SNP_ALLOW_PLAINTEXT_API_KEY`     | Allow API key in config file (not keychain)            | `false`     |
 | `SNP_SYNC_CONNECT_TIMEOUT`        | Sync TCP connect timeout (seconds)                     | `10`        |

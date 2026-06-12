@@ -9,26 +9,30 @@ use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 
-fn get_timeout() -> Duration {
-    let secs = std::env::var("SNP_COMMAND_TIMEOUT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|v| v.max(1))
-        .unwrap_or(DEFAULT_TIMEOUT_SECONDS);
-    Duration::from_secs(secs)
+#[derive(Clone, Copy)]
+enum TimeoutPolicy {
+    NoDefault,
+    Default(Duration),
 }
 
-fn run_command_with_timeout(
-    shell: &str,
-    command: &str,
-    timeout: Duration,
-) -> SnipResult<std::process::ExitStatus> {
-    let mut child = Command::new(shell)
-        .arg("-c")
-        .arg(command)
-        .spawn()
-        .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))?;
+fn get_timeout(policy: TimeoutPolicy) -> Option<Duration> {
+    if let Some(secs) = std::env::var("SNP_COMMAND_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return (secs > 0).then(|| Duration::from_secs(secs));
+    }
 
+    match policy {
+        TimeoutPolicy::NoDefault => None,
+        TimeoutPolicy::Default(timeout) => Some(timeout),
+    }
+}
+
+fn wait_for_command(
+    child: &mut std::process::Child,
+    timeout: Option<Duration>,
+) -> SnipResult<std::process::ExitStatus> {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -42,7 +46,9 @@ fn run_command_with_timeout(
             }
         }
 
-        if start.elapsed() >= timeout {
+        if let Some(timeout) = timeout
+            && start.elapsed() >= timeout
+        {
             let _ = child.kill();
             let _ = child.wait();
             return Err(SnipError::runtime_error(
@@ -55,6 +61,23 @@ fn run_command_with_timeout(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn spawn_shell_command(shell: &str, command: &str) -> SnipResult<std::process::Child> {
+    Command::new(shell)
+        .arg("-c")
+        .arg(command)
+        .spawn()
+        .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))
+}
+
+fn run_shell_command(
+    shell: &str,
+    command: &str,
+    timeout: Option<Duration>,
+) -> SnipResult<std::process::ExitStatus> {
+    let mut child = spawn_shell_command(shell, command)?;
+    wait_for_command(&mut child, timeout)
 }
 
 fn get_shell() -> String {
@@ -165,40 +188,16 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
 
         let shell = get_shell();
-        let timeout = get_timeout();
+        let timeout = get_timeout(TimeoutPolicy::Default(Duration::from_secs(
+            DEFAULT_TIMEOUT_SECONDS,
+        )));
         let mut child = Command::new(&shell)
             .arg("-c")
             .arg(&final_command)
             .stdout(output_file)
             .spawn()
             .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
-
-        let start = std::time::Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if start.elapsed() >= timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(SnipError::runtime_error(
-                            "Command timed out",
-                            Some(&format!(
-                                "Command exceeded timeout of {} seconds",
-                                timeout.as_secs()
-                            )),
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => {
-                    return Err(SnipError::runtime_error(
-                        "Failed to check command status",
-                        Some(&e.to_string()),
-                    ));
-                }
-            }
-        };
+        let status = wait_for_command(&mut child, timeout)?;
 
         Ok(handle_command_result(
             &final_command,
@@ -208,8 +207,8 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         ))
     } else {
         let shell = get_shell();
-        let timeout = get_timeout();
-        let status = run_command_with_timeout(&shell, &final_command, timeout)?;
+        let timeout = get_timeout(TimeoutPolicy::NoDefault);
+        let status = run_shell_command(&shell, &final_command, timeout)?;
 
         Ok(handle_command_result(&final_command, status, snippet, None))
     }

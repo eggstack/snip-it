@@ -57,6 +57,74 @@ pub fn get_terminate() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
 
 static MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
 
+fn sort_filtered_indices(
+    filtered: &mut [(usize, Option<i64>)],
+    filter_state: &FilterState,
+    snippets: &[crate::library::Snippet],
+    display_lower: &[String],
+    has_filter: bool,
+) {
+    if filter_state.sort_mode == SortMode::None && !has_filter {
+        return;
+    }
+
+    filtered.sort_by(|a, b| {
+        let score_cmp = match (a.1, b.1) {
+            (Some(sa), Some(sb)) => sb.cmp(&sa),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+
+        if score_cmp != std::cmp::Ordering::Equal || !has_filter {
+            let explicit_sort = match filter_state.sort_mode {
+                SortMode::Newest => {
+                    snippets
+                        .get(b.0)
+                        .zip(snippets.get(a.0))
+                        .map(|(b_snip, a_snip)| {
+                            b_snip
+                                .created_at
+                                .cmp(&a_snip.created_at)
+                                .then_with(|| b.0.cmp(&a.0))
+                        })
+                }
+                SortMode::Oldest => {
+                    snippets
+                        .get(a.0)
+                        .zip(snippets.get(b.0))
+                        .map(|(a_snip, b_snip)| {
+                            a_snip
+                                .created_at
+                                .cmp(&b_snip.created_at)
+                                .then_with(|| a.0.cmp(&b.0))
+                        })
+                }
+                _ => None,
+            };
+
+            let secondary = match filter_state.sort_mode {
+                SortMode::AlphaAsc => display_lower
+                    .get(a.0)
+                    .zip(display_lower.get(b.0))
+                    .map(|(a_display, b_display)| a_display.cmp(b_display)),
+                SortMode::AlphaDesc => display_lower
+                    .get(a.0)
+                    .zip(display_lower.get(b.0))
+                    .map(|(a_display, b_display)| b_display.cmp(a_display)),
+                _ => None,
+            };
+
+            match explicit_sort {
+                Some(c) if c != std::cmp::Ordering::Equal => c,
+                _ => secondary.unwrap_or(score_cmp),
+            }
+        } else {
+            score_cmp
+        }
+    });
+}
+
 fn extract_variables(command: &str) -> Vec<String> {
     extract_variables_for_display(command)
 }
@@ -186,10 +254,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut terminal = ratatui::init();
     let _guard = TerminalGuard; // Ensures terminal is restored on any exit path
 
-    // Pre-compute syntax-highlighted commands once at startup (not inside draw loop)
-    // This avoids the closure-capture issues that cause TUI to hang
-    let mut highlighted_commands: Vec<Line<'static>> =
-        commands.iter().map(|cmd| highlight_command(cmd)).collect();
+    // Highlight commands lazily so large libraries do not pay the full syntax
+    // highlighting cost before the first frame is shown.
+    let mut highlighted_commands: Vec<Option<Line<'static>>> = vec![None; commands.len()];
 
     let mut sel = SelectState::new();
     let mut filter = initial_filter.map(String::from).unwrap_or_default();
@@ -197,7 +264,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     // input_text tracks what user types in insert mode - displayed in filter input box, NOT in title bar
     let mut input_text = String::new();
     let mut filter_state = FilterState::default();
-    let mut filtered: Vec<(usize, String, Vec<String>)> = Vec::new();
+    let mut filtered: Vec<usize> = (0..descriptions.len()).collect();
     let mut insert_mode = true;
     let mut tag_filter_mode = false;
     let mut list_display_mode = 0;
@@ -229,7 +296,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     const THEME_DEBOUNCE_MS: u64 = 150;
 
     // Debounce filter updates to avoid fuzzy matching on every keystroke
-    let mut filter_dirty = false;
+    let mut filter_dirty = !filter.is_empty();
     let mut last_filter_update: Option<std::time::Instant> = None;
     const FILTER_DEBOUNCE_MS: u64 = 150;
 
@@ -243,8 +310,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         .enumerate()
         .map(|(i, _)| format!("[{}]: {}", descriptions[i], commands[i]))
         .collect();
-
-    let all_tags = tags.to_vec();
+    let all_display_lower: Vec<String> = all_display.iter().map(|d| d.to_lowercase()).collect();
+    let all_tags_lower: Vec<Vec<String>> = tags
+        .iter()
+        .map(|snippet_tags| snippet_tags.iter().map(|tag| tag.to_lowercase()).collect())
+        .collect();
+    sel.update(filtered.len());
 
     loop {
         // Check for signal-induced termination (SIGINT/SIGTERM)
@@ -283,7 +354,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
         // Re-highlight on theme change
         if pending_rehighlight {
-            highlighted_commands = commands.iter().map(|c| highlight_command(c)).collect();
+            highlighted_commands.fill_with(|| None);
             pending_rehighlight = false;
         }
 
@@ -334,151 +405,65 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
         let has_incremental_search = !incremental_search.is_empty();
         let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
-        let has_any_filter = has_incremental_search || has_main_filter;
-        let current_filter_text = if tag_filter_mode {
-            filter_state.tag_filter_text.clone()
+        let current_filter_text: &str = if tag_filter_mode {
+            &filter_state.tag_filter_text
         } else {
-            filter.clone()
+            &filter
         };
 
-        // Optimization: when no recompute is needed AND no filter is active,
-        // reuse previous filtered results directly without rebuilding candidates
-        if !should_recompute && !has_any_filter && !filtered.is_empty() {
-            sel.update(filtered.len());
-        } else {
-            // should_recompute = false means either: no change, or debounce window not elapsed yet
-            // In both cases, reuse previous filtered results. Only build fresh from all_display
-            // when we actually need to recompute (should_recompute = true).
-            let mut candidates: Vec<(usize, String, Vec<String>, Option<i64>)> =
-                if !should_recompute {
-                    if filtered.is_empty() {
-                        // First frame or no previous results
-                        all_display
-                            .iter()
-                            .enumerate()
-                            .zip(all_tags.iter())
-                            .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
-                            .collect()
-                    } else {
-                        filtered
-                            .iter()
-                            .map(|(i, d, t)| (*i, d.clone(), t.clone(), None))
-                            .collect()
-                    }
-                } else {
-                    all_display
-                        .iter()
-                        .enumerate()
-                        .zip(all_tags.iter())
-                        .map(|((i, d), t)| (i, d.clone(), t.clone(), None))
-                        .collect()
-                };
-
+        if should_recompute {
+            let mut candidates: Vec<(usize, Option<i64>)> = Vec::with_capacity(all_display.len());
             if has_incremental_search {
-                candidates = candidates
-                    .into_iter()
-                    .filter_map(|(i, display, tags, _)| {
-                        MATCHER
-                            .fuzzy_match(&display, &incremental_search)
-                            .map(|score| {
-                                let is_exact =
-                                    display.to_lowercase() == incremental_search.to_lowercase();
-                                (
-                                    i,
-                                    display,
-                                    tags,
-                                    Some(if is_exact { i64::MAX } else { score }),
-                                )
-                            })
-                    })
-                    .collect();
-            }
+                let incremental_lower = incremental_search.to_lowercase();
+                for (i, display) in all_display.iter().enumerate() {
+                    if let Some(score) = MATCHER.fuzzy_match(display, &incremental_search) {
+                        let is_exact = all_display_lower
+                            .get(i)
+                            .is_some_and(|display| display == &incremental_lower);
+                        candidates.push((i, Some(if is_exact { i64::MAX } else { score })));
+                    }
+                }
+            } else if has_main_filter {
+                let filter_lower = current_filter_text.to_lowercase();
 
-            if !has_incremental_search && has_main_filter {
-                let filter_text = &current_filter_text;
-                let filter_lower = filter_text.to_lowercase();
+                for (i, display) in all_display.iter().enumerate() {
+                    let display_match = MATCHER.fuzzy_match(display, current_filter_text);
+                    let is_exact_display = all_display_lower
+                        .get(i)
+                        .is_some_and(|display| display == &filter_lower);
+                    let tag_match = if tag_filter_mode || !filter_state.tag_filter_text.is_empty() {
+                        all_tags_lower.get(i).is_some_and(|snippet_tags| {
+                            snippet_tags.iter().any(|tag| tag.contains(&filter_lower))
+                        })
+                    } else {
+                        false
+                    };
 
-                candidates = candidates
-                    .into_iter()
-                    .filter_map(|(i, display, snippet_tags, _)| {
-                        let display_match = MATCHER.fuzzy_match(&display, filter_text);
-                        let is_exact_display = display.to_lowercase() == filter_lower;
-                        let tag_match =
-                            if tag_filter_mode || !filter_state.tag_filter_text.is_empty() {
-                                snippet_tags
-                                    .iter()
-                                    .any(|t| t.to_lowercase().contains(&filter_lower))
-                            } else {
-                                false
-                            };
-
-                        if is_exact_display || tag_match {
-                            Some((i, display, snippet_tags, Some(i64::MAX)))
-                        } else {
-                            display_match.map(|score| (i, display, snippet_tags, Some(score)))
-                        }
-                    })
-                    .collect();
+                    if is_exact_display || tag_match {
+                        candidates.push((i, Some(i64::MAX)));
+                    } else if let Some(score) = display_match {
+                        candidates.push((i, Some(score)));
+                    }
+                }
+            } else {
+                candidates.extend((0..all_display.len()).map(|i| (i, None)));
             }
 
             let has_filter = has_incremental_search || has_main_filter;
-            candidates.sort_by(|a, b| {
-                let score_cmp = match (a.3, b.3) {
-                    (Some(sa), Some(sb)) => sb.cmp(&sa),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                };
+            sort_filtered_indices(
+                &mut candidates,
+                &filter_state,
+                snippets,
+                &all_display_lower,
+                has_filter,
+            );
 
-                if score_cmp != std::cmp::Ordering::Equal || !has_filter {
-                    let explicit_sort = match filter_state.sort_mode {
-                        SortMode::Newest => {
-                            snippets
-                                .get(b.0)
-                                .zip(snippets.get(a.0))
-                                .map(|(b_snip, a_snip)| {
-                                    b_snip
-                                        .created_at
-                                        .cmp(&a_snip.created_at)
-                                        .then_with(|| b.0.cmp(&a.0))
-                                })
-                        }
-                        SortMode::Oldest => {
-                            snippets
-                                .get(a.0)
-                                .zip(snippets.get(b.0))
-                                .map(|(a_snip, b_snip)| {
-                                    a_snip
-                                        .created_at
-                                        .cmp(&b_snip.created_at)
-                                        .then_with(|| a.0.cmp(&b.0))
-                                })
-                        }
-                        _ => None,
-                    };
-
-                    let secondary = match filter_state.sort_mode {
-                        SortMode::AlphaAsc => Some(a.1.to_lowercase().cmp(&b.1.to_lowercase())),
-                        SortMode::AlphaDesc => Some(b.1.to_lowercase().cmp(&a.1.to_lowercase())),
-                        _ => None,
-                    };
-
-                    match explicit_sort {
-                        Some(c) if c != std::cmp::Ordering::Equal => c,
-                        _ => secondary.unwrap_or(score_cmp),
-                    }
-                } else {
-                    score_cmp
-                }
-            });
-
-            filtered = candidates
-                .into_iter()
-                .map(|(i, d, t, _)| (i, d, t))
-                .collect();
+            filtered = candidates.into_iter().map(|(i, _)| i).collect();
 
             sel.update(filtered.len());
-        } // end else (has_any_filter || should_recompute || filtered.is_empty())
+        } else {
+            sel.update(filtered.len());
+        } // end filter recompute
 
         // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
         // Main filter text is displayed in the filter input box below, not in the title.
@@ -498,6 +483,36 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             SortMode::AlphaAsc => "[a-z]".to_string(),
             SortMode::AlphaDesc => "[z-a]".to_string(),
         };
+
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let terminal_size = ratatui::layout::Rect::new(0, 0, cols, rows);
+        let list_area = {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(3),
+                    Constraint::Length(6),
+                    Constraint::Length(1),
+                ])
+                .split(terminal_size);
+            chunks[1]
+        };
+        let list_visible_rows = list_area.height.saturating_sub(2) as usize;
+        let list_offset = if list_visible_rows == 0 {
+            0
+        } else {
+            sel.selected
+                .saturating_sub(list_visible_rows.saturating_sub(1))
+        };
+        let list_end = (list_offset + list_visible_rows).min(filtered.len());
+        if !theme_picker_mode {
+            for &idx in &filtered[list_offset..list_end] {
+                if highlighted_commands.get(idx).is_some_and(Option::is_none) {
+                    highlighted_commands[idx] = Some(highlight_command(&commands[idx]));
+                }
+            }
+        }
 
         if let Err(e) = terminal.draw(|f| {
             let size = f.area();
@@ -719,9 +734,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 f.render_widget(preview_widget, chunks[2]);
             } else {
                 // Snippet list (existing rendering)
-                let items: Vec<ListItem> = filtered
+                let visible_filtered = &filtered[list_offset..list_end];
+                let items: Vec<ListItem> = visible_filtered
                     .iter()
-                    .map(|(idx, _desc, _tags)| {
+                    .map(|idx| {
                         let is_fav = *favorites.get(*idx).unwrap_or(&false);
                         let fav_indicator = if is_fav { "★ " } else { "  " };
 
@@ -729,7 +745,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             let desc = &descriptions[*idx];
                             let cmd_spans = highlighted_commands
                                 .get(*idx)
-                                .cloned()
+                                .and_then(|line| line.clone())
                                 .map(|line| line.spans)
                                 .unwrap_or_default();
 
@@ -743,7 +759,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                         } else {
                             highlighted_commands
                                 .get(*idx)
-                                .cloned()
+                                .and_then(|line| line.clone())
                                 .unwrap_or_else(|| Line::from(""))
                         };
 
@@ -764,13 +780,15 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                     )
                     .highlight_symbol(if is_search { "" } else { "▶ " });
 
-                f.render_stateful_widget(list, chunks[1], &mut sel.list_state);
+                let mut visible_list_state = ratatui::widgets::ListState::default();
+                visible_list_state.select(sel.selected.checked_sub(list_offset));
+                f.render_stateful_widget(list, chunks[1], &mut visible_list_state);
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .thumb_style(ratatui::style::Style::default().bg(theme.secondary));
                 f.render_stateful_widget(scrollbar, chunks[1], &mut sel.scroll_state);
 
                 if sel.selected < filtered.len() {
-                    let idx = filtered[sel.selected].0;
+                    let idx = filtered[sel.selected];
                     let snippet_cmd = &commands[idx];
                     let snippet_desc = &descriptions[idx];
 
@@ -848,24 +866,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
             tracing::warn!("Terminal draw error: {}", e);
         }
 
-        // Get terminal size for mouse click detection
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let terminal_size = ratatui::layout::Rect::new(0, 0, cols, rows);
-
-        // Calculate list area for mouse click detection (same layout as in draw closure)
-        let list_area = {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(3),
-                    Constraint::Length(6),
-                    Constraint::Length(1),
-                ])
-                .split(terminal_size);
-            chunks[1]
-        };
-
         let polled = event::poll(Duration::from_millis(200)).unwrap_or(false);
         if polled {
             match event::read() {
@@ -882,13 +882,17 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             crossterm::event::MouseButton::Left,
                         ) = mouse_event.kind
                         {
-                            if mouse_event.row >= list_area.y
-                                && mouse_event.row < list_area.y + list_area.height
+                            let list_inner_y = list_area.y.saturating_add(1);
+                            let list_inner_height = list_area.height.saturating_sub(2);
+                            if mouse_event.row >= list_inner_y
+                                && mouse_event.row < list_inner_y + list_inner_height
                                 && mouse_event.row
-                                    < list_area.y
-                                        + filtered.len().min(list_area.height as usize) as u16
+                                    < list_inner_y
+                                        + (list_end - list_offset).min(list_inner_height as usize)
+                                            as u16
                             {
-                                let clicked_row = (mouse_event.row - list_area.y) as usize;
+                                let clicked_row =
+                                    list_offset + (mouse_event.row - list_inner_y) as usize;
 
                                 // Check for double-click (same row within time window)
                                 let now = std::time::Instant::now();
@@ -1118,7 +1122,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                         }
 
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
-                            let idx = filtered[sel.selected].0;
+                            let idx = filtered[sel.selected];
                             should_copy = Some(descriptions[idx].clone());
                             if !is_search {
                                 break;
@@ -1182,7 +1186,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         .iter()
                                         .skip(start)
                                         .take(end - start + 1)
-                                        .map(|(idx, _, _)| strip_escape_sequences(&commands[*idx]))
+                                        .map(|idx| strip_escape_sequences(&commands[*idx]))
                                         .collect();
                                     let copy_text = selected_items.join("\n");
                                     match clipboard::copy_to_clipboard_auto(&copy_text) {
@@ -1200,7 +1204,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                             ));
                                         }
                                     }
-                                    if let Some((idx, _, _)) = filtered.get(start) {
+                                    if let Some(idx) = filtered.get(start) {
                                         let original_idx = *idx;
                                         if original_idx < snippets.len()
                                             && let Err(e) = crate::logging::audit_log(
@@ -1350,7 +1354,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 }
                                 KeyCode::Char('y') => {
                                     if sel.selected < filtered.len() {
-                                        let idx = filtered[sel.selected].0;
+                                        let idx = filtered[sel.selected];
                                         should_copy = Some(descriptions[idx].clone());
                                         if !is_search {
                                             break;
@@ -1401,10 +1405,26 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                 {
                                     sel.move_down(filtered.len())
                                 }
-                                KeyCode::Char('n') => filter_state.toggle_sort_new(),
-                                KeyCode::Char('o') => filter_state.toggle_sort_old(),
-                                KeyCode::Char('a') => filter_state.toggle_sort_alpha(),
-                                KeyCode::Char('z') => filter_state.toggle_sort_alpha_rev(),
+                                KeyCode::Char('n') => {
+                                    filter_state.toggle_sort_new();
+                                    filter_dirty = true;
+                                    last_filter_update = None;
+                                }
+                                KeyCode::Char('o') => {
+                                    filter_state.toggle_sort_old();
+                                    filter_dirty = true;
+                                    last_filter_update = None;
+                                }
+                                KeyCode::Char('a') => {
+                                    filter_state.toggle_sort_alpha();
+                                    filter_dirty = true;
+                                    last_filter_update = None;
+                                }
+                                KeyCode::Char('z') => {
+                                    filter_state.toggle_sort_alpha_rev();
+                                    filter_dirty = true;
+                                    last_filter_update = None;
+                                }
                                 KeyCode::Char('x') | KeyCode::Char('c') => {
                                     filter.clear();
                                     incremental_search.clear();
@@ -1453,7 +1473,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         }
     }
     Ok(if !filtered.is_empty() && sel.selected < filtered.len() {
-        Some((filtered[sel.selected].0, should_copy))
+        Some((filtered[sel.selected], should_copy))
     } else {
         None
     })
