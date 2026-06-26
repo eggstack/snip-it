@@ -15,13 +15,16 @@ The TUI provides an interactive, fuzzy-search snippet selector using `ratatui` a
 ### State
 
 ```rust
+// In ui/state.rs
 pub struct SelectState {
-    pub filter: String,           // Current filter text
-    pub search_mode: SearchMode,  // Normal / Incremental (/)
-    pub sort_mode: SortMode,      // Name / Date / Usage
-    pub tag_filter: Option<String>,
-    pub visual_mode: bool,        // Multi-select
-    pub display_mode: DisplayMode,
+    pub selected: usize,               // Current selection index
+    pub list_state: ListState,         // ratatui list state
+    pub scroll_state: ScrollbarState,  // Scrollbar position
+}
+
+pub struct FilterState {
+    pub sort_mode: SortMode,           // None, Newest, Oldest, AlphaAsc, AlphaDesc
+    pub tag_filter_text: String,       // Tag filter input
 }
 ```
 
@@ -34,15 +37,30 @@ Uses `fuzzy-matcher` crate with `SkimMatcherV2`:
 
 ## Themes (`ui/theme.rs`)
 
-Two built-in themes:
-- `DARK_THEME` — Default, dark background
-- `BRIGHT_THEME` — Light background
+Halloy-compatible TOML themes with a 10-color palette:
 
-Colors: `primary`, `secondary`, `accent`, `background`, `text`, `border`, `selected_bg`, `muted`
+- 50 bundled themes (LZMA-compressed at build time from `themes/`)
+- Extracted to `~/.config/snp/themes/` on first launch
+- Active theme persisted in `~/.config/snp/themes.toml`
+- Default theme: `Cyber Red` (hardcoded fallback)
 
-Resolved via:
-1. `SNP_THEME` environment variable (`dark` / `bright`)
-2. `COLORFGBG` terminal environment variable (auto-detect)
+### Theme Picker
+
+Press `e` in normal mode to open the theme picker:
+- `j`/`k` (or arrow keys) to preview themes live
+- `i` to filter themes by name
+- `Enter` to save selection
+- `e`/`q`/`Esc` to cancel
+
+### Legacy Fallback
+
+- `SNP_THEME` env var (`dark`/`bright`/`light`/`auto`)
+- Built-in `DARK_THEME` and `BRIGHT_THEME` constants
+- `COLORFGBG` auto-detection
+
+Colors: `primary`, `secondary`, `accent`, `background`, `text`, `border`, `selected_bg`, `muted`, `string_color`, `escape_color`
+
+Resolved via `get_theme()` which reads from a process-global `RwLock<Theme>`.
 
 ## Syntax Highlighting (`ui/highlight.rs`)
 

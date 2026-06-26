@@ -34,14 +34,14 @@ When `clipboard_auto_clear_seconds` is set in sync settings, the clipboard is au
 3. Clear clipboard contents
 4. Reset scheduling flag
 
-Uses `AtomicBool` to prevent multiple concurrent clear schedules.
+Uses `AtomicU64` generation counter to prevent multiple concurrent clear schedules. Each new copy increments the generation; the sleeping thread checks if its generation matches before clearing.
 
 ## Integration
 
 - `src/commands/run_cmd.rs` — Copies snippet before execution if `copy` flag set
 - `src/commands/clip_cmd.rs` — Primary clipboard copy command
 - `src/commands/cron_cmd.rs` — Optional clipboard copy of crontab entry
-- `src/ui.rs` — `y` key and Ctrl+C copy selected snippet
+- `src/ui/mod.rs` — `y` key and Ctrl+C copy selected snippet
 
 ## Tests
 

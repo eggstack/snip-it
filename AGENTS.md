@@ -15,8 +15,11 @@ cargo test --workspace
 # Run only the main snp crate's tests
 cargo test -p snip-it
 
-# Run only integration tests
+# Run only CLI integration tests
 cargo test --test integration
+
+# Run only sync integration tests (async, needs test-helpers feature)
+cargo test --test sync_integration
 
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
@@ -47,9 +50,12 @@ library / binary crates and can be tested individually with `-p`.
 ```
 snip-it/
 ├── Cargo.toml          # Main crate: binary "snp" (Rust 1.88+)
+├── build.rs            # Re-invokes build_themes.py when themes/ changes
 ├── src/
 │   ├── main.rs         # CLI entry point, clap command dispatch
-│   ├── clipboard.rs    # Cross-platform clipboard (copypasta / clipboard-win)
+│   ├── lib.rs          # Library re-exports for integration tests
+│   ├── proto.rs        # Proto wrapper (re-exports snip_proto types)
+│   ├── clipboard.rs    # Cross-platform clipboard (arboard / clipboard-win)
 │   ├── config.rs       # Sync settings (SyncSettings, SyncDirection)
 │   ├── encryption.rs   # AES-256-GCM + Argon2id key derivation
 │   ├── error.rs        # SnipError enum, SnipResult type alias
@@ -59,9 +65,11 @@ snip-it/
 │   ├── sync_commands.rs# Sync orchestration, merge logic
 │   ├── ui/              # TUI (ratatui), fuzzy search, themes
 │   │   ├── mod.rs       # Main TUI loop, re-exports
-│   │   ├── theme.rs     # Theme system, dark/bright themes, Halloy TOML parsing, ThemeManager
+│   │   ├── state.rs     # SelectState, FilterState, SortMode, is_ctrl_key
+│   │   ├── theme.rs     # Theme system, Halloy TOML parsing, ThemeManager, bundled themes
 │   │   ├── highlight.rs # Syntax highlighting for commands
-│   │   └── variables.rs # Variable prompting UI
+│   │   ├── variables.rs # Variable prompting UI
+│   │   └── _generated_bundled_themes.rs # LZMA-compressed bundled themes (build-time)
 │   ├── commands/       # One module per CLI subcommand
 │   │   ├── mod.rs      # Shared helpers: expand_snippet_command, get_library_path
 │   │   ├── run_cmd.rs  # Snippet execution via shell
@@ -81,19 +89,25 @@ snip-it/
 │       ├── config.rs       # get_config_dir, get_snippets_path, macOS migration
 │       ├── variables.rs    # Variable parsing/expansion (<name=default>)
 │       ├── toml_helpers.rs # TOML backslash escape handling
-│       └── shell_keywords.rs
+│       ├── shell_keywords.rs # ~190 shell command names for highlighting
+│       └── tempfile_guard.rs # RAII temp file cleanup
 ├── snip-proto/         # Protobuf definitions, tonic-generated gRPC code
-│   ├── build.rs
+│   ├── build.rs        # Generates src/snip_proto.rs from proto/sync.proto (needs protoc only for regeneration)
 │   ├── src/lib.rs
 │   └── src/snip_proto.rs
 ├── snip-sync/          # Sync server (gRPC + HTTP/axum)
 │   ├── src/main.rs     # Server entry, SnipSyncService impl, axum health/metrics
+│   ├── src/lib.rs      # Service impl, config, constants (test-helpers feature)
 │   ├── src/db.rs       # SQLite (sqlx) — users, libraries, snippets tables
 │   ├── src/rate_limiter.rs
 │   ├── src/metrics.rs  # Prometheus metrics
 │   └── src/premade.rs  # Premade library file scanning
 ├── tests/
-│   └── integration.rs  # CLI integration tests using TempDir
+│   ├── integration.rs      # CLI integration tests using TempDir
+│   └── sync_integration.rs # gRPC sync integration tests (real server in-process)
+├── scripts/
+│   └── build_themes.py # LZMA-compresses themes/ into src/ui/_generated_bundled_themes.rs
+├── themes/             # 50 Halloy TOML theme files (source of truth for bundled themes)
 ├── plan.md             # Remediation plan for code review findings
 └── AGENTS.md           # This file
 ```
@@ -128,6 +142,7 @@ snip-it/
 
 ### TUI Architecture
 - Single-loop event-driven TUI in `ui/mod.rs::select_snippet_inner()`
+- State types in `ui/state.rs`: `SelectState`, `FilterState`, `SortMode`
 - Syntax highlighting is pre-computed once at startup (not in draw loop)
 - Fuzzy matching via `fuzzy-matcher` (skim algorithm)
 - Debounced filter updates (150ms)
@@ -179,8 +194,9 @@ snip-it/
 
 - Integration tests use `TempDir` with `XDG_CONFIG_HOME` env override
 - Server tests use `sqlite::memory:` for isolation
+- `snip-sync` has a `test-helpers` feature gate for in-process server testing; `snip-it`'s dev-dependencies enable it automatically
+- `tests/sync_integration.rs` spins up a real `snip-sync` server in-process via `test_helpers` — these are async `#[tokio::test]` and need the `test-helpers` feature
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
 - Utils tests cover escape sequences, nested brackets, chained backslashes
 - Sync tests cover device conflict detection
-- Total: 236 unit tests + 20 integration tests + 30 server tests = 286 tests passing

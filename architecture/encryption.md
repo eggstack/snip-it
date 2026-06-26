@@ -20,7 +20,7 @@ End-to-end encryption for snippet data in transit. The server never sees plainte
 ### Argon2id Parameters
 
 ```rust
-const ARGON2_MEMORY_COST_KIB: u32 = 1 << 6;  // 64 KiB
+const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB — OWASP minimum
 const ARGON2_TIME_COST: u32 = 3;               // 3 iterations
 const ARGON2_PARALLELISM: u32 = 4;             // 4 threads
 ```
@@ -106,5 +106,5 @@ pub enum CryptoError {
 
 ## Key Files
 
-- `src/encryption.rs` — Core encrypt/decrypt, key derivation, payload format
+- `src/encryption.rs` — Core encrypt/decrypt, key derivation, payload format, key cache
 - `src/sync.rs` — Uses encrypt/decrypt for snippet sync

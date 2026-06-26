@@ -52,6 +52,8 @@ The CLI is the primary interface for users. The entry point is `src/main.rs` whi
 
 - AES-256-GCM with Argon2id key derivation
 - `encrypt_snippet()` / `decrypt_snippet()` for safe transmission
+- Session-local key cache (`KEY_CACHE`) to avoid re-deriving keys for repeated salts
+- `clear_key_cache()` at end of sync operations
 
 **config.rs** — Sync settings
 
@@ -92,10 +94,21 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 - Debounced filter updates (150ms)
 - State: filter, incremental search (`/`), sort mode, tag filter, visual mode
 
+**ui/state.rs** — State types
+
+- `SelectState` — selection index, list state, scroll state
+- `FilterState` — sort mode and tag filter text
+- `SortMode` — None, Newest, Oldest, AlphaAsc, AlphaDesc
+- `is_ctrl_key()` helper
+
 **ui/theme.rs** — Theming
 
-- `DARK_THEME` (default) and `BRIGHT_THEME`
-- `SNP_THEME` env var or `COLORFGBG` auto-detection
+- `Theme` struct: 10-color palette (primary, secondary, accent, background, text, border, selected_bg, muted, string_color, escape_color)
+- 50 bundled Halloy TOML themes (LZMA-compressed at build time)
+- Theme picker: `e` in normal mode; `j`/`k` preview, `i` filter, `Enter` save
+- `DARK_THEME` / `BRIGHT_THEME` built-in fallbacks
+- `SNP_THEME` env var or `COLORFGBG` auto-detection (legacy)
+- Active theme persisted in `~/.config/snp/themes.toml`
 
 **ui/highlight.rs** — Syntax highlighting for commands
 
@@ -132,6 +145,8 @@ See [tui.md](tui.md) for keybindings, state machine, and interaction details.
 - Only handles single-line strings
 
 **utils/shell_keywords.rs** — ~190 shell command names for syntax highlighting
+
+**utils/tempfile_guard.rs** — RAII guard for temporary file cleanup
 
 ---
 

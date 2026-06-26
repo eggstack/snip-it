@@ -74,13 +74,20 @@ Keywords are defined in `src/utils/shell_keywords.rs` — a `HashSet` of ~190 co
 
 ### Theme System
 
-Two built-in themes, selectable via `SNP_THEME` env var:
+Halloy-compatible TOML themes with a 10-color projection:
 
-| Theme | Background | Text | Border | Selected |
-|-------|-----------|------|--------|----------|
-| `dark` (default) | Black | White | Cyan | Blue |
-| `bright`/`light` | White | Black | Blue | LightBlue |
-| `auto` | Detects via `COLORFGBG` | — | — | — |
+| Component | Description |
+|-----------|-------------|
+| `Theme` struct | 10-color palette: primary, secondary, accent, background, text, border, selected_bg, muted, string_color, escape_color |
+| `DARK_THEME` | Built-in dark fallback (legacy `SNP_THEME=dark`) |
+| `BRIGHT_THEME` | Built-in bright fallback (legacy `SNP_THEME=bright`) |
+| `ACTIVE_THEME` | `RwLock<Theme>` — process-global, reloaded on demand |
+
+**Halloy themes**: 50 bundled themes in `themes/`, LZMA-compressed at build time into `_generated_bundled_themes.rs`, extracted to `~/.config/snp/themes/` on first launch. Active theme persisted in `~/.config/snp/themes.toml`.
+
+**Theme picker**: Press `e` in normal mode; `j`/`k` to preview, `i` to filter, `Enter` to save, `e`/`q`/`Esc` to cancel.
+
+**Legacy**: `SNP_THEME` env var (`dark`/`bright`/`light`/`auto`) and `COLORFGBG` auto-detection still work.
 
 ### Fuzzy Matching
 
@@ -110,3 +117,4 @@ Uses `fuzzy-matcher` crate (skim algorithm) via lazy-static `MATCHER`. Filtering
 - `src/utils/variables.rs` — Parses `<var>` syntax for display and expansion
 - `src/utils/shell_keywords.rs` — Keyword list for syntax highlighting
 - `src/commands/mod.rs` — `expand_snippet_command()` calls `prompt_variables()`
+- `src/ui/state.rs` — SelectState, FilterState, SortMode types

@@ -71,6 +71,15 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<Snippe
 - **Nonce uniqueness**: Random per-encryption via OsRng
 - **Salt uniqueness**: Random per-encryption via OsRng
 
+## Key Cache
+
+Derived keys are cached per-session to avoid re-running Argon2id for the same (api_key, salt) pair during sync:
+
+- **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), [u8; 32]>>>` — keyed by `(SHA-256(api_key), base64(salt))`
+- **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
+- **Clear**: `clear_key_cache()` should be called at the end of a sync operation
+- **Zeroize**: Cache entries are zeroized on drain
+
 ## Known Limitations
 
 1. Key material persists in AES-GCM cipher key schedule (not zeroized)
@@ -80,12 +89,11 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<Snippe
 
 ## Tests
 
-11 tests in `encryption.rs:197-324`:
+Tests in `encryption.rs` cover:
 - Roundtrip encrypt/decrypt
 - Different encryptions produce different output
 - Wrong key fails
 - Empty string, unicode, large payload (10KB)
 - Invalid base64, truncated payload
 - Tampered ciphertext, nonce, salt
-
-Missing: Zeroize correctness, parameter versioning, concurrent encrypt/decrypt, benchmarks.
+- Key cache behavior

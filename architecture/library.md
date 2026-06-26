@@ -10,16 +10,17 @@ The library module is the core data layer of snip-it. It defines the `Snippet` a
 
 ```rust
 pub struct Snippet {
-    pub id: Uuid,
-    pub name: String,
-    pub command: String,
-    pub output: Option<String>,
-    pub tags: Vec<String>,
-    pub folders: Vec<String>,
-    pub favorite: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub deleted: bool,
+    pub id: String,              // UUID v4, generated on first sync
+    pub description: String,     // Human-readable name
+    pub command: String,         // Shell command (may contain <variables>)
+    pub output: String,          // Output file path
+    pub tags: Vec<String>,       // User-defined tags
+    pub folders: Vec<String>,    // Folder organization
+    pub favorite: bool,          // Starred flag
+    pub created_at: i64,         // Unix timestamp
+    pub updated_at: i64,         // Unix timestamp
+    pub device_id: String,       // Originating device
+    pub deleted: bool,           // Soft-delete flag
 }
 ```
 
@@ -61,4 +62,4 @@ Metadata and configuration for multi-library support.
 
 - `SnipError::Io` for file operations
 - `SnipError::Toml` for serialization errors
-- `SnipError::LibraryNotFound` for missing library operations
+- `SnipError::Runtime` for validation errors (e.g., path traversal in library names)

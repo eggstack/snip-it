@@ -111,7 +111,6 @@ service SnippetSync {
 
 ## Error Handling
 
-- `SnipError::Sync` for sync-specific errors
-- `SnipError::Grpc` for gRPC transport errors
-- `SnipError::Encryption` for crypto errors
-- Network failures trigger retry with exponential backoff
+- `SnipError::Runtime` for sync-specific errors (sync failures, validation errors)
+- `CryptoError` for encryption/decryption errors (converted to `SnipError::Runtime` via `From`)
+- Network failures trigger retry with exponential backoff via `retry_grpc!` macro

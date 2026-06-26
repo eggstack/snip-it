@@ -112,7 +112,7 @@ command = "ssh <user=root>@<host> -p <port=22>"
 
 - **Fuzzy search** — find snippets by description, command, or tags (`skim` algorithm).
 - **Variable expansion** — `<name=default>` syntax prompts for values at runtime.
-- **TUI** — keyboard-driven selection with themes (`SNP_THEME=dark|bright`).
+- **TUI** — keyboard-driven selection with 50 bundled Halloy themes and a live theme picker (`e` in normal mode).
 - **Multiple libraries** — separate collections per project, environment, or client.
 - **Premade libraries** — download community-built snippet packs (`snp premade sync`).
 - **End-to-end encrypted sync** — AES-256-GCM + Argon2id; the server never sees plaintext.
@@ -199,7 +199,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 | `SNP_ALLOW_PLAINTEXT_API_KEY`     | Allow API key in config file (not keychain)            | `false`     |
 | `SNP_SYNC_CONNECT_TIMEOUT`        | Sync TCP connect timeout (seconds)                     | `10`        |
 | `SNP_SYNC_REQUEST_TIMEOUT`        | Sync per-request timeout (seconds)                     | `30`        |
-| `SNP_THEME`                       | UI theme (`dark` or `bright`)                          | `dark`      |
+| `SNP_THEME`                       | UI theme (`dark`, `bright`, or Halloy theme name)      | `dark`      |
 | `SNP_LOG_LEVEL`                   | Log level (`trace`, `debug`, `info`, `warn`, `error`)  | `info`      |
 | `SNP_LOG`                         | Per-module log filter (e.g., `snp=debug`)              | -           |
 | `EDITOR`                          | Editor for `snp edit` command                          | `vim`       |

@@ -25,16 +25,15 @@
   - [x] Integrate with codecov (optional)
 
 ### TEST-2: Sync Integration Tests
-- **Status:** Deferred (requires significant infrastructure)
-- **Files:** `tests/sync_integration.rs` (new)
+- **Status:** Completed
+- **Files:** `tests/sync_integration.rs`
 - **Description:** Add integration tests for gRPC client/server sync operations
 - **Tasks:**
-  - [ ] Create `tests/sync_integration.rs`
-  - [ ] Add fixture for starting local snip-sync server
-  - [ ] Add tests for full sync cycle (register, push, pull, merge)
-  - [ ] Add tests for conflict detection (device ID mismatch)
-  - [ ] Add tests for error handling (server unavailable, auth failures)
-- **Blocked by:** Requires PTY/process management for server lifecycle
+  - [x] Create `tests/sync_integration.rs`
+  - [x] Add fixture for starting local snip-sync server (in-process via `test-helpers` feature)
+  - [x] Add tests for full sync cycle (register, push, pull, merge)
+  - [x] Add tests for conflict detection (device ID mismatch)
+  - [x] Add tests for error handling (server unavailable, auth failures)
 
 ### TEST-3: TUI Integration Tests
 - **Status:** Deferred (requires PTY/terminal emulation)

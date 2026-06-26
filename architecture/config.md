@@ -96,11 +96,20 @@ clipboard_auto_clear_seconds = 30
 | Variable | Used By | Default |
 |----------|---------|---------|
 | `XDG_CONFIG_HOME` | `utils/config.rs` | `~/.config` |
-| `SNP_THEME` | `ui.rs` | `"auto"` |
-| `COLORFGBG` | `ui.rs` (theme detection) | — |
+| `SNP_CONFIG_HOME` | `utils/config.rs` | `~/.config/snp` |
+| `SNP_THEME` | `ui/theme.rs` | `"dark"` |
+| `COLORFGBG` | `ui/theme.rs` (theme detection) | — |
 | `SHELL` | `run_cmd.rs` | `"sh"` |
 | `EDITOR` | `edit_cmd.rs` | `"vim"` |
 | `RUST_LOG` | `tracing-subscriber` | `"snp=info,warn"` |
+| `SNP_LOG` | `logging.rs` | — (per-module filter) |
+| `SNP_LOG_LEVEL` | `logging.rs` | `"info"` |
+| `SNP_COMMAND_TIMEOUT` | `run_cmd.rs` | 0 (disabled) |
+| `SNP_CLIPBOARD_TIMEOUT` | `clipboard.rs` | `5` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | `config.rs` | `false` |
+| `SNP_SYNC_CONNECT_TIMEOUT` | `sync.rs` | `10` |
+| `SNP_SYNC_REQUEST_TIMEOUT` | `sync.rs` | `30` |
+| `SNP_EDITOR_TIMEOUT` | `edit_cmd.rs` | — |
 
 ## Key Files
 

@@ -5,10 +5,10 @@ Guide agents through working with the sync module (`src/sync.rs`, `src/sync_comm
 
 ## Known Issues
 
-### PERF-3: Argon2 Key Derivation Per-Snippet
-**Location**: `src/sync.rs:331`, `src/encryption.rs:117`
+### PERF-3: Argon2 Key Derivation Per-Snippet (PARTIALLY ADDRESSED)
+**Location**: `src/sync.rs`, `src/encryption.rs`
 
-Each snippet gets a new random salt, running Argon2 key derivation for every single snippet. For 100 snippets, that's 100 Argon2 runs. The derived key could be cached per sync session.
+Each snippet gets a new random salt, running Argon2 key derivation for every single snippet. A session-local key cache (`KEY_CACHE` in `encryption.rs`) now avoids re-deriving keys for the same (api_key, salt) pair, but each unique salt still triggers a fresh Argon2 run. The cache is cleared at the end of sync via `clear_key_cache()`.
 
 ## Sync Flow
 
