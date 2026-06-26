@@ -88,7 +88,7 @@ regex = "1.11"
 zeroize = { version = "1", features = ["derive"] }
 keyring = "3"
 crc32fast = "1.4"
-sha2 = "0.10"
+sha2 = "0.11"
 time = ">=0.3.36, <0.3.48"
 unicode-width = "0.2"
 lzma-rs = "0.3"
