@@ -25,7 +25,6 @@ jobs:
             --no-progress
             --exclude-loopback
             --exclude-link-local
-            --exclude-mail
             --exclude 'https://github.com/anomalyco/snip-it/(issues|actions|releases).*'
             --exclude 'https://crates.io/.*'
             README.md

@@ -49,6 +49,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -62,6 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Run tests
         run: cargo test --workspace
 
@@ -75,6 +77,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Build
         run: cargo build --release --workspace
       - name: Upload binary (Unix)
@@ -97,6 +100,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Build MSRV
         run: cargo build --release --workspace
       - name: Test MSRV
@@ -111,6 +115,7 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov
       - name: Run coverage
@@ -136,6 +141,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Build snip-proto to regenerate code
         run: cargo build -p snip-proto
       - name: Check generated code is up to date
@@ -167,5 +173,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
       - name: Run snip-sync tests
         run: cargo test -p snip-sync
