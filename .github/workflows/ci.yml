@@ -79,13 +79,13 @@ jobs:
         run: cargo build --release --workspace
       - name: Upload binary (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: snp-${{ matrix.os }}
           path: target/release/snp
       - name: Upload binary (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: snp-${{ matrix.os }}
           path: target/release/snp.exe
