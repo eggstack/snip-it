@@ -40,7 +40,7 @@ prost = "0.14"
 prometheus = "0.13"
 base64 = "0.22"
 toml = "0.8"
-dirs = "5.0"
+dirs = "6.0"
 snip-proto = { version = "0.1.0", path = "../snip-proto" }
 argon2 = "0.5"
 getrandom = "0.2"
