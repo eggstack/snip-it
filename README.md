@@ -1,4 +1,4 @@
-# snp
+# snip-it
 
 [![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
@@ -11,18 +11,10 @@ A fast, terminal-based snippet manager. Fuzzy search your command library,
 expand `<variable>` placeholders on the fly, organize snippets into
 libraries, and keep every device in sync with end-to-end encryption.
 
-## Demo
-
-![snp demo](assets/demo.gif)
-
-> Recording of: launching the TUI, fuzzy-filtering to a snippet, expanding
-> a variable, and running the command.
-> Regenerate with `vhs demo.tape` (see `assets/demo.tape`).
-
-## Why snp?
+## Why snip-it?
 
 Your shell history is unorganized. Generic snippet tools like `pet` don't
-sync. Cloud-first managers want your data. **snp** is a single Rust
+sync. Cloud-first managers want your data. **snip-it** is a single Rust
 binary that runs everywhere, stores snippets in plain TOML you can grep,
 and adds *optional* end-to-end-encrypted sync without ever holding your
 plaintext.
@@ -65,13 +57,13 @@ sudo mv snp /usr/local/bin/
 ### Homebrew
 
 ```bash
-brew install anomalyco/tap/snp
+brew install eggstack/tap/snp
 ```
 
 ### Docker (sync server only)
 
 ```bash
-docker pull ghcr.io/anomalyco/snip-it/snip-sync:latest
+docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
 ```
 
 ## Quickstart
@@ -212,12 +204,13 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 - **[CHANGELOG.md](CHANGELOG.md)** — Release history.
 - **[docs.rs/snip-it](https://docs.rs/snip-it)** — API reference (this is a binary crate; doc-comments are for contributor reference).
 - **[snip-sync/README.md](snip-sync/README.md)** — Sync server setup, configuration, deployment.
+- **[architecture/](architecture/)** — Internal architecture docs (AI-agent oriented).
 
 ## Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
 development setup, code style, and the release process. Bug reports
-and feature requests go through [GitHub Issues](https://github.com/anomalyco/snip-it/issues).
+and feature requests go through [GitHub Issues](https://github.com/eggstack/snip-it/issues).
 
 ## License
 
