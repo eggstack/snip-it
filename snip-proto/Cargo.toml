@@ -2,7 +2,7 @@
 name = "snip-proto"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.94"
 description = "gRPC protocol definitions for snip-it sync"
 license = "MIT"
 authors = ["David Bowman <dbowman91@proton.me>"]

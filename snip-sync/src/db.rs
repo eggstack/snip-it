@@ -57,7 +57,7 @@ pub struct Database {
 
 fn hash_api_key(api_key: &str) -> DbResult<String> {
     let mut salt_bytes = [0u8; 16];
-    getrandom::getrandom(&mut salt_bytes)
+    getrandom::fill(&mut salt_bytes)
         .map_err(|e| DbError::Internal(format!("Failed to generate salt: {}", e)))?;
     let salt_b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(salt_bytes);
     let salt = SaltString::from_b64(&salt_b64)
@@ -426,40 +426,38 @@ impl Database {
         offset: i32,
         include_deleted: bool,
     ) -> DbResult<(Vec<Snippet>, i32)> {
-        let deleted_filter = if include_deleted {
-            ""
-        } else {
-            " AND deleted = 0"
-        };
-
-        let count_sql = format!(
+        let total: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM snippets \
-             WHERE user_id = ? AND library_id = ? AND updated_at > ?{}",
-            deleted_filter
-        );
-        let total: (i64,) = sqlx::query_as(&count_sql)
-            .bind(user_id)
-            .bind(library_id)
-            .bind(since)
-            .fetch_one(&self.pool)
-            .await?;
+             WHERE user_id = ? \
+               AND library_id = ? \
+               AND updated_at > ? \
+               AND (? OR deleted = 0)",
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .bind(since)
+        .bind(include_deleted)
+        .fetch_one(&self.pool)
+        .await?;
 
-        let data_sql = format!(
+        let rows: Vec<SnippetRow> = sqlx::query_as(
             "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
              FROM snippets \
-             WHERE user_id = ? AND library_id = ? AND updated_at > ?{} \
+             WHERE user_id = ? \
+               AND library_id = ? \
+               AND updated_at > ? \
+               AND (? OR deleted = 0) \
              ORDER BY updated_at DESC, id DESC \
              LIMIT ? OFFSET ?",
-            deleted_filter
-        );
-        let rows: Vec<SnippetRow> = sqlx::query_as(&data_sql)
-            .bind(user_id)
-            .bind(library_id)
-            .bind(since)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .bind(since)
+        .bind(include_deleted)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
 
         let snippets = rows
             .into_iter()

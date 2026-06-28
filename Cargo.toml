@@ -2,7 +2,7 @@
 name = "snip-it"
 version = "1.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.94"
 description = "Fast terminal snippet manager with fuzzy search, TUI, variable expansion, and end-to-end encrypted cross-device sync"
 license = "MIT"
 documentation = "https://docs.rs/snip-it"

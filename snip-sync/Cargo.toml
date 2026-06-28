@@ -2,7 +2,7 @@
 name = "snip-sync"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.94"
 description = "gRPC sync server for snp snippet manager"
 license = "MIT"
 authors = ["David Bowman <dbowman91@proton.me>"]
@@ -24,8 +24,8 @@ test-helpers = []
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
-axum = "0.7"
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+axum = "0.8"
+sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio", "chrono"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
@@ -33,7 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 thiserror = "2"
 tonic = { version = "0.14", features = ["transport"] }
 prost = "0.14"
@@ -43,7 +43,7 @@ toml = "1.1"
 dirs = "6.0"
 snip-proto = { version = "0.1.0", path = "../snip-proto" }
 argon2 = "0.5"
-getrandom = "0.2"
+getrandom = "0.4"
 sha2 = "0.11"
 subtle = "2"
 tokio-stream = { version = "0.1", features = ["net"] }

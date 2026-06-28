@@ -136,10 +136,10 @@ fn csv_escape(s: &str) -> String {
     };
 
     // Prefix formula-triggering characters to prevent CSV injection in spreadsheets.
-    if let Some(first) = escaped.chars().next() {
-        if first == '=' || first == '+' || first == '-' || first == '@' {
-            return format!("\t{escaped}");
-        }
+    if let Some(first) = escaped.chars().next()
+        && (first == '=' || first == '+' || first == '-' || first == '@')
+    {
+        return format!("\t{escaped}");
     }
 
     escaped

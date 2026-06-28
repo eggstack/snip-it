@@ -94,10 +94,9 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             let mut flag = String::from(c);
             if let Some(&next) = chars.peek()
                 && next.is_alphabetic()
+                && let Some(c) = chars.next()
             {
-                if let Some(c) = chars.next() {
-                    flag.push(c);
-                }
+                flag.push(c);
             }
             spans.push(Span::styled(flag, color_flag));
         } else if c.is_whitespace() {

@@ -90,10 +90,10 @@ fn handle_library_not_found(
                             {
                                 tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
                             }
-                            if recovery_marker.exists() {
-                                if let Err(e) = fs::remove_file(&recovery_marker) {
-                                    tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
-                                }
+                            if recovery_marker.exists()
+                                && let Err(e) = fs::remove_file(&recovery_marker)
+                            {
+                                tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
                             }
                             status.pulled += server_snippets.len() as u32;
                             results.push((

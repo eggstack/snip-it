@@ -62,10 +62,10 @@ fn strip_port(addr: &str) -> String {
     if !addr.starts_with('[') && addr.matches(':').count() > 1 {
         return addr.to_string();
     }
-    if let Some(colon_pos) = addr.rfind(':') {
-        if !addr.starts_with('[') {
-            return addr[..colon_pos].to_string();
-        }
+    if let Some(colon_pos) = addr.rfind(':')
+        && !addr.starts_with('[')
+    {
+        return addr[..colon_pos].to_string();
     }
     addr.to_string()
 }
@@ -1193,11 +1193,11 @@ impl SnippetSync for SnipSyncService {
             self.record_request_duration("delete_library", start);
             return Err(Status::invalid_argument("Cannot delete default library"));
         }
-        if let Ok(default_id) = self.db.get_default_library(&user_id).await {
-            if req.library_id == default_id {
-                self.record_request_duration("delete_library", start);
-                return Err(Status::invalid_argument("Cannot delete default library"));
-            }
+        if let Ok(default_id) = self.db.get_default_library(&user_id).await
+            && req.library_id == default_id
+        {
+            self.record_request_duration("delete_library", start);
+            return Err(Status::invalid_argument("Cannot delete default library"));
         }
 
         let result = match self.db.delete_library(&user_id, &req.library_id).await {
@@ -1387,6 +1387,10 @@ mod tests {
     };
 
     pub async fn setup_test_service() -> SnipSyncService {
+        setup_test_service_with_rate_limit(DEFAULT_RATE_LIMIT_PER_MINUTE).await
+    }
+
+    async fn setup_test_service_with_rate_limit(rate_limit_per_minute: u32) -> SnipSyncService {
         let db = Arc::new(Database::connect("sqlite::memory:", 5).await.unwrap());
         let config = Config {
             grpc_host: "127.0.0.1".to_string(),
@@ -1405,7 +1409,7 @@ mod tests {
             max_api_key_length: 512,
             request_timeout_secs: 30,
             grpc_max_message_size: 4 * 1024 * 1024,
-            rate_limit_per_minute: 120,
+            rate_limit_per_minute,
             trusted_proxies: vec![],
             persist_rate_limits: false,
             metrics_username: None,
@@ -1460,8 +1464,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_rate_limiting() {
-        let service = setup_test_service().await;
-        for _ in 0..120 {
+        let service = setup_test_service_with_rate_limit(3).await;
+        for _ in 0..3 {
             let req = Request::new(RegisterRequest {
                 device_id: "test-device".to_string(),
             });

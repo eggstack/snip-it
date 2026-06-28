@@ -150,10 +150,10 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
 
     // Check cache first
     {
-        if let Ok(cache) = KEY_CACHE.lock() {
-            if let Some(cached) = cache.get(&cache_key) {
-                return Ok(DerivedKey::new(*cached));
-            }
+        if let Ok(cache) = KEY_CACHE.lock()
+            && let Some(cached) = cache.get(&cache_key)
+        {
+            return Ok(DerivedKey::new(*cached));
         }
     }
 

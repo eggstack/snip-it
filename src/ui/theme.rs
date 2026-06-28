@@ -689,10 +689,10 @@ fn load_initial_theme() -> Theme {
         return theme;
     }
     // (2) SNP_THEME
-    if let Ok(value) = std::env::var("SNP_THEME") {
-        if let Some(theme) = resolve_legacy_or_filename(&value) {
-            return theme;
-        }
+    if let Ok(value) = std::env::var("SNP_THEME")
+        && let Some(theme) = resolve_legacy_or_filename(&value)
+    {
+        return theme;
     }
     // (3) bundled default
     if let Some(theme) = parse_halloy_string(super::_generated_bundled_themes::DEFAULT_BUNDLED) {
