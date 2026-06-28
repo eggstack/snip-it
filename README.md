@@ -30,7 +30,7 @@ cargo install snip-it
 ### From source
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/anomalyco/snip-it.git
 cd snip-it
 cargo build --release
 ./target/release/snp --version
@@ -38,7 +38,7 @@ cargo build --release
 
 ### Pre-built binaries
 
-Download from the latest release (available after first crates.io publish):
+Download from the latest release:
 
 | Platform       | Asset                                    |
 | -------------- | ---------------------------------------- |
@@ -57,7 +57,7 @@ sudo mv snp /usr/local/bin/
 ### Homebrew
 
 ```bash
-brew install eggstack/tap/snp
+brew install anomalyco/tap/snp
 ```
 
 ### Docker (sync server only)
@@ -69,11 +69,11 @@ docker pull ghcr.io/anomalyco/snip-it/snip-sync:latest
 ## Quickstart
 
 ```bash
-# Create a snippet with variables
-snp new 'ssh <user>@<host>' -t ssh
+# Create a snippet with variables, then prompt for description and tags
+snp new 'ssh <user>@<host>' --tags
 
-# Create a snippet with a default value
-snp new 'git push origin <branch=main>' -t git
+# Create a snippet with a default value, then prompt for description
+snp new 'git push origin <branch=main>'
 
 # List all snippets
 snp list
@@ -140,9 +140,9 @@ for installation, configuration, and a `docker-compose.yml` example.
 
 ```bash
 # Register against your server (stores API key in OS keychain)
-snp register https://sync.example.com:50051
+snp register --server https://sync.example.com:50051
 
-# Manual sync
+# Manual sync (uses sync.toml direction; default is push-only)
 snp sync
 
 # Push-only / pull-only
@@ -185,7 +185,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 
 | Variable                          | Description                                            | Default     |
 | --------------------------------- | ------------------------------------------------------ | ----------- |
-| `SNP_CONFIG_HOME`                 | Override config directory                              | `~/.config/snp` |
+| `XDG_CONFIG_HOME`                 | Override config root; snp uses `$XDG_CONFIG_HOME/snp`  | platform default |
 | `SNP_COMMAND_TIMEOUT`             | Command execution timeout in seconds (`0` disables; direct terminal runs default to no timeout, output-capture runs default to 300s) | - |
 | `SNP_CLIPBOARD_TIMEOUT`           | Clipboard operation timeout (seconds)                  | `5`         |
 | `SNP_ALLOW_PLAINTEXT_API_KEY`     | Allow API key in config file (not keychain)            | `false`     |

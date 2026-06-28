@@ -60,7 +60,7 @@ fn handle_library_not_found(
 
     match runtime.block_on(client.create_library(&normalized_name)) {
         Ok(server_lib) => {
-            if let Err(e) = mgr.update_library_id(lib_name, &server_lib.id) {
+            if let Err(e) = mgr.link_server_library(lib_name, &server_lib.id) {
                 tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
             }
             if let Err(e) = mgr.update_last_sync(lib_name, 0) {
@@ -473,7 +473,7 @@ pub fn run_sync(
                         tracing::warn!(library = %lib_name, error = %e, "Failed to add library to config");
                     }
 
-                    if let Err(e) = mgr.update_library_id(lib_name, &new_id) {
+                    if let Err(e) = mgr.link_server_library(lib_name, &new_id) {
                         tracing::warn!(library = %lib_name, error = %e, "Failed to link library in config");
                     }
 

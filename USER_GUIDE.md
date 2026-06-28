@@ -114,7 +114,7 @@ cargo build --release
 snp register
 
 # Register with custom server
-snp register https://sync.example.com:50051
+snp register --server https://sync.example.com:50051
 ```
 
 This creates an API key and stores it in the OS keychain when available.
@@ -123,7 +123,7 @@ This creates an API key and stores it in the OS keychain when available.
 #### 3. Sync Your Snippets
 
 ```bash
-# Bidirectional sync
+# Sync using sync.toml direction (default: push local changes)
 snp sync
 
 # Push local changes only
@@ -139,8 +139,8 @@ Configure sync direction in `~/.config/snp/sync.toml`:
 
 ```toml
 [settings.sync]
-sync_direction = "Bidirectional"  # Default
-# sync_direction = "Push"        # Upload only
+sync_direction = "Push"         # Default: upload only
+# sync_direction = "Bidirectional"  # Upload and download
 # sync_direction = "Pull"        # Download only
 ```
 
@@ -199,12 +199,14 @@ systemctl --user enable --now snp-sync.timer
 
 ### Sync Conflict Resolution
 
-When the same snippet is modified locally and remotely:
+When the same snippet is modified locally and remotely, sync uses
+last-write-wins based on the `updated_at` timestamp. Local-only fields
+such as `output`, `folders`, and `favorite` are preserved when the server
+version wins.
 
-| Mode | Behavior |
-|------|----------|
-| Interactive | Prompts: "Keep Local", "Keep Remote", "Keep Both" |
-| Non-interactive | Keeps local version, logs conflict |
+When linking an existing local library to a server library that already
+contains snippets, `snp sync` prompts you to skip, overwrite the local
+library with the server version, or rename the local copy before pulling.
 
 ---
 
@@ -236,8 +238,8 @@ snp premade get docker-essentials
 # Install all available libraries
 snp premade get all
 
-# Install specific libraries
-snp premade get docker-essentials git-common
+# Install another library by repeating the command
+snp premade get git-common
 ```
 
 ### Syncing Premade Libraries
@@ -436,7 +438,7 @@ cp ~/.config/snp/libraries/work.toml ~/work-snippets.toml
 
 | Variable | Description |
 |----------|-------------|
-| `SNP_CONFIG_HOME` | Override config directory |
+| `XDG_CONFIG_HOME` | Override config root; snp uses `$XDG_CONFIG_HOME/snp` |
 | `SNP_LOG_LEVEL` | Log level (trace, debug, info, warn, error) |
 | `EDITOR` | Editor for `snp edit` command |
 
@@ -455,7 +457,7 @@ api_key = "@keychain"
 device_id = "device-uuid"
 sync_interval_minutes = 30
 auto_sync = false
-sync_direction = "Bidirectional"
+sync_direction = "Push"
 
 [[Snippets]]
 Id = "optional-uuid"
@@ -463,7 +465,7 @@ Description = "Snippet description"
 Output = ""  # For storing command output
 Tag = ["tag1", "tag2"]
 command = "the command with <variables>"
-Folders = []  # Future: folder organization
+folders = []
 favorite = false
 created_at = 1705312200
 updated_at = 1705312200
@@ -481,7 +483,7 @@ deleted = false
 | `sync.device_id` | string | "" | Unique device identifier |
 | `sync.sync_interval_minutes` | u32 | 30 | Sync interval |
 | `sync.auto_sync` | bool | false | Auto-sync on changes |
-| `sync.sync_direction` | enum | Bidirectional | Push, Pull, or Bidirectional |
+| `sync.sync_direction` | enum | Push | Push, Pull, or Bidirectional |
 
 ---
 
@@ -521,7 +523,7 @@ snp is a binary application and does not expose a public Rust API. For automatio
 
 ```bash
 # Create a snippet
-snp new "git commit" -t git
+snp new "git commit" --tags
 
 # List snippets (JSON format for scripting)
 snp list --json
@@ -599,7 +601,7 @@ To reset just sync state (keep snippets, drop the server connection):
 
 ```bash
 rm ~/.config/snp/sync.toml
-snp register https://your-server:50051
+snp register --server https://your-server:50051
 ```
 
 ### Keychain Issues (Linux headless / SSH sessions)
@@ -612,6 +614,6 @@ Fallback for headless / CI usage:
 
 ```bash
 export SNP_ALLOW_PLAINTEXT_API_KEY=true
-snp register https://your-server:50051
+snp register --server https://your-server:50051
 # API key is now stored in sync.toml with a runtime warning emitted
 ```

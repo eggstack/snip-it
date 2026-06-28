@@ -171,6 +171,26 @@ fn test_list_no_library() {
     );
 }
 
+#[test]
+fn test_sync_without_config_does_not_attempt_connection() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["sync"]);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Sync is not enabled"),
+        "Expected disabled-sync message in stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Failed to connect"),
+        "Disabled sync should not attempt a server connection: {stderr}"
+    );
+}
+
 // --- Config path ---
 
 #[test]

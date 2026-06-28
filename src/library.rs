@@ -484,6 +484,28 @@ Snippets = []
         Ok(())
     }
 
+    /// Links a local library to a server-side library.
+    pub fn link_server_library(&mut self, filename: &str, server_id: &str) -> SnipResult<()> {
+        if let Some(lib) = self.get_library_by_filename_mut(filename) {
+            lib.library_id = server_id.to_string();
+            lib.server_id = Some(server_id.to_string());
+
+            self.save_config()?;
+        }
+        Ok(())
+    }
+
+    /// Clears server linkage metadata for a local library.
+    pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()> {
+        if let Some(lib) = self.get_library_by_filename_mut(filename) {
+            lib.library_id.clear();
+            lib.server_id = None;
+
+            self.save_config()?;
+        }
+        Ok(())
+    }
+
     /// Registers an existing library file that is not yet tracked in the config.
     pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()> {
         validate_library_name(filename)

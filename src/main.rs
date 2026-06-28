@@ -50,7 +50,7 @@ fn setup_signal_handler() {
     name = "snp",
     about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and cloud sync",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "Config: ~/.config/snp/snippets.toml | Docs: https://github.com/eggstack/snip-it"
+    after_help = "Config: ~/.config/snp/snippets.toml | Docs: https://github.com/anomalyco/snip-it"
 )]
 struct Cli {
     #[command(subcommand)]

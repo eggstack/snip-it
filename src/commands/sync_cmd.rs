@@ -5,8 +5,48 @@ use crate::library::LibraryManager;
 use crate::proto::Library;
 use std::io::{self, Write};
 
+fn server_library_filename(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-")
+}
+
+fn has_local_snippets(lib_path: &std::path::Path) -> bool {
+    lib_path.exists()
+        && crate::library::load_library(lib_path)
+            .is_ok_and(|snippets| snippets.snippets.iter().any(|snippet| !snippet.deleted))
+}
+
+fn link_library_to_server(filename: &str, server_id: &str, mgr: &mut LibraryManager) -> bool {
+    if let Err(e) = mgr.link_server_library(filename, server_id) {
+        eprintln!("  Failed to link '{filename}': {e}");
+        return false;
+    }
+    true
+}
+
+fn clear_library_for_server_pull(
+    filename: &str,
+    lib_path: &std::path::Path,
+    server_id: &str,
+    mgr: &mut LibraryManager,
+) -> bool {
+    if !link_library_to_server(filename, server_id, mgr) {
+        return false;
+    }
+
+    let empty = crate::library::Snippets::default();
+    if let Err(e) = crate::library::save_library(lib_path, &empty) {
+        eprintln!("    Failed to clear original library: {e}");
+        if let Err(unlink_err) = mgr.unlink_server_library(filename) {
+            eprintln!("    Failed to roll back server link: {unlink_err}");
+        }
+        return false;
+    }
+
+    true
+}
+
 fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bool) -> bool {
-    let filename = lib.name.to_lowercase().replace(' ', "-");
+    let filename = server_library_filename(&lib.name);
     let existing_lib_id = mgr
         .get_library_by_filename(&filename)
         .map(|l| l.library_id.clone());
@@ -18,21 +58,14 @@ fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bo
         }
 
         let lib_path = mgr.get_libraries_dir().join(format!("{filename}.toml"));
-        let local_has_content = if lib_path.exists() {
-            if let Ok(snippets) = crate::library::load_library(&lib_path) {
-                !snippets.snippets.is_empty()
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let local_has_content = has_local_snippets(&lib_path);
 
-        if existing_id.is_empty() && local_has_content {
+        if existing_id.is_empty() && local_has_content && lib.snippet_count > 0 {
             println!("\n  Local library '{filename}' has snippets. Server also has snippets.");
             match prompt_conflict(&filename).as_deref() {
                 Some("overwrite") => {
-                    println!("  Will overwrite with server version");
+                    println!("  Replacing local library with server version");
+                    return clear_library_for_server_pull(&filename, &lib_path, &lib.id, mgr);
                 }
                 Some("rename") => {
                     let new_name = format!("{filename}_local");
@@ -52,14 +85,8 @@ fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bo
                     // Link the original library to the server ID so server
                     // content syncs into it. The backup stays unlinked (created
                     // by create_library with empty library_id).
-                    if let Err(e) = mgr.update_library_id(&filename, &lib.id) {
-                        eprintln!("    Failed to link original: {e}");
-                        return false;
-                    }
                     // Clear original library for server content
-                    let empty = crate::library::Snippets::default();
-                    if let Err(e) = crate::library::save_library(&lib_path, &empty) {
-                        eprintln!("    Failed to clear original library: {e}");
+                    if !clear_library_for_server_pull(&filename, &lib_path, &lib.id, mgr) {
                         return false;
                     }
                     println!(
@@ -75,8 +102,7 @@ fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bo
         }
 
         if existing_id.is_empty() {
-            if let Err(e) = mgr.update_library_id(&filename, &lib.id) {
-                eprintln!("  Failed to link '{}': {}", lib.name, e);
+            if !link_library_to_server(&filename, &lib.id, mgr) {
                 return false;
             }
             println!("  Linked '{}' to server library '{}'", filename, lib.id);
@@ -141,12 +167,16 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
         e
     })?;
 
-    if options.servers {
-        if !sync_settings.enabled {
-            eprintln!("Sync is not enabled. Configure sync settings first.");
-            return Ok(());
-        }
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return Ok(());
+    }
+    if sync_settings.api_key.is_empty() {
+        eprintln!("Sync is enabled but no API key is configured. Run 'snp register --force'.");
+        return Ok(());
+    }
 
+    if options.servers {
         let mut client = runtime
             .block_on(crate::sync::SyncClient::create(sync_settings.clone()))
             .map_err(|e| {
@@ -180,10 +210,6 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 )
             })?;
 
-            for lib in libs {
-                link_server_library(&lib, &mut mgr, true);
-            }
-
             if options.dry_run {
                 println!("\n[DRY RUN] Would sync snippets:");
                 let lib_path = match crate::commands::get_library_path(options.library)? {
@@ -209,6 +235,10 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                     }
                 }
                 return Ok(());
+            }
+
+            for lib in libs {
+                link_server_library(&lib, &mut mgr, true);
             }
 
             println!("\nSyncing snippets...");
@@ -253,8 +283,51 @@ mod tests {
             ("multi word name", "multi-word-name"),
         ];
         for (input, expected) in cases {
-            assert_eq!(input.to_lowercase().replace(' ', "-"), expected);
+            assert_eq!(server_library_filename(input), expected);
         }
+    }
+
+    #[test]
+    fn test_has_local_snippets_ignores_empty_and_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("library.toml");
+
+        assert!(!has_local_snippets(&path));
+
+        crate::library::save_library(&path, &crate::library::Snippets::default()).unwrap();
+        assert!(!has_local_snippets(&path));
+
+        let deleted = crate::library::Snippets {
+            snippets: vec![crate::library::Snippet {
+                id: "deleted".to_string(),
+                description: "deleted".to_string(),
+                command: "echo deleted".to_string(),
+                deleted: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        crate::library::save_library(&path, &deleted).unwrap();
+        assert!(!has_local_snippets(&path));
+    }
+
+    #[test]
+    fn test_has_local_snippets_detects_active_snippet() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("library.toml");
+        let snippets = crate::library::Snippets {
+            snippets: vec![crate::library::Snippet {
+                id: "active".to_string(),
+                description: "active".to_string(),
+                command: "echo active".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        crate::library::save_library(&path, &snippets).unwrap();
+
+        assert!(has_local_snippets(&path));
     }
 
     #[test]
