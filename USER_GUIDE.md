@@ -117,7 +117,8 @@ snp register
 snp register https://sync.example.com:50051
 ```
 
-This creates an API key stored in your sync settings.
+This creates an API key and stores it in the OS keychain when available.
+`sync.toml` stores the `@keychain` marker instead of the key itself.
 
 #### 3. Sync Your Snippets
 
@@ -134,7 +135,7 @@ snp sync --pull-only
 
 ### Sync Modes
 
-Configure sync direction in your snippets file:
+Configure sync direction in `~/.config/snp/sync.toml`:
 
 ```toml
 [settings.sync]
@@ -450,7 +451,7 @@ version = "1.0"
 [settings.sync]
 enabled = true
 server_url = "https://sync.example.com"
-api_key = "your-api-key"
+api_key = "@keychain"
 device_id = "device-uuid"
 sync_interval_minutes = 30
 auto_sync = false
@@ -475,8 +476,8 @@ deleted = false
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `sync.enabled` | bool | false | Enable sync |
-| `sync.server_url` | string | localhost:50051 | Sync server URL |
-| `sync.api_key` | string | "" | API key for auth |
+| `sync.server_url` | string | https://localhost:50051 | Sync server URL |
+| `sync.api_key` | string | "" | API key for auth; normally `@keychain` |
 | `sync.device_id` | string | "" | Unique device identifier |
 | `sync.sync_interval_minutes` | u32 | 30 | Sync interval |
 | `sync.auto_sync` | bool | false | Auto-sync on changes |
@@ -553,7 +554,7 @@ eval "$SNIPPET"
 ### Sync Not Working
 
 1. Check server is running: `curl localhost:50050/health` or equivalent
-2. Verify API key: `cat ~/.config/snp/sync.toml`
+2. Verify sync config: `cat ~/.config/snp/sync.toml`
 3. Check logs: `tail -f ~/.config/snp/logs/snp.log`
 4. Test connection: `snp sync --dry-run`
 

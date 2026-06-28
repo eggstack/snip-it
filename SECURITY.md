@@ -52,11 +52,10 @@ at rest.
 - **Integrity:** `sync.toml` carries a CRC32 comment line to detect
   accidental corruption. This is *not* a cryptographic integrity check
   — the threat model assumes local-only access.
-- **Known limitation:** The API key is currently sent in the gRPC
-  request body rather than in gRPC `authorization` metadata. The
-  transport is TLS-encrypted, so the key is not exposed in transit,
-  but a future release will move it to the standard `authorization`
-  header. Tracking: see `AGENTS.md` (deferred items).
+- **Authentication:** Current clients send the API key as a bearer
+  token in gRPC `authorization` metadata. The proto request-body
+  `api_key` fields remain for backward compatibility with older
+  clients and are ignored when metadata is present.
 
 ### Server Deployment
 

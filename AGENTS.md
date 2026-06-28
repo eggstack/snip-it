@@ -49,7 +49,7 @@ library / binary crates and can be tested individually with `-p`.
 
 ```
 snip-it/
-├── Cargo.toml          # Main crate: binary "snp" (Rust 1.88+)
+├── Cargo.toml          # Main crate: binary "snp" (Rust 1.94+)
 ├── build.rs            # Re-invokes build_themes.py when themes/ changes
 ├── src/
 │   ├── main.rs         # CLI entry point, clap command dispatch

@@ -4,6 +4,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 use axum::extract::State;
+use axum::http::HeaderValue;
 use base64::Engine;
 use snip_proto::snippet_sync_server::SnippetSyncServer;
 use snip_sync::{
@@ -20,9 +21,12 @@ async fn security_headers_middleware(
 ) -> axum::response::Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("cache-control", "no-store".parse().unwrap());
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
     response
 }
 

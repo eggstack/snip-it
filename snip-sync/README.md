@@ -14,8 +14,9 @@ A gRPC server for syncing snippets between clients.
 cd snip-sync
 cargo build --release
 
-# Run with default config (127.0.0.1:50051 for gRPC, 127.0.0.1:50050 for HTTP)
-./target/release/snip-sync
+# Run with default config for local plaintext development
+# (127.0.0.1:50051 for gRPC, 127.0.0.1:50050 for HTTP)
+SNIP_SYNC_ALLOW_HTTP=true ./target/release/snip-sync
 ```
 
 A complete annotated configuration is at `config.example.toml` — copy
@@ -97,6 +98,9 @@ Environment variables override config file settings:
 | `METRICS_USERNAME` | Metrics basic auth username |
 | `METRICS_PASSWORD` | Metrics basic auth password |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated CORS origins |
+| `TLS_ENABLED` | Set to `true` when production TLS is terminated by a reverse proxy |
+| `SNIP_SYNC_ALLOW_HTTP` | Set to `true` only for local plaintext development |
+| `CORS_ALLOW_ALL` | Set to `true` to allow all CORS origins |
 
 ## Ports
 
@@ -129,6 +133,8 @@ Description = "Library description here"
 ## Production Deployment
 
 For production, use a reverse proxy with TLS termination (nginx, traefik, etc.):
+set `TLS_ENABLED=true` for the server process so startup knows TLS is
+handled before traffic reaches it.
 
 ### nginx example
 

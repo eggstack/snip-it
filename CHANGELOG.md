@@ -8,8 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Preserve the real in-memory API key when migrating legacy plaintext
+  `sync.toml` values into the OS keychain; the saved config gets the
+  `@keychain` marker, but the current operation continues with the
+  actual credential.
+- Verify `sync.toml` integrity checks against the exact saved TOML body,
+  preserving trailing newlines and later user-authored comments.
 - **Harden crates.io release.** Remove `themes/` from published package (embeds default theme directly in generated Rust source). Shrink public API surface to 9 modules. Replace `getrandom` jitter with `SystemTime::now().subsec_nanos()`. Split `get_config_dir()` into pure getter + `ensure_config_dir()` — fixes macOS legacy migration (could never run because `get_config_dir()` eagerly created the new directory). Harden `list_libraries` pagination loop against buggy servers. Use `fs::rename` instead of `fs::copy` for atomic backup restore.
 - Move `subtle` to `[dev-dependencies]` (only used in tests).
+
+### Changed
+- Align release-facing documentation with the current Rust 1.94 MSRV and
+  gRPC authorization metadata behavior.
 
 ### Removed
 - Remove inert --non-interactive sync flag

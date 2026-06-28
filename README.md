@@ -3,9 +3,9 @@
 [![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
 [![docs.rs](https://img.shields.io/docsrs/snip-it)](https://docs.rs/snip-it)
-![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-blue)
+![MSRV: 1.94](https://img.shields.io/badge/MSRV-1.94-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88+-orange.svg)
+![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)
 
 A fast, terminal-based snippet manager. Fuzzy search your command library,
 expand `<variable>` placeholders on the fly, organize snippets into
@@ -63,7 +63,7 @@ brew install eggstack/tap/snp
 ### Docker (sync server only)
 
 ```bash
-docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
+docker pull ghcr.io/anomalyco/snip-it/snip-sync:latest
 ```
 
 ## Quickstart
@@ -210,7 +210,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
 development setup, code style, and the release process. Bug reports
-and feature requests go through [GitHub Issues](https://github.com/eggstack/snip-it/issues).
+and feature requests go through [GitHub Issues](https://github.com/anomalyco/snip-it/issues).
 
 ## License
 

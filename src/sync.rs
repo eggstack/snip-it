@@ -69,6 +69,16 @@ fn default_retry_config() -> SyncRetryConfig {
     SyncRetryConfig::default()
 }
 
+fn retry_jitter_multiplier() -> f64 {
+    let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let combined = nanos.wrapping_add(counter.wrapping_mul(31));
+    0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
+}
+
 /// Retry an async gRPC operation with exponential backoff and jitter.
 macro_rules! retry_grpc {
     ($op:expr, $name:expr) => {{
@@ -84,16 +94,7 @@ macro_rules! retry_grpc {
                     {
                         break Err(SnipError::runtime_error($name, Some(&e.to_string())));
                     }
-                    let jitter_ms = {
-                        let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        let nanos = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.subsec_nanos())
-                            .unwrap_or(0);
-                        let combined = nanos.wrapping_add(counter.wrapping_mul(31));
-                        0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
-                    };
-                    let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
+                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     tracing::warn!(
                         "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
                         $name,
@@ -287,16 +288,7 @@ impl SyncClient {
                         e,
                         delay_ms
                     );
-                    let jitter_ms = {
-                        let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        let nanos = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.subsec_nanos())
-                            .unwrap_or(0);
-                        let combined = nanos.wrapping_add(counter.wrapping_mul(31));
-                        0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
-                    };
-                    let actual_delay = (delay_ms as f64 * jitter_ms) as u64;
+                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     tokio::time::sleep(Duration::from_millis(actual_delay)).await;
                     let backoff_multiplier = if is_rate_limited { 4.0 } else { 2.0 };
                     let max_delay = if is_rate_limited {

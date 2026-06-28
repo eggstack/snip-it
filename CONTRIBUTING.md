@@ -7,7 +7,7 @@ provides guidelines and information for contributors.
 
 ### Prerequisites
 
-- **Rust:** Latest two stable releases (currently 1.88+). A
+- **Rust:** Latest two stable releases (currently 1.94+). A
   `rust-toolchain.toml` is checked in to pin the local toolchain.
 - **Protobuf compiler (`protoc`)** — required *only* if you regenerate
   the gRPC stubs. The generated `snip-proto/src/snip_proto.rs` is
@@ -32,7 +32,7 @@ cargo run -- run
 
 # Run the sync server locally for testing
 cd snip-sync
-cargo run
+SNIP_SYNC_ALLOW_HTTP=true cargo run
 
 # In another terminal, register with the local server
 cd ..

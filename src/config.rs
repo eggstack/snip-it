@@ -40,6 +40,17 @@ fn compute_crc32(data: &str) -> u32 {
     crc32fast::hash(data.as_bytes())
 }
 
+fn split_integrity_header(content: &str) -> Option<(&str, &str)> {
+    let (first_line, body) = match content.find('\n') {
+        Some(index) => (&content[..index], &content[index + 1..]),
+        None => (content, ""),
+    };
+
+    first_line
+        .strip_prefix("# integrity:")
+        .map(|checksum| (checksum.trim(), body))
+}
+
 /// Verifies CRC32 integrity of the config file content.
 ///
 /// Note: CRC32 detects accidental corruption (e.g., partial writes, disk errors)
@@ -50,17 +61,12 @@ fn compute_crc32(data: &str) -> u32 {
 fn verify_integrity(content: &str) -> bool {
     // The integrity header must be the very first line to avoid matching
     // user-authored TOML comments like "# integrity: 42".
-    let first_line = content.lines().next().unwrap_or("");
-    if let Some(stripped) = first_line.strip_prefix("# integrity:")
-        && let Ok(stored) = stripped.trim().parse::<u32>()
-    {
-        let body: String = content
-            .lines()
-            .filter(|l| !l.starts_with("# integrity:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return stored == compute_crc32(&body);
+    if let Some((checksum, body)) = split_integrity_header(content) {
+        return checksum
+            .parse::<u32>()
+            .is_ok_and(|stored| stored == compute_crc32(body));
     }
+
     // No integrity header found — this is a legacy config file from before the
     // integrity feature was added. Treat it as valid rather than silently
     // replacing with defaults (which would cause data loss on upgrade).
@@ -69,11 +75,9 @@ fn verify_integrity(content: &str) -> bool {
 }
 
 fn strip_integrity_line(content: &str) -> String {
-    content
-        .lines()
-        .filter(|l| !l.starts_with("# integrity:"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    split_integrity_header(content)
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_else(|| content.to_string())
 }
 
 pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
@@ -268,6 +272,34 @@ fn keychain_retrieve(user: &str) -> SnipResult<String> {
         .map_err(|e| SnipError::runtime_error("keychain retrieve", Some(&e.to_string())))
 }
 
+fn migrate_plaintext_api_key<FStore, FSave>(
+    settings: &SyncSettings,
+    store_key: FStore,
+    save_marker: FSave,
+) where
+    FStore: FnOnce(&str) -> SnipResult<()>,
+    FSave: FnOnce(&SyncSettings) -> SnipResult<()>,
+{
+    if settings.api_key.is_empty() || settings.api_key == KEYCHAIN_MARKER {
+        return;
+    }
+
+    if let Err(e) = store_key(&settings.api_key) {
+        tracing::error!(
+            "Failed to migrate API key to keychain (keychain unavailable): {}. \
+             API key will remain in plaintext config file.",
+            e
+        );
+        return;
+    }
+
+    let mut marker_settings = settings.clone();
+    marker_settings.api_key = KEYCHAIN_MARKER.to_string();
+    if let Err(e) = save_marker(&marker_settings) {
+        tracing::error!("Failed to save keychain marker: {}", e);
+    }
+}
+
 impl Default for SyncSettings {
     fn default() -> Self {
         SyncSettings {
@@ -410,23 +442,16 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let config: SyncConfigFile = toml::from_str(&fixed_content)
         .map_err(|e| SnipError::toml_error("parse sync config", e))?;
 
-    let mut settings = config.settings.sync;
+    let settings = config.settings.sync;
 
-    // Migrate existing plaintext API key to keychain on first load
-    if !settings.api_key.is_empty() && settings.api_key != KEYCHAIN_MARKER {
-        if let Err(e) = keychain_store(&settings.api_key, KEYCHAIN_DEFAULT_USER) {
-            tracing::error!(
-                "Failed to migrate API key to keychain (keychain unavailable): {}. \
-                 API key will remain in plaintext config file.",
-                e
-            );
-        } else {
-            settings.api_key = KEYCHAIN_MARKER.to_string();
-            if let Err(e) = save_sync_settings(&settings) {
-                tracing::error!("Failed to save keychain marker: {}", e);
-            }
-        }
-    }
+    // Migrate existing plaintext API key to keychain on first load. Keep the
+    // plaintext key in this in-memory settings value so the caller can complete
+    // the current sync/register operation with the real credential.
+    migrate_plaintext_api_key(
+        &settings,
+        |api_key| keychain_store(api_key, KEYCHAIN_DEFAULT_USER),
+        save_sync_settings,
+    );
 
     Ok(settings)
 }
@@ -530,5 +555,41 @@ mod tests {
         let tampered = "[sync]\nenabled = false";
         let content = format!("# integrity: {checksum}\n{tampered}");
         assert!(!verify_integrity(&content));
+    }
+
+    #[test]
+    fn test_verify_integrity_preserves_exact_body() {
+        let body = "[sync]\n# integrity: user-authored comment\nenabled = true\n";
+        let checksum = compute_crc32(body);
+        let content = format!("# integrity: {checksum}\n{body}");
+
+        assert!(verify_integrity(&content));
+        assert_eq!(strip_integrity_line(&content), body);
+    }
+
+    #[test]
+    fn test_verify_integrity_malformed_header_fails() {
+        let content = "# integrity: not-a-checksum\n[sync]\nenabled = true\n";
+        assert!(!verify_integrity(content));
+    }
+
+    #[test]
+    fn test_keychain_migration_preserves_in_memory_api_key() {
+        let mut settings = SyncSettings::default();
+        settings.api_key = "test-key-123".to_string();
+
+        migrate_plaintext_api_key(
+            &settings,
+            |api_key| {
+                assert_eq!(api_key, "test-key-123");
+                Ok(())
+            },
+            |saved_settings| {
+                assert_eq!(saved_settings.api_key, KEYCHAIN_MARKER);
+                Ok(())
+            },
+        );
+
+        assert_eq!(settings.api_key, "test-key-123");
     }
 }
