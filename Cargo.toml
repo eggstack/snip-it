@@ -54,7 +54,7 @@ targets = [
 ]
 
 [target.'cfg(windows)'.dependencies]
-clipboard-win = "4.5"
+clipboard-win = "5.4"
 
 [target.'cfg(not(windows))'.dependencies]
 arboard = "3"
