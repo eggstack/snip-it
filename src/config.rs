@@ -21,6 +21,7 @@ pub const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 
 struct CachedToml {
     mtime: SystemTime,
+    len: u64,
     content: String,
 }
 
@@ -83,21 +84,26 @@ fn strip_integrity_line(content: &str) -> String {
 pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let key = path.to_string_lossy().to_string();
 
-    let content = fs::read_to_string(path)
-        .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
-
-    let mtime = fs::metadata(path)
-        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?
+    let metadata = fs::metadata(path)
+        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
+    let mtime = metadata
         .modified()
         .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
+    let len = metadata.len();
 
-    let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = cache.get(&key)
         && entry.mtime == mtime
+        && entry.len == len
     {
         return Ok(entry.content.clone());
     }
+    drop(cache);
 
+    let content = fs::read_to_string(path)
+        .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
+
+    let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() >= MAX_TOML_CACHE_SIZE {
         let keys_to_remove: Vec<_> = cache
             .keys()
@@ -113,6 +119,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         key,
         CachedToml {
             mtime,
+            len,
             content: content.clone(),
         },
     );
@@ -352,11 +359,6 @@ struct SyncConfigSettings {
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let path = get_sync_config_path();
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| SnipError::io_error("create config directory", parent.to_path_buf(), e))?;
-    }
-
     let config = SyncConfigFile {
         settings: SyncConfigSettings {
             sync: settings.clone(),
@@ -370,41 +372,7 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let checksum = compute_crc32(&content);
     let content_with_integrity = format!("# integrity: {checksum}\n{content}");
 
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_stem().and_then(|s| s.to_str()).unwrap_or("sync"),
-        uuid::Uuid::new_v4()
-    ));
-    let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true).mode(0o600);
-        let mut file = opts
-            .open(&tmp_path)
-            .map_err(|e| SnipError::io_error("create sync config temp", &tmp_path, e))?;
-        use std::io::Write;
-        file.write_all(content_with_integrity.as_bytes())
-            .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        use std::io::Write;
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        let mut file = opts
-            .open(&tmp_path)
-            .map_err(|e| SnipError::io_error("create sync config temp", &tmp_path, e))?;
-        file.write_all(content_with_integrity.as_bytes())
-            .map_err(|e| SnipError::io_error("write sync config temp", &tmp_path, e))?;
-    }
-
-    fs::rename(&tmp_path, &path)
-        .map_err(|e| SnipError::io_error("atomic rename sync config", path.clone(), e))?;
-    guard.persist();
+    crate::utils::atomic::write_private_atomic(&path, &content_with_integrity, "sync")?;
 
     invalidate_toml_cache(&path);
     crate::clipboard::invalidate_clipboard_settings_cache();

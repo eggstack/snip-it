@@ -6,6 +6,7 @@
 //! - [`toml_helpers`]: TOML escape sequence handling
 //! - [`shell_keywords`]: Shell keyword expansion
 
+pub mod atomic;
 pub mod config;
 pub mod shell_keywords;
 pub mod tempfile_guard;

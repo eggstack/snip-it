@@ -33,7 +33,8 @@ pub enum ExpandedCommand {
 
 /// Resolves the config path from CLI argument or default location.
 pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
-    use std::fs::{self, File};
+    use std::fs::{self, OpenOptions};
+    use std::io::ErrorKind;
 
     match config {
         Some(path) => {
@@ -52,8 +53,13 @@ pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
                     fs::create_dir_all(parent)
                         .map_err(|e| SnipError::io_error("create directory", parent, e))?;
                 }
-                File::create(path)
-                    .map_err(|e| SnipError::io_error("create config file", path.clone(), e))?;
+                match OpenOptions::new().write(true).create_new(true).open(path) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists && path.is_file() => {}
+                    Err(e) => {
+                        return Err(SnipError::io_error("create config file", path.clone(), e));
+                    }
+                }
                 Ok(path.clone())
             }
         }
@@ -148,14 +154,7 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
 /// Uses atomic write (temp file + rename) and creates a backup before saving,
 /// matching the safety guarantees of `save_library`.
 pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> SnipResult<()> {
-    use std::fs;
-
     let path = get_config_path(config)?;
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| SnipError::io_error("create config directory", parent, e))?;
-    }
 
     if let Err(e) = crate::library::backup_library(&path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
@@ -166,36 +165,11 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("config"),
-        uuid::Uuid::new_v4()
-    ));
-    let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true).mode(0o600);
-        let mut file = opts
-            .open(&tmp_path)
-            .map_err(|e| SnipError::io_error("create config temp", &tmp_path, e))?;
-        use std::io::Write;
-        file.write_all(toml_str.as_bytes())
-            .map_err(|e| SnipError::io_error("write config temp", &tmp_path, e))?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(&tmp_path, &toml_str)
-            .map_err(|e| SnipError::io_error("write config temp", &tmp_path, e))?;
-    }
-
-    fs::rename(&tmp_path, &path)
-        .map_err(|e| SnipError::io_error("atomic rename config file", path.clone(), e))?;
-    guard.persist();
+    let temp_prefix = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("config");
+    crate::utils::atomic::write_private_atomic(&path, &toml_str, temp_prefix)?;
 
     invalidate_toml_cache(&path);
 

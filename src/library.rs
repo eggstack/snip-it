@@ -678,39 +678,8 @@ Snippets = []
 
         let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-        let parent_dir = config_path
-            .parent()
-            .ok_or_else(|| SnipError::runtime_error("config path has no parent", None))?;
-        if !parent_dir.exists() {
-            fs::create_dir_all(parent_dir)
-                .map_err(|e| SnipError::io_error("create config directory", parent_dir, e))?;
-        }
-
-        let tmp_path = parent_dir.join(format!("libraries.{}.tmp", uuid::Uuid::new_v4()));
-        let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut opts = fs::OpenOptions::new();
-            opts.write(true).create_new(true).mode(0o600);
-            let mut file = opts
-                .open(&tmp_path)
-                .map_err(|e| SnipError::io_error("create config temp", tmp_path.clone(), e))?;
-            use std::io::Write;
-            file.write_all(toml_str.as_bytes())
-                .map_err(|e| SnipError::io_error("write config temp", tmp_path.clone(), e))?;
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = fs::remove_file(&tmp_path);
-            fs::write(&tmp_path, &toml_str)
-                .map_err(|e| SnipError::io_error("write temp config", tmp_path.clone(), e))?;
-        }
-
-        std::fs::rename(&tmp_path, &config_path)
-            .map_err(|e| SnipError::io_error("atomic rename config", config_path.clone(), e))?;
-        guard.persist();
+        crate::utils::atomic::write_private_atomic(&config_path, &toml_str, "libraries")?;
+        invalidate_toml_cache(&config_path);
 
         Ok(())
     }
@@ -778,11 +747,6 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
 ///
 /// Creates a backup before saving and sorts snippets by `updated_at` descending.
 pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| SnipError::io_error("create directory", parent, e))?;
-    }
-
     if let Err(e) = backup_library(path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
     }
@@ -797,37 +761,11 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
 
     let toml_str = quote_strings_containing_backslashes(&toml_str);
 
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("snippets"),
-        uuid::Uuid::new_v4()
-    ));
-    let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true).mode(0o600);
-        let mut file = opts
-            .open(&tmp_path)
-            .map_err(|e| SnipError::io_error("create snippets temp", &tmp_path, e))?;
-        use std::io::Write;
-        file.write_all(toml_str.as_bytes())
-            .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = fs::remove_file(&tmp_path);
-        fs::write(&tmp_path, &toml_str)
-            .map_err(|e| SnipError::io_error("write snippets temp", &tmp_path, e))?;
-    }
-
-    fs::rename(&tmp_path, path)
-        .map_err(|e| SnipError::io_error("atomic rename snippets file", path, e))?;
-    guard.persist();
+    let temp_prefix = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("snippets");
+    crate::utils::atomic::write_private_atomic(path, &toml_str, temp_prefix)?;
 
     invalidate_toml_cache(path);
 
@@ -858,7 +796,7 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     // Clean up old backups (keep at most 10 per library)
     cleanup_old_backups(&backup_dir, path)?;
 
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
     let file_stem = path.file_stem().ok_or_else(|| {
         SnipError::runtime_error(
             "backup path has no file stem",
@@ -1234,6 +1172,65 @@ Command = "sudo iptables-restore \< /path/to/rules"
             .filter_map(|e| e.ok())
             .any(|e| e.path().extension().is_some_and(|ext| ext == "tmp"));
         assert!(!has_tmp, "temp files should not remain after atomic rename");
+    }
+
+    #[test]
+    fn test_save_config_invalidates_libraries_toml_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
+        let libraries_dir = config_dir.join("libraries");
+        let premade_dir = config_dir.join("premade");
+        std::fs::create_dir_all(&libraries_dir).unwrap();
+
+        let config_path = config_dir.join("libraries.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[[libraries]]
+filename = "old"
+library_id = ""
+is_primary = true
+"#,
+        )
+        .unwrap();
+        let cached_before = cached_read_toml(&config_path).unwrap();
+        assert!(cached_before.contains("old"));
+
+        let mut mgr = LibraryManager {
+            config_dir,
+            libraries_dir,
+            premade_dir,
+            config: LibraryConfig {
+                libraries: vec![LibraryMeta {
+                    filename: "old".to_string(),
+                    library_id: String::new(),
+                    is_primary: true,
+                    last_sync: None,
+                    server_id: None,
+                }],
+            },
+        };
+        mgr.create_library("new").unwrap();
+
+        let cached_after = cached_read_toml(&config_path).unwrap();
+        assert!(cached_after.contains("old"));
+        assert!(cached_after.contains("new"));
+    }
+
+    #[test]
+    fn test_backup_library_names_do_not_collide() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("snippets.toml");
+        std::fs::write(&path, "test content").unwrap();
+
+        let first = backup_library(&path).unwrap().unwrap();
+        let second = backup_library(&path).unwrap().unwrap();
+
+        assert_ne!(first, second);
+
+        let backup_dir = temp_dir.path().join("backups");
+        let backup_count = std::fs::read_dir(backup_dir).unwrap().count();
+        assert_eq!(backup_count, 2);
     }
 
     #[test]

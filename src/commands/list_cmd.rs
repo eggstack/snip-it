@@ -124,23 +124,41 @@ pub fn run(
 }
 
 fn csv_escape(s: &str) -> String {
-    let escaped = if s.contains(',')
-        || s.contains('"')
-        || s.contains('\n')
-        || s.contains('\r')
-        || s.contains('\t')
+    let field = if s
+        .chars()
+        .next()
+        .is_some_and(|first| matches!(first, '=' | '+' | '-' | '@'))
     {
-        format!("\"{}\"", s.replace('"', "\"\""))
+        format!("\t{s}")
     } else {
         s.to_string()
     };
 
-    // Prefix formula-triggering characters to prevent CSV injection in spreadsheets.
-    if let Some(first) = escaped.chars().next()
-        && (first == '=' || first == '+' || first == '-' || first == '@')
+    if field.contains(',')
+        || s.contains('"')
+        || field.contains('\n')
+        || field.contains('\r')
+        || field.contains('\t')
     {
-        return format!("\t{escaped}");
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csv_escape_quotes_commas_and_quotes() {
+        assert_eq!(csv_escape("desc, with comma"), "\"desc, with comma\"");
+        assert_eq!(csv_escape("echo \"quoted\""), "\"echo \"\"quoted\"\"\"");
     }
 
-    escaped
+    #[test]
+    fn csv_escape_prefixes_formula_values_before_quoting() {
+        assert_eq!(csv_escape("=cmd"), "\"\t=cmd\"");
+        assert_eq!(csv_escape("=cmd,with comma"), "\"\t=cmd,with comma\"");
+    }
 }
