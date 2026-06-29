@@ -439,17 +439,25 @@ cp ~/.config/snp/libraries/work.toml ~/work-snippets.toml
 | Variable | Description |
 |----------|-------------|
 | `XDG_CONFIG_HOME` | Override config root; snp uses `$XDG_CONFIG_HOME/snp` |
-| `SNP_LOG_LEVEL` | Log level (trace, debug, info, warn, error) |
+| `SNP_COMMAND_TIMEOUT` | Command execution timeout in seconds; `0` disables |
+| `SNP_CLIPBOARD_TIMEOUT` | Clipboard operation timeout in seconds |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | Allow sync API key storage in `sync.toml` when the OS keychain is unavailable |
+| `SNP_SYNC_CONNECT_TIMEOUT` | Sync TCP connect timeout in seconds |
+| `SNP_SYNC_REQUEST_TIMEOUT` | Sync per-request timeout in seconds |
+| `SNP_THEME` | UI theme (`dark`, `bright`, `light`, `auto`, or a Halloy theme name) |
 | `EDITOR` | Editor for `snp edit` command |
+| `SHELL` | Shell used to run snippets on Unix |
+| `COMSPEC` | Shell used to run snippets on Windows |
+| `SNP_LOG` | Per-module tracing filter, for example `snp=debug,snip_sync=info` |
+| `RUST_LOG` | Standard tracing/env-filter fallback when `SNP_LOG` is unset |
+| `SNIP_SYNC_ALLOW_HTTP` | Allow plaintext HTTP for local sync server development only |
 
 ### TOML Configuration Format
 
 ```toml
-# snippets.toml with full structure
+# sync.toml
 
 [settings]
-version = "1.0"
-
 [settings.sync]
 enabled = true
 server_url = "https://sync.example.com"
@@ -458,7 +466,12 @@ device_id = "device-uuid"
 sync_interval_minutes = 30
 auto_sync = false
 sync_direction = "Push"
+sync_limit = 1000
+clipboard_auto_clear_seconds = 30
+```
 
+```toml
+# snippets.toml or libraries/<name>.toml
 [[Snippets]]
 Id = "optional-uuid"
 Description = "Snippet description"
@@ -477,13 +490,15 @@ deleted = false
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `sync.enabled` | bool | false | Enable sync |
-| `sync.server_url` | string | https://localhost:50051 | Sync server URL |
-| `sync.api_key` | string | "" | API key for auth; normally `@keychain` |
-| `sync.device_id` | string | "" | Unique device identifier |
-| `sync.sync_interval_minutes` | u32 | 30 | Sync interval |
-| `sync.auto_sync` | bool | false | Auto-sync on changes |
-| `sync.sync_direction` | enum | Push | Push, Pull, or Bidirectional |
+| `settings.sync.enabled` | bool | false | Enable sync |
+| `settings.sync.server_url` | string | https://localhost:50051 | Sync server URL |
+| `settings.sync.api_key` | string | "" | API key for auth; normally `@keychain` |
+| `settings.sync.device_id` | string | "" | Unique device identifier |
+| `settings.sync.sync_interval_minutes` | u32 | 30 | Sync interval |
+| `settings.sync.auto_sync` | bool | false | Auto-sync on changes |
+| `settings.sync.sync_direction` | enum | Push | Push, Pull, or Bidirectional |
+| `settings.sync.sync_limit` | integer | 1000 | Max snippets requested per sync page |
+| `settings.sync.clipboard_auto_clear_seconds` | integer/null | null | Optional clipboard auto-clear delay |
 
 ---
 
@@ -568,7 +583,7 @@ eval "$SNIPPET"
 
 ### Slow Startup
 
-- Reduce log level: `SNP_LOG_LEVEL=error snp run`
+- Reduce log level: `SNP_LOG=snp=error snp run`
 - Disable auto-sync: Set `auto_sync = false`
 
 ### Data Recovery

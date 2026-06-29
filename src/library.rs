@@ -372,21 +372,7 @@ Snippets = []
 
 "#;
 
-        fs::write(&path, default_content)
-            .map_err(|e| SnipError::io_error("create library file", path.clone(), e))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = fs::set_permissions(&path, perms) {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %e,
-                    "Failed to set restrictive permissions on library file"
-                );
-            }
-        }
+        write_library_file(&path, default_content, filename)?;
 
         let is_first = self.config.libraries.is_empty();
         let mut meta = LibraryMeta::new(filename);
@@ -559,20 +545,7 @@ Snippets = []
 
         if !path.exists() {
             let default_content = "# Imported from server\n\nSnippets = []\n";
-            fs::write(&path, default_content)
-                .map_err(|e| SnipError::io_error("create imported library", path.clone(), e))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = std::fs::Permissions::from_mode(0o600);
-                if let Err(e) = fs::set_permissions(&path, perms) {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "Failed to set restrictive permissions on imported library file"
-                    );
-                }
-            }
+            write_library_file(&path, default_content, &filename)?;
         }
 
         // Update existing entry if one with the same filename already exists
@@ -651,21 +624,7 @@ Snippets = []
             ));
         }
 
-        fs::write(&path, content)
-            .map_err(|e| SnipError::io_error("save premade library", path.clone(), e))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = fs::set_permissions(&path, perms) {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %e,
-                    "Failed to set restrictive permissions on library file"
-                );
-            }
-        }
+        write_library_file(&path, content, filename)?;
 
         Ok(path)
     }
@@ -683,6 +642,12 @@ Snippets = []
 
         Ok(())
     }
+}
+
+fn write_library_file(path: &Path, content: &str, temp_prefix: &str) -> SnipResult<()> {
+    crate::utils::atomic::write_private_atomic(path, content, temp_prefix)?;
+    invalidate_toml_cache(path);
+    Ok(())
 }
 
 /// Loads a snippet library from a TOML file.
@@ -856,6 +821,12 @@ fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn file_mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
 
     #[test]
     fn test_pet_format_compatibility() {
@@ -1175,6 +1146,54 @@ Command = "sudo iptables-restore \< /path/to/rules"
     }
 
     #[test]
+    fn test_create_library_uses_private_atomic_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut mgr = LibraryManager {
+            config_dir: temp_dir.path().to_path_buf(),
+            libraries_dir: temp_dir.path().join("libraries"),
+            premade_dir: temp_dir.path().join("premade"),
+            config: Default::default(),
+        };
+
+        let path = mgr.create_library("private").unwrap();
+
+        assert!(path.exists());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Snippets = []")
+        );
+
+        #[cfg(unix)]
+        assert_eq!(file_mode(&path), 0o600);
+    }
+
+    #[test]
+    fn test_add_server_library_uses_private_atomic_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut mgr = LibraryManager {
+            config_dir: temp_dir.path().to_path_buf(),
+            libraries_dir: temp_dir.path().join("libraries"),
+            premade_dir: temp_dir.path().join("premade"),
+            config: Default::default(),
+        };
+
+        let path = mgr
+            .add_server_library("Shared Commands", "server-library-id")
+            .unwrap();
+
+        assert!(path.exists());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Imported from server")
+        );
+
+        #[cfg(unix)]
+        assert_eq!(file_mode(&path), 0o600);
+    }
+
+    #[test]
     fn test_save_config_invalidates_libraries_toml_cache() {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().to_path_buf();
@@ -1264,6 +1283,9 @@ is_primary = true
         let path = result.unwrap();
         assert!(path.exists());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "test content");
+
+        #[cfg(unix)]
+        assert_eq!(file_mode(&path), 0o600);
     }
 
     #[test]

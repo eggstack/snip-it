@@ -82,7 +82,8 @@ If you self-host the `snip-sync` server:
 ### Local File Permissions
 
 On Unix, `snp` creates its config directory with mode `0o700` and
-applies `0o600` to `sync.toml`. These limits help protect the API key
+writes config, library, premade-library, and sync files with mode
+`0o600`. These limits help protect local snippet data and the API key
 when the keychain is unavailable.
 
 ## Scope

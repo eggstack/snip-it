@@ -192,8 +192,8 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 | `SNP_SYNC_CONNECT_TIMEOUT`        | Sync TCP connect timeout (seconds)                     | `10`        |
 | `SNP_SYNC_REQUEST_TIMEOUT`        | Sync per-request timeout (seconds)                     | `30`        |
 | `SNP_THEME`                       | UI theme (`dark`, `bright`, or Halloy theme name)      | `dark`      |
-| `SNP_LOG_LEVEL`                   | Log level (`trace`, `debug`, `info`, `warn`, `error`)  | `info`      |
-| `SNP_LOG`                         | Per-module log filter (e.g., `snp=debug`)              | -           |
+| `SNP_LOG`                         | Per-module log filter (e.g., `snp=debug`)              | `snp=info`  |
+| `RUST_LOG`                        | Standard tracing/env-filter fallback when `SNP_LOG` is unset | -     |
 | `EDITOR`                          | Editor for `snp edit` command                          | `vim`       |
 
 ## Documentation
