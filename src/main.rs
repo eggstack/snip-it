@@ -54,7 +54,7 @@ fn setup_signal_handler() {
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -223,27 +223,30 @@ enum PremadeCommands {
     Update { name: String },
 }
 
-fn dispatch_command(cli: Commands) -> SnipResult<()> {
+fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
     match cli {
-        Commands::Version => {
+        None => {
+            commands::run_cmd::run(None, false, None, &RUNTIME)?;
+        }
+        Some(Commands::Version) => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
         }
-        Commands::New {
+        Some(Commands::New {
             command,
             tags,
             multiline,
             config,
             library,
-        } => {
+        }) => {
             commands::new_cmd::run(command, tags, multiline, config, library)?;
         }
-        Commands::List {
+        Some(Commands::List {
             filter,
             config,
             library,
             json,
             csv,
-        } => {
+        }) => {
             let format = if json {
                 commands::list_cmd::ListFormat::Json
             } else if csv {
@@ -253,40 +256,40 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             };
             commands::list_cmd::run(filter, config, library, format)?;
         }
-        Commands::Run {
+        Some(Commands::Run {
             filter,
             sync,
             library,
-        } => {
+        }) => {
             commands::run_cmd::run(filter, sync, library, &RUNTIME)?;
         }
-        Commands::Clip {
+        Some(Commands::Clip {
             filter,
             sync,
             library,
-        } => {
+        }) => {
             commands::clip_cmd::run(filter, sync, library, None, &RUNTIME)?;
         }
-        Commands::Search {
+        Some(Commands::Search {
             filter,
             sync,
             library,
-        } => {
+        }) => {
             commands::search_cmd::run(filter, sync, library, None, &RUNTIME)?;
         }
-        Commands::Edit { library } => {
+        Some(Commands::Edit { library }) => {
             commands::edit_cmd::run(library, None)?;
         }
-        Commands::Keybindings => {
+        Some(Commands::Keybindings) => {
             commands::keybindings_cmd::run()?;
         }
-        Commands::Sync {
+        Some(Commands::Sync {
             library,
             servers,
             push_only,
             pull_only,
             dry_run,
-        } => {
+        }) => {
             let options = commands::sync_cmd::SyncOptions {
                 library,
                 servers,
@@ -296,13 +299,13 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             };
             commands::sync_cmd::run(options, &RUNTIME)?;
         }
-        Commands::Cron { interval } => {
+        Some(Commands::Cron { interval }) => {
             commands::cron_cmd::run(interval)?;
         }
-        Commands::Register { server, force } => {
+        Some(Commands::Register { server, force }) => {
             commands::register_cmd::run(server, force, &RUNTIME)?;
         }
-        Commands::Library { command } => match command {
+        Some(Commands::Library { command }) => match command {
             LibraryCommands::List => commands::library_cmd::run_list()?,
             LibraryCommands::Create { name } => commands::library_cmd::run_create(name)?,
             LibraryCommands::Delete { name, force } => {
@@ -311,7 +314,7 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
             LibraryCommands::SetPrimary { name } => commands::library_cmd::run_set_primary(name)?,
             LibraryCommands::Show { name } => commands::library_cmd::run_show(name)?,
         },
-        Commands::Premade { command } => match command {
+        Some(Commands::Premade { command }) => match command {
             PremadeCommands::List => commands::premade_cmd::run_list(&RUNTIME)?,
             PremadeCommands::Get { name } => {
                 let all = name.as_ref().is_some_and(|n| n == "all");
@@ -325,7 +328,7 @@ fn dispatch_command(cli: Commands) -> SnipResult<()> {
                 commands::premade_cmd::run_update(name, &RUNTIME)?;
             }
         },
-        Commands::Completions { shell } => {
+        Some(Commands::Completions { shell }) => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "snp", &mut std::io::stdout());
         }

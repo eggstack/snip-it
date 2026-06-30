@@ -217,9 +217,18 @@ fn test_invalid_subcommand() {
 }
 
 #[test]
-fn test_missing_subcommand() {
-    let output = snp_cmd().output().unwrap();
-    assert!(!output.status.success());
+fn test_missing_subcommand_runs_default_tui_command() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No library found"),
+        "Expected bare snp to use the run command path when no library exists, got stderr: {stderr}"
+    );
 }
 
 // --- Snippet list with data ---
