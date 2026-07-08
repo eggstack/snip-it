@@ -13,9 +13,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-#[cfg(windows)]
-use clipboard_win::Clipboard;
-
 #[cfg(not(windows))]
 use arboard::Clipboard;
 
@@ -93,11 +90,7 @@ pub fn schedule_clipboard_clear(seconds: u32) {
 fn clear_clipboard_impl() -> SnipResult<()> {
     #[cfg(windows)]
     {
-        let mut clipboard = Clipboard::new().map_err(|e| {
-            SnipError::clipboard_error("open clipboard for clear", format!("{}", e))
-        })?;
-        clipboard
-            .set_text("")
+        clipboard_win::set_clipboard(clipboard_win::formats::Unicode, "")
             .map_err(|e| SnipError::clipboard_error("clear clipboard", format!("{}", e)))?;
     }
 
@@ -177,12 +170,7 @@ pub fn copy_to_clipboard_auto(text: &str) -> SnipResult<()> {
 pub fn copy_to_clipboard(text: &str) -> SnipResult<()> {
     let text = text.to_owned();
     with_clipboard_timeout("copy", move || {
-        let mut clipboard = Clipboard::new().map_err(|e| {
-            log_clipboard_operation("open clipboard", false);
-            SnipError::clipboard_error("open clipboard", format!("{}", e))
-        })?;
-
-        clipboard.set_text(&text).map_err(|e| {
+        clipboard_win::set_clipboard(clipboard_win::formats::Unicode, &text).map_err(|e| {
             log_clipboard_operation("set_text", false);
             SnipError::clipboard_error("set text", format!("{}", e))
         })?;
