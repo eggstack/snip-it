@@ -90,6 +90,6 @@ when the keychain is unavailable.
 
 This security policy applies to the `snp` CLI tool, the `snip-sync`
 server, and the `snip-proto` definitions — all part of the
-[`anomalyco/snip-it`](https://github.com/anomalyco/snip-it) repository.
+[`eggstack/snip-it`](https://github.com/eggstack/snip-it) repository.
 Third-party integrations and **premade libraries** (downloaded via
 `snp premade`) are **not** covered: review them before installing.

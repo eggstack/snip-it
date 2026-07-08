@@ -18,7 +18,7 @@ provides guidelines and information for contributors.
 ### Getting Started
 
 ```bash
-git clone https://github.com/anomalyco/snip-it.git
+git clone https://github.com/eggstack/snip-it.git
 cd snip-it
 cargo build --release
 cargo test
@@ -165,7 +165,7 @@ and is triggered by pushing a `vX.Y.Z` tag.
    ```bash
    cargo install snp --version X.Y.Z --locked
    snp --version
-   docker pull ghcr.io/anomalyco/snip-it/snip-sync:X.Y.Z
+   docker pull ghcr.io/eggstack/snip-it/snip-sync:X.Y.Z
    ```
 
 ## MSRV Policy

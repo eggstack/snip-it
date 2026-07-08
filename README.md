@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
-[![docs.rs](https://img.shields.io/docsrs/snip-it)](https://docs.rs/snip-it)
+
 ![MSRV: 1.94](https://img.shields.io/badge/MSRV-1.94-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)
@@ -30,7 +30,7 @@ cargo install snip-it
 ### From source
 
 ```bash
-git clone https://github.com/anomalyco/snip-it.git
+git clone https://github.com/eggstack/snip-it.git
 cd snip-it
 cargo build --release
 ./target/release/snp --version
@@ -57,13 +57,13 @@ sudo mv snp /usr/local/bin/
 ### Homebrew
 
 ```bash
-brew install anomalyco/tap/snp
+brew install eggstack/tap/snp
 ```
 
 ### Docker (sync server only)
 
 ```bash
-docker pull ghcr.io/anomalyco/snip-it/snip-sync:latest
+docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
 ```
 
 ## Quickstart
@@ -202,7 +202,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — Development setup, code style, testing, release process.
 - **[SECURITY.md](SECURITY.md)** — Vulnerability disclosure policy and threat model.
 - **[CHANGELOG.md](CHANGELOG.md)** — Release history.
-- **[docs.rs/snip-it](https://docs.rs/snip-it)** — API reference (this is a binary crate; doc-comments are for contributor reference).
+
 - **[snip-sync/README.md](snip-sync/README.md)** — Sync server setup, configuration, deployment.
 - **[architecture/](architecture/)** — Internal architecture docs (AI-agent oriented).
 
@@ -210,7 +210,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
 development setup, code style, and the release process. Bug reports
-and feature requests go through [GitHub Issues](https://github.com/anomalyco/snip-it/issues).
+and feature requests go through [GitHub Issues](https://github.com/eggstack/snip-it/issues).
 
 ## License
 
