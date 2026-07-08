@@ -179,6 +179,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_resolve_editor_absolute_path_exists() {
         let result = resolve_editor("/bin/sh");
         assert!(result.is_ok());
@@ -186,6 +187,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_resolve_editor_absolute_path_not_exists() {
         let result = resolve_editor("/nonexistent/editor");
         assert!(result.is_err());
@@ -194,6 +196,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_resolve_editor_absolute_path_is_directory() {
         let result = resolve_editor("/usr/bin");
         assert!(result.is_err());
@@ -202,6 +205,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_resolve_editor_bare_name_in_path() {
         let result = resolve_editor("sh");
         assert!(result.is_ok());
