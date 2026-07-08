@@ -12,6 +12,7 @@ COPY snip-proto/build.rs snip-proto/
 COPY snip-proto/proto snip-proto/proto
 COPY snip-proto/src snip-proto/src
 COPY snip-sync/src snip-sync/src
+COPY snip-sync/config.toml snip-sync/config.toml
 
 RUN cargo build --release -p snip-sync
 
