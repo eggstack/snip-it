@@ -221,37 +221,42 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_empty_string() {
         let result = copy_to_clipboard("");
         assert!(result.is_ok());
     }
 
     #[test]
-    #[ignore] // Flaky on headless macOS (CFPasteboardGetItemCount error)
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_normal_text() {
         let result = copy_to_clipboard("test content");
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_unicode() {
         let result = copy_to_clipboard("héllo wörld 🎉");
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_multiline() {
         let result = copy_to_clipboard("line1\nline2\nline3");
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_special_chars() {
         let result = copy_to_clipboard("echo 'hello' | grep 'world'");
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore] // Requires a display server (no clipboard on headless CI)
     fn test_clipboard_copy_long_content() {
         let long_text = "x".repeat(100000);
         let result = copy_to_clipboard(&long_text);
