@@ -4,64 +4,51 @@ A gRPC server for syncing snippets between clients.
 
 > **For production, terminate TLS at a reverse proxy** (nginx, Caddy,
 > traefik) with a real certificate (Let's Encrypt, etc.). The server
-> itself speaks plain gRPC; TLS is delegated to the proxy. See the
-> [Production Deployment](#production-deployment) section.
+> itself speaks plain gRPC; TLS is delegated to the proxy.
 
-## Quick Start
+## Quick Install
 
 ```bash
-# Build the server
-cd snip-sync
-cargo build --release
-
-# Run with default config for local plaintext development
-# (127.0.0.1:50051 for gRPC, 127.0.0.1:50050 for HTTP)
-SNIP_SYNC_ALLOW_HTTP=true ./target/release/snip-sync
+cargo install snip-sync
+snip-sync init
+snip-sync edit
+SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 ```
 
-A complete annotated configuration is at `config.example.toml` — copy
-it to `config.toml` and edit as needed:
+## First-Run Setup
+
+`snip-sync init` creates:
+- Config file at `~/.config/snip-sync/config.toml`
+- Dev certificates at `~/.config/snip-sync/certs/`
+- Required directories (data, state, premade)
 
 ```bash
-cp config.example.toml config.toml
-$EDITOR config.toml
+snip-sync init              # create config + certs
+snip-sync init --skip-cert  # skip cert generation
+snip-sync init --force-cert # regenerate certs
 ```
 
 ## Configuration
 
-The server looks for `config.toml` in the current working directory. If not found, a default config is created.
+Default config path: `~/.config/snip-sync/config.toml`
+Override: `CONFIG_PATH=/path/to/config.toml`
 
-### Config File Location
+Edit with: `snip-sync edit`
 
-- Working directory: `./config.toml`
-- Or set via: `CONFIG_PATH=/path/to/config.toml`
-
-### Generating a Local TLS Certificate
-
-For local development, generate a self-signed certificate with:
-
-```bash
-./scripts/gen-dev-cert.sh ./certs
-```
-
-This writes `./certs/cert.pem` and `./certs/key.pem` (mode 600).
-**Do not** ship self-signed certs to production; use Let's Encrypt or
-your organization's CA instead.
-
-### Configuration Options
+### Config File
 
 ```toml
 [server]
-grpc_host = "127.0.0.1"   # gRPC server host
-grpc_port = 50051          # gRPC server port
-http_host = "127.0.0.1"   # HTTP server host (for metrics)
-http_port = 50050          # HTTP server port
+grpc_host = "127.0.0.1"
+grpc_port = 50051
+http_host = "127.0.0.1"
+http_port = 50050
 
 [server.database]
-path = "snippets.db"      # SQLite database path
+# path = "snippets.db"  # defaults to ~/.config/snip-sync/snippets.db
 
 [server.premade]
-directory = "premade-libraries"  # Premade libraries directory
+directory = "premade-libraries"
 
 [server.limits]
 max_command_length = 1024
@@ -74,107 +61,106 @@ request_timeout_secs = 30
 requests_per_minute = 120
 
 [server.metrics]
-# username = "admin"      # Uncomment to enable metrics endpoint
+# username = "admin"
 # password = "metrics"
 
 [server.cors]
-allowed_origins = ""  # Comma-separated, empty = CORS disabled, "*" = allow all
+allowed_origins = ""
 ```
 
 ### Environment Variables
 
-Environment variables override config file settings:
-
 | Variable | Description |
 |----------|-------------|
-| `GRPC_HOST` | gRPC server host |
-| `GRPC_PORT` | gRPC server port |
-| `HTTP_HOST` | HTTP server host |
-| `HTTP_PORT` | HTTP server port |
+| `GRPC_HOST` / `GRPC_PORT` | gRPC server bind |
+| `HTTP_HOST` / `HTTP_PORT` | HTTP server bind |
 | `DATABASE_URL` | Database path |
-| `PREMADE_DIR` | Premade libraries directory |
-| `CONFIG_PATH` | Custom config file path |
-| `RATE_LIMIT_PER_MINUTE` | Rate limit per API key |
-| `METRICS_USERNAME` | Metrics basic auth username |
-| `METRICS_PASSWORD` | Metrics basic auth password |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated CORS origins |
-| `TLS_ENABLED` | Set to `true` when production TLS is terminated by a reverse proxy |
-| `SNIP_SYNC_ALLOW_HTTP` | Set to `true` only for local plaintext development |
-| `CORS_ALLOW_ALL` | Set to `true` to allow all CORS origins |
+| `PREMADE_DIR` | Premade libraries dir |
+| `CONFIG_PATH` | Config file path |
+| `TLS_ENABLED` | Set `true` when TLS is handled by reverse proxy |
+| `SNIP_SYNC_ALLOW_HTTP` | Set `true` for local plaintext dev |
+| `METRICS_USERNAME` / `METRICS_PASSWORD` | Metrics auth |
 
-## Ports
-
-- **gRPC (50051)**: Main sync API
-- **HTTP (50050)**: Prometheus metrics endpoint
-
-## Metrics
-
-When enabled (by setting `username` and `password` in the config), metrics are available at the HTTP endpoint with basic authentication:
+## Dev Certificates
 
 ```bash
-curl -u admin:metrics http://127.0.0.1:50050/metrics
+snip-sync cert              # generate in ~/.config/snip-sync/certs/
+snip-sync cert --out-dir ./certs  # custom location
+snip-sync cert --force      # overwrite existing
 ```
 
-## Premade Libraries
+Generated certs are self-signed (CN=localhost, SANs=localhost+127.0.0.1).
+Use them with a reverse proxy, NOT directly with snip-sync.
 
-The server can serve pre-built snippet libraries to clients. Place `.toml` files in the `premade-libraries` directory.
+## Service Management
 
-### Format
-
-```toml
-Description = "Library description here"
-
-[[Snippets]]
-  Description = "Snippet description"
-  Tag = ["tag1", "tag2"]
-  command = "the command"
-```
-
-## Production Deployment
-
-For production, use a reverse proxy with TLS termination (nginx, traefik, etc.):
-set `TLS_ENABLED=true` for the server process so startup knows TLS is
-handled before traffic reaches it.
-
-### nginx example
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name snip.yourdomain.com;
-    
-    ssl_certificate /etc/letsencrypt/live/snip/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/snip/privkey.pem;
-    
-    location / {
-        grpc_pass 127.0.0.1:50051;
-    }
-}
-```
-
-### systemd service
-
-Create `/etc/systemd/system/snip-sync.service`:
+### systemd (recommended)
 
 ```ini
+# /etc/systemd/system/snip-sync.service
 [Unit]
 Description=snip-sync gRPC server
 After=network.target
 
 [Service]
 Type=simple
-User=snip
-WorkingDirectory=/opt/snip-sync
-ExecStart=/opt/snip-sync/snip-sync
+ExecStart=/home/user/.cargo/bin/snip-sync serve
+Environment=TLS_ENABLED=true
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Then:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable snip-sync
 sudo systemctl start snip-sync
 ```
+
+### cron (lightweight fallback)
+
+```
+@reboot /home/user/.cargo/bin/snip-sync croncheck
+*/5 * * * * /home/user/.cargo/bin/snip-sync croncheck
+```
+
+`croncheck` health-checks the server; if down, spawns a detached `snip-sync serve`.
+Use systemd for production — croncheck is a lightweight fallback.
+
+## Paths
+
+```bash
+snip-sync paths           # human-readable
+snip-sync paths --json    # machine-readable
+```
+
+## Updating
+
+```bash
+snip-sync update              # cargo install snip-sync
+snip-sync update --dry-run    # preview
+snip-sync update --locked     # with lockfile
+```
+
+## Source Build (contributors)
+
+```bash
+git clone https://github.com/eggstack/snip-it.git
+cd snip-sync
+cargo build --release
+./target/release/snip-sync --help
+```
+
+## Docker
+
+```bash
+docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
+```
+
+## Troubleshooting
+
+- **Config not found**: Run `snip-sync init` first
+- **TLS required**: Set `SNIP_SYNC_ALLOW_HTTP=true` for local dev
+- **Port in use**: Check `snip-sync paths` for configured ports
+- **Server won't stop**: Use `snip-sync stop --force` or `kill -9 <pid>`

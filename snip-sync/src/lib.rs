@@ -11,9 +11,15 @@
 // `new_without_default` here keeps the diff focused.
 #![allow(clippy::uninlined_format_args, clippy::new_without_default)]
 
+pub mod bootstrap;
+pub mod cert;
+pub mod cli;
 pub mod db;
+pub mod editor;
 pub mod metrics;
+pub mod paths;
 pub mod premade;
+pub mod process;
 pub mod rate_limiter;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
@@ -173,9 +179,7 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Self {
-        let config_path = std::env::var("CONFIG_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("config.toml"));
+        let config_path = paths::config_path();
 
         let config_file = if config_path.exists() {
             match std::fs::read_to_string(&config_path) {
@@ -338,18 +342,7 @@ impl Config {
     }
 
     pub fn ensure_config_file() {
-        let config_path = std::env::var("CONFIG_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("config.toml"));
-
-        if !config_path.exists() {
-            let default_config = include_str!("../config.toml");
-            if let Err(e) = std::fs::write(&config_path, default_config) {
-                tracing::warn!("Failed to create default config file: {}", e);
-            } else {
-                tracing::info!("Created default config file at {}", config_path.display());
-            }
-        }
+        bootstrap::ensure_config_file();
     }
 }
 

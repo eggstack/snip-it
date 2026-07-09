@@ -136,13 +136,19 @@ and a fuller threat model.
 
 `snp` is a single binary; sync is **opt-in** and requires a `snip-sync`
 server (also in this repo). See [snip-sync/README.md](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)
-for installation, configuration, and a `docker-compose.yml` example.
+for detailed setup.
 
 ```bash
-# Register against your server (stores API key in OS keychain)
-snp register --server https://sync.example.com:50051
+# Install the sync server
+cargo install snip-sync
+snip-sync init
+snip-sync edit
+SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 
-# Manual sync (uses sync.toml direction; default is push-only)
+# Register your client against the server
+snp register --server http://127.0.0.1:50051
+
+# Manual sync
 snp sync
 
 # Push-only / pull-only

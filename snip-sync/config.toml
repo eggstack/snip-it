@@ -5,7 +5,7 @@
 # 2. This config file
 # 3. Hardcoded defaults
 #
-# Config file location: ./config.toml (working directory)
+# Config file location: ~/.config/snip-sync/config.toml (platform config dir)
 # Or set via CONFIG_PATH environment variable
 
 [server]

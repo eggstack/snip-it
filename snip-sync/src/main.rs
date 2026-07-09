@@ -1,92 +1,34 @@
-// Pre-existing `format!` patterns in this binary's metric handler. The
-// lib already suppresses `clippy::uninlined_format_args` for the same
-// reason; mirror that here so the binary compiles cleanly.
 #![allow(clippy::uninlined_format_args)]
 
-use axum::extract::State;
-use axum::http::HeaderValue;
-use base64::Engine;
-use snip_proto::snippet_sync_server::SnippetSyncServer;
-use snip_sync::{
-    AppState, Config, Database, Metrics, PremadeManager, RateLimiter, SnipSyncService,
-};
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
-use tower_http::cors::{Any, CorsLayer};
+use clap::Parser;
+use snip_sync::cli::{Cli, Command};
 
-async fn security_headers_middleware(
-    req: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mut response = next.run(req).await;
-    let headers = response.headers_mut();
-    headers.insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
-    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    headers.insert("cache-control", HeaderValue::from_static("no-store"));
-    response
-}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
 
-async fn metrics_handler(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<String, (axum::http::StatusCode, String)> {
-    let (username, password) = match (
-        &state.config.metrics_username,
-        &state.config.metrics_password,
-    ) {
-        (Some(u), Some(p)) => (u.as_str(), p.as_str()),
-        _ => {
-            return Err((axum::http::StatusCode::NOT_FOUND, "Not found".to_string()));
+    match cli.command {
+        None | Some(Command::Serve) => serve()?,
+        Some(Command::Init {
+            force_cert,
+            skip_cert,
+        }) => cmd_init(force_cert, skip_cert)?,
+        Some(Command::Cert { force, out_dir }) => {
+            snip_sync::cert::generate_dev_certs(force, out_dir)?
         }
-    };
-
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Basic "));
-
-    let expected = format!("{}:{}", username, password);
-    let valid = if let Some(encoded) = auth_header {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-            use subtle::ConstantTimeEq;
-            let expected_bytes = expected.as_bytes();
-            // Pad to expected length so ct_eq always compares the same number of
-            // bytes, preventing a timing side-channel that reveals the password length.
-            let mut padded = decoded.clone();
-            padded.resize(expected_bytes.len(), 0);
-            bool::from(padded.ct_eq(expected_bytes)) && decoded.len() == expected_bytes.len()
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    if !valid {
-        return Err((
-            axum::http::StatusCode::UNAUTHORIZED,
-            "Authentication required".to_string(),
-        ));
+        Some(Command::Edit) => cmd_edit()?,
+        Some(Command::Stop { force }) => cmd_stop(force)?,
+        Some(Command::Restart { force }) => cmd_restart(force)?,
+        Some(Command::Update { dry_run, locked }) => cmd_update(dry_run, locked)?,
+        Some(Command::Croncheck { verbose }) => cmd_croncheck(verbose)?,
+        Some(Command::Paths { json }) => cmd_paths(json)?,
+        Some(Command::Completions { shell }) => cmd_completions(shell),
+        Some(Command::Version) => println!("snip-sync {}", env!("CARGO_PKG_VERSION")),
     }
 
-    use prometheus::Encoder;
-    let encoder = prometheus::TextEncoder::new();
-    let mut buffer = Vec::new();
-    if let Err(e) = encoder.encode(&state.metrics.registry.gather(), &mut buffer) {
-        return Err((
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error gathering metrics: {}", e),
-        ));
-    }
-    Ok(String::from_utf8(buffer).unwrap_or_default())
+    Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_target(false).init();
 
     let tls_enabled = std::env::var("TLS_ENABLED")
@@ -113,8 +55,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    Config::ensure_config_file();
-    let config = Config::load();
+    snip_sync::bootstrap::ensure_config_file();
+    let config = snip_sync::Config::load();
+
+    // Check for stale PID file before starting
+    if let Some(old_pid) = snip_sync::process::read_pid() {
+        if snip_sync::process::is_running(old_pid) {
+            return Err(format!(
+                "Server already running with PID {}. Use 'snip-sync stop' first.",
+                old_pid
+            )
+            .into());
+        }
+        tracing::warn!("Found stale PID file for process {}. Removing.", old_pid);
+        snip_sync::process::remove_pid();
+    }
+
+    snip_sync::process::write_pid().map_err(|e| format!("Failed to write PID file: {}", e))?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(serve_inner(config));
+
+    // Clean up PID file on shutdown
+    snip_sync::process::remove_pid();
+
+    result
+}
+
+async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error::Error>> {
+    use axum::extract::State;
+    use axum::http::HeaderValue;
+    use base64::Engine;
+    use snip_proto::snippet_sync_server::SnippetSyncServer;
+    use snip_sync::{AppState, Database, Metrics, PremadeManager, RateLimiter, SnipSyncService};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tower_http::cors::{Any, CorsLayer};
 
     let db = Arc::new(Database::connect(&config.db_path, config.db_max_connections).await?);
     tracing::info!("Database initialized at {}", config.db_path);
@@ -244,6 +221,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
     };
 
+    async fn security_headers_middleware(
+        req: axum::http::Request<axum::body::Body>,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        let mut response = next.run(req).await;
+        let headers = response.headers_mut();
+        headers.insert(
+            "x-content-type-options",
+            HeaderValue::from_static("nosniff"),
+        );
+        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+        headers.insert("cache-control", HeaderValue::from_static("no-store"));
+        response
+    }
+
+    async fn metrics_handler(
+        State(state): State<AppState>,
+        headers: axum::http::HeaderMap,
+    ) -> Result<String, (axum::http::StatusCode, String)> {
+        let (username, password) = match (
+            &state.config.metrics_username,
+            &state.config.metrics_password,
+        ) {
+            (Some(u), Some(p)) => (u.as_str(), p.as_str()),
+            _ => {
+                return Err((axum::http::StatusCode::NOT_FOUND, "Not found".to_string()));
+            }
+        };
+
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Basic "));
+
+        let expected = format!("{}:{}", username, password);
+        let valid = if let Some(encoded) = auth_header {
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                use subtle::ConstantTimeEq;
+                let expected_bytes = expected.as_bytes();
+                let mut padded = decoded.clone();
+                padded.resize(expected_bytes.len(), 0);
+                bool::from(padded.ct_eq(expected_bytes)) && decoded.len() == expected_bytes.len()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !valid {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Authentication required".to_string(),
+            ));
+        }
+
+        use prometheus::Encoder;
+        let encoder = prometheus::TextEncoder::new();
+        let mut buffer = Vec::new();
+        if let Err(e) = encoder.encode(&state.metrics.registry.gather(), &mut buffer) {
+            return Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error gathering metrics: {}", e),
+            ));
+        }
+        Ok(String::from_utf8(buffer).unwrap_or_default())
+    }
+
     let app = axum::Router::new()
         .route(
             "/health",
@@ -337,4 +382,244 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Server shutdown complete");
     Ok(())
+}
+
+fn cmd_init(force_cert: bool, skip_cert: bool) -> Result<(), Box<dyn std::error::Error>> {
+    snip_sync::bootstrap::ensure_layout()?;
+    snip_sync::bootstrap::ensure_config_file();
+    if !skip_cert {
+        snip_sync::cert::generate_dev_certs(force_cert, None)?;
+    }
+    println!("Initialization complete.");
+    Ok(())
+}
+
+fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = snip_sync::paths::config_path();
+    if !config_path.exists() {
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let default = include_str!("../config.toml");
+        std::fs::write(&config_path, default)?;
+        println!("Created config file at {}", config_path.display());
+    }
+    snip_sync::editor::open_in_editor(&config_path)?;
+    Ok(())
+}
+
+fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let pid = snip_sync::process::read_pid().ok_or("No PID file found. Is the server running?")?;
+
+    if !snip_sync::process::is_running(pid) {
+        println!(
+            "Process {} is not running. Cleaning up stale PID file.",
+            pid
+        );
+        snip_sync::process::remove_pid();
+        return Ok(());
+    }
+
+    if !force && !snip_sync::process::validate_process_name(pid) {
+        eprintln!(
+            "Warning: PID {} does not appear to be a snip-sync process.",
+            pid
+        );
+        eprintln!("Use --force to stop it anyway.");
+        return Err("Refusing to stop non-snip-sync process".into());
+    }
+
+    println!("Sending SIGTERM to process {}...", pid);
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
+    #[cfg(not(unix))]
+    {
+        eprintln!("Stop is only supported on Unix systems.");
+        return Err("Unsupported platform".into());
+    }
+
+    match snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10)) {
+        Ok(()) => {
+            snip_sync::process::remove_pid();
+            println!("Server stopped.");
+        }
+        Err(e) => {
+            eprintln!("Warning: {}", e);
+            if force {
+                println!("Sending SIGKILL...");
+                #[cfg(unix)]
+                {
+                    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                }
+                snip_sync::process::remove_pid();
+                println!("Server killed.");
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    match snip_sync::process::read_pid() {
+        Some(pid) if snip_sync::process::is_running(pid) => {
+            println!("Stopping existing server (PID {})...", pid);
+            cmd_stop(force)?;
+        }
+        _ => {
+            println!("No running server found.");
+        }
+    }
+    println!("Starting server...");
+    serve()
+}
+
+fn cmd_update(dry_run: bool, locked: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Check that cargo is available on PATH
+    let cargo_status = std::process::Command::new("cargo")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match cargo_status {
+        Ok(s) if s.success() => {}
+        _ => {
+            return Err(
+                "cargo is not available on PATH. Install Rust via https://rustup.rs first.".into(),
+            );
+        }
+    }
+
+    let mut args = vec!["install", "snip-sync"];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    if locked {
+        args.push("--locked");
+    }
+
+    println!("Running: cargo {}", args.join(" "));
+    if dry_run {
+        println!("(dry run — no changes will be made)");
+    }
+
+    let status = std::process::Command::new("cargo")
+        .args(&args)
+        .status()
+        .map_err(|e| format!("Failed to run cargo: {}", e))?;
+
+    if status.success() {
+        println!("Update complete.");
+    } else {
+        return Err(format!("cargo install failed with status: {}", status).into());
+    }
+    Ok(())
+}
+
+fn check_health(http_host: &str, http_port: u16) -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    let addr = format!("{}:{}", http_host, http_port);
+    match addr.parse() {
+        Ok(socket_addr) => TcpStream::connect_timeout(&socket_addr, Duration::from_secs(2)).is_ok(),
+        Err(_) => false,
+    }
+}
+
+fn acquire_croncheck_lock() -> Option<std::fs::File> {
+    let lock_path = snip_sync::paths::state_dir().join("croncheck.lock");
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .ok()
+}
+
+fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let _lock = acquire_croncheck_lock();
+
+    let config = snip_sync::Config::load();
+
+    if check_health(&config.http_host, config.http_port) {
+        if verbose {
+            println!(
+                "Server is healthy on {}:{}",
+                config.http_host, config.http_port
+            );
+        } else {
+            println!("ok");
+        }
+        return Ok(());
+    }
+
+    if verbose {
+        println!(
+            "Server is unhealthy or not running on {}:{}.",
+            config.http_host, config.http_port
+        );
+        println!("Starting detached server...");
+    }
+
+    let child = std::process::Command::new(std::env::current_exe()?)
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn server: {}", e))?;
+
+    if verbose {
+        println!("Spawned server process (PID {}).", child.id());
+    }
+
+    // Wait briefly for the server to come up
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    if check_health(&config.http_host, config.http_port) {
+        if verbose {
+            println!("Server started successfully.");
+        }
+        println!("ok");
+    } else {
+        if verbose {
+            println!("Warning: Server started but health check still failing after 3s.");
+        }
+        println!("ok");
+    }
+
+    Ok(())
+}
+
+fn cmd_paths(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = snip_sync::paths::Paths::resolve();
+    if json {
+        let map = serde_json::json!({
+            "config_dir": paths.config_dir,
+            "config_path": paths.config_path,
+            "data_dir": paths.data_dir,
+            "state_dir": paths.state_dir,
+            "cert_dir": paths.cert_dir,
+            "pid_path": paths.pid_path,
+            "db_path": paths.db_path,
+            "premade_dir": paths.premade_dir,
+        });
+        println!("{}", serde_json::to_string_pretty(&map)?);
+    } else {
+        paths.print();
+    }
+    Ok(())
+}
+
+fn cmd_completions(shell: clap_complete::Shell) {
+    let mut cmd = <Cli as clap::CommandFactory>::command();
+    let bin_name = "snip-sync".to_string();
+    clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
 }

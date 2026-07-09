@@ -101,7 +101,13 @@ snip-it/
 │   ├── src/db.rs       # SQLite (sqlx) — users, libraries, snippets tables
 │   ├── src/rate_limiter.rs
 │   ├── src/metrics.rs  # Prometheus metrics
-│   └── src/premade.rs  # Premade library file scanning
+│   ├── src/premade.rs  # Premade library file scanning
+│   ├── src/paths.rs    # Platform path helpers (config, data, state, cert, pid)
+│   ├── src/bootstrap.rs # First-run layout and config creation
+│   ├── src/cli.rs      # Clap CLI definitions (Command enum)
+│   ├── src/cert.rs     # Dev certificate generation (via openssl)
+│   ├── src/editor.rs   # Editor resolution ($EDITOR, PATH search)
+│   └── src/process.rs  # PID file management and process lifecycle
 ├── tests/
 │   ├── integration.rs      # CLI integration tests using TempDir
 │   └── sync_integration.rs # gRPC sync integration tests (real server in-process)
@@ -161,6 +167,13 @@ snip-it/
 - Local-only fields (`output`, `folders`, `favorite`) are preserved when server wins
 - Snippets are sorted by `updated_at` descending after merge
 
+### snip-sync CLI
+- Binary defaults to `serve` when no subcommand given (backward compatible)
+- `CONFIG_PATH` env var overrides platform config dir
+- PID file written at `state_dir()/snip-sync.pid`, cleaned on shutdown
+- `croncheck` spawns detached child process; uses lock file to prevent races
+- Cert generation shells out to `openssl` (not a Rust crypto crate)
+
 ### Database (snip-sync)
 - SQLite via `sqlx` with in-memory support for tests
 - Tables: `users`, `libraries`, `snippets`
@@ -200,3 +213,4 @@ snip-it/
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
 - Utils tests cover escape sequences, nested brackets, chained backslashes
 - Sync tests cover device conflict detection
+- snip-sync has 78 tests (unit + integration)
