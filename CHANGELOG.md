@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-09
+
 ### Fixed
 - Preserve the real in-memory API key when migrating legacy plaintext
   `sync.toml` values into the OS keychain; the saved config gets the
@@ -119,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.3.0]: https://github.com/eggstack/snip-it/releases/tag/v1.3.0
+[1.2.0]: https://github.com/eggstack/snip-it/releases/tag/v1.2.0
 [1.1.0]: https://github.com/eggstack/snip-it/releases/tag/v1.1.0
 [1.0.0]: https://github.com/eggstack/snip-it/releases/tag/v1.0.0
-[1.2.0]: https://github.com/eggstack/snip-it/releases/tag/v1.2.0

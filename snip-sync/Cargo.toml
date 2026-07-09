@@ -6,10 +6,21 @@ rust-version = "1.94"
 description = "gRPC sync server for snp snippet manager"
 license = "MIT"
 authors = ["David Bowman <dbowman91@proton.me>"]
+homepage = "https://github.com/eggstack/snip-it"
+documentation = "https://docs.rs/snip-sync"
+repository = "https://github.com/eggstack/snip-it"
 readme = "README.md"
 keywords = ["grpc", "sync", "snippets", "server", "sqlite"]
 categories = ["command-line-utilities", "web-programming"]
-publish = false
+exclude = [
+    "Dockerfile",
+    ".dockerignore",
+    "docker-compose.yml",
+    "build.sh",
+    "config.example.toml",
+    "premade-libraries/",
+    "scripts/",
+]
 
 [lib]
 name = "snip_sync"

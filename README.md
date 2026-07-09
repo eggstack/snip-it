@@ -129,13 +129,13 @@ command = "ssh <user=root>@<host> -p <port=22>"
 - Integrity: `sync.toml` carries a CRC32 checksum comment to detect
   accidental corruption (e.g., partial writes).
 
-See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy
+See [SECURITY.md](https://github.com/eggstack/snip-it/blob/main/SECURITY.md) for the vulnerability disclosure policy
 and a fuller threat model.
 
 ## Optional: Sync Server
 
 `snp` is a single binary; sync is **opt-in** and requires a `snip-sync`
-server (also in this repo). See [snip-sync/README.md](snip-sync/README.md)
+server (also in this repo). See [snip-sync/README.md](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)
 for installation, configuration, and a `docker-compose.yml` example.
 
 ```bash
@@ -198,17 +198,16 @@ See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
 
 ## Documentation
 
-- **[USER_GUIDE.md](USER_GUIDE.md)** — Detailed guide: libraries, sync, variables, premade libraries, troubleshooting.
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Development setup, code style, testing, release process.
-- **[SECURITY.md](SECURITY.md)** — Vulnerability disclosure policy and threat model.
-- **[CHANGELOG.md](CHANGELOG.md)** — Release history.
+- **[USER_GUIDE.md](https://github.com/eggstack/snip-it/blob/main/USER_GUIDE.md)** — Detailed guide: libraries, sync, variables, premade libraries, troubleshooting.
+- **[CONTRIBUTING.md](https://github.com/eggstack/snip-it/blob/main/CONTRIBUTING.md)** — Development setup, code style, testing, release process.
+- **[SECURITY.md](https://github.com/eggstack/snip-it/blob/main/SECURITY.md)** — Vulnerability disclosure policy and threat model.
+- **[CHANGELOG.md](https://github.com/eggstack/snip-it/blob/main/CHANGELOG.md)** — Release history.
 
-- **[snip-sync/README.md](snip-sync/README.md)** — Sync server setup, configuration, deployment.
-- **[architecture/](architecture/)** — Internal architecture docs (AI-agent oriented).
+- **[snip-sync/README.md](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)** — Sync server setup, configuration, deployment.
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
+Contributions welcome! See [CONTRIBUTING.md](https://github.com/eggstack/snip-it/blob/main/CONTRIBUTING.md) for
 development setup, code style, and the release process. Bug reports
 and feature requests go through [GitHub Issues](https://github.com/eggstack/snip-it/issues).
 

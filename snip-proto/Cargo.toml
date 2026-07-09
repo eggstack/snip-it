@@ -6,9 +6,12 @@ rust-version = "1.94"
 description = "gRPC protocol definitions for snip-it sync"
 license = "MIT"
 authors = ["David Bowman <dbowman91@proton.me>"]
+homepage = "https://github.com/eggstack/snip-it"
+documentation = "https://docs.rs/snip-proto"
+repository = "https://github.com/eggstack/snip-it"
+readme = "README.md"
 keywords = ["grpc", "protobuf", "sync", "snippets"]
 categories = ["encoding"]
-publish = false
 
 [dependencies]
 tonic = "0.14"
