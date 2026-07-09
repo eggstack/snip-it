@@ -1,6 +1,6 @@
 [package]
 name = "snip-it"
-version = "1.3.0"
+version = "1.3.1"
 edition = "2024"
 rust-version = "1.94"
 description = "Fast terminal snippet manager with fuzzy search, TUI, variable expansion, and end-to-end encrypted cross-device sync"
@@ -98,7 +98,7 @@ lzma-rs = "0.3"
 tempfile = "3.10"
 subtle = "2"
 snip-proto = { version = "0.1.0", path = "snip-proto" }
-snip-sync = { version = "0.1.0", path = "snip-sync", features = ["test-helpers"] }
+snip-sync = { version = "0.1.1", path = "snip-sync", features = ["test-helpers"] }
 
 [profile.release]
 lto = true

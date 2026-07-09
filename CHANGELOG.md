@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-09
+
+### Changed
+- Bump `toml` 0.8 → 1.1 (unifies with snip-sync's toml)
+- Bump `signal-hook` 0.3 → 0.4
+- Bump `clipboard-win` 4.5 → 5
+- Bump `prometheus` 0.13 → 0.14 (snip-sync)
+- Relax `time` constraint to `<0.4`
+- Bump GitHub Actions: `action-gh-release` v2→v3, `docker/login-action` v3→v4, `docker/build-push-action` v5→v7
+
 ## [1.3.0] - 2026-07-09
 
 ### Fixed
@@ -121,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.3.1]: https://github.com/eggstack/snip-it/releases/tag/v1.3.1
 [1.3.0]: https://github.com/eggstack/snip-it/releases/tag/v1.3.0
 [1.2.0]: https://github.com/eggstack/snip-it/releases/tag/v1.2.0
 [1.1.0]: https://github.com/eggstack/snip-it/releases/tag/v1.1.0
