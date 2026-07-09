@@ -63,9 +63,13 @@ fn wait_for_command(
     }
 }
 
+fn shell_arg_flag() -> &'static str {
+    if cfg!(windows) { "/C" } else { "-c" }
+}
+
 fn spawn_shell_command(shell: &str, command: &str) -> SnipResult<std::process::Child> {
     Command::new(shell)
-        .arg("-c")
+        .arg(shell_arg_flag())
         .arg(command)
         .spawn()
         .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))
@@ -192,7 +196,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             DEFAULT_TIMEOUT_SECONDS,
         )));
         let mut child = Command::new(&shell)
-            .arg("-c")
+            .arg(shell_arg_flag())
             .arg(&final_command)
             .stdout(output_file)
             .spawn()
@@ -243,6 +247,16 @@ mod tests {
                 shell.contains("/bin/sh") || std::env::var("SHELL").is_ok(),
                 "Expected /bin/sh or $SHELL on Unix, got: {shell}"
             );
+        }
+    }
+
+    #[test]
+    fn test_shell_arg_flag_matches_platform() {
+        let flag = shell_arg_flag();
+        if cfg!(windows) {
+            assert_eq!(flag, "/C", "cmd.exe expects /C, not the unix-style {flag}");
+        } else {
+            assert_eq!(flag, "-c", "Unix shells expect -c, not {flag}");
         }
     }
 }

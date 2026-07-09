@@ -162,7 +162,57 @@ async fn test_captured_authorization_metadata_is_first_wins() {
     captured.2.abort();
 }
 
-// --- helpers ---
+/// Encrypted payload near the plaintext size limit must still be accepted
+/// by the server's `validate_snippet` length check. Before the fix, the
+/// server compared the encrypted blob against `DEFAULT_MAX_COMMAND_LENGTH`
+/// even though the blob grows due to JSON wrapping, AES-GCM overhead,
+/// and base64 encoding, so a valid plaintext command that fit on the
+/// wire could be rejected by the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sync_accepts_encrypted_payload_near_command_length_limit() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    // Plaintext command right at the documented limit. After encryption
+    // it will be substantially larger than 1024 bytes (JSON envelope +
+    // AES-GCM tag + salt + nonce + base64 expansion).
+    let plaintext_command = "x".repeat(snip_sync::DEFAULT_MAX_COMMAND_LENGTH);
+    let now = chrono::Utc::now().timestamp();
+    let snippet = Snippet {
+        id: "near-limit".to_string(),
+        description: "d".to_string(),
+        command: plaintext_command.clone(),
+        tags: vec!["t".to_string()],
+        created_at: now,
+        updated_at: now,
+        device_id,
+        deleted: false,
+        encrypted: false,
+    };
+
+    let response = client
+        .sync_encrypted(vec![snippet], 0, "")
+        .await
+        .expect("sync should accept an encrypted payload near the size limit");
+
+    assert!(
+        response.success,
+        "server should accept encrypted payload near plaintext limit, got: {}",
+        response.message
+    );
+
+    let returned = response
+        .snippets
+        .iter()
+        .find(|s| s.id == "near-limit")
+        .expect("server should echo back the near-limit snippet");
+    let decrypted = decrypt_snippet(&api_key, returned).expect("decryption should succeed");
+    assert_eq!(decrypted.command, plaintext_command);
+
+    captured.2.abort();
+}
 
 /// Spins up a real `snip-sync` server in-process, registers a new device
 /// over gRPC, and returns `(api_key, device_id, (server_url, capture_slot, task))`.

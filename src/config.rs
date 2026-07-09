@@ -17,7 +17,7 @@ const KEYCHAIN_SERVICE: &str = "snp-sync";
 const KEYCHAIN_MARKER: &str = "@keychain";
 const KEYCHAIN_DEFAULT_USER: &str = "api-key";
 
-pub const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
+pub const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
 
 struct CachedToml {
     mtime: SystemTime,

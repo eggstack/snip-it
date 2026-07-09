@@ -491,7 +491,7 @@ deleted = false
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `settings.sync.enabled` | bool | false | Enable sync |
-| `settings.sync.server_url` | string | https://localhost:50051 | Sync server URL |
+| `settings.sync.server_url` | string | http://localhost:50051 | Sync server URL |
 | `settings.sync.api_key` | string | "" | API key for auth; normally `@keychain` |
 | `settings.sync.device_id` | string | "" | Unique device identifier |
 | `settings.sync.sync_interval_minutes` | u32 | 30 | Sync interval |

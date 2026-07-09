@@ -514,15 +514,21 @@ impl SnipSyncService {
             )));
         }
 
-        if snippet.command.len() > self.config.max_command_length {
+        if !snippet.encrypted && snippet.command.len() > self.config.max_command_length {
             return Err(Status::invalid_argument(format!(
                 "Command exceeds maximum length of {} bytes",
                 self.config.max_command_length
             )));
         }
 
-        if snippet.command.trim().is_empty() {
+        if !snippet.encrypted && snippet.command.trim().is_empty() {
             return Err(Status::invalid_argument("Snippet command is required"));
+        }
+
+        if snippet.encrypted && (snippet.command.is_empty() || snippet.command.trim().is_empty()) {
+            return Err(Status::invalid_argument(
+                "Encrypted snippet payload is required",
+            ));
         }
 
         if snippet.description.len() > self.config.max_description_length {

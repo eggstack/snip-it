@@ -57,6 +57,19 @@ at rest.
   `api_key` fields remain for backward compatibility with older
   clients and are ignored when metadata is present.
 
+### Known Suppressed Advisories
+
+`deny.toml` ignores `RUSTSEC-2024-0437` (uncontrolled recursion /
+stack overflow in `protobuf 2.28.0`, pulled in transitively by
+`prometheus 0.13.x`). The `snip-sync` server does not parse
+untrusted protobuf data on this code path — `prometheus` is used
+only for its text encoder in the `/metrics` endpoint, and the
+`protobuf` crate itself is built but not used to deserialize
+attacker-controlled input. The advisory is therefore not
+exploitable in the snip-it / snip-sync build. We track the
+upstream `prometheus` crate for a release that removes the old
+`protobuf` dependency.
+
 ### Server Deployment
 
 If you self-host the `snip-sync` server:
