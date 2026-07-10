@@ -71,6 +71,8 @@ enum Commands {
         tags: bool,
         #[arg(short, long, action = clap::ArgAction::SetTrue)]
         multiline: bool,
+        #[arg(short = 'd', long)]
+        description: Option<String>,
         #[arg(short, long)]
         config: Option<PathBuf>,
         #[arg(short, long)]
@@ -235,10 +237,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
             command,
             tags,
             multiline,
+            description,
             config,
             library,
         }) => {
-            commands::new_cmd::run(command, tags, multiline, config, library)?;
+            commands::new_cmd::run(command, description, tags, multiline, config, library)?;
         }
         Some(Commands::List {
             filter,

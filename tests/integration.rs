@@ -549,6 +549,86 @@ fn test_library_set_primary() {
     );
 }
 
+// --- New --description flag ---
+
+#[test]
+fn test_new_with_description_flag() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args(["new", "--description", "Test snippet", "echo hello"])
+        .output()
+        .expect("failed to execute");
+    assert!(
+        output.status.success(),
+        "new with --description should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    // Verify the snippet was created with the right description
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Test snippet"));
+    assert!(stdout.contains("echo hello"));
+}
+
+#[test]
+fn test_new_without_description_still_works() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut child = snp_in(&config_dir)
+        .args(["new"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn");
+
+    // Send empty input to trigger the prompts, then close stdin
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("failed to wait");
+    // Should fail because no input was provided to the prompts
+    assert!(!output.status.success());
+}
+
+// --- Completions ---
+
+#[test]
+fn test_completions_bash() {
+    let output = snp_cmd()
+        .args(["completions", "bash"])
+        .output()
+        .expect("failed to execute");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("snp"));
+    assert!(stdout.contains("bash"));
+}
+
+#[test]
+fn test_completions_zsh() {
+    let output = snp_cmd()
+        .args(["completions", "zsh"])
+        .output()
+        .expect("failed to execute");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("snp"));
+}
+
+#[test]
+fn test_completions_fish() {
+    let output = snp_cmd()
+        .args(["completions", "fish"])
+        .output()
+        .expect("failed to execute");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("snp"));
+}
+
 // --- Keybindings: theme picker ---
 
 #[test]

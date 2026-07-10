@@ -28,6 +28,7 @@ pub fn read_multiline_command() -> io::Result<String> {
 /// Creates a new snippet with the given command and optional tags.
 pub fn run(
     command: String,
+    description: Option<String>,
     tags: bool,
     multiline: bool,
     config: Option<PathBuf>,
@@ -55,12 +56,16 @@ pub fn run(
         command
     };
 
-    print!("{}", style("Description> ").with(Color::Green));
-    io::stdout().flush()?;
-
-    let mut description = String::new();
-    io::stdin().read_line(&mut description)?;
-    let description = description.trim().to_string();
+    let description = match description {
+        Some(d) => d,
+        None => {
+            print!("{}", style("Description> ").with(Color::Green));
+            io::stdout().flush()?;
+            let mut desc_input = String::new();
+            io::stdin().read_line(&mut desc_input)?;
+            desc_input.trim().to_string()
+        }
+    };
 
     let tags: Vec<String> = if tags {
         print!("{}", style("Tags> ").with(Color::Cyan));

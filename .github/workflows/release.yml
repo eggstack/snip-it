@@ -40,19 +40,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: snp-linux-x86_64
+            archive_name: snip-it-${{ github.ref_name }}-x86_64-unknown-linux-gnu
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: snp-linux-aarch64
+            archive_name: snip-it-${{ github.ref_name }}-aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: snp-macos-aarch64
+            archive_name: snip-it-${{ github.ref_name }}-aarch64-apple-darwin
           - os: macos-13
             target: x86_64-apple-darwin
-            artifact_name: snp-macos-x86_64
+            archive_name: snip-it-${{ github.ref_name }}-x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: snp-windows-x86_64.exe
+            archive_name: snip-it-${{ github.ref_name }}-x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -69,18 +69,29 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Upload artifact (Unix)
+      - name: Package archive (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: target/${{ matrix.target }}/release/snp
-      - name: Upload artifact (Windows)
+        run: |
+          STAGING_DIR=$(mktemp -d)
+          cp target/${{ matrix.target }}/release/snp "$STAGING_DIR/"
+          cp LICENSE README.md "$STAGING_DIR/"
+          cd "$STAGING_DIR"
+          tar czf "${GITHUB_WORKSPACE}/${{ matrix.archive_name }}.tar.gz" snp LICENSE README.md
+          echo "Archive created: ${{ matrix.archive_name }}.tar.gz"
+          ls -la "${{ matrix.archive_name }}.tar.gz"
+      - name: Package archive (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $staging = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "staging")
+          Copy-Item "target/${{ matrix.target }}/release/snp.exe" $staging
+          Copy-Item "LICENSE", "README.md" $staging
+          Compress-Archive -Path $staging/* -DestinationPath "${{ matrix.archive_name }}.zip"
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: target/${{ matrix.target }}/release/snp.exe
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}.*
 
   checksums:
     name: Generate Checksums
@@ -90,19 +101,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: snp-it-*
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
-          for dir in snp-*/; do
+          for dir in snp-it-*/; do
             for file in "$dir"*; do
-              sha256sum "$file" >> checksums.txt
+              if [[ -f "$file" && ! "$file" == *.txt ]]; then
+                sha256sum "$file" >> SHA256SUMS
+              fi
             done
           done
+          echo "Generated SHA256SUMS:"
+          cat SHA256SUMS
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
           name: checksums
-          path: artifacts/checksums.txt
+          path: artifacts/SHA256SUMS
 
   create-release:
     name: Create GitHub Release
@@ -119,8 +135,8 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/snp-*/snp*
-            artifacts/checksums/checksums.txt
+            artifacts/snp-it-*/snp-it-*
+            artifacts/checksums/SHA256SUMS
 
   docker:
     name: Push Docker Image

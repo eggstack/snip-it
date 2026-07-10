@@ -33,6 +33,28 @@ you trust.
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+brew install eggstack/tap/snip-it
+```
+
+This installs the `snp` client with shell completions for Bash, Zsh, and Fish.
+The optional `snip-sync` server is not included. To upgrade:
+
+```bash
+brew upgrade snip-it
+```
+
+To uninstall:
+
+```bash
+brew uninstall snip-it
+```
+
+User configuration and snippet data are preserved by Homebrew unless manually
+removed.
+
 ### From crates.io
 
 ```bash
@@ -49,19 +71,22 @@ Release assets currently include:
 
 | Platform | Asset |
 | --- | --- |
-| Linux x86_64 | `snp-linux-x86_64` |
-| Linux aarch64 | `snp-linux-aarch64` |
-| macOS Intel | `snp-macos-x86_64` |
-| macOS Apple Silicon | `snp-macos-aarch64` |
-| Windows x86_64 | `snp-windows-x86_64.exe` |
+| Linux x86_64 | `snip-it-v<VERSION>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `snip-it-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `snip-it-v<VERSION>-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `snip-it-v<VERSION>-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `snip-it-v<VERSION>-x86_64-pc-windows-msvc.zip` |
 
-On Linux or macOS, make the downloaded file executable and put it on your
-`PATH`:
+On Linux or macOS, extract the archive and install the binary:
 
 ```bash
-chmod +x snp-linux-x86_64
-sudo mv snp-linux-x86_64 /usr/local/bin/snp
+tar xzf snp-*.tar.gz
+sudo mv snp /usr/local/bin/snp
 ```
+
+On Windows, extract the zip and move `snp.exe` to a directory on your `PATH`.
+
+Each release also includes a `SHA256SUMS` file for verifying download integrity.
 
 ### From source
 
@@ -91,8 +116,9 @@ snp clip
 snp search
 ```
 
-`snp new` prompts for a description, and `--tags` also prompts for tags.
-Variable values are requested when a snippet is run or copied.
+`snp new` prompts for a description (or accepts `--description`), and `--tags`
+also prompts for tags. Variable values are requested when a snippet is run or
+copied.
 
 ### Snippet files
 
