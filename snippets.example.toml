@@ -1,62 +1,62 @@
 # Sample snippets for snp
 # Copy this file to ~/.config/snp/snippets.toml and customize
 
-[[Snippets]]
-  Description = "git commit with message"
-  Output = ""
-  Tag = ["git", "version-control"]
+[[snippets]]
+  description = "git commit with message"
+  output = ""
+  tag = ["git", "version-control"]
   command = "git commit -m \"<message>\""
 
-[[Snippets]]
-  Description = "git push to origin"
-  Output = ""
-  Tag = ["git", "version-control"]
+[[snippets]]
+  description = "git push to origin"
+  output = ""
+  tag = ["git", "version-control"]
   command = "git push origin <branch=main>"
 
-[[Snippets]]
-  Description = "docker ps running containers"
-  Output = ""
-  Tag = ["docker", "containers"]
+[[snippets]]
+  description = "docker ps running containers"
+  output = ""
+  tag = ["docker", "containers"]
   command = "docker ps"
 
-[[Snippets]]
-  Description = "docker compose up detached"
-  Output = ""
-  Tag = ["docker", "compose"]
+[[snippets]]
+  description = "docker compose up detached"
+  output = ""
+  tag = ["docker", "compose"]
   command = "docker compose up -d"
 
-[[Snippets]]
-  Description = "kill process on port"
-  Output = ""
-  Tag = ["system", "port"]
+[[snippets]]
+  description = "kill process on port"
+  output = ""
+  tag = ["system", "port"]
   command = "lsof -ti :<port> | xargs kill -9"
 
-[[Snippets]]
-  Description = "find file by name"
-  Output = ""
-  Tag = ["find", "filesystem"]
+[[snippets]]
+  description = "find file by name"
+  output = ""
+  tag = ["find", "filesystem"]
   command = "find . -name \"<pattern>\""
 
-[[Snippets]]
-  Description = "grep recursive with context"
-  Output = ""
-  Tag = ["grep", "search"]
+[[snippets]]
+  description = "grep recursive with context"
+  output = ""
+  tag = ["grep", "search"]
   command = "grep -rn \"<pattern>\" ."
 
-[[Snippets]]
-  Description = "curl with headers"
-  Output = ""
-  Tag = ["http", "curl"]
+[[snippets]]
+  description = "curl with headers"
+  output = ""
+  tag = ["http", "curl"]
   command = "curl -H \"<header>\" <url>"
 
-[[Snippets]]
-  Description = "tar compress directory"
-  Output = ""
-  Tag = ["archive", "tar"]
+[[snippets]]
+  description = "tar compress directory"
+  output = ""
+  tag = ["archive", "tar"]
   command = "tar -czvf <archive.tar.gz> <directory>/"
 
-[[Snippets]]
-  Description = "rsync sync directories"
-  Output = ""
-  Tag = ["sync", "rsync"]
+[[snippets]]
+  description = "rsync sync directories"
+  output = ""
+  tag = ["sync", "rsync"]
   command = "rsync -avz <source>/ <destination>/"

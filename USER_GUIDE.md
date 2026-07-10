@@ -1,175 +1,319 @@
-# snp User Guide
+# snp user guide
 
-Advanced topics and detailed usage documentation for snp (Snippet Manager).
+This guide covers the parts of `snp` that are easy to outgrow from the
+[README](README.md): libraries, TOML compatibility, themes, synchronization,
+and automation.
 
-## Table of Contents
+## Contents
 
-- [Snippet Libraries](#snippet-libraries)
-- [Cloud Sync](#cloud-sync)
-- [Premade Libraries](#premade-libraries)
-- [Variable Expansion](#variable-expansion)
-- [Shell Keyword Expansion](#shell-keyword-expansion)
-- [Import/Export](#importexport)
-- [Configuration Reference](#configuration-reference)
-- [Advanced Usage](#advanced-usage)
-- [Programmatic Usage](#programmatic-usage)
-- [Troubleshooting](#troubleshooting)
-  - [Reset and Recovery](#reset-and-recovery)
+- [Libraries](#libraries)
+- [Pet compatibility and import](#pet-compatibility-and-import)
+- [Themes](#themes)
+- [Sync](#sync)
+- [Syncing one account across environments](#syncing-one-account-across-environments)
+- [Premade libraries](#premade-libraries)
+- [Variables](#variables)
+- [Configuration](#configuration)
+- [Automation](#automation)
+- [Troubleshooting and recovery](#troubleshooting-and-recovery)
 
----
+## Libraries
 
-## Snippet Libraries
-
-Libraries allow you to organize snippets into separate collections, perfect for work/home separation or project-specific snippets.
-
-### Creating Libraries
+Libraries are separate collections of snippets. They are useful for keeping
+personal commands, work commands, and project-specific scripts apart.
 
 ```bash
-# Create a new library
 snp library create work
-
-# Library files are stored in ~/.config/snp/libraries/
-```
-
-### Managing Libraries
-
-```bash
-# List all libraries
-snp library list
-# Output:
-#   work (primary)
-#   personal
-#   docker-essentials (premade)
-
-# Set a library as primary
+snp library create personal
 snp library set-primary work
-
-# View library details
+snp library list
 snp library show work
-# Output:
-#   Name: work
-#   ID: abc123
-#   Primary: yes
-#   Last Sync: 2024-01-15 10:30:00
 
-# Delete a library
-snp library delete old-library
-snp library delete old-library --force  # Skip confirmation
-```
-
-### Using Libraries
-
-```bash
-# Run snippet from specific library
+snp new --library work 'kubectl get pods -n <namespace=default>'
+snp list --library work
 snp run --library work
-
-# Copy from specific library
 snp clip --library work
-
-# Create snippet in specific library
-snp new --library work
+snp edit --library work
 ```
 
-### Library File Format
+Library files live under:
 
-Library files are TOML with the `.toml` extension, stored in `~/.config/snp/libraries/`:
+```text
+$XDG_CONFIG_HOME/snp/libraries/
+```
+
+When `XDG_CONFIG_HOME` is not set, the default is `~/.config/snp/libraries/`.
+`libraries.toml` stores library metadata, including which library is primary
+and which server library it is linked to.
+
+If a legacy `snippets.toml` exists when library mode starts, snp migrates it to
+`libraries/snippets.toml` and retains the original file. Keep your own backup
+before making large changes.
+
+## Pet compatibility and import
+
+Snip-it was inspired by [pet](https://github.com/knqyf263/pet), and the core
+snippet format is intentionally compatible. Pet's current format uses a
+lowercase `[[snippets]]` table and these fields:
 
 ```toml
-# ~/.config/snp/libraries/work.toml
-
-[[Snippets]]
-Description = "Deploy application"
-Tag = ["deploy", "k8s"]
-command = "kubectl apply -f deployment.yaml"
-
-[[Snippets]]
-Description = "Check pod status"
-Tag = ["k8s", "monitoring"]
-command = "kubectl get pods -n <namespace=default>"
+[[snippets]]
+description = "Show listening ports"
+command = "lsof -iTCP -sTCP:LISTEN"
+tag = ["network"]
+output = ""
 ```
 
-Library metadata (ID, primary status, sync state) is stored separately in `~/.config/snp/libraries.toml`.
+The variable syntax is shared too: `<name>` prompts for a value and
+`<name=default>` provides a default. Snip-it accepts pet files directly; no
+conversion script is needed for ordinary command snippets.
 
----
-
-## Cloud Sync
-
-Sync snippets across multiple devices using a snip-sync server.
-
-### Setting Up Sync
-
-#### 1. Run a Sync Server
+To import a pet file as a named snp library:
 
 ```bash
-# Install the published server, or use a binary built from the repository.
-cargo install snip-sync
+SNP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/snp"
+snp library create pet
+cp /path/to/pet-snippets.toml "$SNP_CONFIG_DIR/libraries/pet.toml"
+snp library set-primary pet
+```
 
-# Local direct mode. Keep this process running in a terminal.
+Copy the file only after `snp library create pet`, so the library metadata is
+registered.
+
+Snip-it also reads older `[[Snippets]]` files and capitalized aliases such as
+`Description`, `Command`, `Tag`, and `Output`. Snip-it adds optional metadata
+(`id`, `folders`, `favorite`, timestamps, and sync state); pet will ignore data
+it does not know about, so use a separate copy if you need to preserve that
+metadata while editing the same collection with both tools.
+
+## Themes
+
+Snip-it accepts Halloy color-theme files. Copy a Halloy theme file—not the
+Halloy application config—into:
+
+```text
+$XDG_CONFIG_HOME/snp/themes/<name>.toml
+```
+
+The default is `~/.config/snp/themes/` when `XDG_CONFIG_HOME` is not set. On
+first use, snp extracts 50 bundled themes into this directory without
+overwriting files you have edited.
+
+Press `e` in normal TUI mode to open the picker. Use `j`/`k` or the arrow keys
+to preview, `i` to filter, and `Enter` to save. The selection is stored in
+`themes.toml`:
+
+```toml
+[active]
+name = "Dracula"
+```
+
+The parser follows Halloy's theme schema. Snip-it projects the available
+colors onto its own TUI palette, so Halloy `font_style` and colors for UI
+elements that snp does not have are ignored. See the [Halloy custom theme
+guide](https://halloy.chat/guides/custom-themes) for the upstream format.
+
+## Sync
+
+Sync is provided by the optional self-hosted
+[`snip-sync`](snip-sync/README.md) server. The server uses SQLite and exposes a
+gRPC API plus an HTTP health/metrics port. It does not terminate TLS itself.
+
+For a complete local, Docker, reverse-proxy, and systemd deployment guide, see
+[snip-sync/README.md](snip-sync/README.md).
+
+### Local development
+
+```bash
+# Install both binaries.
+cargo install snip-it snip-sync
+
+# Terminal 1: initialize and start the loopback server.
 snip-sync init --skip-cert
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
-```
 
-#### 2. Register Your Client
-
-```bash
-# Register with the local direct server
+# Terminal 2: register this environment and seed the server.
 snp register --server http://127.0.0.1:50051
-
-# Register with custom server
-snp register --server https://sync.example.com
+snp sync --push-only
 ```
 
-This creates an API key and stores it in the OS keychain when available.
-`sync.toml` stores the `@keychain` marker instead of the key itself.
+`SNIP_SYNC_ALLOW_HTTP=true` is intentionally required for direct plaintext
+HTTP. Use it only for loopback development.
 
-For a remote server, terminate TLS at a reverse proxy and register the proxy
-URL instead, such as `snp register --server https://sync.example.com`.
+### Sync direction
 
-#### 3. Sync Your Snippets
+Registration enables sync and defaults to push-only. That is safe for a first
+upload, but it does not download changes made elsewhere. Use the command flags
+for one-off operations:
 
 ```bash
-# Sync using sync.toml direction (default: push local changes)
-snp sync
-
-# Push local changes only
 snp sync --push-only
-
-# Pull remote changes only
 snp sync --pull-only
+snp sync --dry-run
 ```
 
-### Sync Modes
-
-Configure sync direction in `~/.config/snp/sync.toml`:
+For regular multi-environment use, set the direction in
+`$XDG_CONFIG_HOME/snp/sync.toml` (normally `~/.config/snp/sync.toml`):
 
 ```toml
 [settings.sync]
-sync_direction = "Push"         # Default: upload only
-# sync_direction = "Bidirectional"  # Upload and download
-# sync_direction = "Pull"        # Download only
+sync_direction = "Bidirectional"
 ```
 
-### Automated Sync
+With that setting, plain `snp sync` merges local and remote changes.
 
-#### Cron Setup
+### Conflict behavior
 
-```bash
-# Set up 15-minute sync (default)
-snp cron
+Shared fields use last-write-wins ordering based on `updated_at`; the server
+wins when timestamps are equal. Local-only fields such as `output`, `folders`,
+and `favorite` are not synchronized and are preserved locally when a remote
+version replaces the shared fields.
+Deleted snippets are retained as tombstones so a later sync can converge.
 
-# Custom interval
-snp cron -i 30    # Every 30 minutes
-snp cron -i 60    # Every hour
-snp cron -i 240   # Every 4 hours
+## Syncing one account across environments
+
+The server authenticates a collection by API key. `snp register` creates a new
+account and API key on every invocation; it does not join an existing account.
+Therefore:
+
+1. Register one environment against the remote HTTPS endpoint.
+2. Use `snp sync --push-only` there to create and seed the server libraries.
+3. Provision the same API key, server URL, and a unique device ID to each other
+   environment.
+4. Run `snp sync --pull-only` once on each new environment, then switch all of
+   them to `Bidirectional` for normal use.
+
+Registering separately on the other environments creates isolated accounts
+that cannot see the first environment's libraries. The server stores only a
+hash of the API key, so there is no server-side key recovery. Keep the original
+key in a password manager or managed secret store. The CLI prints a masked key
+after registration; use the first environment's OS keychain tools or your
+secret-management workflow to provision the original value. Copying a
+`sync.toml` containing only `api_key = "@keychain"` does not copy the keychain
+secret itself.
+
+On an additional environment, the settings have this shape:
+
+```toml
+# $XDG_CONFIG_HOME/snp/sync.toml
+[settings.sync]
+enabled = true
+server_url = "https://sync.example.com"
+api_key = "<the same API key as the first environment>"
+device_id = "<a unique ID for this environment>"
+sync_interval_minutes = 30
+auto_sync = false
+sync_direction = "Bidirectional"
 ```
 
-#### Systemd Timer (Linux)
+The API key is normally represented as `@keychain` after snp stores it in the
+OS keychain. When provisioning a headless environment, use its secret manager
+or set `SNP_ALLOW_PLAINTEXT_API_KEY=true` only when you deliberately accept a
+protected plaintext `sync.toml`. Do not commit this file.
+
+## Premade libraries
+
+Premade libraries are read-only source files served by `snip-sync` and copied
+into the local `premade/` directory when installed.
 
 ```bash
-# Create user timer
-cat > ~/.config/systemd/user/snp-sync.timer << 'EOF'
+snp premade list
+snp premade search docker
+snp premade get docker-essentials
+snp premade get all
+snp premade sync
+snp premade update docker-essentials
+```
+
+Server administrators can add `.toml` files to the server's configured
+`premade-libraries` directory. The server reads the same snippet format shown
+above.
+
+## Variables
+
+Variables are expanded when a snippet is run or copied:
+
+| Syntax | Behavior |
+| --- | --- |
+| `<name>` | Prompt for a required value |
+| `<name=default>` | Show a default that can be replaced |
+| `\<` or `\>` | Use a literal angle bracket |
+
+Example:
+
+```toml
+[[snippets]]
+description = "SSH connection"
+command = "ssh <user=root>@<host> -p <port=22>"
+tag = ["ssh"]
+```
+
+Shell expressions such as `$HOME` or `$(date)` are passed to the selected
+shell; snp does not expand them itself.
+
+## Configuration
+
+The client root is `$XDG_CONFIG_HOME/snp`, or `~/.config/snp` when that
+variable is unset.
+
+| Path | Purpose |
+| --- | --- |
+| `snippets.toml` | Legacy single-file storage |
+| `libraries/*.toml` | User library files |
+| `libraries.toml` | Library metadata and server links |
+| `premade/*.toml` | Installed premade libraries |
+| `sync.toml` | Sync settings |
+| `themes/*.toml` | Halloy-compatible themes |
+| `themes.toml` | Active theme |
+| `logs/` | Rolling application logs |
+| `backups/` | Timestamped library backups |
+
+Useful environment variables:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | `0` for direct terminal runs |
+| `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds | `5` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | Permit plaintext API-key storage when keychain storage fails | unset |
+| `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
+| `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
+| `SNP_THEME` | Legacy theme or theme filename | bundled default |
+| `SNP_LOG` / `RUST_LOG` | Tracing filters | `snp=info` |
+| `EDITOR` | Editor for `snp edit` | `vim` |
+
+## Automation
+
+`snp list` supports machine-readable output:
+
+```bash
+snp list --json
+snp list --csv
+snp list --filter docker --json
+```
+
+`snp cron` prints a cron entry and offers to copy it to the clipboard:
+
+```bash
+snp cron          # every 15 minutes
+snp cron --interval 60
+```
+
+On Linux, a user systemd timer is another option:
+
+```ini
+# ~/.config/systemd/user/snp-sync.service
 [Unit]
-Description=Snippet sync timer
+Description=Sync snip-it libraries
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/snp sync
+```
+
+```ini
+# ~/.config/systemd/user/snp-sync.timer
+[Unit]
+Description=Periodic snip-it sync
 
 [Timer]
 OnBootSec=5min
@@ -178,462 +322,38 @@ Unit=snp-sync.service
 
 [Install]
 WantedBy=default.target
-EOF
+```
 
-# Create service
-# NOTE: replace 'your-username' below with the actual username, or use
-# systemd template syntax (%i expands to the user instance name) for a
-# per-user service.
-cat > ~/.config/systemd/user/snp-sync.service << 'EOF'
-[Unit]
-Description=Snippet sync
+Enable it with:
 
-[Service]
-Type=oneshot
-User=%i
-ExecStart=/home/%i/.local/bin/snp sync
-
-[Install]
-WantedBy=default.target
-EOF
-
-# Enable timer
+```bash
 systemctl --user daemon-reload
 systemctl --user enable --now snp-sync.timer
 ```
 
-### Sync Conflict Resolution
+## Troubleshooting and recovery
 
-When the same snippet is modified locally and remotely, sync uses
-last-write-wins based on the `updated_at` timestamp. Local-only fields
-such as `output`, `folders`, and `favorite` are preserved when the server
-version wins.
-
-When linking an existing local library to a server library that already
-contains snippets, `snp sync` prompts you to skip, overwrite the local
-library with the server version, or rename the local copy before pulling.
-
----
-
-## Premade Libraries
-
-Download community-built snippet collections.
-
-### Browsing Libraries
+Check the server before investigating the client:
 
 ```bash
-# List available premade libraries
-snp premade list
-# Output:
-#   Name                    Snippets
-#   docker-essentials       15
-#   git-common              23
-#   networking              31
-
-# Get details for a library
-snp premade get docker-essentials  # Shows what will be installed
+curl http://127.0.0.1:50050/health
 ```
 
-### Installing Libraries
-
-```bash
-# Install a specific library
-snp premade get docker-essentials
-
-# Install all available libraries
-snp premade get all
-
-# Install another library by repeating the command
-snp premade get git-common
-```
-
-### Syncing Premade Libraries
-
-```bash
-# Download any missing premade libraries
-snp premade sync
-```
-
-### Creating Premade Libraries (Server Side)
-
-Server administrators can add premade libraries by placing TOML files in the server's `premade-libraries/` directory:
-
-```toml
-# premade-libraries/my-collection.toml
-Description = "My custom collection"
-
-[[Snippets]]
-Description = "Build project"
-Tag = ["build"]
-command = "cargo build --release"
-
-[[Snippets]]
-Description = "Run tests"
-Tag = ["test"]
-command = "cargo test"
-```
-
----
-
-## Variable Expansion
-
-Dynamic snippets with user input at runtime.
-
-### Syntax
-
-| Pattern | Behavior |
-|---------|----------|
-| `<varname>` | Required input, no default |
-| `<varname=default>` | Optional with default value |
-| `<var1> <var2>` | Multiple variables |
-| `\<` or `\>` | Escaped characters (literal) |
-
-### Examples
-
-#### Required Input
-
-```toml
-[[Snippets]]
-Description = "Docker exec"
-command = "docker exec -it <container> /bin/bash"
-```
-
-Prompts for container name each run.
-
-#### With Defaults
-
-```toml
-[[Snippets]]
-Description = "SSH connection"
-command = "ssh <user=root>@<host> -p <port=22>"
-```
-
-Shows defaults, allows override.
-
-#### Escaped Characters
-
-```toml
-[[Snippets]]
-Description = "Less than comparison"
-command = "test \<num1\> -lt \<num2\>"
-```
-
-The `\<` and `\>` are treated as literal characters.
-
-### Shell Keywords
-
-Automatically expand common shell patterns:
-
-```toml
-[[Snippets]]
-Description = "Git with auto-completion"
-command = "git checkout <branch>"
-```
-
-Supports: `$HOME`, `$USER`, `~`, current date/time, etc.
-
----
-
-## Shell Keyword Expansion
-
-snip automatically expands common shell patterns when copying or running snippets.
-
-### Supported Keywords
-
-| Pattern | Expansion |
-|---------|-----------|
-| `$HOME` | User's home directory |
-| `~` | User's home directory |
-| `$USER` | Current username |
-| `$HOSTNAME` | Machine hostname |
-| `$(date)` | Current date (YYYY-MM-DD) |
-| `$(date +%H:%M)` | Current time |
-| `$PWD` | Current directory |
-| `$RANDOM` | Random number |
-
-### Examples
-
-```toml
-[[Snippets]]
-Description = "Navigate to home"
-command = "cd $HOME"
-
-[[Snippets]]
-Description = "Create backup"
-command = "cp <file> ~/backups/backup-$(date).tar.gz"
-```
-
----
-
-## Import/Export
-
-### Import from `pet` (or `navi`)
-
-snp accepts the same TOML schema as `pet`; copy the file in place and
-you're done:
-
-```bash
-# Typical pet config location: ~/.config/pet/snippets.toml
-cp ~/.config/pet/snippets.toml ~/.config/snp/snippets.toml
-# (note: file is renamed, but the inner TOML is read as-is)
-```
-
-`snp` reads the legacy `pet` keys (`Command`, `Description`, `Tag`,
-`Output`) and the modern lowercase keys (`command`, `description`,
-`tags`, `output`); both work in the same file.
-
-### Import from snip (Python version)
-
-The snip format is compatible:
-
-```toml
-# snip format (works with snp)
-[[snips]]
-command = "git commit"
-description = "Git commit"
-tags = ["git"]
-
-# snp format (new)
-[[Snippets]]
-command = "git commit"
-Description = "Git commit"
-Tag = ["git"]
-```
-
-### Export Snippets
-
-```bash
-# Copy your snippets.toml to backup
-cp ~/.config/snp/snippets.toml ~/snippets-backup.toml
-
-# Export specific library
-cp ~/.config/snp/libraries/work.toml ~/work-snippets.toml
-```
-
-### Manual Import
-
-1. Copy the TOML file to the appropriate location
-2. Edit to ensure format compatibility
-3. Restart snp
-
----
-
-## Configuration Reference
-
-### File Locations
-
-| Platform | Path |
-|----------|------|
-| Linux | `~/.config/snp/` |
-| macOS | `~/.config/snp/` |
-| Windows | `%APPDATA%\snp\` |
-
-### Config Files
-
-| File | Purpose |
-|------|---------|
-| `snippets.toml` | Main snippet storage |
-| `sync.toml` | Sync server settings |
-| `libraries/` | Snippet libraries |
-| `libraries.toml` | Library metadata and sync state |
-| `premade/` | Downloaded premade libraries |
-| `logs/` | Application logs |
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `XDG_CONFIG_HOME` | Override config root; snp uses `$XDG_CONFIG_HOME/snp` |
-| `SNP_COMMAND_TIMEOUT` | Command execution timeout in seconds; `0` disables |
-| `SNP_CLIPBOARD_TIMEOUT` | Clipboard operation timeout in seconds |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | Allow sync API key storage in `sync.toml` when the OS keychain is unavailable |
-| `SNP_SYNC_CONNECT_TIMEOUT` | Sync TCP connect timeout in seconds |
-| `SNP_SYNC_REQUEST_TIMEOUT` | Sync per-request timeout in seconds |
-| `SNP_THEME` | UI theme (`dark`, `bright`, `light`, `auto`, or a Halloy theme name) |
-| `EDITOR` | Editor for `snp edit` command |
-| `SHELL` | Shell used to run snippets on Unix |
-| `COMSPEC` | Shell used to run snippets on Windows |
-| `SNP_LOG` | Per-module tracing filter, for example `snp=debug,snip_sync=info` |
-| `RUST_LOG` | Standard tracing/env-filter fallback when `SNP_LOG` is unset |
-| `SNIP_SYNC_ALLOW_HTTP` | Allow plaintext HTTP for local sync server development only |
-
-### TOML Configuration Format
-
-```toml
-# sync.toml
-
-[settings]
-[settings.sync]
-enabled = true
-server_url = "https://sync.example.com"
-api_key = "@keychain"
-device_id = "device-uuid"
-sync_interval_minutes = 30
-auto_sync = false
-sync_direction = "Push"
-sync_limit = 1000
-clipboard_auto_clear_seconds = 30
-```
-
-```toml
-# snippets.toml or libraries/<name>.toml
-[[Snippets]]
-Id = "optional-uuid"
-Description = "Snippet description"
-Output = ""  # For storing command output
-Tag = ["tag1", "tag2"]
-command = "the command with <variables>"
-folders = []
-favorite = false
-created_at = 1705312200
-updated_at = 1705312200
-device_id = ""
-deleted = false
-```
-
-### Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `settings.sync.enabled` | bool | false | Enable sync |
-| `settings.sync.server_url` | string | http://localhost:50051 | Sync server URL |
-| `settings.sync.api_key` | string | "" | API key for auth; normally `@keychain` |
-| `settings.sync.device_id` | string | "" | Unique device identifier |
-| `settings.sync.sync_interval_minutes` | u32 | 30 | Sync interval |
-| `settings.sync.auto_sync` | bool | false | Auto-sync on changes |
-| `settings.sync.sync_direction` | enum | Push | Push, Pull, or Bidirectional |
-| `settings.sync.sync_limit` | integer | 1000 | Max snippets requested per sync page |
-| `settings.sync.clipboard_auto_clear_seconds` | integer/null | null | Optional clipboard auto-clear delay |
-
----
-
-## Advanced Usage
-
-### Using with Shell History
-
-Combine with shell integration:
-
-```bash
-# Add to .bashrc or .zshrc
-alias snip='eval "$(snp run)"'
-```
-
-### Hook Scripts
-
-Run scripts before/after sync using shell wrappers:
-
-```bash
-# ~/.local/bin/snp-with-hooks
-#!/bin/bash
-snp sync "$@"
-[ $? -eq 0 ] && ~/.local/bin/snp-post-sync
-```
-
-### Performance Tips
-
-- **Large libraries**: Use `--filter` to narrow search
-- **Many snippets**: Organize into multiple libraries
-- **Slow sync**: Increase `sync_interval_minutes`
-
----
-
-## Programmatic Usage
-
-snp is a binary application and does not expose a public Rust API. For automation, use the CLI:
-
-```bash
-# Create a snippet
-snp new "git commit" --tags
-
-# List snippets (JSON format for scripting)
-snp list --json
-
-# Run a snippet non-interactively (with filter)
-snp run --filter "deploy"
-
-# Copy to clipboard
-snp clip --filter "ssh"
-
-# Sync programmatically
-snp sync
-```
-
-### Shell Integration
-
-```bash
-# Add to .bashrc or .zshrc for quick snippet access
-alias snp-run='eval "$(snp run)"'
-
-# Use in scripts
-SNIPPET=$(snp list --json | jq -r '.[0].command')
-eval "$SNIPPET"
-```
-
----
-
-## Troubleshooting
-
-### Sync Not Working
-
-1. Check server is running: `curl localhost:50050/health` or equivalent
-2. Verify sync config: `cat ~/.config/snp/sync.toml`
-3. Check logs: `tail -f ~/.config/snp/logs/snp.log`
-4. Test connection: `snp sync --dry-run`
-
-### TUI Rendering Issues
-
-- Resize terminal window
-- Check $TERM variable: `echo $TERM`
-- Try different terminal emulator
-
-### Slow Startup
-
-- Reduce log level: `SNP_LOG=snp=error snp run`
-- Disable auto-sync: Set `auto_sync = false`
-
-### Data Recovery
-
-If snippets are lost:
-
-1. Check `~/.config/snp/snippets.toml.bak`
-2. Check `~/.config/snp/libraries/` for backups
-3. Restore from server: `snp sync --pull-only`
-
-### Reset and Recovery
-
-To wipe all local data and start fresh:
-
-```bash
-# Remove all snippets, sync settings, libraries, logs, and audit log
-rm -rf ~/.config/snp
-
-# Next invocation will recreate the directory with default permissions
-snp --version
-```
-
-`rm -rf` is destructive. Back up first if you intend to keep anything:
+For a remote deployment, check the reverse proxy's HTTPS endpoint and the
+server logs. `snip-sync paths` prints the active database, config, data, and
+PID paths.
+
+If a sync configuration is damaged, snp keeps a `.corrupt.bak` copy and falls
+back to defaults. Library writes create timestamped backups in `backups/`.
+Restore a library file from there before attempting another sync.
+
+To disconnect sync while keeping local snippets, remove `sync.toml` and
+register again later. To reset all local data, back up the config directory
+first, then remove it:
 
 ```bash
 mv ~/.config/snp ~/.config/snp.backup-$(date +%Y%m%d)
 ```
 
-To reset just sync state (keep snippets, drop the server connection):
-
-```bash
-rm ~/.config/snp/sync.toml
-snp register --server https://your-server:50051
-```
-
-### Keychain Issues (Linux headless / SSH sessions)
-
-On Linux, the `keyring` crate requires a running Secret Service
-(GNOME Keyring, KWallet, or similar). If unavailable, snp logs an
-error and refuses to write the API key in plaintext by default.
-
-Fallback for headless / CI usage:
-
-```bash
-export SNP_ALLOW_PLAINTEXT_API_KEY=true
-snp register --server https://your-server:50051
-# API key is now stored in sync.toml with a runtime warning emitted
-```
+For security issues, follow [SECURITY.md](SECURITY.md) rather than opening a
+public issue.

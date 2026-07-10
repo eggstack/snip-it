@@ -1,8 +1,9 @@
 # snip-sync server
 
-`snip-sync` is the self-hostable gRPC server used by the `snp` client. Snippet
-contents are encrypted by the client before upload; the server stores the
-ciphertext and the metadata needed to synchronize it.
+`snip-sync` is the optional, self-hostable gRPC server used by the `snp` client.
+Snippet descriptions, commands, and tags are encrypted by the client before
+upload; the server stores ciphertext plus the metadata needed to synchronize
+libraries.
 
 `snip-sync` deliberately does not terminate TLS. It serves plaintext gRPC and
 HTTP, normally on loopback, and should sit behind a TLS-terminating reverse
@@ -29,12 +30,22 @@ In another terminal, register the client and sync:
 
 ```bash
 snp register --server http://127.0.0.1:50051
-snp sync
+snp sync --push-only
 ```
 
 Registration creates the account, stores the server URL and device ID in the
 client config, and stores the API key in the OS keychain when available. Run
-`snp register --force` only when you intentionally want a new device key.
+`snp register --force` only when you intentionally want a new account and key;
+it does not join an existing account.
+
+For multiple environments, register once, then securely provision that same
+API key, server URL, and a unique device ID to each environment that should
+share the libraries. Registering each environment independently creates
+isolated accounts. After the first client seeds the server, use
+`snp sync --pull-only` on new environments and then set
+`sync_direction = "Bidirectional"` in the client `sync.toml` for normal use.
+See [USER_GUIDE.md](../USER_GUIDE.md#syncing-one-account-across-environments)
+for the client-side settings example.
 
 The server config location is platform-specific. Run this to see the exact
 paths in use:
@@ -80,8 +91,12 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/user/.cargo/bin/snip-sync serve
+User=snip-sync
+ExecStart=/usr/local/bin/snip-sync serve
+Environment=CONFIG_PATH=/etc/snip-sync/config.toml
 Environment=TLS_ENABLED=true
+Environment=DATABASE_URL=/var/lib/snip-sync/snippets.db
+Environment=PREMADE_DIR=/var/lib/snip-sync/premade-libraries
 Restart=on-failure
 
 [Install]
@@ -93,6 +108,8 @@ server process itself remains plaintext and should not be exposed directly to
 the public network.
 
 ```bash
+sudo install -d -o snip-sync -g snip-sync /etc/snip-sync /var/lib/snip-sync/premade-libraries
+sudo -u snip-sync env CONFIG_PATH=/etc/snip-sync/config.toml /usr/local/bin/snip-sync init --skip-cert
 sudo systemctl daemon-reload
 sudo systemctl enable --now snip-sync
 ```
@@ -101,7 +118,7 @@ Register the client using the proxy's HTTPS URL, not the backend port:
 
 ```bash
 snp register --server https://sync.example.com
-snp sync
+snp sync --push-only
 ```
 
 The client uses the operating system's trusted certificate roots for HTTPS, so
@@ -172,12 +189,12 @@ reachable. `/metrics` is disabled unless both metrics credentials are set.
 ## Supervision fallback
 
 `croncheck` is a lightweight fallback for hosts without systemd. It checks the
-actual `/health` response and starts one detached server when needed. Include
-the plaintext flag for a local deployment:
+actual `/health` response and starts one detached server when needed. For a
+production reverse-proxy deployment, use:
 
 ```cron
-@reboot SNIP_SYNC_ALLOW_HTTP=true /home/user/.cargo/bin/snip-sync croncheck
-*/5 * * * * SNIP_SYNC_ALLOW_HTTP=true /home/user/.cargo/bin/snip-sync croncheck
+@reboot TLS_ENABLED=true SNIP_SYNC_ALLOW_HTTP=false /home/user/.cargo/bin/snip-sync croncheck
+*/5 * * * * TLS_ENABLED=true SNIP_SYNC_ALLOW_HTTP=false /home/user/.cargo/bin/snip-sync croncheck
 ```
 
 Use systemd or another real supervisor for production. `croncheck` is not a
@@ -219,12 +236,34 @@ docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
 ```
 
 The container example exposes plaintext gRPC and should likewise be placed
-behind a TLS proxy before being exposed publicly.
+behind a TLS proxy before being exposed publicly. When the proxy runs on the
+host, bind the published ports to loopback:
+
+```bash
+docker volume create snip-sync-data
+docker run -d \
+  --name snip-sync \
+  --restart unless-stopped \
+  -p 127.0.0.1:50051:50051 \
+  -p 127.0.0.1:50050:50050 \
+  -v snip-sync-data:/data \
+  -e DATABASE_URL=/data/snippets.db \
+  -e GRPC_HOST=0.0.0.0 \
+  -e HTTP_HOST=0.0.0.0 \
+  -e TLS_ENABLED=true \
+  -e SNIP_SYNC_ALLOW_HTTP=false \
+  ghcr.io/eggstack/snip-it/snip-sync:latest
+```
+
+The repository's [`docker-compose.yml`](docker-compose.yml) is useful for
+local/container-network deployments. Review its port bindings before using it
+on a remote host.
 
 ## Troubleshooting
 
 - **`TLS termination is required`**: use `SNIP_SYNC_ALLOW_HTTP=true` only for a local direct connection, or put a TLS proxy in front and set `TLS_ENABLED=true`.
 - **Client registration fails**: use `http://127.0.0.1:50051` for direct local serving and the proxy's `https://` URL for production.
+- **A second environment sees no libraries**: it was probably registered as a new account. Provision the first environment's API key instead.
 - **API key cannot be saved**: configure an OS keychain. On a deliberately headless machine, `SNP_ALLOW_PLAINTEXT_API_KEY=true snp register ...` opts into plaintext storage and should be protected with strict file permissions.
 - **Port in use**: run `snip-sync paths` and inspect the configured gRPC/HTTP ports.
 - **Health check fails**: request `curl http://127.0.0.1:50050/health` and inspect the server logs.

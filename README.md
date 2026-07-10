@@ -2,29 +2,65 @@
 
 [![Crates.io](https://img.shields.io/crates/v/snip-it.svg)](https://crates.io/crates/snip-it)
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-![MSRV: 1.94](https://img.shields.io/badge/MSRV-1.94-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)
+`snip-it` (`snp`) is a terminal-first snippet manager for short scripts and
+commands. Save them in libraries, find them with fuzzy search, fill in
+variables when you use them, then run or copy them from a keyboard-driven TUI.
 
-A fast, terminal-based snippet manager. Fuzzy search your command library,
-expand `<variable>` placeholders on the fly, organize snippets into
-libraries, and keep every device in sync with end-to-end encryption.
+It was inspired by [pet](https://github.com/knqyf263/pet) and keeps the same
+simple, editable TOML approach to command snippets. The optional
+[`snip-sync`](snip-sync/README.md) server adds encrypted synchronization for
+environments where you want one snippet collection available on multiple
+machines.
 
-## Why snip-it?
+## What snip-it provides
 
-Your shell history is unorganized. Generic snippet tools like `pet` don't
-sync. Cloud-first managers want your data. **snip-it** is a single Rust
-binary that runs everywhere, stores snippets in plain TOML you can grep,
-and adds *optional* end-to-end-encrypted sync without ever holding your
-plaintext.
+- Short command and script snippets stored as editable TOML.
+- Separate libraries for work, home, projects, or environments.
+- Fuzzy search, tags, syntax highlighting, clipboard support, and a TUI.
+- Runtime variables such as `<host>` and `<branch=main>`.
+- 50 bundled [Halloy](https://github.com/squidowl/halloy)-compatible themes,
+  plus support for dropping in additional Halloy theme files.
+- Optional self-hosted sync using AES-256-GCM encryption and Argon2id key
+  derivation. The server stores encrypted snippet payloads, not their
+  descriptions or commands.
+- Premade libraries served by `snip-sync`.
+
+Commands are executed through your shell exactly as written. `snip-it` is a
+snippet manager, not a sandbox or a secrets manager; only save and run commands
+you trust.
 
 ## Installation
 
-### From crates.io (recommended)
+### From crates.io
 
 ```bash
 cargo install snip-it
+```
+
+Rust 1.94 or newer is required when building from source.
+
+### Pre-built binaries
+
+Download the binary for your platform from the
+[latest GitHub release](https://github.com/eggstack/snip-it/releases/latest).
+Release assets currently include:
+
+| Platform | Asset |
+| --- | --- |
+| Linux x86_64 | `snp-linux-x86_64` |
+| Linux aarch64 | `snp-linux-aarch64` |
+| macOS Intel | `snp-macos-x86_64` |
+| macOS Apple Silicon | `snp-macos-aarch64` |
+| Windows x86_64 | `snp-windows-x86_64.exe` |
+
+On Linux or macOS, make the downloaded file executable and put it on your
+`PATH`:
+
+```bash
+chmod +x snp-linux-x86_64
+sudo mv snp-linux-x86_64 /usr/local/bin/snp
 ```
 
 ### From source
@@ -33,34 +69,11 @@ cargo install snip-it
 git clone https://github.com/eggstack/snip-it.git
 cd snip-it
 cargo build --release
-./target/release/snp --version
+mkdir -p ~/.local/bin
+install target/release/snp ~/.local/bin/snp
 ```
 
-### Pre-built binaries
-
-Download from the latest release:
-
-| Platform       | Asset                                    |
-| -------------- | ---------------------------------------- |
-| Linux x86_64   | `snp-linux-x86_64.tar.gz`                |
-| Linux aarch64  | `snp-linux-aarch64.tar.gz`               |
-| macOS x86_64   | `snp-macos-x86_64.tar.gz`                |
-| macOS Apple Si | `snp-macos-aarch64.tar.gz`               |
-| Windows x86_64 | `snp-windows-x86_64.exe.zip`             |
-
-```bash
-# Linux / macOS
-tar -xzf snp-linux-x86_64.tar.gz
-sudo mv snp /usr/local/bin/
-```
-
-### Homebrew
-
-```bash
-brew install eggstack/tap/snp
-```
-
-### Docker (sync server only)
+The Docker image is for the optional sync server, not the interactive client:
 
 ```bash
 docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
@@ -68,161 +81,205 @@ docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
 
 ## Quickstart
 
+Create a snippet, search it, and run or copy it:
+
 ```bash
-# Create a snippet with variables, then prompt for description and tags
-snp new 'ssh <user>@<host>' --tags
-
-# Create a snippet with a default value, then prompt for description
-snp new 'git push origin <branch=main>'
-
-# List all snippets
+snp new 'git push origin <branch=main>' --tags
 snp list
-
-# Launch the TUI to search, run, or copy
 snp run
 snp clip
-
-# Open the snippets file in $EDITOR
-snp edit
+snp search
 ```
 
-Snippets live in `~/.config/snp/snippets.toml`:
+`snp new` prompts for a description, and `--tags` also prompts for tags.
+Variable values are requested when a snippet is run or copied.
 
-```toml
-[[Snippets]]
-Description = "git commit with message"
-Tag = ["git", "version-control"]
-command = "git commit -m \"<message>\""
+### Snippet files
 
-[[Snippets]]
-Description = "ssh with port"
-Tag = ["ssh"]
-command = "ssh <user=root>@<host> -p <port=22>"
+Without libraries, snip-it uses the legacy single-file layout:
+
+```text
+$XDG_CONFIG_HOME/snp/snippets.toml
 ```
 
-## Features
+When `XDG_CONFIG_HOME` is unset, this is `~/.config/snp/snippets.toml`.
 
-- **Fuzzy search** — find snippets by description, command, or tags (`skim` algorithm).
-- **Variable expansion** — `<name=default>` syntax prompts for values at runtime.
-- **TUI** — keyboard-driven selection with 50 bundled Halloy themes and a live theme picker (`e` in normal mode).
-- **Multiple libraries** — separate collections per project, environment, or client.
-- **Premade libraries** — download community-built snippet packs (`snp premade sync`).
-- **End-to-end encrypted sync** — AES-256-GCM + Argon2id; the server never sees plaintext.
-- **Cron-friendly** — `snp sync` is non-interactive by default; safe for headless setups.
-- **TOML you can grep** — snippets are plain files; version-control them, edit them, diff them.
-- **Cross-platform** — macOS, Linux, Windows; uses the system clipboard and keychain.
-- **Shell keyword expansion** — `$HOME`, `~`, `$(date)`, etc. expand at copy time.
-
-## Security
-
-> **Snippet commands are executed as-is via your shell.** Only add snippets
-> you trust. Snippets that contain secrets (passwords, tokens, keys) live
-> in plaintext TOML — use a sync server with end-to-end encryption rather
-> than sharing the file.
-
-- Sync: snippets are encrypted with **AES-256-GCM** before leaving the
-  client; the server stores only ciphertext.
-- Key derivation: **Argon2id** with OWASP-recommended parameters.
-- API keys: stored in the OS keychain (macOS Keychain, GNOME Keyring,
-  Windows Credential Manager) by default. A `SNP_ALLOW_PLAINTEXT_API_KEY=true`
-  opt-in falls back to a plaintext key with a warning.
-- Integrity: `sync.toml` carries a CRC32 checksum comment to detect
-  accidental corruption (e.g., partial writes).
-
-See [SECURITY.md](https://github.com/eggstack/snip-it/blob/main/SECURITY.md) for the vulnerability disclosure policy
-and a fuller threat model.
-
-## Optional: Sync Server
-
-`snp` is a single binary; sync is **opt-in** and requires a `snip-sync`
-server (also in this repo). See [snip-sync/README.md](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)
-for detailed setup.
+Creating a library switches the installation to library mode. Existing
+`snippets.toml` content is migrated to `libraries/snippets.toml` when needed.
 
 ```bash
-# Install the client and sync server
+snp library create work
+snp library set-primary work
+snp new --library work 'kubectl get pods -n <namespace=default>'
+snp run --library work
+```
+
+The canonical file format is compatible with pet's snippet format:
+
+```toml
+[[snippets]]
+description = "Git commit with a message"
+command = "git commit -m \"<message>\""
+tag = ["git", "version-control"]
+output = ""
+```
+
+The loader also accepts snip-it's older `[[Snippets]]` spelling and legacy
+capitalized field names. Snip-it-only metadata such as IDs, folders, favorites,
+and sync timestamps is preserved when snip-it writes a library. See
+[USER_GUIDE.md](USER_GUIDE.md) for library layout, import/export, and the full
+configuration reference.
+
+## Themes
+
+Snip-it reads the same color-theme TOML files used by Halloy. A Halloy theme
+file can be copied directly into:
+
+```text
+$XDG_CONFIG_HOME/snp/themes/<name>.toml
+```
+
+When `XDG_CONFIG_HOME` is unset, use `~/.config/snp/themes/<name>.toml`.
+
+Then press `e` in the normal TUI mode to open the theme picker, preview themes,
+and press `Enter` to save the selection. The active theme is recorded in
+the config root's `themes.toml`. The `SNP_THEME` environment variable remains
+available for compatibility with the older `dark`, `bright`, `light`, and
+`auto` values, or a theme filename.
+
+Snip-it uses Halloy's color schema and projects it onto the colors needed by
+the TUI. `font_style` and Halloy-specific UI colors that have no snip-it
+equivalent are ignored. Copy the theme file itself, not Halloy's main config
+entry such as `theme = "..."`. See the [Halloy theme guide](https://halloy.chat/guides/custom-themes)
+and [Halloy's theme repository](https://github.com/squidowl/halloy).
+
+## Sync across environments
+
+Sync is optional. It uses a self-hosted `snip-sync` server backed by SQLite.
+The client encrypts snippet descriptions, commands, and tags before sending
+them; the server handles authentication, library metadata, and ciphertext
+storage. The server does not terminate TLS, so a remote deployment must put it
+behind a TLS-terminating reverse proxy.
+
+The complete deployment guide, including Docker, Caddy, systemd, configuration,
+health checks, and troubleshooting, is in
+[snip-sync/README.md](snip-sync/README.md).
+
+### Local test server
+
+```bash
 cargo install snip-it snip-sync
 
-# Local direct mode: no certificate or reverse proxy required
+# In one terminal:
 snip-sync init --skip-cert
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 
-# Register your client against the server
+# In another terminal:
 snp register --server http://127.0.0.1:50051
-
-# Manual sync
-snp sync
-
-# Push-only / pull-only
 snp sync --push-only
-snp sync --pull-only
-
-# Set up a 15-minute sync cron job
-snp cron
 ```
 
-For a remote deployment, put `snip-sync` behind a TLS-terminating reverse
-proxy and register with its HTTPS URL, for example
-`snp register --server https://sync.example.com`. See the
-[server quickstart](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)
-for the proxy and service configuration.
+Plaintext HTTP is for loopback development only. Do not expose this server
+directly to the internet.
 
-## CLI Overview
+### Remote server and multiple environments
 
-```
-$ snp --help
-A fast, terminal-based snippet manager with fuzzy search, clipboard support, and cloud sync
+For a remote server, use an HTTPS URL terminated by your reverse proxy:
 
-Usage: snp [COMMAND]
-
-Commands:
-  new         Create a new snippet
-  list        List all snippets
-  run         Run a snippet via TUI
-  clip        Copy snippet to clipboard
-  search      Search and view snippet details
-  edit        Edit snippets file in $EDITOR
-  sync        Sync snippets with server
-  cron        Setup automatic sync
-  library     Manage snippet libraries
-  premade     Browse/download premade libraries
-  register    Register sync account
-  keybindings Show TUI keybindings
-  completions Generate shell completions
-  version     Show version
+```bash
+snp register --server https://sync.example.com
 ```
 
-See [USER_GUIDE.md](USER_GUIDE.md) for the full reference and
-[CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+The sync server's current credential model is API-key based. `snp register`
+creates a new account and API key, so run it once for the collection you want
+to share. Every environment that should see that collection must be configured
+with the same server URL and API key; registering independently creates a
+separate account and separate libraries. Provision the key through your OS
+keychain or a secret manager, and never commit it to a repository or put it in
+shell history. The [multi-environment section of USER_GUIDE.md](USER_GUIDE.md#syncing-one-account-across-environments)
+shows the settings involved.
 
-## Environment Variables
+After the first environment has pushed its libraries, use bidirectional sync on
+each environment so local and remote changes are merged:
 
-| Variable                          | Description                                            | Default     |
-| --------------------------------- | ------------------------------------------------------ | ----------- |
-| `XDG_CONFIG_HOME`                 | Override config root; snp uses `$XDG_CONFIG_HOME/snp`  | platform default |
-| `SNP_COMMAND_TIMEOUT`             | Command execution timeout in seconds (`0` disables; direct terminal runs default to no timeout, output-capture runs default to 300s) | - |
-| `SNP_CLIPBOARD_TIMEOUT`           | Clipboard operation timeout (seconds)                  | `5`         |
-| `SNP_ALLOW_PLAINTEXT_API_KEY`     | Allow API key in config file (not keychain)            | `false`     |
-| `SNP_SYNC_CONNECT_TIMEOUT`        | Sync TCP connect timeout (seconds)                     | `10`        |
-| `SNP_SYNC_REQUEST_TIMEOUT`        | Sync per-request timeout (seconds)                     | `30`        |
-| `SNP_THEME`                       | UI theme (`dark`, `bright`, or Halloy theme name)      | `dark`      |
-| `SNP_LOG`                         | Per-module log filter (e.g., `snp=debug`)              | `snp=info`  |
-| `RUST_LOG`                        | Standard tracing/env-filter fallback when `SNP_LOG` is unset | -     |
-| `EDITOR`                          | Editor for `snp edit` command                          | `vim`       |
+```bash
+snp sync --push-only       # first environment: seed the server
+snp sync --pull-only       # another environment: fetch the existing libraries
+snp sync                    # after setting sync_direction = "Bidirectional"
+```
+
+Sync uses last-write-wins timestamps for shared fields. Keep the SQLite
+database on persistent storage and back it up along with the rest of the server
+data.
+
+## CLI overview
+
+```text
+snp new          Create a snippet
+snp list         List snippets
+snp run          Run a snippet from the TUI
+snp clip         Copy a snippet from the TUI
+snp search       Search and inspect snippets
+snp edit         Edit a snippet library in $EDITOR
+snp library      Create, list, select, or delete libraries
+snp premade      Browse and download premade libraries
+snp register     Register with a snip-sync server
+snp sync         Push, pull, or bidirectionally sync libraries
+snp cron         Print a periodic sync schedule
+snp keybindings  Show TUI keybindings
+snp completions  Generate shell completions
+```
+
+Run `snp <command> --help` for command-specific options.
+
+## Configuration and security
+
+The client configuration root is `$XDG_CONFIG_HOME/snp` when
+`XDG_CONFIG_HOME` is set, otherwise `~/.config/snp`. Important files include:
+
+| Path | Purpose |
+| --- | --- |
+| `snippets.toml` | Legacy single-file library |
+| `libraries.toml` | Library metadata and sync links |
+| `libraries/*.toml` | User libraries |
+| `premade/*.toml` | Downloaded premade libraries |
+| `sync.toml` | Sync server settings and direction |
+| `themes/*.toml` | Halloy-compatible theme files |
+| `themes.toml` | Active theme selection |
+
+API keys are stored in the operating system keychain when available. Set
+`SNP_ALLOW_PLAINTEXT_API_KEY=true` only for a deliberately controlled headless
+environment where keychain storage is unavailable. This stores the key in
+`sync.toml` and should be protected with restrictive file permissions.
+
+Sync payloads use AES-256-GCM with an Argon2id-derived key. CRC32 integrity
+headers on local sync settings detect accidental partial writes but are not an
+anti-tampering mechanism. See [SECURITY.md](SECURITY.md) for the threat model
+and disclosure policy.
+
+Common environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `XDG_CONFIG_HOME` | Change the client configuration root |
+| `SNP_THEME` | Select a legacy or file-based theme |
+| `SNP_COMMAND_TIMEOUT` | Command execution timeout in seconds; `0` disables it |
+| `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds; default `5` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | Permit plaintext API-key storage when keychain storage fails |
+| `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout; default `10` seconds |
+| `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout; default `30` seconds |
+| `SNP_LOG` / `RUST_LOG` | Configure tracing output |
+| `EDITOR` | Editor used by `snp edit` |
 
 ## Documentation
 
-- **[USER_GUIDE.md](https://github.com/eggstack/snip-it/blob/main/USER_GUIDE.md)** — Detailed guide: libraries, sync, variables, premade libraries, troubleshooting.
-- **[CONTRIBUTING.md](https://github.com/eggstack/snip-it/blob/main/CONTRIBUTING.md)** — Development setup, code style, testing, release process.
-- **[SECURITY.md](https://github.com/eggstack/snip-it/blob/main/SECURITY.md)** — Vulnerability disclosure policy and threat model.
-- **[CHANGELOG.md](https://github.com/eggstack/snip-it/blob/main/CHANGELOG.md)** — Release history.
-
-- **[snip-sync/README.md](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)** — Sync server setup, configuration, deployment.
-
-## Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](https://github.com/eggstack/snip-it/blob/main/CONTRIBUTING.md) for
-development setup, code style, and the release process. Bug reports
-and feature requests go through [GitHub Issues](https://github.com/eggstack/snip-it/issues).
+- [USER_GUIDE.md](USER_GUIDE.md) — libraries, pet compatibility, themes, sync,
+  multi-environment provisioning, variables, premade libraries, and recovery.
+- [snip-sync/README.md](snip-sync/README.md) — self-hosting and deploying the
+  optional sync server.
+- [SECURITY.md](SECURITY.md) — threat model and vulnerability disclosure.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development and release workflow.
+- [CHANGELOG.md](CHANGELOG.md) — release history.
 
 ## License
 

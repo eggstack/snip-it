@@ -8,9 +8,9 @@
 //! # Snippet TOML Format
 //!
 //! ```toml
-//! [[Snippets]]
-//! Description = "git commit"
-//! Tag = ["git"]
+//! [[snippets]]
+//! description = "git commit"
+//! tag = ["git"]
 //! command = "git commit -m \"<msg>\""
 //! ```
 
@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 /// Wraps a list of [`Snippet`] items and optional folder structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Snippets {
-    #[serde(rename = "Snippets", default)]
+    // `snippets` is pet's canonical table name. Keep `Snippets` as an alias
+    // so existing snp libraries and premade collections continue to load.
+    #[serde(rename = "snippets", alias = "Snippets", default)]
     pub snippets: Vec<Snippet>,
     #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<String>,
@@ -40,15 +42,17 @@ pub struct Snippets {
 /// `<name>` or `<name=default>` syntax.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Snippet {
-    #[serde(rename = "Id", alias = "ID", default)]
+    #[serde(rename = "id", alias = "Id", alias = "ID", default)]
     pub id: String,
     #[serde(alias = "Description", alias = "name", default)]
     pub description: String,
-    #[serde(rename = "Output", alias = "output", default)]
+    #[serde(rename = "output", alias = "Output", default)]
     pub output: String,
     #[serde(
+        rename = "tag",
         alias = "Tag",
         alias = "Tags",
+        alias = "tags",
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
@@ -366,9 +370,9 @@ impl LibraryManager {
         }
 
         let default_content = r#"# Snippet library
-# Each snippet has: Description, Output, Tag, command, folders, favorite
+# Each snippet has: description, output, tag, command, folders, favorite
 
-Snippets = []
+snippets = []
 
 "#;
 
@@ -544,7 +548,7 @@ Snippets = []
         let path = self.libraries_dir.join(format!("{filename}.toml"));
 
         if !path.exists() {
-            let default_content = "# Imported from server\n\nSnippets = []\n";
+            let default_content = "# Imported from server\n\nsnippets = []\n";
             write_library_file(&path, default_content, &filename)?;
         }
 
@@ -831,17 +835,17 @@ mod tests {
     #[test]
     fn test_pet_format_compatibility() {
         let pet_toml = r#"
-[[Snippets]]
-  Description = "git commit with message"
-  Command = "git commit -m \"message\""
-  Tag = ["git", "version-control"]
-  Output = ""
+[[snippets]]
+  description = "git commit with message"
+  command = "git commit -m \"message\""
+  tag = ["git", "version-control"]
+  output = ""
 
-[[Snippets]]
-  Description = "docker ps"
-  Command = "docker ps"
-  Tag = ["docker"]
-  Output = ""
+[[snippets]]
+  description = "docker ps"
+  command = "docker ps"
+  tag = ["docker"]
+  output = ""
 "#;
         let snippets: Snippets = toml::from_str(pet_toml).unwrap();
         assert_eq!(snippets.snippets.len(), 2);
@@ -852,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn test_snp_format_compatibility() {
+    fn test_legacy_snp_format_compatibility() {
         let snp_toml = r#"
 [[Snippets]]
   Description = "git commit"
@@ -863,6 +867,25 @@ mod tests {
         let snippets: Snippets = toml::from_str(snp_toml).unwrap();
         assert_eq!(snippets.snippets.len(), 1);
         assert_eq!(snippets.snippets[0].command, "git commit -m 'msg'");
+    }
+
+    #[test]
+    fn test_snp_serializes_to_pet_table_name() {
+        let snippets = Snippets {
+            snippets: vec![Snippet {
+                description: "list files".to_string(),
+                command: "ls -la".to_string(),
+                tags: vec!["files".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let toml = toml::to_string(&snippets).unwrap();
+        assert!(toml.contains("[[snippets]]"));
+        assert!(toml.contains("tag = [\"files\"]"));
+        assert!(toml.contains("output = \"\""));
+        assert!(!toml.contains("[[Snippets]]"));
     }
 
     #[test]
@@ -1161,7 +1184,7 @@ Command = "sudo iptables-restore \< /path/to/rules"
         assert!(
             std::fs::read_to_string(&path)
                 .unwrap()
-                .contains("Snippets = []")
+                .contains("snippets = []")
         );
 
         #[cfg(unix)]

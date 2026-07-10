@@ -1,7 +1,7 @@
 //! snp - A fast, terminal-based snippet manager.
 //!
 //! Features include fuzzy search, clipboard support, variable expansion,
-//! TUI interface, and cloud sync with end-to-end encryption.
+//! TUI interface, and optional self-hosted sync with end-to-end encryption.
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -48,7 +48,7 @@ fn setup_signal_handler() {
 #[derive(Debug, Parser)]
 #[command(
     name = "snp",
-    about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and cloud sync",
+    about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and optional self-hosted sync",
     version = env!("CARGO_PKG_VERSION"),
     after_help = "Config: ~/.config/snp/snippets.toml | Docs: https://github.com/eggstack/snip-it"
 )]

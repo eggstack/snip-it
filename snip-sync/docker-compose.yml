@@ -4,8 +4,8 @@ services:
     image: ghcr.io/eggstack/snip-it/snip-sync:latest
     container_name: snip-sync
     ports:
-      - "50051:50051"
-      - "50050:50050"
+      - "127.0.0.1:50051:50051"
+      - "127.0.0.1:50050:50050"
     volumes:
       - snippets-data:/data
     environment:
