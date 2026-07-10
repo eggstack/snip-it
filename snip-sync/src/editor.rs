@@ -57,7 +57,8 @@ pub fn resolve_editor(editor: &str) -> Result<String, String> {
     }
 
     let path_var = std::env::var("PATH").unwrap_or_default();
-    for dir in path_var.split(':') {
+    let path_sep = if cfg!(windows) { ';' } else { ':' };
+    for dir in path_var.split(path_sep) {
         if dir.is_empty() {
             continue;
         }
@@ -114,30 +115,46 @@ mod tests {
 
     #[test]
     fn test_resolve_editor_absolute_exists() {
-        let result = resolve_editor("/bin/sh");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/bin/sh");
+        let editor = if cfg!(windows) {
+            "C:\\Windows\\System32\\cmd.exe"
+        } else {
+            "/bin/sh"
+        };
+        let result = resolve_editor(editor);
+        assert!(result.is_ok(), "failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), editor);
     }
 
     #[test]
     fn test_resolve_editor_absolute_not_exists() {
-        let result = resolve_editor("/nonexistent/editor");
+        let editor = if cfg!(windows) {
+            "C:\\nonexistent\\editor.exe"
+        } else {
+            "/nonexistent/editor"
+        };
+        let result = resolve_editor(editor);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not exist"));
     }
 
     #[test]
     fn test_resolve_editor_absolute_is_dir() {
-        let result = resolve_editor("/usr/bin");
+        let editor = if cfg!(windows) {
+            "C:\\Windows"
+        } else {
+            "/usr/bin"
+        };
+        let result = resolve_editor(editor);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("is not a file"));
     }
 
     #[test]
     fn test_resolve_editor_bare_in_path() {
-        let result = resolve_editor("sh");
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("sh"));
+        let editor = if cfg!(windows) { "cmd.exe" } else { "sh" };
+        let result = resolve_editor(editor);
+        assert!(result.is_ok(), "failed: {:?}", result.err());
+        assert!(result.unwrap().ends_with(editor));
     }
 
     #[test]

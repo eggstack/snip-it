@@ -15,8 +15,6 @@ use snip_it::error::SnipResult;
 use snip_it::logging::{
     init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
 };
-use snip_it::ui;
-
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("Failed to create async runtime: {e}. Ensure no other process is consuming excessive system resources.");
@@ -27,6 +25,8 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 #[cfg(unix)]
 fn setup_signal_handler() {
     use signal_hook::flag;
+
+    use snip_it::ui;
 
     let terminate = ui::get_terminate();
 

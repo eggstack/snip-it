@@ -430,34 +430,32 @@ fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         return Err("Refusing to stop non-snip-sync process".into());
     }
 
-    println!("Sending SIGTERM to process {}...", pid);
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-    }
     #[cfg(not(unix))]
     {
         eprintln!("Stop is only supported on Unix systems.");
         return Err("Unsupported platform".into());
     }
 
-    match snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10)) {
-        Ok(()) => {
-            snip_sync::process::remove_pid();
-            println!("Server stopped.");
-        }
-        Err(e) => {
-            eprintln!("Warning: {}", e);
-            if force {
-                println!("Sending SIGKILL...");
-                #[cfg(unix)]
-                {
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-                }
+    #[cfg(unix)]
+    {
+        println!("Sending SIGTERM to process {}...", pid);
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+
+        match snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10)) {
+            Ok(()) => {
                 snip_sync::process::remove_pid();
-                println!("Server killed.");
-            } else {
-                return Err(e.into());
+                println!("Server stopped.");
+            }
+            Err(e) => {
+                eprintln!("Warning: {}", e);
+                if force {
+                    println!("Sending SIGKILL...");
+                    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                    snip_sync::process::remove_pid();
+                    println!("Server killed.");
+                } else {
+                    return Err(e.into());
+                }
             }
         }
     }
