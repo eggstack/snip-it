@@ -88,6 +88,11 @@ On Windows, extract the zip and move `snp.exe` to a directory on your `PATH`.
 
 Each release also includes a `SHA256SUMS` file for verifying download integrity.
 
+After installing the client, `snp update` checks the appropriate source and
+updates in place: crates.io for Cargo installs, Homebrew for Homebrew installs,
+and the matching GitHub release archive for standalone binaries. Use
+`snp update --dry-run` to check without installing.
+
 ### From source
 
 ```bash
@@ -253,6 +258,7 @@ snp register     Register with a snip-sync server
 snp sync         Push, pull, or bidirectionally sync libraries
 snp cron         Print a periodic sync schedule
 snp keybindings  Show TUI keybindings
+snp update       Check for and install an update
 snp completions  Generate shell completions
 ```
 

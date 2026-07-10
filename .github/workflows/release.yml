@@ -101,14 +101,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: snp-it-*
+          pattern: snip-it-*
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
-          for dir in snp-it-*/; do
+          for dir in snip-it-*/; do
             for file in "$dir"*; do
               if [[ -f "$file" && ! "$file" == *.txt ]]; then
-                sha256sum "$file" >> SHA256SUMS
+                (cd "$dir" && sha256sum "$(basename "$file")") >> SHA256SUMS
               fi
             done
           done
@@ -135,7 +135,7 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/snp-it-*/snp-it-*
+            artifacts/snip-it-*/snip-it-*
             artifacts/checksums/SHA256SUMS
 
   docker:

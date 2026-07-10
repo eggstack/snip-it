@@ -46,6 +46,15 @@ fn test_version_subcommand() {
     );
 }
 
+#[test]
+fn test_update_help() {
+    let output = snp_cmd().args(["update", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("current installation method"));
+    assert!(stdout.contains("--dry-run"));
+}
+
 // --- Keybindings ---
 
 #[test]

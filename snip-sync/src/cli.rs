@@ -42,7 +42,7 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Update snip-sync via cargo install
+    /// Check for and install an update from crates.io when Cargo-managed
     Update {
         #[arg(long)]
         dry_run: bool,
@@ -127,5 +127,17 @@ mod tests {
     fn test_parse_version() {
         let cli = Cli::try_parse_from(["snip-sync", "version"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Version)));
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let cli = Cli::try_parse_from(["snip-sync", "update", "--dry-run", "--locked"]).unwrap();
+        match cli.command {
+            Some(Command::Update { dry_run, locked }) => {
+                assert!(dry_run);
+                assert!(locked);
+            }
+            _ => panic!("Expected Update command"),
+        }
     }
 }

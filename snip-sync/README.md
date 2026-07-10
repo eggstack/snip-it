@@ -209,7 +209,8 @@ snip-sync init --force-cert   # regenerate the dev cert assets
 snip-sync edit                # open the active config in $EDITOR (defaults to vim)
 snip-sync stop                # stop the PID recorded by snip-sync
 snip-sync restart             # stop and run in the foreground
-snip-sync update              # cargo install snip-sync
+snip-sync update              # check crates.io and update Cargo installs
+snip-sync update --dry-run    # check without installing
 snip-sync paths --json        # machine-readable path output
 snip-sync completions bash    # generate shell completions
 ```
@@ -217,6 +218,10 @@ snip-sync completions bash    # generate shell completions
 `snip-sync cert` uses the system `openssl` command. It refuses to overwrite
 existing assets unless `--force` is supplied and preserves existing assets if
 certificate generation fails.
+
+`snip-sync update` is automatic for Cargo-managed installations. Homebrew,
+Docker, and source-built binaries should be updated through the tool that
+installed or built them.
 
 ## Source build and Docker
 

@@ -15,6 +15,9 @@ use snip_it::error::SnipResult;
 use snip_it::logging::{
     init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
 };
+
+mod update;
+
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("Failed to create async runtime: {e}. Ensure no other process is consuming excessive system resources.");
@@ -62,6 +65,13 @@ enum Commands {
     /// Show version (v)
     #[command(alias = "v")]
     Version,
+    /// Check for and install an update using the current installation method
+    Update {
+        #[arg(long, help = "Check for an update without installing it")]
+        dry_run: bool,
+        #[arg(long, help = "Use Cargo's locked dependency versions")]
+        locked: bool,
+    },
     /// Create a new snippet (n)
     #[command(alias = "n")]
     New {
@@ -232,6 +242,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
         }
         Some(Commands::Version) => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
+        }
+        Some(Commands::Update { dry_run, locked }) => {
+            update::run(dry_run, locked).map_err(|error| {
+                snip_it::error::SnipError::runtime_error("update failed", Some(&error))
+            })?;
         }
         Some(Commands::New {
             command,

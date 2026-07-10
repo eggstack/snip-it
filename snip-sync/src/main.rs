@@ -6,6 +6,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+mod update;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -21,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Edit) => cmd_edit()?,
         Some(Command::Stop { force }) => cmd_stop(force)?,
         Some(Command::Restart { force }) => cmd_restart(force)?,
-        Some(Command::Update { dry_run, locked }) => cmd_update(dry_run, locked)?,
+        Some(Command::Update { dry_run, locked }) => update::run(dry_run, locked)?,
         Some(Command::Croncheck { verbose }) => cmd_croncheck(verbose)?,
         Some(Command::Paths { json }) => cmd_paths(json)?,
         Some(Command::Completions { shell }) => cmd_completions(shell),
@@ -475,48 +477,6 @@ fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("Starting server...");
     serve()
-}
-
-fn cmd_update(dry_run: bool, locked: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // Check that cargo is available on PATH
-    let cargo_status = std::process::Command::new("cargo")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match cargo_status {
-        Ok(s) if s.success() => {}
-        _ => {
-            return Err(
-                "cargo is not available on PATH. Install Rust via https://rustup.rs first.".into(),
-            );
-        }
-    }
-
-    let mut args = vec!["install", "snip-sync"];
-    if dry_run {
-        args.push("--dry-run");
-    }
-    if locked {
-        args.push("--locked");
-    }
-
-    println!("Running: cargo {}", args.join(" "));
-    if dry_run {
-        println!("(dry run — no changes will be made)");
-    }
-
-    let status = std::process::Command::new("cargo")
-        .args(&args)
-        .status()
-        .map_err(|e| format!("Failed to run cargo: {}", e))?;
-
-    if status.success() {
-        println!("Update complete.");
-    } else {
-        return Err(format!("cargo install failed with status: {}", status).into());
-    }
-    Ok(())
 }
 
 fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr, Box<dyn std::error::Error>> {
