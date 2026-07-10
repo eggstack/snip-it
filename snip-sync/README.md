@@ -1,100 +1,76 @@
-# snip-sync Server
+# snip-sync server
 
-A gRPC server for syncing snippets between clients.
+`snip-sync` is the self-hostable gRPC server used by the `snp` client. Snippet
+contents are encrypted by the client before upload; the server stores the
+ciphertext and the metadata needed to synchronize it.
 
-> **For production, terminate TLS at a reverse proxy** (nginx, Caddy,
-> traefik) with a real certificate (Let's Encrypt, etc.). The server
-> itself speaks plain gRPC; TLS is delegated to the proxy.
+`snip-sync` deliberately does not terminate TLS. It serves plaintext gRPC and
+HTTP, normally on loopback, and should sit behind a TLS-terminating reverse
+proxy for a remote deployment. `TLS_ENABLED=true` only acknowledges that an
+upstream proxy is providing TLS; it does not turn on TLS inside `snip-sync`.
 
-## Quick Install
+## Local quickstart
+
+This is the shortest path for trying the client and server on one machine.
 
 ```bash
-cargo install snip-sync
-snip-sync init
-snip-sync edit
+# Install both binaries (skip either command if already installed).
+cargo install snip-it snip-sync
+
+# Create the platform-specific config, database, state, and data directories.
+# Certificates are not needed for direct loopback development.
+snip-sync init --skip-cert
+
+# Keep this in a terminal while using the client.
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 ```
 
-## First-Run Setup
-
-`snip-sync init` creates:
-- Config file at `~/.config/snip-sync/config.toml`
-- Dev certificates at `~/.config/snip-sync/certs/`
-- Required directories (data, state, premade)
+In another terminal, register the client and sync:
 
 ```bash
-snip-sync init              # create config + certs
-snip-sync init --skip-cert  # skip cert generation
-snip-sync init --force-cert # regenerate certs
+snp register --server http://127.0.0.1:50051
+snp sync
 ```
 
-## Configuration
+Registration creates the account, stores the server URL and device ID in the
+client config, and stores the API key in the OS keychain when available. Run
+`snp register --force` only when you intentionally want a new device key.
 
-Default config path: `~/.config/snip-sync/config.toml`
-Override: `CONFIG_PATH=/path/to/config.toml`
-
-Edit with: `snip-sync edit`
-
-### Config File
-
-```toml
-[server]
-grpc_host = "127.0.0.1"
-grpc_port = 50051
-http_host = "127.0.0.1"
-http_port = 50050
-
-[server.database]
-# path = "snippets.db"  # defaults to ~/.config/snip-sync/snippets.db
-
-[server.premade]
-directory = "premade-libraries"
-
-[server.limits]
-max_command_length = 1024
-max_description_length = 1024
-max_tags = 50
-max_tag_length = 100
-request_timeout_secs = 30
-
-[server.rate_limit]
-requests_per_minute = 120
-
-[server.metrics]
-# username = "admin"
-# password = "metrics"
-
-[server.cors]
-allowed_origins = ""
-```
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `GRPC_HOST` / `GRPC_PORT` | gRPC server bind |
-| `HTTP_HOST` / `HTTP_PORT` | HTTP server bind |
-| `DATABASE_URL` | Database path |
-| `PREMADE_DIR` | Premade libraries dir |
-| `CONFIG_PATH` | Config file path |
-| `TLS_ENABLED` | Set `true` when TLS is handled by reverse proxy |
-| `SNIP_SYNC_ALLOW_HTTP` | Set `true` for local plaintext dev |
-| `METRICS_USERNAME` / `METRICS_PASSWORD` | Metrics auth |
-
-## Dev Certificates
+The server config location is platform-specific. Run this to see the exact
+paths in use:
 
 ```bash
-snip-sync cert              # generate in ~/.config/snip-sync/certs/
-snip-sync cert --out-dir ./certs  # custom location
-snip-sync cert --force      # overwrite existing
+snip-sync paths
+snip-sync edit
 ```
 
-Generated certs are self-signed (CN=localhost, SANs=localhost+127.0.0.1).
-Use them with a reverse proxy, NOT directly with snip-sync.
+The server defaults to gRPC `127.0.0.1:50051`, HTTP health/metrics
+`127.0.0.1:50050`, and a SQLite database under the platform data/config area.
+The initialized premade directory is also shown by `snip-sync paths`.
 
-## Service Management
+To generate local certificate assets for a reverse-proxy experiment:
 
-### systemd (recommended)
+```bash
+snip-sync cert
+```
+
+This writes `cert.pem` and `key.pem` under the reported certificate directory.
+They are self-signed development assets for a proxy, not production
+certificates, and are not read directly by `snip-sync`.
+
+## Production deployment
+
+Use a real certificate from a trusted CA at the reverse proxy and forward gRPC
+over cleartext HTTP/2 (`h2c`) to the loopback server. For example, Caddy can
+use:
+
+```text
+sync.example.com {
+    reverse_proxy h2c://127.0.0.1:50051
+}
+```
+
+Keep the server bound to loopback in `snip-sync` and run it under a supervisor:
 
 ```ini
 # /etc/systemd/system/snip-sync.service
@@ -112,55 +88,144 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
+`TLS_ENABLED=true` is appropriate here because the proxy terminates TLS. The
+server process itself remains plaintext and should not be exposed directly to
+the public network.
+
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable snip-sync
-sudo systemctl start snip-sync
+sudo systemctl enable --now snip-sync
 ```
 
-### cron (lightweight fallback)
-
-```
-@reboot /home/user/.cargo/bin/snip-sync croncheck
-*/5 * * * * /home/user/.cargo/bin/snip-sync croncheck
-```
-
-`croncheck` health-checks the server; if down, spawns a detached `snip-sync serve`.
-Use systemd for production — croncheck is a lightweight fallback.
-
-## Paths
+Register the client using the proxy's HTTPS URL, not the backend port:
 
 ```bash
-snip-sync paths           # human-readable
-snip-sync paths --json    # machine-readable
+snp register --server https://sync.example.com
+snp sync
 ```
 
-## Updating
+The client uses the operating system's trusted certificate roots for HTTPS, so
+use a publicly trusted certificate for a remote deployment. A self-signed
+certificate generated by `snip-sync cert` is intended for local proxy testing.
+
+## Configuration
+
+The default config path is the platform config directory shown by
+`snip-sync paths`. Set `CONFIG_PATH` to use a specific file:
 
 ```bash
+CONFIG_PATH=/etc/snip-sync/config.toml snip-sync serve
+```
+
+Configuration priority is environment variables, then the TOML file, then
+compiled defaults. The generated file contains the common settings:
+
+```toml
+[server]
+grpc_host = "127.0.0.1"
+grpc_port = 50051
+http_host = "127.0.0.1"
+http_port = 50050
+
+[server.database]
+# path = "/var/lib/snip-sync/snippets.db"
+
+[server.premade]
+# directory = "/var/lib/snip-sync/premade-libraries"
+
+[server.limits]
+max_command_length = 1024
+max_description_length = 1024
+max_tags = 50
+max_tag_length = 100
+request_timeout_secs = 30
+
+[server.rate_limit]
+requests_per_minute = 120
+
+[server.metrics]
+# username = "metrics"
+# password = "change-me"
+
+[server.cors]
+allowed_origins = ""
+```
+
+Important environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `GRPC_HOST` / `GRPC_PORT` | gRPC bind address |
+| `HTTP_HOST` / `HTTP_PORT` | Health and metrics bind address |
+| `DATABASE_URL` | SQLite file path (not a remote database URL) |
+| `PREMADE_DIR` | Premade library directory |
+| `CONFIG_PATH` | Config file override |
+| `SNIP_SYNC_ALLOW_HTTP=true` | Explicit local plaintext mode |
+| `TLS_ENABLED=true` | Acknowledge TLS termination by a reverse proxy |
+| `METRICS_USERNAME` / `METRICS_PASSWORD` | Enable authenticated `/metrics` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins |
+| `CORS_ALLOW_ALL=true` | Allow all CORS origins (development only) |
+
+`/health` is unauthenticated and returns HTTP 200 only when the database is
+reachable. `/metrics` is disabled unless both metrics credentials are set.
+
+## Supervision fallback
+
+`croncheck` is a lightweight fallback for hosts without systemd. It checks the
+actual `/health` response and starts one detached server when needed. Include
+the plaintext flag for a local deployment:
+
+```cron
+@reboot SNIP_SYNC_ALLOW_HTTP=true /home/user/.cargo/bin/snip-sync croncheck
+*/5 * * * * SNIP_SYNC_ALLOW_HTTP=true /home/user/.cargo/bin/snip-sync croncheck
+```
+
+Use systemd or another real supervisor for production. `croncheck` is not a
+replacement for service logging, restart policies, or privilege management.
+
+## Other commands
+
+```bash
+snip-sync init                 # create config/layout and dev certs
+snip-sync init --skip-cert    # create config/layout without OpenSSL
+snip-sync init --force-cert   # regenerate the dev cert assets
+snip-sync edit                # open the active config in $EDITOR (defaults to vim)
+snip-sync stop                # stop the PID recorded by snip-sync
+snip-sync restart             # stop and run in the foreground
 snip-sync update              # cargo install snip-sync
-snip-sync update --dry-run    # preview
-snip-sync update --locked     # with lockfile
+snip-sync paths --json        # machine-readable path output
+snip-sync completions bash    # generate shell completions
 ```
 
-## Source Build (contributors)
+`snip-sync cert` uses the system `openssl` command. It refuses to overwrite
+existing assets unless `--force` is supplied and preserves existing assets if
+certificate generation fails.
+
+## Source build and Docker
+
+For contributors building from the repository:
 
 ```bash
 git clone https://github.com/eggstack/snip-it.git
-cd snip-sync
+cd snip-it/snip-sync
 cargo build --release
 ./target/release/snip-sync --help
 ```
 
-## Docker
+For a container image:
 
 ```bash
 docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
 ```
 
+The container example exposes plaintext gRPC and should likewise be placed
+behind a TLS proxy before being exposed publicly.
+
 ## Troubleshooting
 
-- **Config not found**: Run `snip-sync init` first
-- **TLS required**: Set `SNIP_SYNC_ALLOW_HTTP=true` for local dev
-- **Port in use**: Check `snip-sync paths` for configured ports
-- **Server won't stop**: Use `snip-sync stop --force` or `kill -9 <pid>`
+- **`TLS termination is required`**: use `SNIP_SYNC_ALLOW_HTTP=true` only for a local direct connection, or put a TLS proxy in front and set `TLS_ENABLED=true`.
+- **Client registration fails**: use `http://127.0.0.1:50051` for direct local serving and the proxy's `https://` URL for production.
+- **API key cannot be saved**: configure an OS keychain. On a deliberately headless machine, `SNP_ALLOW_PLAINTEXT_API_KEY=true snp register ...` opts into plaintext storage and should be protected with strict file permissions.
+- **Port in use**: run `snip-sync paths` and inspect the configured gRPC/HTTP ports.
+- **Health check fails**: request `curl http://127.0.0.1:50050/health` and inspect the server logs.
+- **Server will not stop**: use `snip-sync stop --force` only after confirming the PID with `snip-sync paths` and the process list.

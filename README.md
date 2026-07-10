@@ -139,10 +139,11 @@ server (also in this repo). See [snip-sync/README.md](https://github.com/eggstac
 for detailed setup.
 
 ```bash
-# Install the sync server
-cargo install snip-sync
-snip-sync init
-snip-sync edit
+# Install the client and sync server
+cargo install snip-it snip-sync
+
+# Local direct mode: no certificate or reverse proxy required
+snip-sync init --skip-cert
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 
 # Register your client against the server
@@ -158,6 +159,12 @@ snp sync --pull-only
 # Set up a 15-minute sync cron job
 snp cron
 ```
+
+For a remote deployment, put `snip-sync` behind a TLS-terminating reverse
+proxy and register with its HTTPS URL, for example
+`snp register --server https://sync.example.com`. See the
+[server quickstart](https://github.com/eggstack/snip-it/blob/main/snip-sync/README.md)
+for the proxy and service configuration.
 
 ## CLI Overview
 

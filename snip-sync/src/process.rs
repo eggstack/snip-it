@@ -1,5 +1,7 @@
 use crate::paths;
 use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub fn write_pid() -> Result<(), String> {
@@ -8,8 +10,20 @@ pub fn write_pid() -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create pid dir: {}", e))?;
     }
-    fs::write(&path, pid.to_string())
-        .map_err(|e| format!("Failed to write PID file {}: {}", path.display(), e))
+    let result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(pid.to_string().as_bytes()));
+    if let Err(e) = result {
+        let _ = fs::remove_file(&path);
+        return Err(format!(
+            "Failed to write PID file {}: {}",
+            path.display(),
+            e
+        ));
+    }
+    Ok(())
 }
 
 pub fn remove_pid() {
@@ -68,6 +82,78 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), String> {
             ));
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Try to acquire an advisory lock for a short-lived maintenance command.
+///
+/// Unix callers use `flock`, so the lock file can safely remain on disk and
+/// stale processes do not leave a permanently blocked lock. On other
+/// platforms, an exclusive create is used as a best-effort fallback.
+pub struct LockGuard {
+    #[allow(dead_code)]
+    file: fs::File,
+    path: PathBuf,
+    remove_on_drop: bool,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub fn try_lock(path: &Path) -> Result<Option<LockGuard>, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create lock directory: {}", e))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|e| format!("Failed to open lock file {}: {}", path.display(), e))?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(Some(LockGuard {
+                file,
+                path: path.to_path_buf(),
+                remove_on_drop: false,
+            }));
+        }
+        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        Err(format!(
+            "Failed to lock {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ))
+    }
+
+    #[cfg(not(unix))]
+    {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(file) => Ok(Some(LockGuard {
+                file,
+                path: path.to_path_buf(),
+                remove_on_drop: true,
+            })),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(e) => Err(format!("Failed to lock {}: {}", path.display(), e)),
+        }
     }
 }
 

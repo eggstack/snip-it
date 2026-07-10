@@ -1,5 +1,6 @@
 use crate::paths;
 use std::fs;
+use std::io::Write;
 
 pub fn ensure_layout() -> Result<(), String> {
     let dirs = [
@@ -18,19 +19,51 @@ pub fn ensure_layout() -> Result<(), String> {
     Ok(())
 }
 
-pub fn ensure_config_file() {
+pub fn ensure_config_file() -> Result<(), String> {
     let config_path = paths::config_path();
-    if !config_path.exists() {
-        let default_config = include_str!("../config.toml");
-        if let Some(parent) = config_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Err(e) = fs::write(&config_path, default_config) {
-            tracing::warn!("Failed to create default config file: {}", e);
-        } else {
+    if config_path.exists() {
+        return Ok(());
+    }
+
+    let default_config = include_str!("../config.toml");
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create config directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+
+    // Do not overwrite a file created concurrently by another invocation.
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&config_path)
+    {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(default_config.as_bytes()) {
+                let _ = fs::remove_file(&config_path);
+                return Err(format!(
+                    "Failed to write config file {}: {}",
+                    config_path.display(),
+                    e
+                ));
+            }
             tracing::info!("Created default config file at {}", config_path.display());
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            return Err(format!(
+                "Failed to create config file {}: {}",
+                config_path.display(),
+                e
+            ));
+        }
     }
+
+    Ok(())
 }
 
 pub fn ensure_certs(force: bool) -> Result<(), String> {

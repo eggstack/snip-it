@@ -35,9 +35,9 @@ grpc_max_message_size = 4194304   # 4 MiB
 [server.rate_limit]
 # Per-API-key request limit.
 requests_per_minute = 120
-# If your snip-sync is behind nginx/Caddy, list the trusted proxy IPs/CIDRs
-# here so X-Forwarded-For is honored correctly.
-# trusted_proxies = ["127.0.0.1/32"]
+# If your snip-sync is behind nginx/Caddy, list the exact proxy peer IPs here
+# so X-Forwarded-For is honored correctly.
+# trusted_proxies = ["127.0.0.1"]
 # Persist rate-limit counters in the SQLite database (survives restart).
 # persist = false
 
@@ -49,5 +49,6 @@ requests_per_minute = 120
 
 [server.cors]
 # Comma-separated list of allowed CORS origins.
-# Empty = disabled (default), "*" = allow all, otherwise list exact origins.
+# Empty = disabled (default); otherwise list exact origins. For permissive
+# development CORS, use CORS_ALLOW_ALL=true in the environment.
 allowed_origins = ""

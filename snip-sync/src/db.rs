@@ -5,7 +5,9 @@ use argon2::{
 use base64::Engine;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::path::Path;
+use std::str::FromStr;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -110,9 +112,35 @@ type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 
 impl Database {
     pub async fn connect(url: &str, max_connections: u32) -> DbResult<Self> {
+        // The public configuration uses a SQLite file path for convenience,
+        // while tests and advanced deployments may provide a full sqlite URL.
+        // Sqlx's generic `Pool::connect` leaves file creation disabled, which
+        // makes a fresh `snip-sync init` fail on its first start. Normalize
+        // both forms and explicitly create the file when needed.
+        let options = if url.starts_with("sqlite:") {
+            SqliteConnectOptions::from_str(url)?
+        } else {
+            SqliteConnectOptions::new().filename(url)
+        }
+        .create_if_missing(true);
+
+        let filename = options.get_filename();
+        if filename != Path::new(":memory:")
+            && let Some(parent) = filename.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                DbError::Internal(format!(
+                    "Failed to create database directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
-            .connect(url)
+            .connect_with(options)
             .await?;
 
         sqlx::query("PRAGMA journal_mode=WAL")
@@ -650,6 +678,16 @@ mod tests {
 
     async fn setup_db() -> Database {
         Database::connect("sqlite::memory:", 5).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_file_database_is_created_from_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested").join("snippets.db");
+
+        let _db = Database::connect(path.to_str().unwrap(), 1).await.unwrap();
+
+        assert!(path.exists());
     }
 
     #[tokio::test]

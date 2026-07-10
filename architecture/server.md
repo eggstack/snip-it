@@ -162,7 +162,8 @@ http_port = 50050
 path = "snippets.db"
 
 [server.premade]
-directory = "premade-libraries"
+# Omit to use the platform data directory shown by `snip-sync paths`.
+# directory = "/var/lib/snip-sync/premade-libraries"
 
 [server.limits]
 max_command_length = 1024

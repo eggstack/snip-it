@@ -101,24 +101,29 @@ Sync snippets across multiple devices using a snip-sync server.
 #### 1. Run a Sync Server
 
 ```bash
-# Using the included snip-sync server
-cd snip-sync
-cargo build --release
-./target/release/snip-sync
+# Install the published server, or use a binary built from the repository.
+cargo install snip-sync
+
+# Local direct mode. Keep this process running in a terminal.
+snip-sync init --skip-cert
+SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 ```
 
 #### 2. Register Your Client
 
 ```bash
-# Register with default local server
-snp register
+# Register with the local direct server
+snp register --server http://127.0.0.1:50051
 
 # Register with custom server
-snp register --server https://sync.example.com:50051
+snp register --server https://sync.example.com
 ```
 
 This creates an API key and stores it in the OS keychain when available.
 `sync.toml` stores the `@keychain` marker instead of the key itself.
+
+For a remote server, terminate TLS at a reverse proxy and register the proxy
+URL instead, such as `snp register --server https://sync.example.com`.
 
 #### 3. Sync Your Snippets
 

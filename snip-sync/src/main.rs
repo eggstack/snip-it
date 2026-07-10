@@ -2,6 +2,9 @@
 
 use clap::Parser;
 use snip_sync::cli::{Cli, Command};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -37,25 +40,30 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Starting snip-sync server v{}", env!("CARGO_PKG_VERSION"));
 
-    if !tls_enabled {
+    if tls_enabled {
+        tracing::warn!(
+            "TLS_ENABLED acknowledges TLS termination by an upstream reverse proxy; snip-sync itself still serves plaintext gRPC and HTTP."
+        );
+    } else {
         if std::env::var_os("SNIP_SYNC_ALLOW_HTTP").is_some_and(|v| v == "true") {
             tracing::warn!(
-                "TLS is not enabled. For production, use a reverse proxy with TLS (nginx, traefik, etc.) \
-                 (explicitly allowed via SNIP_SYNC_ALLOW_HTTP=true)"
+                "Serving plaintext gRPC and HTTP for local development. For production, put a \
+                 TLS-terminating reverse proxy in front of snip-sync."
             );
         } else {
             tracing::error!(
-                "TLS is not enabled. For production, set TLS_ENABLED=true or use a reverse proxy with TLS. \
-                 Set SNIP_SYNC_ALLOW_HTTP=true to allow plaintext HTTP."
+                "snip-sync does not terminate TLS. Put a TLS-terminating reverse proxy in front \
+                 of it and set TLS_ENABLED=true, or set SNIP_SYNC_ALLOW_HTTP=true for local development."
             );
             return Err(
-                "TLS is required for production. Set TLS_ENABLED=true or SNIP_SYNC_ALLOW_HTTP=true"
+                "TLS termination is required for production. Set TLS_ENABLED=true when a reverse proxy terminates TLS, or set SNIP_SYNC_ALLOW_HTTP=true for local development"
                     .into(),
             );
         }
     }
 
-    snip_sync::bootstrap::ensure_config_file();
+    snip_sync::bootstrap::ensure_layout()?;
+    snip_sync::bootstrap::ensure_config_file()?;
     let config = snip_sync::Config::load();
 
     // Check for stale PID file before starting
@@ -88,7 +96,6 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     use base64::Engine;
     use snip_proto::snippet_sync_server::SnippetSyncServer;
     use snip_sync::{AppState, Database, Metrics, PremadeManager, RateLimiter, SnipSyncService};
-    use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
     use tower_http::cors::{Any, CorsLayer};
@@ -108,8 +115,14 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         }
     }
 
-    let grpc_addr = format!("{}:{}", config.grpc_host, config.grpc_port).parse::<SocketAddr>()?;
-    let http_addr = format!("{}:{}", config.http_host, config.http_port).parse::<SocketAddr>()?;
+    let grpc_addr = resolve_socket_addr(&config.grpc_host, config.grpc_port)?;
+    let http_addr = resolve_socket_addr(&config.http_host, config.http_port)?;
+
+    // Bind both listeners before spawning either service. This makes port and
+    // address errors fail the command immediately instead of leaving a
+    // half-started server running with a misleading successful exit.
+    let grpc_listener = tokio::net::TcpListener::bind(grpc_addr).await?;
+    let http_listener = tokio::net::TcpListener::bind(http_addr).await?;
 
     tracing::info!("gRPC server listening on {}", grpc_addr);
     tracing::info!("HTTP server listening on {}", http_addr);
@@ -315,11 +328,12 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         .with_state(state);
 
     let grpc_handle = tokio::spawn(async move {
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(grpc_listener);
         let server = tonic::transport::Server::builder()
             .timeout(timeout)
             .max_frame_size(grpc_max_message_size)
             .add_service(SnippetSyncServer::new(grpc_service))
-            .serve(grpc_addr);
+            .serve_with_incoming(incoming);
 
         tracing::info!(
             "gRPC server listening on http://{} (timeout: {}s)",
@@ -340,16 +354,9 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     });
 
     let http_handle = tokio::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(http_addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::error!(addr = %http_addr, error = %e, "Failed to bind HTTP listener");
-                return;
-            }
-        };
         tracing::info!("HTTP server listening on http://{}", http_addr);
 
-        if let Err(e) = axum::serve(listener, app)
+        if let Err(e) = axum::serve(http_listener, app)
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
                 tracing::info!("Shutdown signal received, stopping HTTP server...");
@@ -386,7 +393,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
 
 fn cmd_init(force_cert: bool, skip_cert: bool) -> Result<(), Box<dyn std::error::Error>> {
     snip_sync::bootstrap::ensure_layout()?;
-    snip_sync::bootstrap::ensure_config_file();
+    snip_sync::bootstrap::ensure_config_file()?;
     if !skip_cert {
         snip_sync::cert::generate_dev_certs(force_cert, None)?;
     }
@@ -395,15 +402,9 @@ fn cmd_init(force_cert: bool, skip_cert: bool) -> Result<(), Box<dyn std::error:
 }
 
 fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
+    snip_sync::bootstrap::ensure_layout()?;
+    snip_sync::bootstrap::ensure_config_file()?;
     let config_path = snip_sync::paths::config_path();
-    if !config_path.exists() {
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let default = include_str!("../config.toml");
-        std::fs::write(&config_path, default)?;
-        println!("Created config file at {}", config_path.display());
-    }
     snip_sync::editor::open_in_editor(&config_path)?;
     Ok(())
 }
@@ -520,31 +521,59 @@ fn cmd_update(dry_run: bool, locked: bool) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-fn check_health(http_host: &str, http_port: u16) -> bool {
-    use std::net::TcpStream;
-    use std::time::Duration;
-    let addr = format!("{}:{}", http_host, http_port);
-    match addr.parse() {
-        Ok(socket_addr) => TcpStream::connect_timeout(&socket_addr, Duration::from_secs(2)).is_ok(),
-        Err(_) => false,
-    }
+fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+    let host = host.trim();
+    let address = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    address
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| format!("Could not resolve {address}").into())
 }
 
-fn acquire_croncheck_lock() -> Option<std::fs::File> {
-    let lock_path = snip_sync::paths::state_dir().join("croncheck.lock");
-    if let Some(parent) = lock_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+fn check_health(http_host: &str, http_port: u16) -> bool {
+    let address = match resolve_socket_addr(http_host, http_port) {
+        Ok(address) => address,
+        Err(_) => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!("GET /health HTTP/1.1\r\nHost: {http_host}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
     }
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .ok()
+    let mut response = [0u8; 4096];
+    let bytes_read = match stream.read(&mut response) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    if bytes_read == 0 {
+        return false;
+    }
+    let response = String::from_utf8_lossy(&response[..bytes_read]);
+    response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
 }
 
 fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let _lock = acquire_croncheck_lock();
+    snip_sync::bootstrap::ensure_layout()?;
+    snip_sync::bootstrap::ensure_config_file()?;
+    let lock_path = snip_sync::paths::state_dir().join("croncheck.lock");
+    let _lock = match snip_sync::process::try_lock(&lock_path)? {
+        Some(lock) => lock,
+        None => {
+            if verbose {
+                println!("Another croncheck is already running; skipping this check.");
+            }
+            return Ok(());
+        }
+    };
 
     let config = snip_sync::Config::load();
 
@@ -580,22 +609,21 @@ fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!("Spawned server process (PID {}).", child.id());
     }
 
-    // Wait briefly for the server to come up
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
-    if check_health(&config.http_host, config.http_port) {
-        if verbose {
-            println!("Server started successfully.");
+    // Wait briefly for the server to come up. A failed health check is an
+    // error: cron callers must be able to alert instead of receiving a false
+    // success when `serve` exits during startup.
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if check_health(&config.http_host, config.http_port) {
+            if verbose {
+                println!("Server started successfully.");
+            }
+            println!("ok");
+            return Ok(());
         }
-        println!("ok");
-    } else {
-        if verbose {
-            println!("Warning: Server started but health check still failing after 3s.");
-        }
-        println!("ok");
     }
 
-    Ok(())
+    Err("Server did not become healthy within 5 seconds; inspect the service logs".into())
 }
 
 fn cmd_paths(json: bool) -> Result<(), Box<dyn std::error::Error>> {

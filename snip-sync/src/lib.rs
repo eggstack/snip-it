@@ -231,15 +231,7 @@ impl Config {
             db_path: std::env::var("DATABASE_URL")
                 .ok()
                 .or_else(|| server.database.as_ref().and_then(|d| d.path.clone()))
-                .unwrap_or_else(|| {
-                    dirs::home_dir()
-                        .unwrap_or_else(|| PathBuf::from("."))
-                        .join(".config")
-                        .join("snip-sync")
-                        .join("snippets.db")
-                        .to_string_lossy()
-                        .into_owned()
-                }),
+                .unwrap_or_else(|| paths::default_db_path().to_string_lossy().into_owned()),
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -255,7 +247,7 @@ impl Config {
                         .and_then(|p| p.directory.clone())
                         .map(PathBuf::from)
                 })
-                .unwrap_or_else(|| PathBuf::from("premade-libraries")),
+                .unwrap_or_else(paths::default_premade_dir),
             max_command_length: std::env::var("MAX_COMMAND_LENGTH")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -336,13 +328,21 @@ impl Config {
             cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS")
                 .ok()
                 .or_else(|| server.cors.as_ref().and_then(|c| c.allowed_origins.clone()))
-                .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|origin| !origin.is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
 
     pub fn ensure_config_file() {
-        bootstrap::ensure_config_file();
+        if let Err(e) = bootstrap::ensure_config_file() {
+            tracing::warn!("{}", e);
+        }
     }
 }
 

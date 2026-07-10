@@ -33,6 +33,5 @@ echo "Wrote:"
 echo "  cert: $cert_path"
 echo "  key:  $key_path (mode 600)"
 echo
-echo "Configure snip-sync with:"
-echo "  TLS_CERT=$cert_path"
-echo "  TLS_KEY=$key_path"
+echo "These are reverse-proxy development assets."
+echo "snip-sync does not read TLS_CERT/TLS_KEY and does not terminate TLS itself."
