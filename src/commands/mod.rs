@@ -256,11 +256,11 @@ where
             return Ok(());
         }
     };
-    let snippets = crate::library::load_library(&lib_path)?;
-    let (snippet_data, original_indices) = get_snippet_data(&snippets);
+    let mut snippets = crate::library::load_library(&lib_path)?;
 
     let mut selected_and_processed = false;
     loop {
+        let (snippet_data, original_indices) = get_snippet_data(&snippets);
         let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
             descriptions: &snippet_data.descriptions,
             commands: &snippet_data.commands,
@@ -272,16 +272,37 @@ where
             snippets: &snippets.snippets,
             original_indices: &original_indices,
         })?;
-        if let Some((idx, copy_flag)) = result {
-            let snippet = &snippets.snippets[original_indices[idx]];
-            match process_fn(snippet, copy_flag)? {
-                crate::ProcessResult::Cancel => {
-                    return Ok(());
+        if let Some(result) = result {
+            match result {
+                crate::ui::SnippetSelection::Delete(idx) => {
+                    let original_idx = *original_indices.get(idx).ok_or_else(|| {
+                        SnipError::runtime_error(
+                            "Snippet not found",
+                            Some("The selected snippet is no longer available"),
+                        )
+                    })?;
+                    let deleted_snippet = mark_snippet_deleted(&mut snippets, original_idx)?;
+                    crate::library::save_library(&lib_path, &snippets)?;
+                    if let Err(e) = crate::logging::audit_log("delete", &deleted_snippet, None) {
+                        tracing::debug!("Audit log write failed: {}", e);
+                    }
+                    if do_sync && let Err(e) = crate::sync_commands::run_default_sync(runtime) {
+                        tracing::warn!(error = %e, "Background sync after delete failed");
+                    }
+                    continue;
                 }
-                crate::ProcessResult::Continue => continue,
-                crate::ProcessResult::Done(_msg) => {
-                    selected_and_processed = true;
-                    break;
+                crate::ui::SnippetSelection::Selected(idx, copy_flag) => {
+                    let snippet = &snippets.snippets[original_indices[idx]];
+                    match process_fn(snippet, copy_flag)? {
+                        crate::ProcessResult::Cancel => {
+                            return Ok(());
+                        }
+                        crate::ProcessResult::Continue => continue,
+                        crate::ProcessResult::Done(_msg) => {
+                            selected_and_processed = true;
+                            break;
+                        }
+                    }
                 }
             }
         } else {
@@ -295,6 +316,24 @@ where
         tracing::warn!(error = %e, "Background sync failed");
     }
     Ok(())
+}
+
+/// Marks a selected snippet as deleted while preserving its tombstone for sync.
+fn mark_snippet_deleted(
+    snippets: &mut crate::library::Snippets,
+    original_idx: usize,
+) -> SnipResult<crate::library::Snippet> {
+    let snippet = snippets.snippets.get_mut(original_idx).ok_or_else(|| {
+        SnipError::runtime_error(
+            "Snippet not found",
+            Some("The selected snippet is no longer available"),
+        )
+    })?;
+
+    snippet.deleted = true;
+    let now = chrono::Utc::now().timestamp();
+    snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
+    Ok(snippet.clone())
 }
 
 #[cfg(test)]
@@ -379,5 +418,26 @@ command = "echo hello"
         assert_eq!(data.descriptions[0], "active");
         assert_eq!(data.descriptions[1], "also active");
         assert_eq!(indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_mark_snippet_deleted_preserves_tombstone_for_sync() {
+        let mut snippets = crate::library::Snippets {
+            snippets: vec![crate::library::Snippet {
+                id: "1".to_string(),
+                description: "remove me".to_string(),
+                command: "echo remove me".to_string(),
+                updated_at: 10,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let deleted = mark_snippet_deleted(&mut snippets, 0).unwrap();
+
+        assert!(deleted.deleted);
+        assert!(deleted.updated_at > 10);
+        assert!(snippets.snippets[0].deleted);
+        assert_eq!(snippets.snippets[0].command, "echo remove me");
     }
 }

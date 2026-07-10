@@ -10,7 +10,7 @@ The TUI provides an interactive, fuzzy-search snippet selector using `ratatui` a
 - Loads snippets from library
 - Renders a filterable list
 - Handles keyboard/mouse events
-- Calls a user-provided closure on selection
+- Returns a selection or a confirmed delete action to the caller
 
 ### State
 
@@ -99,6 +99,7 @@ Returns `VariablePromptResult::Cancel | Skip | Values(...)`.
 | `v` | Toggle visual mode |
 | `V` | Visual line mode |
 | `y` | Copy selected to clipboard |
+| `d` | Open delete confirmation; `y` confirms and any other key cancels |
 | `/` | Start incremental search |
 | `t` | Tag filter mode |
 | `n` | Sort by name |
@@ -120,6 +121,11 @@ Returns `VariablePromptResult::Cancel | Skip | Values(...)`.
 | `Ctrl+b` / `PageUp` | Page up |
 | `Ctrl+u` | Half page up |
 | `Ctrl+d` | Half page down |
+
+The `d` key is ordinary filter input in insert mode. Deleting a snippet marks
+it as a hidden tombstone in its library TOML so an enabled sync can propagate
+the deletion to other devices. The selector reloads the library after the
+operation so the deleted snippet disappears immediately.
 
 ### Mouse
 

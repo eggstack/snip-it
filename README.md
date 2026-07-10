@@ -123,7 +123,8 @@ snp search
 
 `snp new` prompts for a description (or accepts `--description`), and `--tags`
 also prompts for tags. Variable values are requested when a snippet is run or
-copied.
+copied. In the TUI, press `d` in normal mode and confirm with `y` to delete the
+selected snippet; any other key cancels.
 
 ### Snippet files
 

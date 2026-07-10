@@ -18,6 +18,7 @@ pub fn run() -> SnipResult<()> {
     println!("  v     : visual mode (character)");
     println!("  V     : visual mode (line)");
     println!("  y     : copy and quit");
+    println!("  d     : delete selected snippet (confirm with y)");
     println!("  i     : insert mode");
     println!("  e     : open theme picker");
     println!("  q     : quit");

@@ -25,7 +25,7 @@ use ratatui::text::{Line, Span};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::Style as TuiStyle,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
 };
 
 use crate::clipboard;
@@ -460,12 +460,20 @@ pub struct SnippetListParams<'a> {
     pub original_indices: &'a [usize],
 }
 
-pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<(usize, Option<String>)>> {
+/// Action returned by the snippet selector after the user leaves the TUI.
+pub enum SnippetSelection {
+    /// Select a snippet for the command-specific action.
+    Selected(usize, Option<String>),
+    /// Delete a snippet after the user confirmed the delete dialog.
+    Delete(usize),
+}
+
+pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<SnippetSelection>> {
     select_snippet_inner(params)
 }
 
 #[allow(clippy::collapsible_match)]
-fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, Option<String>)>> {
+fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetSelection>> {
     let SnippetListParams {
         descriptions,
         commands,
@@ -505,6 +513,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
     let mut list_display_mode = 0;
     let mut should_copy: Option<String> = None;
     let mut copied_message: Option<(String, std::time::Instant)> = None;
+    let mut delete_confirmation: Option<usize> = None;
     let mut visual_mode = false;
     let mut visual_start = 0usize;
     let mut visual_end = 0usize;
@@ -1070,7 +1079,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                     )
                 } else {
                     format!(
-                        "[{mode_str}]{tag_mode_str} | i: insert | y/ctrl+c: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode"
+                        "[{mode_str}]{tag_mode_str} | i: insert | y/ctrl+c: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode"
                     )
                 }
             } else if insert_mode {
@@ -1079,7 +1088,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 )
             } else {
                 format!(
-                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run"
+                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run"
                 )
             };
             let status_widget = Paragraph::new(status_text)
@@ -1091,6 +1100,37 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                 1,
             );
             f.render_widget(status_widget, status_area);
+
+            if let Some(idx) = delete_confirmation {
+                let popup_width = size.width.saturating_sub(4).min(70);
+                let popup_height = 7.min(size.height.saturating_sub(2));
+                let popup_area = ratatui::layout::Rect::new(
+                    size.x + (size.width.saturating_sub(popup_width)) / 2,
+                    size.y + (size.height.saturating_sub(popup_height)) / 2,
+                    popup_width,
+                    popup_height,
+                );
+                let description = descriptions
+                    .get(idx)
+                    .map(String::as_str)
+                    .unwrap_or("selected snippet");
+                let confirmation = Paragraph::new(vec![
+                    Line::from("Delete selected snippet?"),
+                    Line::from(format!("\"{description}\"")),
+                    Line::from(""),
+                    Line::from("[y] yes   [n] no"),
+                ])
+                .centered()
+                .block(
+                    Block::default()
+                        .title("Confirm delete")
+                        .borders(Borders::ALL)
+                        .border_style(style_fg(theme.accent))
+                        .style(TuiStyle::default().bg(theme.background)),
+                );
+                f.render_widget(Clear, popup_area);
+                f.render_widget(confirmation, popup_area);
+            }
                 }
             });
             if let Err(e) = draw_result {
@@ -1380,6 +1420,15 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             continue;
                         }
 
+                        if let Some(idx) = delete_confirmation.take() {
+                            if key.code == KeyCode::Char('y')
+                                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                            {
+                                return Ok(Some(SnippetSelection::Delete(idx)));
+                            }
+                            continue;
+                        }
+
                         if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
                             let idx = filtered[sel.selected];
                             should_copy = Some(descriptions[idx].clone());
@@ -1617,6 +1666,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                                         }
                                     }
                                 }
+                                KeyCode::Char('d')
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                        && sel.selected < filtered.len() =>
+                                {
+                                    delete_confirmation = Some(filtered[sel.selected]);
+                                }
                                 KeyCode::Tab => {
                                     list_display_mode = (list_display_mode + 1) % 2;
                                 }
@@ -1730,7 +1785,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
         }
     }
     Ok(if !filtered.is_empty() && sel.selected < filtered.len() {
-        Some((filtered[sel.selected], should_copy))
+        Some(SnippetSelection::Selected(
+            filtered[sel.selected],
+            should_copy,
+        ))
     } else {
         None
     })

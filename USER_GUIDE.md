@@ -36,6 +36,11 @@ snp clip --library work
 snp edit --library work
 ```
 
+In the snippet TUI, press `d` in normal mode to delete the selected snippet.
+The confirmation box requires `y` to proceed; any other key cancels. The key
+remains ordinary filter input in insert mode. Deleted snippets are hidden from
+the TUI, and `--sync` propagates the deletion when sync is configured.
+
 Library files live under:
 
 ```text
