@@ -1388,14 +1388,16 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
                             }
                         }
 
-                        if key.code == KeyCode::Char('v') && !visual_mode {
+                        // Visual mode is a normal-mode command. In INSERT mode, `v` and
+                        // `V` must remain ordinary printable characters.
+                        if !insert_mode && key.code == KeyCode::Char('v') && !visual_mode {
                             visual_mode = true;
                             visual_start = sel.selected;
                             visual_end = sel.selected;
                             continue;
                         }
 
-                        if key.code == KeyCode::Char('V') && !visual_mode {
+                        if !insert_mode && key.code == KeyCode::Char('V') && !visual_mode {
                             visual_mode = true;
                             visual_start = sel.selected;
                             visual_end = filtered.len().saturating_sub(1);
@@ -1503,14 +1505,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<(usize, 
 
                         if insert_mode {
                             match key.code {
-                                KeyCode::Char('/') => {
-                                    insert_mode = true;
-                                    incremental_search.clear();
-                                    input_text.clear();
-                                    filter.clear();
-                                    filter_dirty = true;
-                                    last_filter_update = Some(std::time::Instant::now());
-                                }
                                 KeyCode::Esc => {
                                     if tag_filter_mode {
                                         tag_filter_mode = false;
