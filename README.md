@@ -4,9 +4,16 @@
 [![Downloads](https://img.shields.io/crates/d/snip-it.svg)](https://crates.io/crates/snip-it)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+![snip-it in use](demo/snip-it-demo.gif)
+
 `snip-it` (`snp`) is a terminal-first snippet manager for short scripts and
 commands. Save them in libraries, find them with fuzzy search, fill in
-variables when you use them, then run or copy them from a keyboard-driven TUI.
+variables when you use them, then run or copy them from a keyboard-first TUI
+with Vim bindings.
+
+Built in Rust and heavily optimized for fast start times and quick navigation
+through large snippet libraries, snip-it was created in large part to make
+that workflow feel immediate.
 
 It was inspired by [pet](https://github.com/knqyf263/pet) and keeps the same
 simple, editable TOML approach to command snippets. The optional
@@ -19,6 +26,8 @@ machines.
 - Short command and script snippets stored as editable TOML.
 - Separate libraries for work, home, projects, or environments.
 - Fuzzy search, tags, syntax highlighting, clipboard support, and a TUI.
+- Keyboard-first navigation with Vim bindings for quickly moving through large
+  snippet libraries.
 - Runtime variables such as `<host>` and `<branch=main>`.
 - 50 bundled [Halloy](https://github.com/squidowl/halloy)-compatible themes,
   plus support for dropping in additional Halloy theme files.
