@@ -170,6 +170,31 @@ the library is changed. `--description` is required in this mode; omit
 `--tags` or pass an explicit comma/space-separated value rather than using the
 interactive tag prompt.
 
+### File and editor creation
+
+Beyond `--command-stdin`, `snp new` supports two additional non-interactive
+creation modes:
+
+```bash
+# Read a script file verbatim
+snp new --from-file ./deploy.sh --description 'Deploy service'
+
+# Open your editor to author the command
+snp new --editor --description 'Complex pipeline'
+```
+
+`--from-file` reads the specified file as exact UTF-8 command data. It rejects
+invalid UTF-8, NUL bytes, files larger than 16 MiB, directories, and symlinks.
+The file content is stored verbatim — no trimming, evaluation, or execution.
+
+`--editor` opens `$EDITOR` (falling back to `vim`) with a temporary file. The
+temp file is created with `0600` permissions and cleaned up automatically. After
+the editor exits, empty content or a failed invocation returns an error.
+Non-empty content is stored verbatim.
+
+Both modes do not consume stdin, so `--description` is optional and tags can be
+prompted interactively.
+
 The Bash and Zsh previous helpers use their native history APIs and avoid
 self-capture when invoked as ordinary functions or widgets. Fish uses its
 native history search API. No helper reads `.bash_history`, `.zsh_history`, or

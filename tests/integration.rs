@@ -508,6 +508,399 @@ favorite = false
     assert!(stdout.contains("\"echo \"\"quoted\"\"\""));
 }
 
+// --- CLI contract: new --from-file ---
+
+#[test]
+fn test_new_from_file_preserves_exact_content() {
+    let (_tmp, config_dir) = setup_test_env();
+    let from_file = _tmp.path().join("cmd.sh");
+    fs::write(&from_file, "line one\nline two\nline three\n").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--description",
+            "from-file test",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(snippets[0]["command"], "line one\nline two\nline three\n");
+    assert_eq!(snippets[0]["description"], "from-file test");
+}
+
+#[test]
+fn test_new_from_file_rejects_directory() {
+    let (_tmp, config_dir) = setup_test_env();
+    let dir = _tmp.path().join("not-a-file");
+    fs::create_dir(&dir).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            dir.to_str().unwrap(),
+            "--description",
+            "test",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("directory"),
+        "Expected directory error: {combined}"
+    );
+}
+
+#[test]
+fn test_new_from_file_rejects_missing_file() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            "/nonexistent/path/cmd.sh",
+            "--description",
+            "test",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("does not exist") || combined.contains("not found"),
+        "Expected missing file error: {combined}"
+    );
+}
+
+#[test]
+fn test_new_from_file_rejects_invalid_utf8() {
+    let (_tmp, config_dir) = setup_test_env();
+    let from_file = _tmp.path().join("bad_utf8.bin");
+    fs::write(&from_file, [0xff, 0xfe, b'\n']).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "from-file-utf8"]);
+    assert!(cmd.output().unwrap().status.success());
+    let library_path = config_dir.join("libraries").join("from-file-utf8.toml");
+    let before = fs::read(&library_path).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--description",
+            "bad utf8",
+            "--library",
+            "from-file-utf8",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("valid UTF-8"),
+        "Expected UTF-8 error: {combined}"
+    );
+    assert_eq!(fs::read(&library_path).unwrap(), before);
+}
+
+#[test]
+fn test_new_from_file_conflicts_with_positional() {
+    let (_tmp, config_dir) = setup_test_env();
+    let from_file = _tmp.path().join("cmd.sh");
+    fs::write(&from_file, "echo hello").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--description",
+            "test",
+            "echo y",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflicts"),
+        "Expected clap conflict error: {stderr}"
+    );
+}
+
+#[test]
+fn test_new_from_file_conflicts_with_command_stdin() {
+    let (_tmp, config_dir) = setup_test_env();
+    let from_file = _tmp.path().join("cmd.sh");
+    fs::write(&from_file, "echo hello").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--command-stdin",
+            "--description",
+            "test",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflicts"),
+        "Expected clap conflict error: {stderr}"
+    );
+}
+
+#[test]
+fn test_new_from_file_with_tags_and_library() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "from-file-tags"]);
+    assert!(cmd.output().unwrap().status.success());
+
+    let from_file = _tmp.path().join("tagged.sh");
+    fs::write(&from_file, "echo tagged").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--description",
+            "tagged snippet",
+            "--tags",
+            "a,b",
+            "--library",
+            "from-file-tags",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "from-file-tags"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(snippets[0]["command"], "echo tagged");
+    assert_eq!(snippets[0]["description"], "tagged snippet");
+    assert_eq!(snippets[0]["tags"], serde_json::json!(["a", "b"]));
+}
+
+// --- CLI contract: new --editor ---
+
+#[test]
+fn test_new_editor_with_fake_editor() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let fake_editor = _tmp.path().join("fake_editor.sh");
+    fs::write(
+        &fake_editor,
+        "#!/bin/sh\necho 'editor content here' > \"$1\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_editor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let output = snp_in(&config_dir)
+        .args(["new", "--editor", "--description", "editor test"])
+        .env("EDITOR", &fake_editor)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(snippets[0]["command"], "editor content here\n");
+    assert_eq!(snippets[0]["description"], "editor test");
+}
+
+#[test]
+fn test_new_editor_empty_content_rejected() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let fake_editor = _tmp.path().join("empty_editor.sh");
+    fs::write(&fake_editor, "#!/bin/sh\n: > \"$1\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_editor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let output = snp_in(&config_dir)
+        .args(["new", "--editor", "--description", "empty test"])
+        .env("EDITOR", &fake_editor)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("empty") || combined.contains("no content"),
+        "Expected empty command error: {combined}"
+    );
+}
+
+#[test]
+fn test_new_editor_nonzero_exit_rejected() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "editor-nonzero"]);
+    assert!(cmd.output().unwrap().status.success());
+    let library_path = config_dir.join("libraries").join("editor-nonzero.toml");
+    let before = fs::read(&library_path).unwrap();
+
+    let fake_editor = _tmp.path().join("fail_editor.sh");
+    fs::write(&fake_editor, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_editor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--editor",
+            "--description",
+            "fail test",
+            "--library",
+            "editor-nonzero",
+        ])
+        .env("EDITOR", &fake_editor)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("exited with status") || combined.contains("editor"),
+        "Expected editor exit error: {combined}"
+    );
+    assert_eq!(fs::read(&library_path).unwrap(), before);
+}
+
+#[test]
+fn test_new_editor_conflicts_with_positional() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args(["new", "--editor", "--description", "test", "echo y"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflicts"),
+        "Expected clap conflict error: {stderr}"
+    );
+}
+
+#[test]
+fn test_new_editor_conflicts_with_command_stdin() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--editor",
+            "--command-stdin",
+            "--description",
+            "test",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflicts"),
+        "Expected clap conflict error: {stderr}"
+    );
+}
+
+#[test]
+fn test_new_editor_not_found() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args(["new", "--editor", "--description", "test"])
+        .env("EDITOR", "/nonexistent/editor-xyz")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Editor not found") || combined.contains("does not exist"),
+        "Expected editor-not-found error: {combined}"
+    );
+}
+
 // --- Cron command ---
 
 #[test]

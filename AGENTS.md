@@ -29,6 +29,11 @@ cargo test --test integration command_stdin
 cargo test --lib new_cmd
 cargo test --lib bash_new
 
+# Release 2B file and editor creation tests
+cargo test --test integration from_file
+cargo test --test integration editor
+cargo test --lib new_cmd
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -196,8 +201,10 @@ snip-it/
 - Cert generation shells out to `openssl` (not a Rust crypto crate)
 
 ### Creation and Shell Integration (`snp new`, `snp shell init`)
-- `src/commands/new_cmd.rs` resolves positional, interactive, multiline, and `--command-stdin` sources before using the shared save pipeline.
+- `src/commands/new_cmd.rs` resolves positional, interactive, multiline, `--command-stdin`, `--from-file`, and `--editor` sources before using the shared save pipeline.
 - `--command-stdin` validates UTF-8, rejects NUL bytes, preserves supplied trailing newlines, and caps input at 16 MiB.
+- `--from-file` reads exact file content (valid UTF-8, 16 MiB limit, no NUL bytes, rejects directories).
+- `--editor` opens `$EDITOR` with a temp file (0600 permissions, RAII cleanup), rejects empty or failed editor output.
 - Stdin ingestion requires `--description`; do not mix metadata prompts with command stdin.
 - Captured command bodies are data: never evaluate, execute, echo, or log them during ingestion.
 - `src/commands/shell_cmd.rs` generates Bash, Zsh, and Fish integration code

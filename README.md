@@ -154,6 +154,17 @@ reserved for command data, `--description` is required and tag prompts cannot
 be used in this mode. Do not pass secrets through shell history; captured
 history can contain credentials, tokens, or private URLs.
 
+For file-based or editor-based creation:
+
+```bash
+snp new --from-file ./deploy.sh --description 'Deploy service'
+snp new --editor --description 'Complex pipeline'
+```
+
+`--from-file` reads the file as-is (valid UTF-8 required, no execution). `--editor`
+opens `$EDITOR` (falling back to `vim`) for authoring the command body, then
+continues with normal description and tag handling.
+
 ### Snippet files
 
 Without libraries, snip-it uses the legacy single-file layout:
@@ -275,7 +286,7 @@ data.
 ## CLI overview
 
 ```text
-snp new          Create a snippet
+snp new          Create a snippet (--command-stdin, --from-file, --editor, --multiline)
 snp list         List snippets
 snp run          Run a snippet from the TUI
 snp clip         Copy a snippet from the TUI

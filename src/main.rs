@@ -77,7 +77,10 @@ enum Commands {
     #[command(alias = "n")]
     New {
         /// Command text supplied as a positional argument.
-        #[arg(value_name = "COMMAND", conflicts_with_all = ["command_stdin", "multiline"])]
+        #[arg(
+            value_name = "COMMAND",
+            conflicts_with_all = ["command_stdin", "multiline", "from_file", "editor"]
+        )]
         command: Option<String>,
         /// Prompt for tags, or provide comma/space-separated tags directly.
         #[arg(
@@ -89,11 +92,34 @@ enum Commands {
             value_name = "TAGS"
         )]
         tags: Option<String>,
-        #[arg(short, long, action = clap::ArgAction::SetTrue, conflicts_with = "command_stdin")]
+        #[arg(
+            short,
+            long,
+            action = clap::ArgAction::SetTrue,
+            conflicts_with_all = ["command_stdin", "editor"]
+        )]
         multiline: bool,
         /// Read the command body byte-for-byte from stdin.
-        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with_all = ["command", "multiline"])]
+        #[arg(
+            long,
+            action = clap::ArgAction::SetTrue,
+            conflicts_with_all = ["command", "multiline", "from_file", "editor"]
+        )]
         command_stdin: bool,
+        /// Read command body from a file.
+        #[arg(
+            long = "from-file",
+            value_name = "PATH",
+            conflicts_with_all = ["command", "command_stdin", "editor"]
+        )]
+        from_file: Option<PathBuf>,
+        /// Open $EDITOR to write the command body.
+        #[arg(
+            long,
+            action = clap::ArgAction::SetTrue,
+            conflicts_with_all = ["command", "command_stdin", "from_file"]
+        )]
+        editor: bool,
         #[arg(short = 'd', long)]
         description: Option<String>,
         #[arg(short, long)]
@@ -310,6 +336,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             tags,
             multiline,
             command_stdin,
+            from_file,
+            editor,
             description,
             config,
             library,
@@ -320,6 +348,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 tags,
                 multiline,
                 command_stdin,
+                from_file,
+                editor,
                 config,
                 library,
             )?;

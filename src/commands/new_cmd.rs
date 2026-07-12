@@ -3,7 +3,8 @@ use crate::error::{SnipError, SnipResult};
 use crate::library::Snippet;
 use crossterm::style::{Color, Stylize, style};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const TAG_PROMPT_SENTINEL: &str = "__snp_prompt_tags__";
 const MAX_COMMAND_STDIN_BYTES: usize = 16 * 1024 * 1024;
@@ -19,6 +20,10 @@ pub enum CommandSource {
     InteractivePrompt,
     /// A command entered through the existing two-blank-line prompt.
     MultilinePrompt,
+    /// A command read from a file path.
+    File(PathBuf),
+    /// A command written in an external editor.
+    Editor,
 }
 
 /// Read exact command data from a reader without evaluating, trimming, or
@@ -53,6 +58,245 @@ pub fn read_command_stdin<R: Read>(reader: R) -> SnipResult<String> {
     }
 
     Ok(command)
+}
+
+/// Read a command from a file path.
+///
+/// Rejects directories, missing files, invalid UTF-8, and NUL bytes. The file
+/// is read as-is with no trimming, normalization, or execution.
+pub fn read_file_command(path: &Path) -> SnipResult<String> {
+    if path.is_dir() {
+        return Err(SnipError::runtime_error(
+            "Path is a directory",
+            Some(&format!("'{}' is a directory, not a file", path.display())),
+        ));
+    }
+    if !path.exists() {
+        return Err(SnipError::runtime_error(
+            "File not found",
+            Some(&format!("'{}' does not exist", path.display())),
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    let file = std::fs::File::open(path)
+        .map_err(|e| SnipError::io_error("open file for reading", path, e))?;
+    let limit = (MAX_COMMAND_STDIN_BYTES as u64) + 1;
+    io::BufReader::new(file)
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| SnipError::io_error("read command from file", path, e))?;
+
+    if bytes.len() > MAX_COMMAND_STDIN_BYTES {
+        return Err(SnipError::runtime_error(
+            "File too large",
+            Some("file command data is limited to 16 MiB"),
+        ));
+    }
+
+    let command = String::from_utf8(bytes).map_err(|_| {
+        SnipError::runtime_error(
+            "Invalid command input",
+            Some("file content must be valid UTF-8"),
+        )
+    })?;
+
+    if command.contains('\0') {
+        return Err(SnipError::runtime_error(
+            "Invalid command input",
+            Some("file content cannot contain NUL bytes"),
+        ));
+    }
+
+    Ok(command)
+}
+
+fn has_directory_component(editor: &str) -> bool {
+    editor.contains('/') || (cfg!(windows) && editor.contains('\\')) || editor.starts_with('.')
+}
+
+fn resolve_editor(editor: &str) -> SnipResult<String> {
+    let editor_path = Path::new(editor);
+
+    if editor_path.is_absolute() {
+        if !editor_path.exists() {
+            return Err(SnipError::runtime_error(
+                "Editor not found",
+                Some(&format!(
+                    "EDITOR '{editor}' does not exist. Set EDITOR to a valid editor path."
+                )),
+            ));
+        }
+        if !editor_path.is_file() {
+            return Err(SnipError::runtime_error(
+                "Editor is not a file",
+                Some(&format!(
+                    "EDITOR '{editor}' exists but is not a file (it may be a directory). \
+                     Set EDITOR to a valid editor executable."
+                )),
+            ));
+        }
+        return Ok(editor.to_string());
+    }
+
+    if has_directory_component(editor) {
+        let cwd = std::env::current_dir().map_err(|e| {
+            SnipError::runtime_error(
+                "Failed to get current directory",
+                Some(&format!("Cannot resolve relative editor path: {e}")),
+            )
+        })?;
+        let candidate = cwd.join(editor);
+        if !candidate.exists() {
+            return Err(SnipError::runtime_error(
+                "Editor not found",
+                Some(&format!(
+                    "EDITOR '{}' does not exist relative to {}.",
+                    editor,
+                    cwd.display()
+                )),
+            ));
+        }
+        if !candidate.is_file() {
+            return Err(SnipError::runtime_error(
+                "Editor is not a file",
+                Some(&format!(
+                    "EDITOR '{}' exists but is not a file.",
+                    candidate.display()
+                )),
+            ));
+        }
+
+        let canonical = candidate.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Editor path resolution failed",
+                Some(&format!(
+                    "Cannot resolve editor path '{}': {}",
+                    candidate.display(),
+                    e
+                )),
+            )
+        })?;
+
+        let canonical_cwd = cwd.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Current directory resolution failed",
+                Some(&format!("Cannot canonicalize CWD: {e}")),
+            )
+        })?;
+
+        if !canonical.starts_with(&canonical_cwd) {
+            return Err(SnipError::runtime_error(
+                "Editor path unsafe",
+                Some(&format!(
+                    "EDITOR '{editor}' resolves outside of current directory (possible symlink attack). Use an absolute path."
+                )),
+            ));
+        }
+
+        return Ok(candidate.to_string_lossy().into_owned());
+    }
+
+    let path_var = std::env::var("PATH").unwrap_or_default();
+
+    for dir in path_var.split(if cfg!(windows) { ';' } else { ':' }) {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(editor);
+        if candidate.exists() && candidate.is_file() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
+        #[cfg(windows)]
+        {
+            for ext in &[".exe", ".cmd", ".bat"] {
+                let with_ext = Path::new(dir).join(format!("{}{}", editor, ext));
+                if with_ext.exists() && with_ext.is_file() {
+                    return Ok(with_ext.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
+    Err(SnipError::runtime_error(
+        "Editor not found",
+        Some(&format!(
+            "EDITOR '{editor}' is not an absolute path and could not be found in PATH. \
+             Set EDITOR to an absolute path (e.g., /usr/bin/vim)."
+        )),
+    ))
+}
+
+/// Open an editor to compose a command body.
+///
+/// Creates a temp file with restrictive permissions, launches the editor, reads
+/// the result, and cleans up. Returns an error if the editor exits nonzero or
+/// the content is empty after trimming trailing newlines.
+pub fn read_editor_command() -> SnipResult<String> {
+    let editor_env = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+    let resolved = resolve_editor(&editor_env)?;
+
+    let temp_dir = std::env::temp_dir();
+    let temp_name = format!(
+        "snp-editor-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_path = temp_dir.join(&temp_name);
+
+    // Create with restrictive permissions
+    {
+        let f = std::fs::File::create(&temp_path)
+            .map_err(|e| SnipError::io_error("create temp file", &temp_path, e))?;
+        // Set 0600 on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| SnipError::io_error("set temp file permissions", &temp_path, e))?;
+        }
+        drop(f);
+    }
+
+    let _guard = crate::utils::tempfile_guard::TempFileGuard::new(temp_path.clone());
+
+    let status = Command::new(&resolved)
+        .arg(&temp_path)
+        .status()
+        .map_err(|e| {
+            SnipError::command_error(&resolved, vec![temp_path.display().to_string()], e)
+        })?;
+
+    if !status.success() {
+        return Err(SnipError::runtime_error(
+            "Editor exited with error",
+            Some(&format!(
+                "editor '{}' exited with status {}",
+                resolved,
+                status.code().unwrap_or(-1)
+            )),
+        ));
+    }
+
+    let mut content = String::new();
+    std::fs::File::open(&temp_path)
+        .map_err(|e| SnipError::io_error("open editor output", &temp_path, e))?
+        .read_to_string(&mut content)
+        .map_err(|e| SnipError::io_error("read editor output", &temp_path, e))?;
+
+    // Trim trailing newlines — empty after trimming means the user cancelled
+    let trimmed = content.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() {
+        return Err(SnipError::runtime_error(
+            "Empty command",
+            Some("editor produced no content; command not saved"),
+        ));
+    }
+
+    Ok(content)
 }
 
 /// Reads a multiline snippet command from stdin (terminated by two blank lines).
@@ -104,6 +348,8 @@ pub fn run(
     tags: Option<String>,
     multiline: bool,
     command_stdin: bool,
+    from_file: Option<PathBuf>,
+    editor: bool,
     config: Option<PathBuf>,
     library: Option<String>,
 ) -> SnipResult<()> {
@@ -122,6 +368,10 @@ pub fn run(
 
     let source = if command_stdin {
         CommandSource::Stdin
+    } else if let Some(path) = from_file {
+        CommandSource::File(path)
+    } else if editor {
+        CommandSource::Editor
     } else if multiline {
         CommandSource::MultilinePrompt
     } else if let Some(command) = command {
@@ -134,6 +384,8 @@ pub fn run(
     // keeps malformed stdin input from triggering migration or persistence.
     let command = match source {
         CommandSource::Stdin => read_command_stdin(io::stdin().lock())?,
+        CommandSource::File(path) => read_file_command(&path)?,
+        CommandSource::Editor => read_editor_command()?,
         CommandSource::MultilinePrompt => read_multiline_command()?,
         CommandSource::InteractivePrompt => read_prompt_line("Command> ", Color::Yellow)?,
         CommandSource::Positional(command) => {
@@ -207,5 +459,49 @@ mod tests {
             parse_tags("git, release deploy"),
             ["git", "release", "deploy"]
         );
+    }
+
+    #[test]
+    fn file_reader_preserves_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("cmd.txt");
+        std::fs::write(&path, "echo hello\n").unwrap();
+        assert_eq!(read_file_command(&path).unwrap(), "echo hello\n");
+    }
+
+    #[test]
+    fn file_reader_rejects_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(read_file_command(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn file_reader_rejects_missing_file() {
+        let path = PathBuf::from("/nonexistent/file/path/command.txt");
+        assert!(read_file_command(&path).is_err());
+    }
+
+    #[test]
+    fn file_reader_rejects_invalid_utf8() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("bad.txt");
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(read_file_command(&path).is_err());
+    }
+
+    #[test]
+    fn file_reader_rejects_nul_bytes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("nul.txt");
+        std::fs::write(&path, b"echo\0secret").unwrap();
+        assert!(read_file_command(&path).is_err());
+    }
+
+    #[test]
+    fn file_reader_preserves_trailing_newlines() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("trailing.txt");
+        std::fs::write(&path, "echo hi\n\n\n").unwrap();
+        assert_eq!(read_file_command(&path).unwrap(), "echo hi\n\n\n");
     }
 }
