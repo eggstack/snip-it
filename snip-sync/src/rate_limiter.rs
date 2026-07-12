@@ -101,15 +101,23 @@ impl RateLimiter {
         let mut loaded = 0u32;
 
         for (peer_ip, window_start, request_count) in rows {
-            let ws = window_start as u64;
-            if now.saturating_sub(ws) >= WINDOW_SECS {
+            if window_start < 0 || request_count <= 0 {
+                continue;
+            }
+            let Ok(ws) = u64::try_from(window_start) else {
+                continue;
+            };
+            let Ok(count) = usize::try_from(request_count) else {
+                continue;
+            };
+            if ws > now || now.saturating_sub(ws) >= WINDOW_SECS {
                 continue;
             }
             windows.insert(
                 peer_ip,
                 WindowEntry {
                     window_start: ws,
-                    count: request_count as usize,
+                    count,
                 },
             );
             loaded += 1;
@@ -142,7 +150,12 @@ impl RateLimiter {
         for (key, window_start, count) in &snapshot {
             if let Err(e) = sqlx::query(
                 "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)
-                 ON CONFLICT(peer_ip) DO UPDATE SET window_start = excluded.window_start, request_count = excluded.request_count",
+                 ON CONFLICT(peer_ip) DO UPDATE SET
+                    window_start = excluded.window_start,
+                    request_count = excluded.request_count
+                 WHERE excluded.window_start > rate_limits.window_start
+                    OR (excluded.window_start = rate_limits.window_start
+                        AND excluded.request_count >= rate_limits.request_count)",
             )
             .bind(key)
             .bind(*window_start as i64)
@@ -168,13 +181,13 @@ impl RateLimiter {
     pub fn start_persistence_task(
         self: &Arc<Self>,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-    ) {
+    ) -> Option<tokio::task::JoinHandle<()>> {
         if !self.persist || self.db_pool.is_none() {
-            return;
+            return None;
         }
 
         let limiter = Arc::clone(self);
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             tokio::pin!(shutdown);
             loop {
@@ -190,7 +203,7 @@ impl RateLimiter {
                     }
                 }
             }
-        });
+        }))
     }
 
     pub async fn allow(&self, key: &str, max_requests: usize, window: Duration) -> bool {
@@ -306,5 +319,48 @@ mod tests {
     async fn test_zero_max_requests_deny_all() {
         let limiter = RateLimiter::new();
         assert!(!limiter.allow("zero", 0, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn test_load_state_ignores_malformed_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE rate_limits (
+                peer_ip TEXT PRIMARY KEY,
+                window_start INTEGER NOT NULL,
+                request_count INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO rate_limits (peer_ip, window_start, request_count)
+             VALUES ('negative', -1, 1), ('zero', 1, -1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let limiter = RateLimiter::new_with_db(pool.clone(), true);
+        limiter.load_state().await;
+
+        assert!(limiter.allow("negative", 1, Duration::from_secs(60)).await);
+        assert!(limiter.allow("zero", 1, Duration::from_secs(60)).await);
+        assert!(limiter.allow("stale", 1, Duration::from_secs(60)).await);
+        limiter.save_state().await;
+
+        sqlx::query("UPDATE rate_limits SET request_count = 2 WHERE peer_ip = 'stale'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        limiter.save_state().await;
+
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT request_count FROM rate_limits WHERE peer_ip = 'stale'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 2);
     }
 }

@@ -136,8 +136,8 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         Arc::new(RateLimiter::new())
     };
     rate_limiter.load_state().await;
-    let (_persist_shutdown_tx, persist_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    rate_limiter.start_persistence_task(async {
+    let (persist_shutdown_tx, persist_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let persistence_handle = rate_limiter.start_persistence_task(async {
         let _ = persist_shutdown_rx.await;
     });
     let cors_allowed_origins = config.cors_allowed_origins.clone();
@@ -333,8 +333,11 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(grpc_listener);
         let server = tonic::transport::Server::builder()
             .timeout(timeout)
-            .max_frame_size(grpc_max_message_size)
-            .add_service(SnippetSyncServer::new(grpc_service))
+            .add_service(
+                SnippetSyncServer::new(grpc_service)
+                    .max_decoding_message_size(grpc_max_message_size as usize)
+                    .max_encoding_message_size(grpc_max_message_size as usize),
+            )
             .serve_with_incoming(incoming);
 
         tracing::info!(
@@ -386,6 +389,22 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         }
         Err(_) => {
             tracing::warn!("Shutdown timed out after 30s, forcing exit");
+        }
+    }
+
+    // Signal the persistence task only after both servers have stopped, then
+    // wait for its final database snapshot to complete before dropping the
+    // database pool.
+    let _ = persist_shutdown_tx.send(());
+    if let Some(handle) = persistence_handle {
+        match tokio::time::timeout(Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "Rate limiter persistence task failed during shutdown");
+            }
+            Err(_) => {
+                tracing::warn!("Rate limiter persistence did not finish before shutdown");
+            }
         }
     }
 

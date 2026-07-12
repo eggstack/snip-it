@@ -5,13 +5,16 @@ package snip_proto;
 option go_package = "github.com/eggstack/snip-it/snip-proto;snip_proto";
 
 service SnippetSync {
-    // Get snippets from server (optionally since a timestamp)
+    // Get non-deleted snippets from the selected library. Results are filtered
+    // to records with updated_at strictly greater than since.
     rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);
     
-    // Push local snippets to server
+    // Push local snippets to the selected library. Invalid snippets are
+    // rejected individually and reported in the response.
     rpc PushSnippets (PushSnippetsRequest) returns (PushSnippetsResponse);
     
-    // Two-way sync - merge local and server snippets
+    // Merge local snippets into the selected library and return changed server
+    // records, including deletion tombstones.
     rpc Sync (SyncRequest) returns (SyncResponse);
     
     // Health check
@@ -20,27 +23,35 @@ service SnippetSync {
     // Register a new device/user
     rpc Register (RegisterRequest) returns (RegisterResponse);
 
-    // Library management
+    // Library management. Library IDs are scoped to the authenticated account.
     rpc CreateLibrary (CreateLibraryRequest) returns (CreateLibraryResponse);
     rpc ListLibraries (ListLibrariesRequest) returns (ListLibrariesResponse);
     rpc DeleteLibrary (DeleteLibraryRequest) returns (DeleteLibraryResponse);
 
-    // Premade libraries (server->client only)
+    // Premade libraries (server-to-client only).
     rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
     rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
     rpc SearchPremadeLibraries (SearchPremadeLibrariesRequest) returns (SearchPremadeLibrariesResponse);
 }
 
 message GetSnippetsRequest {
+    // Deprecated compatibility field. New clients should send the API key in
+    // the authorization metadata as `Bearer <api-key>`.
     string api_key = 1;
+    // Return records updated after this Unix timestamp.
     int64 since = 2;
+    // Empty selects the account's default library.
     string library_id = 3;
+    // Maximum records to return. Zero selects the server default.
     int32 limit = 4;
+    // Number of records to skip for pagination.
     int32 offset = 5;
 }
 
 message PushSnippetsRequest {
+    // Deprecated compatibility field. Prefer authorization metadata.
     string api_key = 1;
+    // Empty selects the account's default library.
     string library_id = 3;
     repeated Snippet snippets = 2;
 }
@@ -53,11 +64,18 @@ message PushSnippetsResponse {
 }
 
 message SyncRequest {
+    // Deprecated compatibility field. Prefer authorization metadata.
     string api_key = 1;
+    // Local records to merge. Only records newer than last_sync_timestamp are
+    // considered for insertion or conflict resolution.
     repeated Snippet local_snippets = 2;
+    // Unix timestamp returned by the previous completed sync.
     int64 last_sync_timestamp = 3;
+    // Empty selects the account's default library.
     string library_id = 4;
+    // Maximum records to return. Zero selects the server default.
     int32 limit = 5;
+    // Number of records to skip for pagination.
     int32 offset = 6;
 }
 
@@ -73,14 +91,23 @@ message SyncResponse {
 }
 
 message Snippet {
+    // Client-generated stable identifier.
     string id = 1;
+    // Plaintext when encrypted is false; empty for encrypted records.
     string description = 2;
+    // Plaintext command when encrypted is false; encrypted payload otherwise.
     string command = 3;
+    // Plaintext tags when encrypted is false; empty for encrypted records.
     repeated string tags = 4;
+    // Unix timestamp when the record was created.
     int64 created_at = 5;
+    // Unix timestamp used for last-write-wins conflict resolution.
     int64 updated_at = 6;
+    // Client/device identifier used as the deterministic tie-breaker.
     string device_id = 7;
+    // Deletion tombstone. Tombstones are returned by Sync, not GetSnippets.
     bool deleted = 8;
+    // Indicates that command contains the client-encrypted payload.
     bool encrypted = 9;
 }
 

@@ -5,18 +5,21 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub fn write_pid() -> Result<(), String> {
-    let pid = std::process::id();
-    let path = paths::pid_path();
+    write_pid_at(&paths::pid_path(), std::process::id())
+}
+
+fn write_pid_at(path: &Path, pid: u32) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create pid dir: {}", e))?;
     }
-    let result = fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&path)
-        .and_then(|mut file| file.write_all(pid.to_string().as_bytes()));
-    if let Err(e) = result {
-        let _ = fs::remove_file(&path);
+        .open(path)
+        .map_err(|e| format!("Failed to write PID file {}: {}", path.display(), e))?;
+
+    if let Err(e) = file.write_all(pid.to_string().as_bytes()) {
+        let _ = fs::remove_file(path);
         return Err(format!(
             "Failed to write PID file {}: {}",
             path.display(),
@@ -160,6 +163,16 @@ pub fn try_lock(path: &Path) -> Result<Option<LockGuard>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_pid_does_not_remove_an_existing_pid_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        fs::write(&path, "live-pid").unwrap();
+
+        assert!(write_pid_at(&path, 1234).is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "live-pid");
+    }
 
     #[test]
     fn test_read_pid_nonexistent() {

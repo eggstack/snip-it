@@ -241,6 +241,7 @@ impl PremadeManager {
             });
         }
 
+        libraries.sort_by(|a, b| a.filename.cmp(&b.filename));
         tracing::info!("Loaded {} premade libraries", libraries.len());
         libraries
     }

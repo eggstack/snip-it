@@ -406,10 +406,13 @@ impl Database {
         }
 
         sqlx::query(
-            "UPDATE snippets SET deleted = 1, updated_at = ? WHERE library_id = ? AND deleted = 0",
+            "UPDATE snippets
+             SET deleted = 1, updated_at = MAX(updated_at, ?)
+             WHERE library_id = ? AND user_id = ? AND deleted = 0",
         )
         .bind(now)
         .bind(library_id)
+        .bind(user_id)
         .execute(&mut *tx)
         .await?;
 
@@ -810,6 +813,39 @@ mod tests {
         assert_eq!(snippets[0].description, "Test snippet");
         assert_eq!(snippets[0].command, "echo hello");
         assert_eq!(snippets[0].tags, vec!["test"]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_library_preserves_future_tombstone_timestamp() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let library_id = db.create_library(&user_id, "future-delete").await.unwrap();
+        let future_timestamp = Utc::now().timestamp() + 100;
+
+        let snippet = Snippet {
+            id: "future-snippet".to_string(),
+            description: "desc".to_string(),
+            command: "echo hi".to_string(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: future_timestamp,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &library_id)
+            .await
+            .unwrap();
+
+        db.delete_library(&user_id, &library_id).await.unwrap();
+
+        let (snippets, total) = db
+            .get_snippets(&user_id, &library_id, future_timestamp - 1, 10, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert!(snippets[0].deleted);
+        assert_eq!(snippets[0].updated_at, future_timestamp);
     }
 
     #[tokio::test]

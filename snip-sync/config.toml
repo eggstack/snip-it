@@ -37,12 +37,24 @@ max_description_length = 1024
 max_tags = 50
 # Maximum length of each tag
 max_tag_length = 100
+# Maximum length of client-generated identifiers
+max_id_length = 128
+# Maximum length of a device identifier
+max_device_id_length = 128
+# Maximum length of an API key
+max_api_key_length = 512
 # Request timeout in seconds
 request_timeout_secs = 30
+# Maximum encoded gRPC request or response message size
+grpc_max_message_size = 4194304
 
 [server.rate_limit]
 # Number of requests allowed per minute per API key
 requests_per_minute = 120
+# Accept forwarded client IPs only when the immediate peer is listed here.
+# trusted_proxies = ["127.0.0.1"]
+# Persist rate-limit counters across restarts.
+# persist = false
 
 [server.metrics]
 # Basic auth credentials for metrics endpoint

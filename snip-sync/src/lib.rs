@@ -1305,6 +1305,10 @@ impl SnippetSync for SnipSyncService {
             self.record_request_duration("get_premade_library", start);
             return Err(Status::invalid_argument("Invalid filename"));
         }
+        if sanitized != req.filename {
+            self.record_request_duration("get_premade_library", start);
+            return Err(Status::invalid_argument("Invalid filename"));
+        }
 
         let content = match self.premade_manager.get(&sanitized) {
             Ok(c) => c,
@@ -1381,8 +1385,9 @@ impl SnippetSync for SnipSyncService {
 mod tests {
     use super::*;
     use snip_proto::{
-        CreateLibraryRequest, GetSnippetsRequest, HealthRequest, ListLibrariesRequest,
-        PushSnippetsRequest, RegisterRequest, Snippet as ProtoSnippet, SyncRequest,
+        CreateLibraryRequest, GetPremadeLibraryRequest, GetSnippetsRequest, HealthRequest,
+        ListLibrariesRequest, PushSnippetsRequest, RegisterRequest, Snippet as ProtoSnippet,
+        SyncRequest,
     };
 
     pub async fn setup_test_service() -> SnipSyncService {
@@ -1791,5 +1796,20 @@ mod tests {
         let resp = service.sync(req).await.unwrap();
         let sync = resp.into_inner();
         assert_eq!(sync.snippets.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_premade_filename_with_unsafe_characters_is_rejected() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(GetPremadeLibraryRequest {
+            api_key,
+            filename: "valid-name!.toml".to_string(),
+        });
+        let error = service.get_premade_library(req).await.unwrap_err();
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "Invalid filename");
     }
 }
