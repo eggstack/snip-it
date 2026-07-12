@@ -13,6 +13,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -123,6 +124,107 @@ fn run_snp_pty(args: &[&str], config_dir: &Path, keys: &[u8]) -> (i32, String) {
     (exit_code, output_str)
 }
 
+/// Spawn an interactive Bash session, source generated integration, invoke
+/// the current-buffer widget, and return its exit code plus terminal output.
+fn run_bash_capture_pty(
+    config_dir: &Path,
+    integration_path: &Path,
+    command: &[u8],
+    sentinel_path: &Path,
+    shim_dir: &Path,
+    args_capture: &Path,
+) -> (i32, String) {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+
+    let mut shell = CommandBuilder::new("bash");
+    shell.args(["--noprofile", "--norc", "-i"]);
+    shell.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
+    shell.env("TERM", "xterm-256color");
+    shell.env("PS1", "snp-pty> ");
+    shell.env("PATH", format!("{}:/usr/bin:/bin", shim_dir.display()));
+    shell.env("SNP_ARGS_CAPTURE", args_capture);
+    shell.cwd(config_dir.parent().unwrap());
+    let mut child = pair.slave.spawn_command(shell).unwrap();
+
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut output = Vec::new();
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+            }
+        }
+        output
+    });
+
+    std::thread::sleep(Duration::from_millis(700));
+    let raw_fd = pair.master.as_raw_fd().expect("master pty fd");
+    let setup = format!(
+        "source \"{}\"\nsnp_pty_capture() {{ snp_new_current --description 'PTY capture' --library pty; }}\nbind -x '\"\\C-n\": snp_pty_capture'\nprintf 'READY\\n'\n",
+        integration_path.display()
+    );
+    for byte in setup.bytes() {
+        unsafe {
+            libc::write(raw_fd, &byte as *const u8 as *const libc::c_void, 1);
+        }
+    }
+    std::thread::sleep(Duration::from_millis(700));
+
+    for &byte in command {
+        unsafe {
+            libc::write(raw_fd, &byte as *const u8 as *const libc::c_void, 1);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Ctrl-N invokes the explicitly installed current-buffer widget.
+    let ctrl_n = 0x0e_u8;
+    unsafe {
+        libc::write(raw_fd, &ctrl_n as *const u8 as *const libc::c_void, 1);
+    }
+    std::thread::sleep(Duration::from_millis(1200));
+    // Clear the unexecuted buffer, then exit the shell normally.
+    for byte in b"\x15exit\n" {
+        unsafe {
+            libc::write(raw_fd, byte as *const u8 as *const libc::c_void, 1);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let timeout = Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    let exit_code = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.exit_code() as i32,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let output = drain.join().unwrap();
+                    panic!(
+                        "bash PTY capture timed out after {timeout:?}; sentinel={:?}\nOUTPUT: {}",
+                        sentinel_path,
+                        String::from_utf8_lossy(&output)
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("try_wait error: {e}"),
+        }
+    };
+
+    let output = drain.join().unwrap();
+    (exit_code, String::from_utf8_lossy(&output).to_string())
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
@@ -208,6 +310,118 @@ fn test_search_cancel_returns_exit_0() {
     let (code, output) = run_snp_pty(&["search"], &config_dir, b"\x1bq");
     eprintln!("OUTPUT: {output}");
     assert_eq!(code, 0, "snp search with Esc+q should exit 0");
+}
+
+#[test]
+fn test_bash_current_buffer_capture_pty_persists_without_execution() {
+    let bash_supports_readline_buffer = Command::new("bash")
+        .args(["-c", "(( BASH_VERSINFO[0] >= 4 ))"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !bash_supports_readline_buffer {
+        eprintln!("skipping: Bash Readline buffer API requires Bash 4+");
+        return;
+    }
+
+    let (tmp, config_dir) = setup_test_env();
+    let created = Command::new(snp_bin())
+        .args(["library", "create", "pty"])
+        .env("XDG_CONFIG_HOME", config_dir.parent().unwrap())
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "library create failed");
+    let integration_path = tmp.path().join("snp-bash-init.sh");
+    let integration = Command::new(snp_bin())
+        .args(["shell", "init", "bash"])
+        .output()
+        .unwrap();
+    assert!(integration.status.success());
+    fs::write(&integration_path, integration.stdout).unwrap();
+
+    let shim_dir = tmp.path().join("bin");
+    fs::create_dir_all(&shim_dir).unwrap();
+    let args_capture = tmp.path().join("snp-args.capture");
+    fs::write(
+        shim_dir.join("snp"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SNP_ARGS_CAPTURE\"\nexec \"{}\" \"$@\"\n",
+            snp_bin().display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(shim_dir.join("snp"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let sentinel = tmp.path().join("must-not-run");
+    let command = format!(
+        "printf '%s' 'quotes and $()'; touch '{}'",
+        sentinel.display()
+    );
+    let (code, output) = run_bash_capture_pty(
+        &config_dir,
+        &integration_path,
+        command.as_bytes(),
+        &sentinel,
+        &shim_dir,
+        &args_capture,
+    );
+    assert_eq!(code, 0, "bash PTY exited unsuccessfully: {output}");
+    assert!(!sentinel.exists(), "captured command was executed");
+
+    let listed = Command::new(snp_bin())
+        .args(["list", "--json", "--library", "pty"])
+        .env("XDG_CONFIG_HOME", config_dir.parent().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        listed.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(
+        snippets.len(),
+        1,
+        "pty output: {output}; args: {}; list: {}",
+        fs::read_to_string(&args_capture).unwrap_or_default(),
+        String::from_utf8_lossy(&listed.stdout)
+    );
+    assert_eq!(snippets[0]["command"], command);
+}
+
+#[test]
+fn test_command_stdin_pty_persists_exact_command_body() {
+    let (_tmp, config_dir) = setup_test_env();
+    let command = b"printf '%s' 'pty ingestion'\n";
+    let mut input = command.to_vec();
+    // VEOF gives read_to_end an EOF while keeping the command body in the PTY.
+    input.push(0x04);
+    let (code, output) = run_snp_pty(
+        &["new", "--command-stdin", "--description", "PTY ingestion"],
+        &config_dir,
+        &input,
+    );
+    assert_eq!(code, 0, "snp new --command-stdin failed: {output}");
+
+    let listed = Command::new(snp_bin())
+        .args(["list", "--json"])
+        .env("XDG_CONFIG_HOME", config_dir.parent().unwrap())
+        .output()
+        .unwrap();
+    assert!(listed.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&listed.stdout).unwrap();
+    let captured = snippets
+        .iter()
+        .find(|snippet| snippet["description"] == "PTY ingestion")
+        .expect("PTY snippet was not persisted");
+    assert_eq!(
+        captured["command"],
+        String::from_utf8_lossy(command).to_string()
+    );
 }
 
 /// Diagnostic: verify that data written to master is readable on slave stdin.

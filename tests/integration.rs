@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 fn snp_cmd() -> Command {
@@ -18,6 +19,17 @@ fn snp_in(config_dir: &Path) -> Command {
     let mut cmd = snp_cmd();
     cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
     cmd
+}
+
+fn output_with_stdin(mut cmd: Command, input: &[u8]) -> std::process::Output {
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    child.wait_with_output().unwrap()
 }
 
 // --- Version ---
@@ -926,6 +938,151 @@ fn test_new_adds_snippet_to_library() {
         contents.contains("echo contract"),
         "TOML must contain the new snippet command"
     );
+}
+
+#[test]
+fn test_new_command_stdin_preserves_exact_text_and_metadata() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut create = snp_in(&config_dir);
+    create.args(["library", "create", "stdin-capture"]);
+    assert!(create.output().unwrap().status.success());
+
+    let command = "-nasty 'quoted value' $(not executed) | printf '\u{65e5}\u{672c}\u{8a9e}'\n\n";
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "stdin capture",
+        "--tags",
+        "git,release shell",
+        "--library",
+        "stdin-capture",
+    ]);
+    let output = output_with_stdin(cmd, command.as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("not executed"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("not executed"));
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "stdin-capture"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(snippets[0]["command"], command);
+    assert_eq!(
+        snippets[0]["tags"],
+        serde_json::json!(["git", "release", "shell"])
+    );
+}
+
+#[test]
+fn test_new_command_stdin_preserves_no_trailing_newline() {
+    let (_tmp, config_dir) = setup_test_env();
+    let command = "echo \"quotes\" && printf '\\tUnicode: café'";
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["new", "--command-stdin", "--description", "exact bytes"]);
+    let output = output_with_stdin(cmd, command.as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets[0]["command"], command);
+}
+
+#[test]
+fn test_new_command_stdin_invalid_utf8_does_not_mutate_library() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut create = snp_in(&config_dir);
+    create.args(["library", "create", "invalid-stdin"]);
+    assert!(create.output().unwrap().status.success());
+    let library_path = config_dir.join("libraries").join("invalid-stdin.toml");
+    let before = fs::read(&library_path).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "invalid input",
+        "--library",
+        "invalid-stdin",
+    ]);
+    let output = output_with_stdin(cmd, &[0xff, 0xfe, b'\n']);
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        diagnostics.contains("valid UTF-8"),
+        "diagnostics: {diagnostics}"
+    );
+    assert_eq!(fs::read(&library_path).unwrap(), before);
+}
+
+#[test]
+fn test_new_command_stdin_requires_explicit_metadata_and_conflicts_with_positional() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut missing_description = snp_in(&config_dir);
+    missing_description.args(["new", "--command-stdin"]);
+    let output = output_with_stdin(missing_description, b"echo secret");
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        diagnostics.contains("Description required"),
+        "diagnostics: {diagnostics}"
+    );
+    assert!(!config_dir.join("libraries.toml").exists());
+
+    let output = snp_in(&config_dir)
+        .args(["new", "--command-stdin", "--description", "x", "echo y"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used"));
+}
+
+#[test]
+fn test_new_tags_prompt_flag_remains_compatible() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["new", "--description", "tagged", "echo tagged", "--tags"]);
+    let output = output_with_stdin(cmd, b"one,two\n");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets[0]["tags"], serde_json::json!(["one", "two"]));
 }
 
 // --- CLI contract: cron output format ---

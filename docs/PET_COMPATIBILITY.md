@@ -86,11 +86,29 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | --- | --- | --- | --- | --- | --- |
 | Command | `pet new` | `snp new` (alias: `n`) | Supported differently | — | Both create snippets interactively. |
 | Interactive prompts | Prompts for command, description, tag | Prompts for command, description, tags. Color-coded prompts (yellow/green/cyan). | Full | — | Equivalent workflow. |
-| CLI arguments | `pet new [command]` | `snp new [command] [-d description] [-t tags] [-m multiline] [--library lib]` | Supported differently | — | snp supports non-interactive creation with `--description` and `--tags` flags. |
+| CLI arguments | `pet new [command]` | `snp new [command] [-d description] [-t [tags]] [-m multiline] [--command-stdin] [--library lib]` | Supported differently | R2A | `--tags` without a value still prompts; a value is comma/space-separated. `--command-stdin` is exact UTF-8 ingestion for shell helpers. |
 | Multiline support | `pet new --multiline` | `snp new --multiline` (alias: `-m`). Reads from stdin terminated by two blank lines. | Full | — | Equivalent. Multiline input from stdin. |
 | Library target | Single file only | `--library` flag to target a specific library. Falls back to primary library or legacy path. | New | — | snp-only. |
 | Config override | N/A | `--config` flag for custom config path. | New | — | snp-only. |
 | Duplicate handling | Appends to single file | Appends to library file. IDs auto-generated, deduplicated on load. | Supported differently | — | snp assigns UUIDs; pet has no IDs. |
+
+### Release 2A: Command ingestion and history capture
+
+Release 2A is implemented. It adds `snp new --command-stdin` and generated
+`snp_new_current` / `snp_new_previous` helpers for Bash, Zsh, and Fish while
+leaving positional `snp new` behavior unchanged.
+
+- stdin is read as exact bytes, then validated as UTF-8; supplied trailing
+  newlines are preserved and no newline is appended or trimmed;
+- NUL bytes and inputs larger than 16 MiB are rejected before library mutation;
+- `--description` is required because command stdin is never reused for
+  metadata prompts; use explicit `--tags value` or omit `--tags`;
+- helpers use shell-native buffer/history APIs, do not execute or evaluate the
+  captured command, do not read history files, and install no keybindings;
+- previous-command helpers account for their own invocation so they do not
+  capture the helper call as the new snippet;
+- shell history can contain credentials, tokens, private URLs, and other
+  secrets. Review history before saving and avoid putting secrets in it.
 
 ### 3.3 search
 

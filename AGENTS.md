@@ -24,6 +24,11 @@ cargo test --test sync_integration
 # Run PTY end-to-end tests (must run single-threaded, needs portable-pty)
 cargo test --test pty_integration -- --test-threads=1
 
+# Release 2A command ingestion and shell-helper tests
+cargo test --test integration command_stdin
+cargo test --lib new_cmd
+cargo test --lib bash_new
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -190,11 +195,17 @@ snip-it/
 - `croncheck` spawns detached child process; uses lock file to prevent races
 - Cert generation shells out to `openssl` (not a Rust crypto crate)
 
-### Shell Integration (`snp shell init`)
+### Creation and Shell Integration (`snp new`, `snp shell init`)
+- `src/commands/new_cmd.rs` resolves positional, interactive, multiline, and `--command-stdin` sources before using the shared save pipeline.
+- `--command-stdin` validates UTF-8, rejects NUL bytes, preserves supplied trailing newlines, and caps input at 16 MiB.
+- Stdin ingestion requires `--description`; do not mix metadata prompts with command stdin.
+- Captured command bodies are data: never evaluate, execute, echo, or log them during ingestion.
 - `src/commands/shell_cmd.rs` generates Bash, Zsh, and Fish integration code
 - CLI: `snp shell init <bash|zsh|fish>` prints generated code to stdout
-- Two public functions per shell: `snp_select_raw` and `snp_select_expanded`
+- Four public functions per shell: `snp_select_raw`, `snp_select_expanded`, `snp_new_current`, and `snp_new_previous`
 - Shell functions call `snp select --query <buffer> --raw/--expanded --output-file <tmpfile>`
+- Capture helpers use shell-native current-buffer/history APIs and never parse history files.
+- Capture helpers forward metadata as argument arrays/lists, preserve the buffer, and install no keybindings by default.
 - Temp-file transport for lossless multiline handling (avoids `$(...)` trailing-newline stripping)
 - `--query` is an alias for `--filter` on the `select` command (pre-fills TUI search)
 - `snp select` returns `CommandOutcome` (Success/Cancelled); `Cancelled` maps to exit 4 at the CLI boundary in `main.rs`

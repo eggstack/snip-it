@@ -123,14 +123,63 @@ snp shell init bash | head -20   # or just the first 20 lines
 
 ### Generated functions
 
-Each shell gets two public functions:
+Each shell gets four public functions:
 
 | Function | Behavior |
 | --- | --- |
 | `snp_select_raw` | Inserts the snippet with variable placeholders unchanged |
 | `snp_select_expanded` | Prompts for variable values, then inserts the resolved command |
+| `snp_new_current` | Saves the current shell buffer as a new snippet |
+| `snp_new_previous` | Saves the previous accepted shell-history entry as a new snippet |
 
-An internal `__snp_select` function handles the shared logic.
+Internal helper functions handle shared selection and shell-specific capture
+logic.
+
+### Saving shell commands
+
+The capture helpers are opt-in functions/widgets; they do not install a
+keybinding. Bind them after sourcing, for example:
+
+```bash
+# Bash
+bind -x '"\C-n": snp_new_current'
+bind -x '"\C-p": snp_new_previous'
+
+# Zsh
+bindkey '^N' snp_new_current
+bindkey '^P' snp_new_previous
+
+# Fish
+bind \cn snp_new_current
+bind \cp snp_new_previous
+```
+
+Pass metadata as arguments so the helper can keep stdin dedicated to command
+data:
+
+```bash
+snp_new_current --description 'Current deployment command' --tags deploy,work
+snp_new_previous --description 'Last accepted command' --library work
+```
+
+The binary receives the command through `snp new --command-stdin`. It stores
+valid UTF-8 exactly, including zero or more supplied trailing newlines; it does
+not trim, normalize, evaluate, execute, or log the command body. The stdin
+ingestion limit is 16 MiB, and invalid UTF-8 or NUL bytes are rejected before
+the library is changed. `--description` is required in this mode; omit
+`--tags` or pass an explicit comma/space-separated value rather than using the
+interactive tag prompt.
+
+The Bash and Zsh previous helpers use their native history APIs and avoid
+self-capture when invoked as ordinary functions or widgets. Fish uses its
+native history search API. No helper reads `.bash_history`, `.zsh_history`, or
+Fish history files, and none prints the captured command as a status message.
+The Bash current-buffer widget requires a Bash Readline with `READLINE_LINE`
+(Bash 4+); the macOS system Bash 3.2 can still use the generated history
+helper, but cannot expose the active buffer to this widget.
+Shell history may contain credentials, access tokens, private URLs, or other
+secrets; inspect a command before saving it and avoid putting secrets in
+history in the first place.
 
 ### Binding keys
 

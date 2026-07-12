@@ -76,12 +76,24 @@ enum Commands {
     /// Create a new snippet (n)
     #[command(alias = "n")]
     New {
-        #[arg(default_value = "")]
-        command: String,
-        #[arg(short, long, action = clap::ArgAction::SetTrue)]
-        tags: bool,
-        #[arg(short, long, action = clap::ArgAction::SetTrue)]
+        /// Command text supplied as a positional argument.
+        #[arg(value_name = "COMMAND", conflicts_with_all = ["command_stdin", "multiline"])]
+        command: Option<String>,
+        /// Prompt for tags, or provide comma/space-separated tags directly.
+        #[arg(
+            short,
+            long,
+            action = clap::ArgAction::Set,
+            num_args = 0..=1,
+            default_missing_value = "__snp_prompt_tags__",
+            value_name = "TAGS"
+        )]
+        tags: Option<String>,
+        #[arg(short, long, action = clap::ArgAction::SetTrue, conflicts_with = "command_stdin")]
         multiline: bool,
+        /// Read the command body byte-for-byte from stdin.
+        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with_all = ["command", "multiline"])]
+        command_stdin: bool,
         #[arg(short = 'd', long)]
         description: Option<String>,
         #[arg(short, long)]
@@ -297,11 +309,20 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             command,
             tags,
             multiline,
+            command_stdin,
             description,
             config,
             library,
         }) => {
-            commands::new_cmd::run(command, description, tags, multiline, config, library)?;
+            commands::new_cmd::run(
+                command,
+                description,
+                tags,
+                multiline,
+                command_stdin,
+                config,
+                library,
+            )?;
         }
         Some(Commands::List {
             filter,

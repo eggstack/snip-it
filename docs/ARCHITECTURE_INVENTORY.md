@@ -26,6 +26,20 @@ A concise map of the snp internal architecture for contributors working on pet-c
   - `load_snippets()` / `save_snippets()` — legacy single-file operations
   - `ExpandedCommand` enum — `Cancel`, `Skip`, `Expanded(String)`
 
+### Creation Pipeline (`src/commands/new_cmd.rs`)
+- `CommandSource` separates positional, interactive, multiline, and stdin command bodies before persistence.
+- `read_command_stdin()` reads at most 16 MiB, validates UTF-8, rejects NUL bytes, and preserves all other bytes including trailing newlines.
+- `--command-stdin` requires `--description` and never reuses command stdin for metadata prompts.
+- Positional, prompt, and stdin sources converge on `Snippet::new()` and the existing `save_library()` / `save_snippets()` backup and atomic-write paths.
+- Stdin command bodies are never echoed or logged as part of ingestion; the command is data and is not executed.
+
+### Shell Integration (`src/commands/shell_cmd.rs`)
+- `snp shell init` generates Bash, Zsh, and Fish code at runtime.
+- Four public functions are generated per shell: `snp_select_raw`, `snp_select_expanded`, `snp_new_current`, and `snp_new_previous`.
+- Selection uses the existing temp-file output contract; capture helpers pass command text to `snp new --command-stdin` without evaluation.
+- Current-buffer helpers use Readline, ZLE, or `commandline`; previous helpers use native `fc` or Fish `history search` and never parse history files.
+- No keybindings are installed automatically. Metadata is forwarded as shell argument arrays/lists, and capture helpers preserve the current buffer.
+
 ### Error Handling (`src/error.rs`)
 - `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`
 - `SnipResult<T>` type alias

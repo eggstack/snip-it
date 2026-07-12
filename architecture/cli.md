@@ -31,7 +31,7 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | Command | Alias | Module | Async | Description |
 |---------|-------|--------|-------|-------------|
 | `version` | `v` | — | No | Print version |
-| `new` | `n` | `new_cmd` | No | Create snippet (interactive stdin) |
+| `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, or exact command stdin |
 | `list` | `l` | `list_cmd` | No | List snippets (with fuzzy filter) |
 | `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell |
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard |
@@ -75,7 +75,7 @@ Most TUI commands (`run`, `clip`, `search`) follow the same pattern:
 - `src/commands/run_cmd.rs` — Shell execution with output file support
 - `src/commands/clip_cmd.rs` — Clipboard copy with audit logging
 - `src/commands/search_cmd.rs` — Display snippet details
-- `src/commands/new_cmd.rs` — Interactive snippet creation (single + multiline)
+- `src/commands/new_cmd.rs` — Unified snippet creation pipeline (positional, prompts, multiline, and `--command-stdin`)
 - `src/commands/sync_cmd.rs` — Server library linking, conflict resolution
 - `src/commands/library_cmd.rs` — Library CRUD operations
 - `src/commands/premade_cmd.rs` — Premade library browsing/downloading

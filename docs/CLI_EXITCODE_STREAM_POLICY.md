@@ -105,6 +105,23 @@ sequences. Errors (e.g., failed library load) go to stderr.
 - **Success**: `println!("Snippet added")` to **stdout**.
 - **Errors**: To stderr via the main error handler.
 
+#### Release 2A command ingestion
+
+`snp new --command-stdin` explicitly assigns stdin to the command body. The
+body is read as bytes, validated as UTF-8, and passed through unchanged,
+including supplied trailing newlines. It is not echoed to stdout, evaluated,
+executed, or included in normal-level ingestion logs. Invalid UTF-8, NUL bytes,
+and inputs larger than 16 MiB return exit 1 before a snippet is appended.
+
+Because command stdin is consumed in full, `--description` is required and the
+prompt-only form of `--tags` is unavailable. Use `--tags git,release` (or omit
+the option) for noninteractive capture. The existing positional form keeps its
+current prompt and command-echo behavior.
+
+Generated `snp_new_current` and `snp_new_previous` helpers pass command text to
+this mode using the active shell's buffer/history API. They do not execute the
+text, parse history files, or install keybindings automatically.
+
 Interactive prompts use `io::stdout().flush()` and `io::stdin().read_line()`
 directly — they do not go through the TUI layer.
 

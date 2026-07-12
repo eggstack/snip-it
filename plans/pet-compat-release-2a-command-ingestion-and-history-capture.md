@@ -2,6 +2,13 @@
 
 ## Purpose
 
+**Implementation status (2026-07-12): Complete.** `snp new --command-stdin`,
+the unified creation pipeline, Bash/Zsh/Fish generated capture helpers,
+integration coverage, PTY ingestion coverage, and documentation are landed.
+The local environment has Bash 3.2 and no Fish binary; Bash current-buffer PTY
+coverage is skipped with a clear reason there, while generated Fish syntax and
+function tests remain covered when Fish is installed.
+
 Add maintained, opt-in workflows for saving commands discovered during normal shell use without requiring users to copy and paste command text manually or edit TOML.
 
 This release track closes a practical migration gap for established `pet` users: saving the current command buffer, saving the previously accepted command, and optionally selecting an item from shell history through shell-native facilities.

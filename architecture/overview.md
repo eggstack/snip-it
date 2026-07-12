@@ -18,7 +18,7 @@ This document provides a bird's-eye view of the snip-it codebase. Each section l
 The CLI is the primary interface for users. The entry point is `src/main.rs` which uses `clap` to define all subcommands.
 
 **Commands** (`src/commands/`):
-- [new_cmd.md](commands/new_cmd.md) — Interactive snippet creation
+- [new_cmd.md](commands/new_cmd.md) — Unified snippet creation and exact stdin ingestion
 - [list_cmd.md](commands/list_cmd.md) — Text-based snippet listing
 - [run_cmd.md](commands/run_cmd.md) — TUI selection + shell execution
 - [clip_cmd.md](commands/clip_cmd.md) — Copy snippet to clipboard

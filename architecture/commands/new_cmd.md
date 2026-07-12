@@ -2,56 +2,70 @@
 
 ## Overview
 
-`new_cmd` provides interactive snippet creation via the TUI. It supports multiline input, tags, folders, and favorite marking.
+`src/commands/new_cmd.rs` owns command-source resolution and then sends every
+source through the same metadata, validation, library-loading, backup, and
+atomic-save pipeline. The positional command and existing prompts remain the
+compatibility path; Release 2A adds exact stdin ingestion for shell helpers.
 
-## Entry Point
+## Sources
 
-```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
-```
+The CLI accepts these mutually exclusive command-body sources:
 
-## Flow
+| CLI form | Internal source | Behavior |
+| --- | --- | --- |
+| `snp new '<command>'` | `CommandSource::Positional` | Existing positional behavior; non-empty commands are echoed as before. |
+| `snp new` | `CommandSource::InteractivePrompt` | Existing single-line prompt, with the existing trim behavior. |
+| `snp new --multiline` | `CommandSource::MultilinePrompt` | Existing two-blank-line stdin prompt. |
+| `snp new --command-stdin` | `CommandSource::Stdin` | Reads stdin as exact UTF-8 command data. |
 
-1. **Name input** — Prompt for snippet name
-2. **Command input** — Multiline TUI input (Ctrl+D to finish, Ctrl+C to cancel)
-3. **Optional fields** — Tags, folders, favorite flag
-4. **Save** — Write to library via `save_snippets()` after backup
+`--command-stdin` conflicts with a positional command and `--multiline`.
+Source resolution happens before library resolution so malformed stdin cannot
+trigger migration or persistence.
 
-## Key Features
+## Exact stdin contract
 
-### Multiline Input
+`read_command_stdin()` reads at most 16 MiB, validates UTF-8, rejects NUL bytes,
+and returns the resulting `String` without trimming, shell parsing, evaluation,
+or an appended newline. A supplied trailing newline (or multiple trailing
+newlines) is stored unchanged. The command is data only: it is never executed
+by the ingestion path and is not echoed to stdout or included in normal logs.
 
-Uses `ui::multiline_input()` to capture multi-line commands:
-- `Enter` adds new line
-- `Ctrl+D` finishes input
-- `Ctrl+C` cancels
+The data model rejects commands that are empty or whitespace-only, matching
+`Snippet::new()` and existing positional creation behavior.
 
-### Tags
+## Metadata and persistence
 
-Comma-separated input parsed into `Vec<String>`.
+`--description` accepts a direct description. With `--command-stdin`, it is
+required because stdin is reserved for the command body; metadata prompts must
+not consume the command stream. `--tags` remains a prompt when passed without a
+value, and accepts comma/space-separated values when given a value. The
+prompt-only form is rejected for stdin ingestion.
 
-### Folder Organization
+After source and metadata resolution:
 
-Snippets can be placed in folders for organization.
+1. `get_library_path()` resolves a named or primary library.
+2. The existing library or legacy single-file loader reads the collection.
+3. `Snippet::new()` validates the command and description and assigns ID/time
+   fields through the existing model.
+4. The snippet is appended and saved through `save_library()` or
+   `save_snippets()`, preserving backup and atomic-write behavior.
 
-### Favorite
+No separate stdin persistence implementation exists.
 
-Boolean flag for quick access / sorting.
+## Errors and atomicity
 
-## Library Integration
+Invalid UTF-8, NUL bytes, oversized input, missing noninteractive metadata,
+empty commands, missing libraries, and save failures return the existing
+general error status. They occur before the new snippet is appended; save
+operations use the existing backup and atomic replacement path, so an input or
+write failure does not leave a partial snippet.
 
-- Loads existing snippets with `load_snippets()`
-- Creates backup before save with `backup_library()`
-- Appends new snippet, sorts by `updated_at` descending
-- Saves with `save_snippets()`
+## Testing
 
-## Error Handling
-
-- `SnipError::Toml` on serialization failure
-- `SnipError::Io` on file write failure
-- User can cancel at any prompt (Ctrl+C)
-
-## Related
-
-- [mod.md](mod.md) — Shared helpers (path resolution, library loading)
-- [library.md](../library.md) — Snippet data structures
+- `src/commands/new_cmd.rs` unit tests cover exact newlines, invalid UTF-8,
+  NUL rejection, and tag parsing.
+- `tests/integration.rs` verifies exact TOML round-trips, metadata, leading
+  hyphens, Unicode, metacharacters, no trailing newline, invalid input
+  atomicity, conflicts, and legacy `--tags` prompting.
+- Shell integration tests stub `snp` and verify that generated helpers pass
+  command data over stdin without evaluating it.

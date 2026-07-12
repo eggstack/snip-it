@@ -131,10 +131,28 @@ snp select
 snp search
 ```
 
-`snp new` prompts for a description (or accepts `--description`), and `--tags`
-also prompts for tags. Variable values are requested when a snippet is run or
-copied. In the TUI, press `d` in normal mode and confirm with `y` to delete the
-selected snippet; any other key cancels.
+`snp new` prompts for a description (or accepts `--description`). `--tags`
+retains its prompt behavior when passed without a value, and also accepts
+comma/space-separated values such as `--tags git,release`. Variable values are
+requested when a snippet is run or copied. In the TUI, press `d` in normal mode
+and confirm with `y` to delete the selected snippet; any other key cancels.
+
+For exact command ingestion from a pipe or shell helper, provide metadata
+non-interactively and let `snp` own stdin for the command body:
+
+```bash
+printf '%s' 'git commit -m "release"' | \
+  snp new --command-stdin --description 'Release commit'
+cat deploy.sh | snp new --command-stdin --description 'Deploy script' \
+  --tags deploy,script --library work
+```
+
+`--command-stdin` preserves valid UTF-8 bytes exactly, including supplied
+trailing newlines, and does not execute or print the captured command. It
+rejects invalid UTF-8, NUL bytes, and input larger than 16 MiB. Because stdin is
+reserved for command data, `--description` is required and tag prompts cannot
+be used in this mode. Do not pass secrets through shell history; captured
+history can contain credentials, tokens, or private URLs.
 
 ### Snippet files
 
@@ -294,6 +312,11 @@ eval "$(snp shell init zsh)"
 snp shell init fish | source
 ```
 
+In addition to the selection functions below, the generated integration
+defines `snp_new_current` for the current buffer and `snp_new_previous` for the
+previous accepted shell command. These capture helpers never execute the
+captured text and do not install keybindings automatically.
+
 This defines `snp_select_raw` (inserts placeholders unchanged) and
 `snp_select_expanded` (prompts for variables before inserting). Bind them
 to your preferred keys:
@@ -301,12 +324,18 @@ to your preferred keys:
 ```bash
 # Bash
 bind -x '"\C-o": snp_select_raw'
+bind -x '"\C-n": snp_new_current'
+bind -x '"\C-p": snp_new_previous'
 
 # Zsh
 bindkey '^O' snp_select_raw
+bindkey '^N' snp_new_current
+bindkey '^P' snp_new_previous
 
 # Fish
 bind \co snp_select_raw
+bind \cn snp_new_current
+bind \cp snp_new_previous
 ```
 
 The generated code is safe to inspect before sourcing. It invokes `snp`
