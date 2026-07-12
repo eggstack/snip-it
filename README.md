@@ -271,10 +271,51 @@ snp sync         Push, pull, or bidirectionally sync libraries
 snp cron         Print a periodic sync schedule
 snp keybindings  Show TUI keybindings
 snp update       Check for and install an update
+snp shell        Generate interactive shell integration
 snp completions  Generate shell completions
 ```
 
 Run `snp <command> --help` for command-specific options.
+
+## Shell integration
+
+snip-it generates shell functions that search snippets using the current
+command buffer as the initial query and insert the selected snippet without
+executing it. No keybindings are installed by default.
+
+```bash
+# Bash — add to ~/.bashrc
+eval "$(snp shell init bash)"
+
+# Zsh — add to ~/.zshrc
+eval "$(snp shell init zsh)"
+
+# Fish — add to ~/.config/fish/config.fish
+snp shell init fish | source
+```
+
+This defines `snp_select_raw` (inserts placeholders unchanged) and
+`snp_select_expanded` (prompts for variables before inserting). Bind them
+to your preferred keys:
+
+```bash
+# Bash
+bind -x '"\C-o": snp_select_raw'
+
+# Zsh
+bindkey '^O' snp_select_raw
+
+# Fish
+bind \co snp_select_raw
+```
+
+The generated code is safe to inspect before sourcing. It invokes `snp`
+through your `PATH`, passes the current buffer as `--query`, and uses a
+temp-file transport for lossless multiline handling. On cancellation the
+original buffer is preserved exactly.
+
+See [USER_GUIDE.md](USER_GUIDE.md#shell-integration) for the full
+reference including expanded mode, troubleshooting, and removal.
 
 ## Configuration and security
 

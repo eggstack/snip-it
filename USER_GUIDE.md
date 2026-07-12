@@ -8,6 +8,7 @@ and automation.
 
 - [Libraries](#libraries)
 - [Pet compatibility and import](#pet-compatibility-and-import)
+- [Shell integration](#shell-integration)
 - [Themes](#themes)
 - [Sync](#sync)
 - [Syncing one account across environments](#syncing-one-account-across-environments)
@@ -90,6 +91,100 @@ Snip-it also reads older `[[Snippets]]` files and capitalized aliases such as
 (`id`, `folders`, `favorite`, timestamps, and sync state); pet will ignore data
 it does not know about, so use a separate copy if you need to preserve that
 metadata while editing the same collection with both tools.
+
+## Shell integration
+
+snip-it generates Bash, Zsh, and Fish functions that integrate snippet
+selection directly into your shell prompt. The generated code passes the
+current command buffer as the initial search query, inserts the selected
+snippet without executing it, and preserves the original buffer on
+cancellation.
+
+### Setup
+
+```bash
+# Bash — add to ~/.bashrc
+eval "$(snp shell init bash)"
+
+# Zsh — add to ~/.zshrc
+eval "$(snp shell init zsh)"
+
+# Fish — add to ~/.config/fish/config.fish
+snp shell init fish | source
+```
+
+The `eval` and `| source` invocations execute trusted generated code from
+your installed `snp` binary. Inspect the output first if you prefer:
+
+```bash
+snp shell init bash    # review the generated code
+snp shell init bash | head -20   # or just the first 20 lines
+```
+
+### Generated functions
+
+Each shell gets two public functions:
+
+| Function | Behavior |
+| --- | --- |
+| `snp_select_raw` | Inserts the snippet with variable placeholders unchanged |
+| `snp_select_expanded` | Prompts for variable values, then inserts the resolved command |
+
+An internal `__snp_select` function handles the shared logic.
+
+### Binding keys
+
+No keybindings are installed by default. After sourcing the generated
+code, bind your preferred keys:
+
+```bash
+# Bash — in ~/.bashrc after the eval
+bind -x '"\C-o": snp_select_raw'
+bind -x '"\C-o\C-e": snp_select_expanded'
+
+# Zsh — in ~/.zshrc after the eval
+bindkey '^O' snp_select_raw
+bindkey '^O^E' snp_select_expanded
+
+# Fish — in ~/.config/fish/config.fish after the source
+bind \co snp_select_raw
+bind \co\e snp_select_expanded
+```
+
+### How it works
+
+1. The shell function reads the current command buffer.
+2. It writes a temp file path and calls `snp select --query <buffer> --raw`
+   (or `--expanded`) with `--output-file <tmpfile>`.
+3. On success the temp file contents replace the buffer; on cancellation
+   (exit code 4) the original buffer is restored exactly.
+4. The temp file is removed immediately after reading.
+
+The temp-file transport is lossless: multiline snippets, quotes, backslashes,
+Unicode, and shell metacharacters are preserved byte-for-byte. The generated
+code never uses `eval` on selected content.
+
+### Cancellation and errors
+
+- **User cancels** (Esc/Ctrl-C in the TUI): exit code 4, original buffer
+  restored, no output printed.
+- **Operational failure** (snp not found, library missing, etc.): stderr
+  diagnostic shown, original buffer restored, non-zero exit code.
+- **Success**: the selected command replaces the buffer; cursor moves to the
+  end. The user presses Enter explicitly to execute.
+
+### Pet migration
+
+If you previously used pet's shell integration (typically a `pet-select`
+function bound to Ctrl-T), the `snp_select_raw` function provides the same
+workflow: search with the current buffer, insert without executing, edit
+placeholders in place.
+
+### Removal
+
+Remove the `eval`/`source` line and any `bind`/`bindkey` lines you added.
+No files are written by `snp shell init`; the generated code is printed to
+stdout only.
 
 ## Themes
 

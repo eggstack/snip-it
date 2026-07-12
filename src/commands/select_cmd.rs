@@ -2,6 +2,7 @@ use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use crate::library::Snippet;
 use std::cell::Cell;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
 enum OutputMode {
@@ -31,11 +32,15 @@ fn process_snippet(
 }
 
 /// Select a snippet and print its command to stdout (no execution).
+///
+/// When `output_file` is provided, writes the selection to that file instead
+/// of stdout. Used by shell integration functions for lossless transport.
 pub fn run(
     filter: Option<String>,
     library: Option<String>,
     _raw: bool,
     expanded: bool,
+    output_file: Option<PathBuf>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
     let mode = if expanded {
@@ -55,11 +60,20 @@ pub fn run(
     })?;
 
     if cancelled.get() {
+        if let Some(path) = &output_file {
+            let _ = std::fs::remove_file(path);
+        }
         std::process::exit(4);
     }
 
     if let Some(command) = selected_command.take() {
-        println!("{command}");
+        if let Some(path) = output_file {
+            std::fs::write(&path, command).map_err(|e| {
+                crate::error::SnipError::io_error("write selection to file", path.clone(), e)
+            })?;
+        } else {
+            println!("{command}");
+        }
     }
 
     Ok(())

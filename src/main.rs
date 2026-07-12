@@ -139,6 +139,9 @@ enum Commands {
     Select {
         #[arg(short, long)]
         filter: Option<String>,
+        /// Initial query to pre-fill the search (alias for --filter)
+        #[arg(long)]
+        query: Option<String>,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync: bool,
         #[arg(short, long)]
@@ -147,6 +150,9 @@ enum Commands {
         raw: bool,
         #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "raw")]
         expanded: bool,
+        /// Write selection to file instead of stdout (used by shell integration)
+        #[arg(long)]
+        output_file: Option<PathBuf>,
     },
     /// Edit the config file in $EDITOR (e)
     #[command(alias = "e")]
@@ -206,6 +212,11 @@ enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Generate interactive shell integration (functions/widgets)
+    Shell {
+        #[command(subcommand)]
+        command: ShellCommands,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -247,6 +258,27 @@ enum PremadeCommands {
     /// Update a premade library (show diff and re-download)
     #[command(alias = "u")]
     Update { name: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum ShellCommands {
+    /// Generate shell integration code for the specified shell
+    #[command(alias = "i")]
+    Init {
+        /// Shell to generate integration for
+        #[arg(value_enum)]
+        shell: ShellIntegration,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ShellIntegration {
+    /// Bash shell integration
+    Bash,
+    /// Zsh shell integration
+    Zsh,
+    /// Fish shell integration
+    Fish,
 }
 
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
@@ -311,12 +343,23 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
         }
         Some(Commands::Select {
             filter,
+            query,
             sync: _,
             library,
             raw,
             expanded,
+            output_file,
         }) => {
-            commands::select_cmd::run(filter, library, raw, expanded, &RUNTIME)?;
+            // --query is an alias for --filter (used by shell integration)
+            let effective_filter = filter.or(query);
+            commands::select_cmd::run(
+                effective_filter,
+                library,
+                raw,
+                expanded,
+                output_file,
+                &RUNTIME,
+            )?;
         }
         Some(Commands::Edit { library }) => {
             commands::edit_cmd::run(library, None)?;
@@ -373,6 +416,16 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "snp", &mut std::io::stdout());
         }
+        Some(Commands::Shell { command }) => match command {
+            ShellCommands::Init { shell } => {
+                let shell_type = match shell {
+                    ShellIntegration::Bash => commands::shell_cmd::ShellType::Bash,
+                    ShellIntegration::Zsh => commands::shell_cmd::ShellType::Zsh,
+                    ShellIntegration::Fish => commands::shell_cmd::ShellType::Fish,
+                };
+                commands::shell_cmd::run(shell_type)?;
+            }
+        },
     }
     Ok(())
 }

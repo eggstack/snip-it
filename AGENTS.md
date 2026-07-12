@@ -76,6 +76,7 @@ snip-it/
 │   │   ├── clip_cmd.rs # Copy to clipboard
 │   │   ├── search_cmd.rs
 │   │   ├── select_cmd.rs # Non-executing selection to stdout (pet compat)
+│   │   ├── shell_cmd.rs  # Shell integration generation (snp shell init)
 │   │   ├── new_cmd.rs
 │   │   ├── list_cmd.rs
 │   │   ├── edit_cmd.rs
@@ -174,6 +175,18 @@ snip-it/
 - PID file written at `state_dir()/snip-sync.pid`, cleaned on shutdown
 - `croncheck` spawns detached child process; uses lock file to prevent races
 - Cert generation shells out to `openssl` (not a Rust crypto crate)
+
+### Shell Integration (`snp shell init`)
+- `src/commands/shell_cmd.rs` generates Bash, Zsh, and Fish integration code
+- CLI: `snp shell init <bash|zsh|fish>` prints generated code to stdout
+- Two public functions per shell: `snp_select_raw` and `snp_select_expanded`
+- Shell functions call `snp select --query <buffer> --raw/--expanded --output-file <tmpfile>`
+- Temp-file transport for lossless multiline handling (avoids `$(...)` trailing-newline stripping)
+- `--query` is an alias for `--filter` on the `select` command (pre-fills TUI search)
+- Cancellation: exit code 4, original buffer restored, temp file cleaned up
+- No keybindings installed by default; generated code includes binding examples in comments
+- No `eval` on selected content; `eval` only for sourcing trusted generated init code
+- `snp check` at widget invocation time (not at source time) for graceful degradation
 
 ### Database (snip-sync)
 - SQLite via `sqlx` with in-memory support for tests
