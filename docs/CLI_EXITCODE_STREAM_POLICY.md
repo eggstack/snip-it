@@ -81,6 +81,21 @@ sequences. Errors (e.g., failed library load) go to stderr.
 - **stderr**: Error messages (clipboard failure, etc.) from the main handler.
 - **Exit**: 0 on success, 1 on error.
 
+#### `snp select` (alias `sel`)
+
+- **TUI**: Renders directly to the terminal via crossterm.
+- **stdout**: Prints the selected command string (raw or expanded) on success.
+  When `--output-file` is provided, nothing is printed to stdout; the command
+  is written to the file instead.
+- **stderr**: Error messages from the main error handler.
+- **Exit**: 0 on success, 4 on user cancellation (`q`/`Esc` or variable prompt
+  cancel), 1 on `SnipError` (all error variants).
+- **Output file**: Rejects symlinks and directories with exit 1. On cancellation,
+  the output file is removed if it exists and is a regular file.
+- **Return type**: `SnipResult<CommandOutcome>` — `CommandOutcome::Success` or
+  `CommandOutcome::Cancelled`. Exit code 4 is mapped at the CLI boundary in
+  `main.rs`.
+
 #### `snp new` (alias `n`)
 
 - **Prompts**: `print!()` writes "Command> ", "Description> ", "Tags> " to
@@ -203,7 +218,7 @@ Status messages are split across both streams. No consistent convention.
 | 1 | `ERROR` | General/unclassified error | Default for all current `SnipError` variants |
 | 2 | `USAGE` | Invalid arguments or missing required input | Bad CLI flags, missing library name for `library delete` |
 | 3 | `NOT_FOUND` | Requested resource does not exist | Snippet not found, library not found, file missing |
-| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc` in snippet selector (planned for `snp select`) |
+| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc` in snippet selector (`snp select`) |
 | 5 | `IO` | Filesystem or clipboard failure | Cannot write file, clipboard unavailable |
 | 6 | `PARSE` | Configuration or data format error | Malformed TOML, invalid sync config |
 
@@ -212,9 +227,10 @@ Status messages are split across both streams. No consistent convention.
 by checking specific codes.
 
 **Note**: The `ProcessResult::Cancel` variant (returned when the user presses
-`q` in the TUI) currently maps to exit 0. Under the proposed contract, TUI
-cancellation would map to exit 4 — but only for the future `snp select`
-primitive, not for existing commands where cancellation is a valid "done" state.
+`q` in the TUI) maps to exit 0 for existing commands (`run`, `clip`, `search`)
+where cancellation is a valid "done" state. For `snp select`, cancellation
+maps to exit 4 via `CommandOutcome::Cancelled`, which is returned to the CLI
+boundary in `main.rs`.
 
 ### Stream Contract
 
@@ -247,6 +263,7 @@ primitive, not for existing commands where cancellation is a valid "done" state.
 | `list --json` | JSON | JSON (no change) | Nothing | Nothing |
 | `list --csv` | CSV | CSV (no change) | Nothing | Nothing |
 | `search` | Snippet details | Snippet details | Nothing | Nothing |
+| `select` | Command string | Command string (no change) | Nothing | Nothing |
 | `keybindings` | Keybinding docs | *Move to stderr* | Nothing | Keybinding docs |
 | `cron` | Crontab entry | *Move to stderr* | Nothing | Crontab entry |
 | `new` prompts | "Command> " | *Move to stderr* | Nothing | "Command> " |
@@ -265,20 +282,17 @@ primitive, not for existing commands where cancellation is a valid "done" state.
 - `--json` and `--csv` remain on stdout (machine-readable)
 - `version` and `completions` remain on stdout (machine-readable / standard)
 
-### For `snp select` (Release 1B)
+### For `snp select` (Release 1B — implemented)
 
-A new `snp select` primitive will provide non-TUI snippet selection for
-scripting:
+A `snp select` primitive provides non-TUI snippet selection for scripting:
 
 | Scenario | stdout | stderr | Exit Code |
 |----------|--------|--------|-----------|
-| Snippet selected | Expanded command string | Nothing | 0 |
-| User cancelled (`q`/`Esc`) | Nothing | Nothing | 4 |
-| Variable prompt cancelled | Nothing | Nothing | 4 |
-| Snippet not found | Nothing | `error: ...` | 3 |
-| Library not found | Nothing | `error: ...` | 3 |
-| I/O error | Nothing | `error: ...` | 5 |
-| Parse error | Nothing | `error: ...` | 6 |
+| Selection to stdout | exact command | empty except tracing | 0 |
+| Selection to output file | empty | empty except tracing | 0 |
+| User cancellation (`q`/`Esc`) | empty | empty | 4 |
+| Variable prompt cancelled | empty | empty | 4 |
+| `SnipError` (all variants) | empty | `error: ...` | 1 |
 
 **Usage**:
 

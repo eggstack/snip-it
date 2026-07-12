@@ -1,3 +1,4 @@
+use crate::CommandOutcome;
 use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use crate::library::Snippet;
@@ -42,7 +43,7 @@ pub fn run(
     expanded: bool,
     output_file: Option<PathBuf>,
     runtime: &tokio::runtime::Runtime,
-) -> SnipResult<()> {
+) -> SnipResult<CommandOutcome> {
     let mode = if expanded {
         OutputMode::Expanded
     } else {
@@ -60,14 +61,37 @@ pub fn run(
     })?;
 
     if cancelled.get() {
-        if let Some(path) = &output_file {
+        if let Some(path) = &output_file
+            && path.is_file()
+            && !path.is_symlink()
+        {
             let _ = std::fs::remove_file(path);
         }
-        std::process::exit(4);
+        return Ok(CommandOutcome::Cancelled);
     }
 
     if let Some(command) = selected_command.take() {
         if let Some(path) = output_file {
+            if path.is_symlink() {
+                return Err(crate::error::SnipError::io_error(
+                    "write selection to file",
+                    path.clone(),
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "output file is a symlink; refusing to follow",
+                    ),
+                ));
+            }
+            if path.is_dir() {
+                return Err(crate::error::SnipError::io_error(
+                    "write selection to file",
+                    path.clone(),
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "output file path is a directory",
+                    ),
+                ));
+            }
             std::fs::write(&path, command).map_err(|e| {
                 crate::error::SnipError::io_error("write selection to file", path.clone(), e)
             })?;
@@ -76,5 +100,5 @@ pub fn run(
         }
     }
 
-    Ok(())
+    Ok(CommandOutcome::Success)
 }

@@ -183,10 +183,13 @@ snip-it/
 - Shell functions call `snp select --query <buffer> --raw/--expanded --output-file <tmpfile>`
 - Temp-file transport for lossless multiline handling (avoids `$(...)` trailing-newline stripping)
 - `--query` is an alias for `--filter` on the `select` command (pre-fills TUI search)
-- Cancellation: exit code 4, original buffer restored, temp file cleaned up
+- `snp select` returns `CommandOutcome` (Success/Cancelled); `Cancelled` maps to exit 4 at the CLI boundary in `main.rs`
+- Shell adapters check exit status before file emptiness, and propagate nonzero exit codes from operational failures
+- Cancellation (exit code 4): original buffer restored, temp file cleaned up
+- `--output-file` rejects symlinks and directories
 - No keybindings installed by default; generated code includes binding examples in comments
 - No `eval` on selected content; `eval` only for sourcing trusted generated init code
-- `snp check` at widget invocation time (not at source time) for graceful degradation
+- `command -v snp` at widget invocation time (not at source time) for graceful degradation
 
 ### Database (snip-sync)
 - SQLite via `sqlx` with in-memory support for tests

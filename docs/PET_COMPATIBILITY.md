@@ -102,7 +102,18 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Initial query | Shell buffer content passed as query | `--filter` flag provides initial filter string. | Supported differently | — | snp does not yet receive shell buffer as query. R1B adds this. |
 | Library scoping | Single file | `--library` flag. Searches within a single library. | New | — | snp-only. |
 
-### 3.4 edit
+### 3.4 select
+
+| Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Command | No equivalent | `snp select` (alias: `sel`) | New | — | Non-executing selection primitive for shell integration. |
+| Output | N/A | Prints selected command to stdout (or `--output-file`). | New | — | Machine-readable output for piping and shell integration. |
+| Cancellation | N/A | Exit code 4 on `q`/`Esc`/cancel. Empty stdout. | New | — | Shell adapters check exit code 4 and restore buffer. |
+| Raw vs expanded | N/A | `--raw` (default) prints command unchanged. `--expanded` prompts for variables. Mutually exclusive. | New | — | `--raw` is for placeholder insertion; `--expanded` is for evaluated commands. |
+| Initial query | N/A | `--query` (alias `--filter`) pre-fills TUI search. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
+| Output file | N/A | `--output-file` writes selection to file. Rejects symlinks and directories. | New | — | Used by shell adapters for lossless multiline transport. |
+
+### 3.5 edit
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -110,7 +121,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Target file | `~/.config/pet/snippets.toml` | Primary library TOML or `--library` target. Falls back to legacy snippets path. | Supported differently | — | snp opens the active library file. |
 | Editor resolution | `$EDITOR` | `$EDITOR`, falls back to `vim`. Resolves bare names via PATH. Symlink-attack protection. | Supported differently | — | snp adds path resolution and security checks. |
 
-### 3.5 list
+### 3.6 list
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -120,7 +131,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Library scoping | Single file | `--library` flag. `--config` flag for legacy path. | New | — | snp-only. |
 | Deleted snippets | No concept | Filtered out by default (tombstoned for sync). | New | — | snp-only. |
 
-### 3.6 sync
+### 3.7 sync
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -132,7 +143,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Auto-sync | `pet` config: `auto_sync = true` | Not yet implemented. Manual/scheduled via `snp cron`. | Planned | R5 | Will add `auto_sync` with debounce. |
 | Cron scheduling | Not built-in (user configures externally) | `snp cron --interval <minutes>` sets up automatic sync. | New | — | snp-only. |
 
-### 3.7 import / export
+### 3.8 import / export
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -190,11 +201,11 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Shell init script | `pet init bash` / `pet init zsh` / `pet init fish` — generates shell functions | Not implemented. | Planned | R1C | Will add `snp shell init bash/zsh/fish` generating buffer-insertion functions. |
+| Shell init script | `pet init bash` / `pet init zsh` / `pet init fish` — generates shell functions | `snp shell init bash/zsh/fish` — generates `snp_select_raw` and `snp_select_expanded` functions. | Full | — | Shell adapters use temp-file transport and exit code 4 for cancellation. |
 | Shell completions | Built-in fish completions. Bash/zsh via init script. | Via `clap_complete`: `snp completions bash/zsh/fish/powershell/elvish`. | Supported differently | — | snp uses clap's completion generator. No init script. |
-| Buffer insertion | Shell function wraps `pet search`, inserts selected command into shell buffer | Not implemented. | Planned | R1B-R1C | `snp select` (R1B) + shell init (R1C). |
-| Keybinding | Shell function bound to Ctrl+R by default | Not implemented. | Planned | R1C | Will be opt-in. No default keybinding. |
-| Current buffer as query | Shell function passes `$BUFFER` to `pet search --query` | Not implemented. | Planned | R1B | `snp select --query` will accept initial query. |
+| Buffer insertion | Shell function wraps `pet search`, inserts selected command into shell buffer | `snp_select_raw` and `snp_select_expanded` call `snp select --output-file <tmpfile>`, read back, and set `$BUFFER`/`READLINE_LINE`. | Full | — | Lossless multiline handling via temp-file transport. |
+| Keybinding | Shell function bound to Ctrl+R by default | Not installed by default. Generated code includes binding examples in comments. | Supported differently | — | Opt-in. User binds `snp_select_raw`/`snp_select_expanded` manually. |
+| Current buffer as query | Shell function passes `$BUFFER` to `pet search --query` | `snp select --query "$BUFFER"` (or `--filter`) passes current buffer as initial search query. | Full | — | Shell adapters pass buffer when non-empty. |
 
 ---
 

@@ -1342,7 +1342,6 @@ fn test_select_help() {
     assert!(stdout.contains("--library"));
     assert!(stdout.contains("--raw"));
     assert!(stdout.contains("--expanded"));
-    assert!(stdout.contains("--sync"));
 }
 
 #[test]
@@ -1436,7 +1435,6 @@ fn test_select_help_contains_all_options() {
     assert!(stdout.contains("--library"));
     assert!(stdout.contains("--raw"));
     assert!(stdout.contains("--expanded"));
-    assert!(stdout.contains("--sync"));
 }
 
 #[test]
@@ -1458,5 +1456,16 @@ fn test_select_missing_library_value() {
     assert!(
         stderr.contains("required") || stderr.contains("missing") || stderr.contains("valid"),
         "Expected missing value error: {stderr}"
+    );
+}
+
+#[test]
+fn test_select_rejects_sync_flag() {
+    let output = snp_cmd().args(["select", "--sync"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument") || stderr.contains("error"),
+        "Expected error for --sync on select: {stderr}"
     );
 }

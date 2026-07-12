@@ -53,3 +53,11 @@ pub enum ProcessResult {
     /// A snippet command was selected; contains the expanded command string.
     Done(String),
 }
+
+/// Top-level outcome returned by command implementations for exit-code mapping.
+pub enum CommandOutcome {
+    /// Command completed successfully.
+    Success,
+    /// User cancelled the selection.
+    Cancelled,
+}

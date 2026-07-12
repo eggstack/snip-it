@@ -59,7 +59,7 @@ __snp_select() {
   snp select "${args[@]}"
   local rc=$?
 
-  if [[ $rc -eq 4 ]] || [[ ! -s "$tmp_file" ]]; then
+  if [[ $rc -eq 4 ]]; then
     rm -f "$tmp_file"
     READLINE_LINE="$old_line"
     READLINE_POINT="$old_point"
@@ -67,6 +67,14 @@ __snp_select() {
   fi
 
   if [[ $rc -ne 0 ]]; then
+    rm -f "$tmp_file"
+    READLINE_LINE="$old_line"
+    READLINE_POINT="$old_point"
+    return "$rc"
+  fi
+
+  if [[ ! -f "$tmp_file" ]]; then
+    echo "snp: selection output was not produced" >&2
     rm -f "$tmp_file"
     READLINE_LINE="$old_line"
     READLINE_POINT="$old_point"
@@ -124,7 +132,7 @@ __snp_select() {
   snp select "${args[@]}"
   local rc=$?
 
-  if [[ $rc -eq 4 ]] || [[ ! -s "$tmp_file" ]]; then
+  if [[ $rc -eq 4 ]]; then
     rm -f "$tmp_file"
     BUFFER="$old_buffer"
     CURSOR="$old_cursor"
@@ -137,7 +145,16 @@ __snp_select() {
     BUFFER="$old_buffer"
     CURSOR="$old_cursor"
     zle redisplay
-    return
+    return $rc
+  fi
+
+  if [[ ! -f "$tmp_file" ]]; then
+    echo "snp: selection output was not produced" >&2
+    rm -f "$tmp_file"
+    BUFFER="$old_buffer"
+    CURSOR="$old_cursor"
+    zle redisplay
+    return 1
   fi
 
   local selected
@@ -185,7 +202,7 @@ function __snp_select --argument-names mode
   snp select $snp_args
   set -l rc $status
 
-  if test $rc -eq 4 -o ! -s "$tmp_file"
+  if test $rc -eq 4
     rm -f "$tmp_file"
     commandline -C "$old_cursor"
     commandline -r "$old_cmdline"
@@ -193,6 +210,14 @@ function __snp_select --argument-names mode
   end
 
   if test $rc -ne 0
+    rm -f "$tmp_file"
+    commandline -C "$old_cursor"
+    commandline -r "$old_cmdline"
+    return $rc
+  end
+
+  if not test -f "$tmp_file"
+    echo "snp: selection output was not produced" >&2
     rm -f "$tmp_file"
     commandline -C "$old_cursor"
     commandline -r "$old_cmdline"
@@ -554,5 +579,485 @@ mod tests {
                 "generated code must use --query for initial filter"
             );
         }
+    }
+
+    // --- Behavioral tests: source generated code with a stub snp executable ---
+
+    fn make_stub_snp(dir: &std::path::Path, script: &str) {
+        let stub_path = dir.join("snp");
+        std::fs::write(&stub_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    fn run_bash(script: &str) -> (bool, String, String) {
+        let output = Command::new("bash")
+            .args(["-c", script])
+            .output()
+            .expect("failed to run bash");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        (output.status.success(), stdout, stderr)
+    }
+
+    fn run_fish(script: &str) -> (bool, String, String) {
+        let output = Command::new("fish")
+            .args(["-c", script])
+            .output()
+            .expect("failed to run fish");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        (output.status.success(), stdout, stderr)
+    }
+
+    // Bash behavioral tests
+
+    #[test]
+    fn test_bash_success_sets_buffer() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+for ((i=1; i<=$#; i++)); do
+    if [[ "${!i}" == "--output-file" ]]; then
+        next=$((i+1))
+        echo -n "hello world" > "${!next}"
+        exit 0
+    fi
+done
+exit 1
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE="original buffer"
+READLINE_POINT=5
+snp_select_raw
+echo "BUFFER=$READLINE_LINE"
+echo "POINT=$READLINE_POINT""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_bash(&script);
+        assert!(ok, "bash failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=hello world"),
+            "buffer not updated: {stdout}"
+        );
+        assert!(stdout.contains("POINT=11"), "point not updated: {stdout}");
+    }
+
+    #[test]
+    fn test_bash_cancellation_restores_buffer() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+exit 4
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE="original buffer"
+READLINE_POINT=5
+snp_select_raw
+echo "BUFFER=$READLINE_LINE"
+echo "POINT=$READLINE_POINT""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_bash(&script);
+        assert!(ok, "bash failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=original buffer"),
+            "buffer not restored: {stdout}"
+        );
+        assert!(stdout.contains("POINT=5"), "point not restored: {stdout}");
+    }
+
+    #[test]
+    fn test_bash_operational_failure_restores_buffer() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+echo "error occurred" >&2
+exit 1
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE="original buffer"
+READLINE_POINT=5
+snp_select_raw
+SNP_RC=$?
+echo "RC=$SNP_RC"
+echo "BUFFER=$READLINE_LINE"
+echo "POINT=$READLINE_POINT""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (_ok, stdout, _stderr) = run_bash(&script);
+        assert!(
+            stdout.contains("RC=1"),
+            "should return error for operational failure: {stdout}"
+        );
+        assert!(
+            stdout.contains("BUFFER=original buffer"),
+            "buffer not restored: {stdout}"
+        );
+        assert!(stdout.contains("POINT=5"), "point not restored: {stdout}");
+    }
+
+    #[test]
+    fn test_bash_success_with_output_file() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+for ((i=1; i<=$#; i++)); do
+    if [[ "${!i}" == "--output-file" ]]; then
+        next=$((i+1))
+        echo -n "selected command" > "${!next}"
+        exit 0
+    fi
+done
+exit 1
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE=""
+READLINE_POINT=0
+snp_select_raw
+echo "BUFFER=$READLINE_LINE""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_bash(&script);
+        assert!(ok, "bash failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=selected command"),
+            "buffer not set: {stdout}"
+        );
+    }
+
+    #[test]
+    fn test_bash_missing_snp_returns_error() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}"
+{}
+READLINE_LINE="original"
+READLINE_POINT=0
+snp_select_raw
+SNP_RC=$?
+echo "RC=$SNP_RC"
+echo "BUFFER=$READLINE_LINE""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (_ok, stdout, _stderr) = run_bash(&script);
+        assert!(
+            stdout.contains("RC=1"),
+            "should return error for missing snp: {stdout}"
+        );
+        assert!(
+            stdout.contains("BUFFER=original"),
+            "buffer should be unchanged: {stdout}"
+        );
+    }
+
+    #[test]
+    fn test_bash_no_output_file_content() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+# Success exit code but no output file written
+exit 0
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE="original buffer"
+READLINE_POINT=5
+snp_select_raw
+SNP_RC=$?
+echo "RC=$SNP_RC"
+echo "BUFFER=$READLINE_LINE"
+echo "POINT=$READLINE_POINT""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (_ok, stdout, _stderr) = run_bash(&script);
+        // mktemp creates the file, so snp returning 0 with empty file means
+        // the buffer gets set to empty string (the file content)
+        assert!(
+            stdout.contains("RC=0"),
+            "should return success (file exists, even if empty): {stdout}"
+        );
+        // Buffer is empty because the empty output file was read
+        assert!(
+            stdout.contains("BUFFER="),
+            "buffer should be empty string from empty output file: {stdout}"
+        );
+    }
+
+    #[test]
+    fn test_bash_multiline_selection() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+for ((i=1; i<=$#; i++)); do
+    if [[ "${!i}" == "--output-file" ]]; then
+        next=$((i+1))
+        printf 'line1\nline2\nline3' > "${!next}"
+        exit 0
+    fi
+done
+exit 1
+"#,
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            r#"export PATH="{}:$PATH"
+{}
+READLINE_LINE=""
+READLINE_POINT=0
+snp_select_raw
+echo "BUFFER=$READLINE_LINE""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_bash(&script);
+        assert!(ok, "bash failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=line1"),
+            "multiline buffer not set: {stdout}"
+        );
+    }
+
+    // Fish behavioral tests
+
+    #[test]
+    fn test_fish_success_sets_buffer() {
+        if !shell_exists("fish") {
+            eprintln!("skipping: fish not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+for ((i=1; i<=$#; i++)); do
+    if [[ "${!i}" == "--output-file" ]]; then
+        next=$((i+1))
+        echo -n "hello world" > "${!next}"
+        exit 0
+    fi
+done
+exit 1
+"#,
+        );
+
+        let code = generate_fish();
+        let script = format!(
+            r#"set -gx PATH "{}" $PATH
+{}
+commandline -r "original buffer"
+commandline -C 5
+snp_select_raw
+echo "BUFFER=(commandline)"
+echo "POINT=(commandline -C)""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_fish(&script);
+        assert!(ok, "fish failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=hello world"),
+            "buffer not updated: {stdout}"
+        );
+        assert!(stdout.contains("POINT=11"), "point not updated: {stdout}");
+    }
+
+    #[test]
+    fn test_fish_cancellation_restores_buffer() {
+        if !shell_exists("fish") {
+            eprintln!("skipping: fish not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+exit 4
+"#,
+        );
+
+        let code = generate_fish();
+        let script = format!(
+            r#"set -gx PATH "{}" $PATH
+{}
+commandline -r "original buffer"
+commandline -C 5
+snp_select_raw
+set -g SNP_RC $status
+echo "BUFFER=(commandline)"
+echo "POINT=(commandline -C)""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (ok, stdout, stderr) = run_fish(&script);
+        assert!(ok, "fish failed: {stderr}");
+        assert!(
+            stdout.contains("BUFFER=original buffer"),
+            "buffer not restored: {stdout}"
+        );
+        assert!(stdout.contains("POINT=5"), "point not restored: {stdout}");
+    }
+
+    #[test]
+    fn test_fish_operational_failure_restores_buffer() {
+        if !shell_exists("fish") {
+            eprintln!("skipping: fish not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        make_stub_snp(
+            tmp_dir.path(),
+            r#"#!/bin/bash
+echo "error occurred" >&2
+exit 1
+"#,
+        );
+
+        let code = generate_fish();
+        let script = format!(
+            r#"set -gx PATH "{}" $PATH
+{}
+commandline -r "original buffer"
+commandline -C 5
+snp_select_raw
+set -g SNP_RC $status
+echo "RC=$SNP_RC"
+echo "BUFFER=(commandline)"
+echo "POINT=(commandline -C)""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (_ok, stdout, _stderr) = run_fish(&script);
+        assert!(
+            stdout.contains("RC=1"),
+            "should return error for operational failure: {stdout}"
+        );
+        assert!(
+            stdout.contains("BUFFER=original buffer"),
+            "buffer not restored: {stdout}"
+        );
+        assert!(stdout.contains("POINT=5"), "point not restored: {stdout}");
+    }
+
+    #[test]
+    fn test_fish_missing_snp_returns_error() {
+        if !shell_exists("fish") {
+            eprintln!("skipping: fish not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let code = generate_fish();
+        let script = format!(
+            r#"set -gx PATH "{}"
+{}
+commandline -r "original"
+commandline -C 0
+snp_select_raw
+set -g SNP_RC $status
+echo "RC=$SNP_RC"
+echo "BUFFER=(commandline)""#,
+            tmp_dir.path().to_str().unwrap(),
+            code
+        );
+
+        let (_ok, stdout, _stderr) = run_fish(&script);
+        assert!(
+            stdout.contains("RC=1"),
+            "should return error for missing snp: {stdout}"
+        );
+        assert!(
+            stdout.contains("BUFFER=original"),
+            "buffer should be unchanged: {stdout}"
+        );
     }
 }

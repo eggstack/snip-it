@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
+use snip_it::CommandOutcome;
 use snip_it::commands;
 use snip_it::config;
 use snip_it::error::SnipResult;
@@ -142,8 +143,6 @@ enum Commands {
         /// Initial query to pre-fill the search (alias for --filter)
         #[arg(long)]
         query: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync: bool,
         #[arg(short, long)]
         library: Option<String>,
         #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "expanded")]
@@ -281,7 +280,7 @@ enum ShellIntegration {
     Fish,
 }
 
-fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
+fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
             commands::run_cmd::run(None, false, None, &RUNTIME)?;
@@ -344,22 +343,20 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
         Some(Commands::Select {
             filter,
             query,
-            sync: _,
             library,
             raw,
             expanded,
             output_file,
         }) => {
-            // --query is an alias for --filter (used by shell integration)
             let effective_filter = filter.or(query);
-            commands::select_cmd::run(
+            return commands::select_cmd::run(
                 effective_filter,
                 library,
                 raw,
                 expanded,
                 output_file,
                 &RUNTIME,
-            )?;
+            );
         }
         Some(Commands::Edit { library }) => {
             commands::edit_cmd::run(library, None)?;
@@ -427,7 +424,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
             }
         },
     }
-    Ok(())
+    Ok(CommandOutcome::Success)
 }
 
 fn main() {
@@ -437,10 +434,17 @@ fn main() {
     log_startup_info();
 
     let cli = Cli::parse();
-    if let Err(e) = dispatch_command(cli.command) {
-        eprintln!("error: {e}");
-        log_shutdown_info();
-        std::process::exit(1);
+    match dispatch_command(cli.command) {
+        Ok(CommandOutcome::Success) => {}
+        Ok(CommandOutcome::Cancelled) => {
+            log_shutdown_info();
+            std::process::exit(4);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            log_shutdown_info();
+            std::process::exit(1);
+        }
     }
 
     log_shutdown_info();
