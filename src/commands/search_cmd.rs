@@ -18,7 +18,7 @@ pub fn run(
                 .map(|s| s.to_string())
         })
     });
-    run_snippet_selection(
+    let _outcome = run_snippet_selection(
         filter,
         effective_library,
         do_sync,
@@ -32,5 +32,6 @@ pub fn run(
             println!("Favorite: {}", snippet.favorite);
             Ok(crate::ProcessResult::Done(String::new()))
         },
-    )
+    )?;
+    Ok(())
 }

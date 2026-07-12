@@ -108,7 +108,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | --- | --- | --- | --- | --- | --- |
 | Command | No equivalent | `snp select` (alias: `sel`) | New | — | Non-executing selection primitive for shell integration. |
 | Output | N/A | Prints selected command to stdout (or `--output-file`). | New | — | Machine-readable output for piping and shell integration. |
-| Cancellation | N/A | Exit code 4 on `q`/`Esc`/cancel. Empty stdout. | New | — | Shell adapters check exit code 4 and restore buffer. |
+| Cancellation | N/A | Exit code 4 on `q`/`Esc`/Ctrl-C. Empty stdout. | New | — | Shell adapters check exit code 4 and restore buffer. |
 | Raw vs expanded | N/A | `--raw` (default) prints command unchanged. `--expanded` prompts for variables. Mutually exclusive. | New | — | `--raw` is for placeholder insertion; `--expanded` is for evaluated commands. |
 | Initial query | N/A | `--query` (alias `--filter`) pre-fills TUI search. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
 | Output file | N/A | `--output-file` writes selection to file. Rejects symlinks and directories. | New | — | Used by shell adapters for lossless multiline transport. |

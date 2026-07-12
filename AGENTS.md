@@ -21,6 +21,9 @@ cargo test --test integration
 # Run only sync integration tests (async, needs test-helpers feature)
 cargo test --test sync_integration
 
+# Run PTY end-to-end tests (must run single-threaded, needs portable-pty)
+cargo test --test pty_integration -- --test-threads=1
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -112,6 +115,7 @@ snip-it/
 │   └── src/process.rs  # PID file management and process lifecycle
 ├── tests/
 │   ├── integration.rs      # CLI integration tests using TempDir
+│   ├── pty_integration.rs  # PTY end-to-end tests (portable-pty, --test-threads=1)
 │   └── sync_integration.rs # gRPC sync integration tests (real server in-process)
 ├── scripts/
 │   └── build_themes.py # LZMA-compresses themes/ into src/ui/_generated_bundled_themes.rs
@@ -156,6 +160,16 @@ snip-it/
 - Debounced filter updates (150ms)
 - Theme picker: press `e` in normal mode to open; `j`/`k` to preview live, `i` to filter, `Enter` to commit, `e`/`q`/`Esc` to cancel. INS sub-mode mirrors the snippet browser INS UX.
 - Theme: Halloy-compatible TOML at `~/.config/snp/themes/<name>.toml`; active theme persisted in `~/.config/snp/themes.toml`. `SNP_THEME` env var still works for backward compat.
+
+### Selection Outcome Architecture
+- **Three-layer outcome model:**
+  1. `SnippetSelection` (ui/mod.rs): `Selected(usize, Option<String>)`, `Delete(usize)`, `Cancelled`
+  2. `SelectionOutcome` (lib.rs): `Selected` or `Cancelled` — returned by `run_snippet_selection()`
+  3. `CommandOutcome` (lib.rs): `Success` or `Cancelled` — returned by command `run()` functions, mapped to exit codes in `main.rs`
+- **Cancellation flow:** TUI returns `SnippetSelection::Cancelled` → `run_snippet_selection()` returns `SelectionOutcome::Cancelled` → `select_cmd` maps to `CommandOutcome::Cancelled` → exit code 4
+- **Conservative callers:** `run_cmd`, `clip_cmd`, `search_cmd` ignore `SelectionOutcome` (treat cancellation as normal completion, exit 0)
+- **Ctrl+C:** Handled same as `q`/`Esc` in normal mode (sets `sel.selected = filtered.len()` → returns `Cancelled`). SIGINT signal path also returns `Cancelled` via TERMINATE atomic flag.
+- **Variable prompt cancel:** Also maps to `SelectionOutcome::Cancelled` → exit 4 for `select`
 
 ### Bundled Themes
 - 50 Halloy themes live in `themes/` and are LZMA-compressed and base64-encoded at build time by `scripts/build_themes.py` into `src/ui/_generated_bundled_themes.rs`.
@@ -226,6 +240,7 @@ snip-it/
 - Server tests use `sqlite::memory:` for isolation
 - `snip-sync` has a `test-helpers` feature gate for in-process server testing; `snip-it`'s dev-dependencies enable it automatically
 - `tests/sync_integration.rs` spins up a real `snip-sync` server in-process via `test_helpers` — these are async `#[tokio::test]` and need the `test-helpers` feature
+- PTY tests (`tests/pty_integration.rs`) use `portable-pty` crate and must run with `--test-threads=1` — they create real PTY pairs and inject keystrokes via raw fd writes
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
 - Utils tests cover escape sequences, nested brackets, chained backslashes

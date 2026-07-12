@@ -466,6 +466,8 @@ pub enum SnippetSelection {
     Selected(usize, Option<String>),
     /// Delete a snippet after the user confirmed the delete dialog.
     Delete(usize),
+    /// User cancelled the selector (q, Esc, or Ctrl-C in normal mode).
+    Cancelled,
 }
 
 pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<SnippetSelection>> {
@@ -1079,7 +1081,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                     )
                 } else {
                     format!(
-                        "[{mode_str}]{tag_mode_str} | i: insert | y/ctrl+c: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode"
+                        "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode"
                     )
                 }
             } else if insert_mode {
@@ -1088,7 +1090,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 )
             } else {
                 format!(
-                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q: quit | x/c: clear | tab: mode | double-click: run"
+                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode | double-click: run"
                 )
             };
             let status_widget = Paragraph::new(status_text)
@@ -1429,12 +1431,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                             continue;
                         }
 
-                        if is_ctrl_key(&key, 'c') && sel.selected < filtered.len() {
-                            let idx = filtered[sel.selected];
-                            should_copy = Some(descriptions[idx].clone());
-                            if !is_search {
-                                break;
-                            }
+                        if is_ctrl_key(&key, 'c') {
+                            sel.selected = filtered.len();
+                            break;
                         }
 
                         // Visual mode is a normal-mode command. In INSERT mode, `v` and
@@ -1784,14 +1783,20 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             }
         }
     }
-    Ok(if !filtered.is_empty() && sel.selected < filtered.len() {
-        Some(SnippetSelection::Selected(
+    if TERMINATE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(Some(SnippetSelection::Cancelled));
+    }
+    if filtered.is_empty() {
+        return Ok(None);
+    }
+    if sel.selected < filtered.len() {
+        Ok(Some(SnippetSelection::Selected(
             filtered[sel.selected],
             should_copy,
-        ))
+        )))
     } else {
-        None
-    })
+        Ok(Some(SnippetSelection::Cancelled))
+    }
 }
 
 #[cfg(test)]

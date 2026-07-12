@@ -32,7 +32,9 @@ pub fn run(
     _config: Option<PathBuf>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
-        process_snippet(snippet, copy_flag)
-    })
+    let _outcome =
+        run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
+            process_snippet(snippet, copy_flag)
+        })?;
+    Ok(())
 }

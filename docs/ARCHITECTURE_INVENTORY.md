@@ -122,6 +122,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 ## Test Infrastructure
 
 - `tests/integration.rs` — CLI integration tests (28 tests, `TempDir` + `XDG_CONFIG_HOME` override)
+- `tests/pty_integration.rs` — PTY end-to-end tests (10 tests, `portable-pty` crate, runs with `--test-threads=1`)
 - `tests/sync_integration.rs` — gRPC integration tests (4 async `#[tokio::test]`, in-process server via `test-helpers` feature)
 - Inline `#[cfg(test)]` modules in every source file
 - All test data is inline — no fixture files
@@ -156,6 +157,7 @@ main.rs::dispatch_command()
 
 - `0` — success (snippet executed/copied, or command completed)
 - `1` — any error (all `SnipError` variants map to exit(1))
+- `4` — user cancelled TUI interaction (`q`/`Esc`/Ctrl-C in `snp select` only; `run`/`clip`/`search` treat cancellation as exit 0)
 
 ## Configuration Files
 

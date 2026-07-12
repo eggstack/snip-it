@@ -103,6 +103,8 @@ tempfile = "3.10"
 subtle = "2"
 snip-proto = { version = "0.1.0", path = "snip-proto" }
 snip-sync = { version = "0.1.1", path = "snip-sync", features = ["test-helpers"] }
+portable-pty = "0.9"
+libc = "0.2"
 
 [profile.release]
 lto = true

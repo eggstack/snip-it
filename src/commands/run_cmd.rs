@@ -225,9 +225,11 @@ pub fn run(
     library: Option<String>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
-        process_snippet(snippet, copy_flag.is_some())
-    })
+    let _outcome =
+        run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
+            process_snippet(snippet, copy_flag.is_some())
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]

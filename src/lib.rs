@@ -61,3 +61,15 @@ pub enum CommandOutcome {
     /// User cancelled the selection.
     Cancelled,
 }
+
+/// Internal outcome of the shared snippet-selection TUI loop.
+///
+/// This is distinct from `CommandOutcome`: `SelectionOutcome` is the raw
+/// result of the TUI interaction, while `CommandOutcome` is the CLI-level
+/// semantic result mapped to exit codes in `main.rs`.
+pub enum SelectionOutcome {
+    /// A snippet was selected and processed by the callback.
+    Selected,
+    /// The user cancelled the primary selector (q, Esc, Ctrl-C).
+    Cancelled,
+}

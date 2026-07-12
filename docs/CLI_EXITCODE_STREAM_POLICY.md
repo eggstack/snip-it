@@ -218,7 +218,7 @@ Status messages are split across both streams. No consistent convention.
 | 1 | `ERROR` | General/unclassified error | Default for all current `SnipError` variants |
 | 2 | `USAGE` | Invalid arguments or missing required input | Bad CLI flags, missing library name for `library delete` |
 | 3 | `NOT_FOUND` | Requested resource does not exist | Snippet not found, library not found, file missing |
-| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc` in snippet selector (`snp select`) |
+| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc`/Ctrl-C in snippet selector (`snp select`) |
 | 5 | `IO` | Filesystem or clipboard failure | Cannot write file, clipboard unavailable |
 | 6 | `PARSE` | Configuration or data format error | Malformed TOML, invalid sync config |
 
@@ -226,11 +226,12 @@ Status messages are split across both streams. No consistent convention.
 `exit != 0` will continue to work. Scripts can opt into finer-grained handling
 by checking specific codes.
 
-**Note**: The `ProcessResult::Cancel` variant (returned when the user presses
-`q` in the TUI) maps to exit 0 for existing commands (`run`, `clip`, `search`)
-where cancellation is a valid "done" state. For `snp select`, cancellation
+**Note**: `run_snippet_selection()` returns `SelectionOutcome` (Selected or
+Cancelled). For existing commands (`run`, `clip`, `search`), cancellation is
+treated as normal completion (exit 0). For `snp select`, cancellation
 maps to exit 4 via `CommandOutcome::Cancelled`, which is returned to the CLI
-boundary in `main.rs`.
+boundary in `main.rs`. Ctrl+C in the TUI (normal mode) also maps to
+`SelectionOutcome::Cancelled` → exit 4 for `select`.
 
 ### Stream Contract
 
@@ -290,7 +291,7 @@ A `snp select` primitive provides non-TUI snippet selection for scripting:
 |----------|--------|--------|-----------|
 | Selection to stdout | exact command | empty except tracing | 0 |
 | Selection to output file | empty | empty except tracing | 0 |
-| User cancellation (`q`/`Esc`) | empty | empty | 4 |
+| User cancellation (`q`/`Esc`/Ctrl-C) | empty | empty | 4 |
 | Variable prompt cancelled | empty | empty | 4 |
 | `SnipError` (all variants) | empty | `error: ...` | 1 |
 

@@ -238,13 +238,16 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
 /// Handles loading the library, extracting snippet data, and optionally running
 /// a background sync after processing. The `process_fn` callback is invoked with
 /// the selected snippet and any copy flag from the TUI.
+///
+/// Returns `SelectionOutcome::Selected` when a snippet was selected and processed,
+/// or `SelectionOutcome::Cancelled` when the user cancelled the primary selector.
 pub fn run_snippet_selection<F>(
     filter: Option<String>,
     library: Option<String>,
     do_sync: bool,
     runtime: &tokio::runtime::Runtime,
     mut process_fn: F,
-) -> crate::error::SnipResult<()>
+) -> crate::error::SnipResult<crate::SelectionOutcome>
 where
     F: FnMut(
         &crate::library::Snippet,
@@ -255,12 +258,13 @@ where
         Some(p) => p,
         None => {
             eprintln!("No library found. Create one with 'snp library create <name>'");
-            return Ok(());
+            return Ok(crate::SelectionOutcome::Cancelled);
         }
     };
     let mut snippets = crate::library::load_library(&lib_path)?;
 
     let mut selected_and_processed = false;
+    let mut cancelled = false;
     loop {
         let (snippet_data, original_indices) = get_snippet_data(&snippets);
         let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
@@ -276,6 +280,10 @@ where
         })?;
         if let Some(result) = result {
             match result {
+                crate::ui::SnippetSelection::Cancelled => {
+                    cancelled = true;
+                    break;
+                }
                 crate::ui::SnippetSelection::Delete(idx) => {
                     let original_idx = *original_indices.get(idx).ok_or_else(|| {
                         SnipError::runtime_error(
@@ -297,7 +305,8 @@ where
                     let snippet = &snippets.snippets[original_indices[idx]];
                     match process_fn(snippet, copy_flag)? {
                         crate::ProcessResult::Cancel => {
-                            return Ok(());
+                            cancelled = true;
+                            break;
                         }
                         crate::ProcessResult::Continue => continue,
                         crate::ProcessResult::Done(_msg) => {
@@ -308,6 +317,7 @@ where
                 }
             }
         } else {
+            cancelled = true;
             break;
         }
     }
@@ -317,7 +327,11 @@ where
     {
         tracing::warn!(error = %e, "Background sync failed");
     }
-    Ok(())
+    if cancelled {
+        Ok(crate::SelectionOutcome::Cancelled)
+    } else {
+        Ok(crate::SelectionOutcome::Selected)
+    }
 }
 
 /// Marks a selected snippet as deleted while preserving its tombstone for sync.
