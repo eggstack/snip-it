@@ -134,6 +134,20 @@ enum Commands {
         #[arg(short, long)]
         library: Option<String>,
     },
+    /// Select a snippet and print its command to stdout (no execution)
+    #[command(alias = "sel")]
+    Select {
+        #[arg(short, long)]
+        filter: Option<String>,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        sync: bool,
+        #[arg(short, long)]
+        library: Option<String>,
+        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "expanded")]
+        raw: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "raw")]
+        expanded: bool,
+    },
     /// Edit the config file in $EDITOR (e)
     #[command(alias = "e")]
     Edit {
@@ -294,6 +308,15 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<()> {
             library,
         }) => {
             commands::search_cmd::run(filter, sync, library, None, &RUNTIME)?;
+        }
+        Some(Commands::Select {
+            filter,
+            sync: _,
+            library,
+            raw,
+            expanded,
+        }) => {
+            commands::select_cmd::run(filter, library, raw, expanded, &RUNTIME)?;
         }
         Some(Commands::Edit { library }) => {
             commands::edit_cmd::run(library, None)?;

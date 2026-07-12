@@ -1330,3 +1330,133 @@ favorite = false
     assert_eq!(parsed[0]["description"], "Ünïcödé test 🎉");
     assert_eq!(parsed[0]["command"], "echo '日本語'");
 }
+
+// --- snp select ---
+
+#[test]
+fn test_select_help() {
+    let output = snp_cmd().args(["select", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--filter"));
+    assert!(stdout.contains("--library"));
+    assert!(stdout.contains("--raw"));
+    assert!(stdout.contains("--expanded"));
+    assert!(stdout.contains("--sync"));
+}
+
+#[test]
+fn test_select_alias() {
+    let output = snp_cmd().args(["sel", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Select a snippet"));
+}
+
+#[test]
+fn test_select_raw_expanded_conflict() {
+    let output = snp_cmd()
+        .args(["select", "--raw", "--expanded"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflicts"),
+        "Expected conflict error for --raw --expanded: {stderr}"
+    );
+}
+
+#[test]
+fn test_select_no_library() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["select"]);
+    let output = cmd.output().unwrap();
+    // Should succeed gracefully with no library message
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No library found"),
+        "Expected 'No library found' in stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_select_nonexistent_library() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["select", "--library", "does-not-exist"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not exist"),
+        "Expected library-not-found error: {stderr}"
+    );
+}
+
+#[test]
+fn test_select_requires_terminal() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Write a snippet library so library resolution succeeds
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "test-select"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    snp_in(&config_dir)
+        .args(["library", "set-primary", "test-select"])
+        .output()
+        .unwrap();
+
+    // When stdin is not a terminal, select should fail with a clear message
+    // (the TUI requires a terminal for interactive selection)
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["select"]);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
+    let output = cmd.output().unwrap();
+    // Should fail because there's no terminal
+    assert!(
+        !output.status.success(),
+        "snp select should fail without a terminal"
+    );
+}
+
+#[test]
+fn test_select_help_contains_all_options() {
+    let output = snp_cmd().args(["select", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Select a snippet and print its command"));
+    assert!(stdout.contains("--filter"));
+    assert!(stdout.contains("--library"));
+    assert!(stdout.contains("--raw"));
+    assert!(stdout.contains("--expanded"));
+    assert!(stdout.contains("--sync"));
+}
+
+#[test]
+fn test_select_missing_filter_value() {
+    let output = snp_cmd().args(["select", "--filter"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("required") || stderr.contains("missing") || stderr.contains("valid"),
+        "Expected missing value error: {stderr}"
+    );
+}
+
+#[test]
+fn test_select_missing_library_value() {
+    let output = snp_cmd().args(["select", "--library"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("required") || stderr.contains("missing") || stderr.contains("valid"),
+        "Expected missing value error: {stderr}"
+    );
+}

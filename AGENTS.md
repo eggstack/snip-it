@@ -75,6 +75,7 @@ snip-it/
 │   │   ├── run_cmd.rs  # Snippet execution via shell
 │   │   ├── clip_cmd.rs # Copy to clipboard
 │   │   ├── search_cmd.rs
+│   │   ├── select_cmd.rs # Non-executing selection to stdout (pet compat)
 │   │   ├── new_cmd.rs
 │   │   ├── list_cmd.rs
 │   │   ├── edit_cmd.rs

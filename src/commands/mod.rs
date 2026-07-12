@@ -14,6 +14,7 @@ pub mod premade_cmd;
 pub mod register_cmd;
 pub mod run_cmd;
 pub mod search_cmd;
+pub mod select_cmd;
 pub mod sync_cmd;
 
 use crate::config::invalidate_toml_cache;

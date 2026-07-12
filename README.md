@@ -127,6 +127,7 @@ snp new 'git push origin <branch=main>' --tags
 snp list
 snp run
 snp clip
+snp select
 snp search
 ```
 
@@ -260,6 +261,7 @@ snp new          Create a snippet
 snp list         List snippets
 snp run          Run a snippet from the TUI
 snp clip         Copy a snippet from the TUI
+snp select       Select a snippet and print its command (no execution)
 snp search       Search and inspect snippets
 snp edit         Edit a snippet library in $EDITOR
 snp library      Create, list, select, or delete libraries
