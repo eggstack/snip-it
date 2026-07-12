@@ -1,0 +1,32 @@
+# Snippets with various variable syntax patterns in commands.
+# Tests parsing of <name>, <name=default>, escaped brackets, and nested brackets.
+
+[[snippets]]
+description = "simple variable — no default"
+command = "echo <greeting>"
+output = ""
+tag = ["variables"]
+
+[[snippets]]
+description = "variable with default value"
+command = "ssh <host=localhost> 'uptime'"
+output = ""
+tag = ["ssh"]
+
+[[snippets]]
+description = "escaped angle brackets — literal"
+command = 'ping \<hostname\> -c 3'
+output = ""
+tag = ["network"]
+
+[[snippets]]
+description = "nested angle brackets"
+command = "echo <outer<inner>>"
+output = ""
+tag = ["edge-case"]
+
+[[snippets]]
+description = "variable with default containing spaces"
+command = 'cp <src=/tmp/default file> <dest=.>'
+output = ""
+tag = ["variables"]

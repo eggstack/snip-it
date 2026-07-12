@@ -164,4 +164,71 @@ mod tests {
         };
         assert!(!is_ctrl_key(&key, 'c'));
     }
+
+    #[test]
+    fn test_select_state_move_up_at_top() {
+        let mut state = SelectState::new();
+        state.selected = 0;
+        state.move_up();
+        assert_eq!(state.selected, 0, "move_up at top should not underflow");
+    }
+
+    #[test]
+    fn test_select_state_move_down_at_bottom() {
+        let mut state = SelectState::new();
+        let len = 5;
+        state.selected = len - 1;
+        state.move_down(len);
+        assert_eq!(
+            state.selected,
+            len - 1,
+            "move_down at bottom should not overflow"
+        );
+    }
+
+    #[test]
+    fn test_select_state_move_up_down_roundtrip() {
+        let mut state = SelectState::new();
+        let len = 10;
+        state.update(len);
+
+        // Move down 3 times: 0 -> 1 -> 2 -> 3
+        for _ in 0..3 {
+            state.move_down(len);
+        }
+        assert_eq!(state.selected, 3);
+
+        // Move up 2 times: 3 -> 2 -> 1
+        for _ in 0..2 {
+            state.move_up();
+        }
+        assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn test_filter_state_sort_toggle() {
+        let mut state = FilterState::default();
+        assert_eq!(state.sort_mode, SortMode::None);
+
+        // Cycle through all sort modes
+        state.toggle_sort_new();
+        assert_eq!(state.sort_mode, SortMode::Newest);
+        state.toggle_sort_new();
+        assert_eq!(state.sort_mode, SortMode::None);
+
+        state.toggle_sort_old();
+        assert_eq!(state.sort_mode, SortMode::Oldest);
+        state.toggle_sort_old();
+        assert_eq!(state.sort_mode, SortMode::None);
+
+        state.toggle_sort_alpha();
+        assert_eq!(state.sort_mode, SortMode::AlphaAsc);
+        state.toggle_sort_alpha();
+        assert_eq!(state.sort_mode, SortMode::None);
+
+        state.toggle_sort_alpha_rev();
+        assert_eq!(state.sort_mode, SortMode::AlphaDesc);
+        state.toggle_sort_alpha_rev();
+        assert_eq!(state.sort_mode, SortMode::None);
+    }
 }

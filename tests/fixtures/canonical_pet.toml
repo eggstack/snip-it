@@ -1,0 +1,33 @@
+# Canonical pet-format snippet file.
+# pet produces this format: [[snippets]] with Description, Command, Output, Tag.
+# No snip-it-only fields (id, created_at, updated_at, device_id, deleted).
+
+[[snippets]]
+description = "git commit with message"
+command = "git commit -m \"<msg>\""
+output = ""
+tag = ["git", "version-control"]
+
+[[snippets]]
+description = "docker ps running containers"
+command = "docker ps --format \"table {{.Names}}\\t{{.Status}}\""
+output = "NAMES                STATUS\nweb-app              Up 2 hours\ndatabase             Up 2 hours"
+tag = ["docker"]
+
+[[snippets]]
+description = "list files in current directory"
+command = "ls -la"
+output = ""
+tag = []
+
+[[snippets]]
+description = "search & replace with \"quotes\" and special chars"
+command = "grep -r 'pattern' . --include='*.rs'"
+output = ""
+tag = ["search", "ripgrep"]
+
+[[snippets]]
+description = "日本語のスニペット — unicode test"
+command = "echo 'こんにちは世界'"
+output = ""
+tag = ["unicode", "日本語"]

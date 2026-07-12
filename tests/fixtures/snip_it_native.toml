@@ -1,0 +1,54 @@
+# snip-it native format snippet file.
+# Uses lowercase [[snippets]] with all snip-it-specific fields.
+
+[[snippets]]
+id = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+description = "list all docker containers"
+command = "docker ps -a"
+output = ""
+tag = ["docker"]
+folders = ["devops", "containers"]
+favorite = true
+created_at = 1700000000
+updated_at = 1700100000
+device_id = "device-alpha-001"
+deleted = false
+
+[[snippets]]
+id = "f6e5d4c3-b2a1-4f0e-9d8c-7b6a5f4e3d2c"
+description = "check disk usage"
+command = "df -h"
+output = ""
+tag = ["system"]
+folders = ["ops"]
+favorite = false
+created_at = 1700000100
+updated_at = 1700000100
+device_id = "device-alpha-001"
+deleted = false
+
+[[snippets]]
+id = "11223344-5566-4778-899a-bbccddeeff00"
+description = "show running processes"
+command = "ps aux --sort=-%cpu | head -20"
+output = ""
+tag = ["processes", "system"]
+folders = []
+favorite = false
+created_at = 1700000200
+updated_at = 1700000200
+device_id = ""
+deleted = false
+
+[[snippets]]
+id = "aabbccdd-eeff-4000-8111-223344556677"
+description = "old snippet — soft deleted"
+command = "echo this was deleted"
+output = ""
+tag = ["legacy"]
+folders = []
+favorite = false
+created_at = 1690000000
+updated_at = 1690000000
+device_id = "device-beta-002"
+deleted = true

@@ -46,6 +46,7 @@ impl Drop for TerminalGuard {
 }
 
 /// Result of prompting the user for variable values.
+#[derive(Debug)]
 pub enum VariablePromptResult {
     /// User explicitly cancelled the program (`Ctrl+C` or SIGINT/SIGTERM).
     /// The caller should exit the program entirely.
@@ -802,5 +803,44 @@ mod tests {
         .unwrap();
         assert_eq!(action, KeyAction::Continue);
         assert_eq!(fields[0].value, "", "Ctrl+C must not insert 'c'");
+    }
+
+    #[test]
+    fn test_variable_prompt_result_cancel_is_distinct_from_skip() {
+        let cancel = VariablePromptResult::Cancel;
+        let skip = VariablePromptResult::Skip;
+        assert_ne!(
+            std::mem::discriminant(&cancel),
+            std::mem::discriminant(&skip),
+            "Cancel and Skip must be distinct enum variants"
+        );
+    }
+
+    #[test]
+    fn test_variable_prompt_cancel_returns_empty_values() {
+        let cancel = VariablePromptResult::Cancel;
+        let values = match cancel {
+            VariablePromptResult::Values(v) => v,
+            _ => vec![],
+        };
+        assert!(
+            values.is_empty(),
+            "Cancel variant must not carry any values"
+        );
+    }
+
+    #[test]
+    fn test_variable_prompt_skip_returns_empty_values() {
+        let result = prompt_variables(vec![]).unwrap();
+        assert!(
+            matches!(result, VariablePromptResult::Skip),
+            "Empty vars should produce Skip, got {:?}",
+            result
+        );
+        let values = match result {
+            VariablePromptResult::Values(v) => v,
+            _ => vec![],
+        };
+        assert!(values.is_empty(), "Skip variant must not carry any values");
     }
 }

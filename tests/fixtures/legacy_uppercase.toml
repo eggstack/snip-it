@@ -1,0 +1,14 @@
+# Legacy snp format using [[Snippets]] (uppercase table) and capitalized field names.
+# Tests backward compatibility with older snp library files.
+
+[[Snippets]]
+Description = "list files"
+Command = "ls -la"
+Output = ""
+Tag = ["files"]
+
+[[Snippets]]
+Description = "find large files"
+Command = "find . -type f -size +10M"
+Output = ""
+Tag = ["search", "find"]

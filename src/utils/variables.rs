@@ -628,4 +628,161 @@ mod tests {
         let result = expand_command(r"<x\>foo", &[]);
         assert_eq!(result, "<x>foo");
     }
+
+    // ========================================================================
+    // Pet-compatibility regression tests — behavioral contract for core APIs
+    // These must not change in future releases.
+    // ========================================================================
+
+    #[test]
+    fn test_extract_basic_variable_no_default() {
+        let vars = parse_variables("<name>");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "name");
+        assert_eq!(vars[0].default, None);
+    }
+
+    #[test]
+    fn test_extract_variable_with_default() {
+        let vars = parse_variables("<host=localhost>");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "host");
+        assert_eq!(vars[0].default, Some("localhost".to_string()));
+    }
+
+    #[test]
+    fn test_extract_variable_with_default_containing_slash() {
+        let vars = parse_variables("<path=/usr/local/bin>");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "path");
+        assert_eq!(vars[0].default, Some("/usr/local/bin".to_string()));
+    }
+
+    #[test]
+    fn test_extract_variable_with_default_containing_spaces() {
+        let vars = parse_variables("<greeting=hello world>");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "greeting");
+        assert_eq!(vars[0].default, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_extract_multiple_variables() {
+        let vars = parse_variables("ssh <user>@<host> -p <port=22>");
+        assert_eq!(vars.len(), 3);
+        assert_eq!(vars[0].name, "user");
+        assert_eq!(vars[0].default, None);
+        assert_eq!(vars[1].name, "host");
+        assert_eq!(vars[1].default, None);
+        assert_eq!(vars[2].name, "port");
+        assert_eq!(vars[2].default, Some("22".to_string()));
+    }
+
+    #[test]
+    fn test_extract_no_variables() {
+        let vars = parse_variables("echo hello world");
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn test_extract_empty_string() {
+        let vars = parse_variables("");
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn test_expand_single_variable() {
+        let result = expand_command("<name>", &[("name".to_string(), "david".to_string())]);
+        assert_eq!(result, "david");
+    }
+
+    #[test]
+    fn test_expand_variable_with_default_not_provided() {
+        // expand_command does NOT use the default value from the syntax;
+        // without a matching entry in values, the literal token is preserved.
+        let result = expand_command("<host=localhost>", &[]);
+        assert_eq!(result, "<host=localhost>");
+    }
+
+    #[test]
+    fn test_expand_variable_with_default_provided() {
+        // expand_command does NOT expand <var=default> syntax at all;
+        // the entire token is preserved as a literal.
+        let result = expand_command(
+            "<host=localhost>",
+            &[("host".to_string(), "server1".to_string())],
+        );
+        assert_eq!(result, "<host=localhost>");
+    }
+
+    #[test]
+    fn test_expand_multiple_variables() {
+        // expand_command does NOT expand <var=default> syntax;
+        // only plain <var> tokens are expanded. The <port=22> literal is preserved.
+        let result = expand_command(
+            "ssh <user>@<host> -p <port=22>",
+            &[
+                ("user".to_string(), "root".to_string()),
+                ("host".to_string(), "10.0.0.1".to_string()),
+            ],
+        );
+        assert_eq!(result, "ssh root@10.0.0.1 -p <port=22>");
+    }
+
+    #[test]
+    fn test_expand_preserves_literal_text() {
+        let result = expand_command(
+            "echo <var> done",
+            &[("var".to_string(), "hello".to_string())],
+        );
+        assert_eq!(result, "echo hello done");
+    }
+
+    #[test]
+    fn test_expand_with_empty_value() {
+        let result = expand_command("<name>", &[("name".to_string(), "".to_string())]);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_escapes_literal_angle_brackets() {
+        let result = strip_escape_sequences(r"\<hello\>");
+        assert_eq!(result, "<hello>");
+    }
+
+    #[test]
+    fn test_strip_escapes_backslash() {
+        let result = strip_escape_sequences(r"\\path");
+        assert_eq!(result, r"\path");
+    }
+
+    #[test]
+    fn test_strip_escapes_no_escapes() {
+        let result = strip_escape_sequences("hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_has_unmatched_angle_bracket_simple() {
+        assert!(has_unmatched_angle_bracket("<name"));
+    }
+
+    #[test]
+    fn test_has_unmatched_angle_bracket_matched() {
+        assert!(!has_unmatched_angle_bracket("<name>"));
+    }
+
+    #[test]
+    fn test_has_unmatched_angle_bracket_escaped() {
+        assert!(!has_unmatched_angle_bracket(r"\<literal\>"));
+    }
+
+    #[test]
+    fn test_parse_variables_returns_unique_names() {
+        let vars = parse_variables("<a> <a> <b>");
+        assert_eq!(vars.len(), 3);
+        assert_eq!(vars[0].name, "a");
+        assert_eq!(vars[1].name, "a");
+        assert_eq!(vars[2].name, "b");
+    }
 }

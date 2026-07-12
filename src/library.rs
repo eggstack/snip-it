@@ -1331,4 +1331,407 @@ Command = "cmd2"
         assert_eq!(loaded.snippets.len(), 2);
         assert_ne!(loaded.snippets[0].id, loaded.snippets[1].id);
     }
+
+    #[test]
+    fn test_fixture_canonical_pet_roundtrips() {
+        let content = include_str!("../tests/fixtures/canonical_pet.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert_eq!(library.snippets.len(), 5);
+
+        assert_eq!(library.snippets[0].description, "git commit with message");
+        assert_eq!(library.snippets[0].command, "git commit -m \"<msg>\"");
+        assert_eq!(library.snippets[0].tags, vec!["git", "version-control"]);
+
+        assert_eq!(
+            library.snippets[1].description,
+            "docker ps running containers"
+        );
+        assert!(library.snippets[1].command.contains("docker ps"));
+
+        assert_eq!(
+            library.snippets[3].description,
+            "search & replace with \"quotes\" and special chars"
+        );
+        assert_eq!(library.snippets[3].tags, vec!["search", "ripgrep"]);
+
+        assert_eq!(
+            library.snippets[4].description,
+            "日本語のスニペット — unicode test"
+        );
+        assert_eq!(library.snippets[4].tags, vec!["unicode", "日本語"]);
+
+        // Roundtrip: serialize back and reload
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 5);
+        for i in 0..5 {
+            assert_eq!(
+                reloaded.snippets[i].description,
+                library.snippets[i].description
+            );
+            assert_eq!(reloaded.snippets[i].command, library.snippets[i].command);
+            assert_eq!(reloaded.snippets[i].tags, library.snippets[i].tags);
+        }
+    }
+
+    #[test]
+    fn test_fixture_snip_it_native_roundtrips() {
+        let content = include_str!("../tests/fixtures/snip_it_native.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert_eq!(library.snippets.len(), 4);
+
+        assert_eq!(
+            library.snippets[0].id,
+            "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+        );
+        assert_eq!(
+            library.snippets[0].description,
+            "list all docker containers"
+        );
+        assert_eq!(library.snippets[0].tags, vec!["docker"]);
+        assert_eq!(library.snippets[0].folders, vec!["devops", "containers"]);
+        assert!(library.snippets[0].favorite);
+        assert_eq!(library.snippets[0].created_at, 1700000000);
+        assert_eq!(library.snippets[0].updated_at, 1700100000);
+        assert_eq!(library.snippets[0].device_id, "device-alpha-001");
+        assert!(!library.snippets[0].deleted);
+
+        assert!(!library.snippets[1].favorite);
+        assert_eq!(library.snippets[1].folders, vec!["ops"]);
+
+        assert_eq!(
+            library.snippets[3].id,
+            "aabbccdd-eeff-4000-8111-223344556677"
+        );
+        assert!(library.snippets[3].deleted);
+
+        // Roundtrip
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 4);
+        for i in 0..4 {
+            assert_eq!(reloaded.snippets[i].id, library.snippets[i].id);
+            assert_eq!(
+                reloaded.snippets[i].description,
+                library.snippets[i].description
+            );
+            assert_eq!(reloaded.snippets[i].command, library.snippets[i].command);
+            assert_eq!(reloaded.snippets[i].tags, library.snippets[i].tags);
+            assert_eq!(reloaded.snippets[i].favorite, library.snippets[i].favorite);
+            assert_eq!(
+                reloaded.snippets[i].created_at,
+                library.snippets[i].created_at
+            );
+            assert_eq!(
+                reloaded.snippets[i].updated_at,
+                library.snippets[i].updated_at
+            );
+            assert_eq!(reloaded.snippets[i].deleted, library.snippets[i].deleted);
+        }
+    }
+
+    #[test]
+    fn test_fixture_legacy_uppercase_loads_as_snippets() {
+        let content = include_str!("../tests/fixtures/legacy_uppercase.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert_eq!(library.snippets.len(), 2);
+
+        assert_eq!(library.snippets[0].description, "list files");
+        assert_eq!(library.snippets[0].command, "ls -la");
+        assert_eq!(library.snippets[0].tags, vec!["files"]);
+
+        assert_eq!(library.snippets[1].description, "find large files");
+        assert_eq!(library.snippets[1].command, "find . -type f -size +10M");
+        assert_eq!(library.snippets[1].tags, vec!["search", "find"]);
+    }
+
+    #[test]
+    fn test_fixture_mixed_aliases_load_correctly() {
+        let content = include_str!("../tests/fixtures/mixed_field_aliases.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert_eq!(library.snippets.len(), 3);
+
+        // First snippet uses "name" alias for description and "cmd" alias for command
+        assert_eq!(
+            library.snippets[0].description,
+            "snippet using name instead of description"
+        );
+        assert_eq!(library.snippets[0].command, "echo alias test");
+        assert_eq!(library.snippets[0].tags, vec!["aliases"]);
+
+        // Second snippet uses canonical field names
+        assert_eq!(
+            library.snippets[1].description,
+            "snippet using canonical field names"
+        );
+        assert_eq!(library.snippets[1].command, "echo canonical");
+        assert_eq!(library.snippets[1].tags, vec!["canonical"]);
+
+        // Third snippet uses capitalized "Description" and "Command"
+        assert_eq!(
+            library.snippets[2].description,
+            "snippet using capitalized Description"
+        );
+        assert_eq!(library.snippets[2].command, "echo capitalized");
+        assert_eq!(library.snippets[2].tags, vec!["capitalized"]);
+    }
+
+    #[test]
+    fn test_fixture_variable_commands_preserve_syntax() {
+        let content = include_str!("../tests/fixtures/variable_commands.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert_eq!(library.snippets.len(), 5);
+
+        // Simple variable
+        assert_eq!(library.snippets[0].command, "echo <greeting>");
+
+        // Variable with default value
+        assert_eq!(library.snippets[1].command, "ssh <host=localhost> 'uptime'");
+
+        // Escaped angle brackets — single-quoted TOML literal preserves \< as-is
+        assert_eq!(library.snippets[2].command, "ping \\<hostname\\> -c 3");
+
+        // Nested angle brackets
+        assert_eq!(library.snippets[3].command, "echo <outer<inner>>");
+
+        // Variable with default containing spaces
+        assert_eq!(
+            library.snippets[4].command,
+            "cp <src=/tmp/default file> <dest=.>"
+        );
+
+        // Roundtrip preserves variable syntax
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 5);
+        for i in 0..5 {
+            assert_eq!(reloaded.snippets[i].command, library.snippets[i].command);
+        }
+    }
+
+    #[test]
+    fn test_fixture_empty_library_loads_empty() {
+        let content = include_str!("../tests/fixtures/empty_library.toml");
+        let library: Snippets = toml::from_str(content).unwrap();
+
+        assert!(library.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_pet_field_names_in_output() {
+        let snippet = Snippet {
+            description: "list files".to_string(),
+            command: "ls -la".to_string(),
+            tags: vec!["files".to_string()],
+            output: "".to_string(),
+            ..Default::default()
+        };
+        let snippets = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let toml_str = toml::to_string_pretty(&snippets).unwrap();
+        assert!(toml_str.contains("[[snippets]]"));
+        assert!(toml_str.contains("description = \"list files\""));
+        assert!(toml_str.contains("command = \"ls -la\""));
+        assert!(toml_str.contains("tag = [\"files\"]"));
+        assert!(toml_str.contains("output = \"\""));
+        assert!(!toml_str.contains("Description"));
+        assert!(!toml_str.contains("Command"));
+        assert!(!toml_str.contains("Tag ="));
+    }
+
+    #[test]
+    fn test_snippet_description_alias_roundtrip() {
+        let snippet = Snippet {
+            description: "test description".to_string(),
+            command: "echo test".to_string(),
+            ..Default::default()
+        };
+
+        let toml_str = toml::to_string_pretty(&snippet).unwrap();
+        assert!(toml_str.contains("description = \"test description\""));
+        assert!(!toml_str.contains("Description ="));
+        assert!(!toml_str.contains("name ="));
+
+        let reloaded: Snippet = toml::from_str(&toml_str).unwrap();
+        assert_eq!(reloaded.description, "test description");
+    }
+
+    #[test]
+    fn test_snippet_command_alias_roundtrip() {
+        let snippet = Snippet {
+            description: "test".to_string(),
+            command: "echo hello world".to_string(),
+            ..Default::default()
+        };
+
+        let toml_str = toml::to_string_pretty(&snippet).unwrap();
+        assert!(toml_str.contains("command = \"echo hello world\""));
+        assert!(!toml_str.contains("Command ="));
+        assert!(!toml_str.contains("cmd ="));
+
+        let reloaded: Snippet = toml::from_str(&toml_str).unwrap();
+        assert_eq!(reloaded.command, "echo hello world");
+    }
+
+    #[test]
+    fn test_snippet_tags_rename_roundtrip() {
+        let snippet = Snippet {
+            description: "test".to_string(),
+            command: "echo test".to_string(),
+            tags: vec!["rust".to_string(), "test".to_string()],
+            ..Default::default()
+        };
+
+        let toml_str = toml::to_string_pretty(&snippet).unwrap();
+        assert!(
+            toml_str.contains("tag ="),
+            "Expected 'tag' field, got: {}",
+            toml_str
+        );
+        assert!(toml_str.contains("\"rust\""));
+        assert!(toml_str.contains("\"test\""));
+        assert!(!toml_str.contains("tags ="));
+        assert!(!toml_str.contains("Tags ="));
+
+        let reloaded: Snippet = toml::from_str(&toml_str).unwrap();
+        assert_eq!(reloaded.tags, vec!["rust", "test"]);
+    }
+
+    #[test]
+    fn test_snippet_with_empty_output_roundtrips() {
+        let snippet = Snippet {
+            description: "test".to_string(),
+            command: "echo test".to_string(),
+            output: String::new(),
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert_eq!(reloaded.snippets[0].output, "");
+    }
+
+    #[test]
+    fn test_snippet_with_nonempty_output_roundtrips() {
+        let snippet = Snippet {
+            description: "test".to_string(),
+            command: "echo test".to_string(),
+            output: "some output".to_string(),
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert_eq!(reloaded.snippets[0].output, "some output");
+    }
+
+    #[test]
+    fn test_deleted_snippet_preserved_on_roundtrip() {
+        let snippet = Snippet {
+            description: "deleted snippet".to_string(),
+            command: "echo deleted".to_string(),
+            deleted: true,
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert!(reloaded.snippets[0].deleted);
+    }
+
+    #[test]
+    fn test_timestamps_preserved_on_roundtrip() {
+        let snippet = Snippet {
+            description: "test".to_string(),
+            command: "echo test".to_string(),
+            created_at: 1700000000,
+            updated_at: 1700123456,
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert_eq!(reloaded.snippets[0].created_at, 1700000000);
+        assert_eq!(reloaded.snippets[0].updated_at, 1700123456);
+    }
+
+    #[test]
+    fn test_uuid_preserved_on_roundtrip() {
+        let snippet = Snippet {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            description: "test".to_string(),
+            command: "echo test".to_string(),
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert_eq!(
+            reloaded.snippets[0].id,
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+
+    #[test]
+    fn test_special_characters_in_description_roundtrip() {
+        let snippet = Snippet {
+            description: "has \"quotes\" & ampersand <> angle brackets".to_string(),
+            command: "echo test".to_string(),
+            ..Default::default()
+        };
+        let library = Snippets {
+            snippets: vec![snippet],
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&library).unwrap();
+        let reloaded: Snippets = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded.snippets.len(), 1);
+        assert_eq!(
+            reloaded.snippets[0].description,
+            "has \"quotes\" & ampersand <> angle brackets"
+        );
+    }
 }

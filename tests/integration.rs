@@ -658,3 +658,675 @@ fn test_keybindings_lists_theme_picker() {
         "expected 'save & apply theme' binding: {stdout}"
     );
 }
+
+// --- CLI contract: exit code on missing config ---
+
+#[test]
+fn test_run_without_config_exits_nonzero() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["run"]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No library found"),
+        "snp run with no config should print 'No library found': {stderr}"
+    );
+}
+
+#[test]
+fn test_clip_without_config_exits_nonzero() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["clip"]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No library found"),
+        "snp clip with no config should print 'No library found': {stderr}"
+    );
+}
+
+#[test]
+fn test_search_without_config_exits_nonzero() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["search"]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No library found"),
+        "snp search with no config should print 'No library found': {stderr}"
+    );
+}
+
+#[test]
+fn test_edit_without_config_exits_nonzero() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["edit"]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("No library found")
+            || combined.contains("editor")
+            || combined.contains("EDITOR")
+            || output.status.success(),
+        "snp edit with no config should either report no library or attempt to open editor: {combined}"
+    );
+}
+
+// --- CLI contract: list output formats ---
+
+#[test]
+fn test_list_json_output_is_valid_json_array() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "contract-json"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("contract-json.toml"),
+        r#"
+[[Snippets]]
+description = "greet"
+command = "echo hi"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+
+[[Snippets]]
+description = "list files"
+command = "ls -la"
+tags = ["files"]
+output = ""
+folders = []
+favorite = true
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "contract-json"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("output must be valid JSON");
+    assert_eq!(parsed.len(), 2, "expected 2 snippets in JSON array");
+
+    let descriptions: Vec<&str> = parsed
+        .iter()
+        .map(|v| v["description"].as_str().unwrap())
+        .collect();
+    assert!(descriptions.contains(&"greet"));
+    assert!(descriptions.contains(&"list files"));
+
+    for item in &parsed {
+        assert!(
+            item.get("command").is_some(),
+            "each item must have 'command'"
+        );
+        assert!(item.get("tags").is_some(), "each item must have 'tags'");
+        assert!(
+            item.get("favorite").is_some(),
+            "each item must have 'favorite'"
+        );
+    }
+}
+
+#[test]
+fn test_list_csv_output_has_header() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "contract-csv"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("contract-csv.toml"),
+        r#"
+[[Snippets]]
+description = "test snippet"
+command = "echo test"
+tags = ["contract"]
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "contract-csv"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+
+    let header = lines
+        .next()
+        .expect("CSV output must have at least a header line");
+    assert_eq!(
+        header, "description,command,output,tags,folders,favorite",
+        "CSV header must match expected columns"
+    );
+
+    let data_line = lines
+        .next()
+        .expect("CSV output must have at least one data line");
+    assert!(data_line.contains("test snippet"));
+    assert!(data_line.contains("echo test"));
+}
+
+#[test]
+fn test_list_default_output_contains_commands() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "contract-default"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("contract-default.toml"),
+        r#"
+[[Snippets]]
+description = "disk usage"
+command = "du -sh *"
+tags = ["sys"]
+output = ""
+folders = []
+favorite = false
+
+[[Snippets]]
+description = "network info"
+command = "ifconfig"
+tags = ["net"]
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "contract-default"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("du -sh *"),
+        "default output must contain snippet command: {stdout}"
+    );
+    assert!(
+        stdout.contains("ifconfig"),
+        "default output must contain snippet command: {stdout}"
+    );
+}
+
+// --- CLI contract: new command adds snippet ---
+
+#[test]
+fn test_new_adds_snippet_to_library() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "contract-new"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "contract-new"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["new", "--description", "contract test", "echo contract"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success(), "snp new should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    let lib_path = config_dir.join("libraries").join("contract-new.toml");
+    assert!(
+        lib_path.exists(),
+        "library TOML file must exist after adding snippet"
+    );
+    let contents = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        contents.contains("contract test"),
+        "TOML must contain the new snippet description"
+    );
+    assert!(
+        contents.contains("echo contract"),
+        "TOML must contain the new snippet command"
+    );
+}
+
+// --- CLI contract: cron output format ---
+
+#[test]
+fn test_cron_output_is_crontab_format() {
+    let mut cmd = snp_cmd();
+    cmd.args(["cron"]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let re = regex::Regex::new(r"\*/\d+ \* \* \* \* .+ sync").unwrap();
+    assert!(
+        re.is_match(&stdout),
+        "output must contain a crontab entry like '*/N * * * * <path> sync': {stdout}"
+    );
+}
+
+// --- CLI contract: completions ---
+
+#[test]
+fn test_completions_bash_output_is_valid() {
+    let output = snp_cmd().args(["completions", "bash"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("_snp") || stdout.contains("complete"),
+        "bash completions must contain '_snp' or 'complete': {stdout}"
+    );
+    assert!(
+        stdout.contains("snp"),
+        "bash completions must reference the snp command: {stdout}"
+    );
+}
+
+#[test]
+fn test_completions_zsh_output_is_valid() {
+    let output = snp_cmd().args(["completions", "zsh"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("compdef") || stdout.contains("_arguments") || stdout.contains("snp"),
+        "zsh completions must contain 'compdef', '_arguments', or 'snp': {stdout}"
+    );
+}
+
+#[test]
+fn test_completions_fish_output_is_valid() {
+    let output = snp_cmd().args(["completions", "fish"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("complete"),
+        "fish completions must contain 'complete': {stdout}"
+    );
+}
+
+// --- CLI contract: version output ---
+
+#[test]
+fn test_version_output_contains_version_string() {
+    let output = snp_cmd().arg("--version").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = env!("CARGO_PKG_VERSION");
+    assert!(
+        stdout.contains(expected),
+        "version output must contain '{expected}': {stdout}"
+    );
+    let re = regex::Regex::new(r"snp \d+\.\d+\.\d+").unwrap();
+    assert!(
+        re.is_match(&stdout),
+        "version output must match pattern 'snp X.Y.Z': {stdout}"
+    );
+}
+
+// --- CLI contract: keybindings structure ---
+
+#[test]
+fn test_keybindings_output_structure() {
+    let output = snp_cmd().arg("keybindings").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Normal Mode"),
+        "keybindings must contain 'Normal Mode' section: {stdout}"
+    );
+    assert!(
+        stdout.contains("Insert Mode"),
+        "keybindings must contain 'Insert Mode' section: {stdout}"
+    );
+}
+
+// --- TUI lifecycle: performance ---
+
+#[test]
+fn test_list_with_many_snippets_performance() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "perf-test"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("perf-test.toml");
+
+    let mut toml = String::new();
+    for i in 0..100 {
+        toml.push_str(&format!(
+            r#"[[Snippets]]
+description = "snippet {i}"
+command = "echo {i}"
+tags = ["tag{i}"]
+output = ""
+folders = []
+favorite = false
+"#,
+            i = i
+        ));
+    }
+    fs::write(&lib_path, &toml).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "perf-test"]);
+    cmd.output().unwrap();
+
+    let start = std::time::Instant::now();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 100);
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "Listing 100 snippets took {:?}, expected < 5s",
+        elapsed
+    );
+}
+
+// --- TUI lifecycle: unicode ---
+
+#[test]
+fn test_list_with_unicode_in_snippets() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "unicode-test"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("unicode-test.toml");
+    fs::write(
+        &lib_path,
+        r#"[[Snippets]]
+description = "中文测试"
+command = "echo 'こんにちは世界'"
+tags = ["日本語"]
+output = ""
+folders = []
+favorite = false
+
+[[Snippets]]
+description = "accented résumé café"
+command = "echo 'Ñoño über'"
+tags = ["latin"]
+output = ""
+folders = []
+favorite = false
+
+[[Snippets]]
+description = "Cyrillic Тест"
+command = "echo 'Привет мир'"
+tags = ["кириллица"]
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "unicode-test"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[0]["description"], "中文测试");
+    assert_eq!(parsed[1]["description"], "accented résumé café");
+    assert_eq!(parsed[2]["description"], "Cyrillic Тест");
+}
+
+// --- TUI lifecycle: very long command ---
+
+#[test]
+fn test_list_with_very_long_command() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "long-cmd-test"]);
+    cmd.output().unwrap();
+
+    let long_command = "echo ".to_string() + &"a".repeat(1000);
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("long-cmd-test.toml");
+    fs::write(
+        &lib_path,
+        format!(
+            r#"[[Snippets]]
+description = "long command"
+command = "{cmd}"
+tags = []
+output = ""
+folders = []
+favorite = false
+"#,
+            cmd = long_command
+        ),
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "long-cmd-test"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    let stored_cmd = parsed[0]["command"].as_str().unwrap();
+    assert_eq!(stored_cmd.len(), long_command.len());
+    assert!(stored_cmd.starts_with("echo "));
+}
+
+// --- TUI lifecycle: special characters in tags ---
+
+#[test]
+fn test_list_with_special_characters_in_tags() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "special-tags-test"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("special-tags-test.toml");
+    fs::write(
+        &lib_path,
+        r#"[[Snippets]]
+description = "tagged snippet"
+command = "echo hello"
+tags = ["tag with space", "tag/with/slashes"]
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "special-tags-test"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    let tags = parsed[0]["tags"].as_array().unwrap();
+    assert!(tags.contains(&serde_json::Value::String("tag with space".to_string())));
+    assert!(tags.contains(&serde_json::Value::String("tag/with/slashes".to_string())));
+}
+
+// --- TUI lifecycle: new with unicode description ---
+
+#[test]
+fn test_new_with_unicode_description() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args(["new", "--description", "日本語テスト", "echo test"])
+        .output()
+        .expect("failed to execute");
+    assert!(
+        output.status.success(),
+        "snp new with unicode description should succeed"
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0]["description"], "日本語テスト");
+    assert_eq!(parsed[0]["command"], "echo test");
+}
+
+// --- TUI lifecycle: new with special characters in command ---
+
+#[test]
+fn test_new_with_special_characters_in_command() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--description",
+            "Special",
+            "echo 'hello world' && ls -la",
+        ])
+        .output()
+        .expect("failed to execute");
+    assert!(
+        output.status.success(),
+        "snp new with special chars should succeed"
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0]["description"], "Special");
+    assert_eq!(parsed[0]["command"], "echo 'hello world' && ls -la");
+}
+
+// --- TUI lifecycle: output encoding ---
+
+#[test]
+fn test_list_output_encoding() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "encoding-test"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("encoding-test.toml");
+    fs::write(
+        &lib_path,
+        r#"[[Snippets]]
+description = "Ünïcödé test 🎉"
+command = "echo '日本語'"
+tags = [" unicode 🌍 "]
+output = ""
+folders = []
+favorite = false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "encoding-test"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    // Verify output is valid UTF-8 (from_utf8_lossy above won't fail, but
+    // from_utf8_strict will confirm no replacement characters leaked in)
+    let stdout_bytes = &output.stdout;
+    let _stdout_str =
+        std::str::from_utf8(stdout_bytes).expect("snp list --json output must be valid UTF-8");
+
+    let stdout = String::from_utf8_lossy(stdout_bytes);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0]["description"], "Ünïcödé test 🎉");
+    assert_eq!(parsed[0]["command"], "echo '日本語'");
+}

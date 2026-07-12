@@ -1,0 +1,38 @@
+# Edge case snippets for testing parser robustness.
+# Some entries are intentionally malformed or unusual.
+
+[[snippets]]
+description = ""
+command = "echo empty description is fine for deserialization"
+output = ""
+tag = []
+
+[[snippets]]
+description = "very long command string"
+command = "echo AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRRSSSSTTTTUUUUVVVVWWWWXXXXYYYYZZZZaaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzzAAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRRSSSSTTTTUUUUVVVVWWWWXXXXYYYYZZZZaaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz0000111122223333444455556666777788889999ABCDEF00112233445566778899AABBCCDDEEFFF"
+output = ""
+tag = ["long-command"]
+
+[[snippets]]
+description = "multiline description test"
+command = "echo 'this command has a newline in it'"
+output = ""
+tag = []
+
+[[snippets]]
+description = "backslashes in command"
+command = 'C:\\Users\\test\\file.txt'
+output = ""
+tag = ["windows-path"]
+
+[[snippets]]
+description = "single tag element"
+command = "echo single tag"
+output = ""
+tag = ["lonely"]
+
+[[snippets]]
+description = "empty tags array"
+command = "echo no tags here"
+output = ""
+tag = []

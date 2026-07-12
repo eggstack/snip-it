@@ -1,0 +1,20 @@
+# File mixing different alias conventions for snippet fields.
+# Tests that serde aliases work correctly across naming styles.
+
+[[snippets]]
+name = "snippet using name instead of description"
+cmd = "echo alias test"
+output = ""
+Tags = ["aliases"]
+
+[[snippets]]
+description = "snippet using canonical field names"
+command = "echo canonical"
+output = ""
+tag = ["canonical"]
+
+[[snippets]]
+Description = "snippet using capitalized Description"
+Command = "echo capitalized"
+Output = ""
+tag = ["capitalized"]
