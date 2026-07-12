@@ -87,7 +87,7 @@ The closure work must preserve these invariants:
 
 # Workstream A: Explicit Selection Outcomes
 
-## A1. Audit the current shared selection pipeline
+## A1. Audit the current shared selection pipeline ✓
 
 Inspect:
 
@@ -99,7 +99,7 @@ Inspect:
 
 Document the exact existing flow before changing types. The implementation should minimize churn to commands unrelated to `select`.
 
-## A2. Introduce an explicit outcome type
+## A2. Introduce an explicit outcome type ✓
 
 Add or extend a shared result type that can represent at least:
 
@@ -126,7 +126,7 @@ pub enum SelectionOutcome<T> {
 
 Do not force unrelated commands to adopt new user-visible semantics. Existing commands may map `Cancelled` back to their current `Ok(())` behavior.
 
-## A3. Make `snp select` return a structured command outcome
+## A3. Make `snp select` return a structured command outcome ✓
 
 Refactor `select_cmd::run()` so it returns a normal Rust value rather than terminating the process.
 
@@ -153,7 +153,7 @@ The command implementation should:
 - return an error for operational failure;
 - never call `std::process::exit`.
 
-## A4. Preserve existing behavior for other commands
+## A4. Preserve existing behavior for other commands ✓
 
 `run`, `clip`, and `search` currently treat ordinary cancellation as success. Preserve that behavior unless the existing policy says otherwise.
 
@@ -165,7 +165,7 @@ The shared outcome refactor must not cause:
 - deletion behavior to change;
 - TUI terminal restoration regressions.
 
-## A5. Add outcome-level tests
+## A5. Add outcome-level tests ✓
 
 Add unit tests for:
 
@@ -186,7 +186,7 @@ Acceptance criteria:
 
 # Workstream B: Top-Level Exit-Code Mapping
 
-## B1. Add a top-level command outcome contract
+## B1. Add a top-level command outcome contract ✓
 
 Introduce a narrow process-boundary mapping in `main.rs` or the central dispatcher.
 
@@ -207,7 +207,7 @@ The dispatcher returns this outcome, and `main()` maps:
 
 Avoid broad exit-code redesign. This pass should not introduce a taxonomy for every `SnipError` variant.
 
-## B2. Scope exit 4 to `snp select`
+## B2. Scope exit 4 to `snp select` ✓
 
 The new cancellation exit code must apply to:
 
@@ -219,7 +219,7 @@ snp select --expanded
 
 It must not silently alter cancellation behavior for `run`, `clip`, or `search`.
 
-## B3. Verify stream behavior
+## B3. Verify stream behavior ✓
 
 For `snp select`:
 
@@ -239,7 +239,7 @@ Acceptance criteria:
 
 # Workstream C: Resolve the Ignored `--sync` Option
 
-## C1. Decide based on existing command semantics
+## C1. Decide based on existing command semantics ✓
 
 Inspect why `--sync` was added to `Select` and whether the current shared selection API assumed parity with `run` or `search`.
 
@@ -252,7 +252,7 @@ The preferred closure decision is to remove `--sync` from `snp select` because:
 
 Only retain and implement `--sync` if repository conventions clearly require it and behavior can be made consistent with an existing command.
 
-## C2. Remove all stale documentation and tests if the option is removed
+## C2. Remove all stale documentation and tests if the option is removed ✓
 
 Update:
 
@@ -272,7 +272,7 @@ Acceptance criteria:
 
 # Workstream D: Correct Shell Adapter Status Handling
 
-## D1. Establish a strict status decision tree
+## D1. Establish a strict status decision tree ✓
 
 All generated shell adapters must implement this ordering:
 
@@ -309,7 +309,7 @@ fi
 
 Adapt syntax appropriately for Zsh and Fish.
 
-## D2. Define empty-command behavior
+## D2. Define empty-command behavior ✓
 
 Determine whether an empty snippet command is valid in the current data model.
 
@@ -322,7 +322,7 @@ If legacy files can contain empty commands and must remain loadable, then shell 
 
 Document the chosen policy and add tests.
 
-## D3. Preserve original status on operational failure
+## D3. Preserve original status on operational failure ✓
 
 For shell functions:
 
@@ -331,7 +331,7 @@ For shell functions:
 - where practical, preserve the original `snp` exit status rather than collapsing everything to 1;
 - diagnostics already emitted by `snp` should not be duplicated unnecessarily.
 
-## D4. Preserve buffer and cursor exactly
+## D4. Preserve buffer and cursor exactly ✓
 
 On cancellation or failure:
 
@@ -353,7 +353,7 @@ Acceptance criteria:
 
 # Workstream E: Harden Output Transport
 
-## E1. Reassess the pathname transport contract
+## E1. Reassess the pathname transport contract ✓
 
 The current temp-file transport is acceptable for multiline fidelity, but `snp select --output-file` must not behave as a generic arbitrary overwrite primitive.
 
@@ -379,13 +379,13 @@ If practical without excessive complexity, allow shell wrappers to pass a writab
 
 Do not adopt this option if it substantially broadens the pass.
 
-## E2. Consider hiding the option
+## E2. Consider hiding the option ✓
 
 If `--output-file` exists only for generated integrations, mark it hidden from normal help while documenting the stable public behavior through `snp shell init`.
 
 Do not hide it if users are expected to rely on it as a supported automation API. Make the decision explicit in code comments and design docs.
 
-## E3. Ensure cancellation and failure do not leave stale content
+## E3. Ensure cancellation and failure do not leave stale content ✓
 
 The wrapper creates a fresh temporary file. Still ensure:
 
@@ -397,7 +397,7 @@ The wrapper creates a fresh temporary file. Still ensure:
 
 A straightforward write followed by close before returning success is sufficient for a unique private temp file.
 
-## E4. Add filesystem safety tests
+## E4. Add filesystem safety tests ✓
 
 Test:
 
@@ -419,7 +419,7 @@ Acceptance criteria:
 
 # Workstream F: Real Shell and PTY Validation
 
-## F1. Add shell-level tests with a stub `snp`
+## F1. Add shell-level tests with a stub `snp` ✓
 
 For each supported shell, source the generated integration and place a stub `snp` executable earlier in `PATH`.
 
@@ -444,7 +444,7 @@ Verify:
 - no execution of selected text;
 - no `eval` of selected text.
 
-## F2. Use actual shells, not only parser checks
+## F2. Use actual shells, not only parser checks ✓
 
 Run generated code in:
 
@@ -456,7 +456,7 @@ If a shell is not available in the default CI image, install it in the relevant 
 
 Tests may call internal generated helper functions directly with simulated buffer variables where necessary, but at least one path per shell should exercise the actual public function.
 
-## F3. Add targeted PTY tests for the real binary
+## F3. Add targeted PTY tests for the real binary ✓
 
 Use a PTY-capable test harness to validate the actual `snp select` binary against a temporary fixture library.
 
@@ -474,13 +474,13 @@ Required cases:
 
 Keep PTY tests deterministic. Use a small fixture with uniquely searchable descriptions and commands. Avoid relying on terminal dimensions or timing more than necessary.
 
-## F4. Add a test seam if necessary
+## F4. Add a test seam if necessary ✓
 
 If the current TUI is too difficult to drive reliably, add a narrow internal abstraction for event input or selector outcomes. Do not add a public bypass that undermines the TUI contract.
 
 A deterministic event-source abstraction under `cfg(test)` is preferable to flaky sleeps and raw byte timing.
 
-## F5. Cross-platform test expectations
+## F5. Cross-platform test expectations ✓
 
 The shell integration is Unix-oriented, but the core crate remains cross-platform.
 
@@ -498,7 +498,7 @@ Acceptance criteria:
 
 # Workstream G: Documentation Reconciliation
 
-## G1. Update the compatibility contract
+## G1. Update the compatibility contract ✓
 
 Revise `docs/PET_COMPATIBILITY.md` to state the final Release 1 behavior precisely:
 
@@ -511,7 +511,7 @@ Revise `docs/PET_COMPATIBILITY.md` to state the final Release 1 behavior precise
 - no automatic keybindings;
 - no execution of inserted content.
 
-## G2. Update exit-code and stream policy
+## G2. Update exit-code and stream policy ✓
 
 Update `docs/CLI_EXITCODE_STREAM_POLICY.md` with tested final behavior.
 
@@ -527,13 +527,13 @@ Include an explicit table for `snp select`:
 
 Adjust if the implementation intentionally preserves non-1 operational statuses.
 
-## G3. Correct architecture inventory drift
+## G3. Correct architecture inventory drift ✓
 
 Remove or correct stale statements, including any reference to `snp check` if the generated code uses `command -v snp`.
 
 Update the test-infrastructure section to reflect the fixture corpus and new shell/PTY tests.
 
-## G4. Ensure README and USER_GUIDE do not overpromise
+## G4. Ensure README and USER_GUIDE do not overpromise ✓
 
 Verify all shell examples are syntactically correct and match generated function names.
 
@@ -552,7 +552,7 @@ Acceptance criteria:
 
 # Workstream H: Regression and Release Validation
 
-## H1. Full local validation
+## H1. Full local validation ✓
 
 Run:
 
@@ -564,7 +564,7 @@ cargo test --workspace --all-features
 
 If some feature combinations are intentionally unsupported, document the exact validated command set and reason.
 
-## H2. Preserve the Release 1A baseline
+## H2. Preserve the Release 1A baseline ✓
 
 All fixtures and compatibility tests introduced in Release 1A must continue to pass.
 
@@ -579,7 +579,7 @@ Specifically verify:
 - serialization round trips;
 - current `run`, `clip`, `search`, and `list` behavior.
 
-## H3. Add negative regression tests
+## H3. Add negative regression tests ✓
 
 Add tests proving:
 
@@ -593,7 +593,7 @@ Add tests proving:
 - raw mode does not prompt for variables;
 - expanded mode does prompt when required.
 
-## H4. CI verification
+## H4. CI verification ✓
 
 Ensure the head commit receives visible CI results for the repository's normal workflow matrix.
 
@@ -607,7 +607,7 @@ At minimum confirm:
 
 Do not declare closure based only on commit-message claims.
 
-## H5. Manual smoke checklist
+## H5. Manual smoke checklist ✓
 
 Before marking Release 1 closed, manually test on at least one real interactive shell:
 
