@@ -184,6 +184,96 @@ fn parse_pet_toml(content: &str) -> SnipResult<Snippets> {
     toml::from_str(&fixed).map_err(|e| SnipError::toml_error("parse pet TOML", e))
 }
 
+/// Known field names for pet snippet entries (canonical + aliases).
+/// Used to detect unknown fields in the source TOML.
+const KNOWN_SNIPPET_FIELDS: &[&str] = &[
+    // Canonical snip-it fields
+    "id",
+    "description",
+    "command",
+    "output",
+    "tag",
+    "tags",
+    "folders",
+    "favorite",
+    "created_at",
+    "updated_at",
+    "device_id",
+    "deleted",
+    // Pet aliases
+    "name",
+    "cmd",
+    "Tag",
+    "Tags",
+    "Description",
+    "Command",
+    "Output",
+    "Id",
+    "ID",
+];
+
+/// Detect unknown fields, missing required keys, and structural issues in
+/// the raw TOML snippet entries. Returns diagnostics for the report.
+fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    let value: toml::Value = match toml::from_str(raw_toml) {
+        Ok(v) => v,
+        Err(_) => return diagnostics, // Parse errors are caught earlier by parse_pet_toml
+    };
+
+    let entries = match value.get("snippets").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return diagnostics,
+    };
+
+    for (i, entry) in entries.iter().enumerate() {
+        let table = match entry.as_table() {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Check for unknown fields
+        for key in table.keys() {
+            if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
+                diagnostics.push(CompatibilityDiagnostic {
+                    entry_index: i,
+                    field: Some(key.clone()),
+                    severity: DiagnosticSeverity::Info,
+                    message: format!("Unknown field '{}' will be ignored", key),
+                });
+            }
+        }
+
+        // Check for missing required fields
+        if !table.contains_key("description")
+            && !table.contains_key("Description")
+            && !table.contains_key("name")
+        {
+            diagnostics.push(CompatibilityDiagnostic {
+                entry_index: i,
+                field: Some("description".to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: "Entry missing 'description' field (will be empty)".to_string(),
+            });
+        }
+
+        if !table.contains_key("command")
+            && !table.contains_key("Command")
+            && !table.contains_key("cmd")
+        {
+            diagnostics.push(CompatibilityDiagnostic {
+                entry_index: i,
+                field: Some("command".to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: "Entry missing 'command' field (will be empty)".to_string(),
+            });
+        }
+    }
+
+    diagnostics
+}
+
 /// Convert a pet snippet into a native snip-it `Snippet`.
 ///
 /// Preserves command text semantically. Generates snip-it-native fields
@@ -247,6 +337,16 @@ fn convert_entry(
             field: Some("output".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry has output field (preserved)".to_string(),
+        });
+    }
+
+    // Diagnostic: empty tags array
+    if snippet.tags.is_empty() {
+        diagnostics.push(CompatibilityDiagnostic {
+            entry_index: index,
+            field: Some("tag".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: "Entry has no tags".to_string(),
         });
     }
 
@@ -349,6 +449,9 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
         ));
     }
 
+    // Detect unknown fields and missing keys in raw TOML
+    let unknown_field_diagnostics = detect_unknown_fields(&content);
+
     // Phase 2: Initialize library manager
     let mut mgr = LibraryManager::new()?;
     mgr.ensure_library_mode()?;
@@ -369,6 +472,9 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
         options.strict,
     );
     report.total_entries = pet_snippets.snippets.len();
+
+    // Add unknown-field and missing-key diagnostics from raw TOML analysis
+    report.diagnostics.extend(unknown_field_diagnostics);
 
     let mut converted: Vec<Snippet> = Vec::new();
 
@@ -813,6 +919,110 @@ tag = ["test"]
             diagnostics
                 .iter()
                 .any(|d| d.field.as_deref() == Some("output"))
+        );
+    }
+
+    #[test]
+    fn test_convert_entry_empty_tags_diagnostic() {
+        let pet = Snippet {
+            description: "test".to_string(),
+            command: "echo hi".to_string(),
+            tags: Vec::new(),
+            ..Default::default()
+        };
+        let (_, diagnostics, _) = convert_entry(0, &pet);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.field.as_deref() == Some("tag") && d.message.contains("no tags"))
+        );
+    }
+
+    #[test]
+    fn test_detect_unknown_fields() {
+        let toml = r#"
+[[snippets]]
+description = "test"
+command = "echo hi"
+custom_field = "unknown"
+another_unknown = 42
+"#;
+        let diagnostics = detect_unknown_fields(toml);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("custom_field")),
+            "Should detect custom_field as unknown"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("another_unknown")),
+            "Should detect another_unknown as unknown"
+        );
+        // Known fields should not be flagged
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.message.contains("description")),
+            "description should not be flagged as unknown"
+        );
+        assert!(
+            !diagnostics.iter().any(|d| d.message.contains("command")),
+            "command should not be flagged as unknown"
+        );
+    }
+
+    #[test]
+    fn test_detect_missing_description() {
+        let toml = r#"
+[[snippets]]
+command = "echo hi"
+"#;
+        let diagnostics = detect_unknown_fields(toml);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("missing 'description'")),
+            "Should detect missing description"
+        );
+    }
+
+    #[test]
+    fn test_detect_missing_command() {
+        let toml = r#"
+[[snippets]]
+description = "test"
+"#;
+        let diagnostics = detect_unknown_fields(toml);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("missing 'command'")),
+            "Should detect missing command"
+        );
+    }
+
+    #[test]
+    fn test_detect_known_pet_aliases() {
+        let toml = r#"
+[[snippets]]
+Description = "legacy"
+Command = "echo legacy"
+Tag = ["legacy"]
+Output = "out"
+"#;
+        let diagnostics = detect_unknown_fields(toml);
+        // These are known aliases, should not be flagged as unknown
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.message.contains("Description")),
+            "Description alias should not be flagged"
+        );
+        assert!(
+            !diagnostics.iter().any(|d| d.message.contains("Command")),
+            "Command alias should not be flagged"
         );
     }
 }

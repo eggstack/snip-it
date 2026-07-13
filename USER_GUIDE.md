@@ -74,7 +74,33 @@ The variable syntax is shared too: `<name>` prompts for a value and
 `<name=default>` provides a default. Snip-it accepts pet files directly; no
 conversion script is needed for ordinary command snippets.
 
-To import a pet file as a named snp library:
+The first-class import command migrates pet files into named snp libraries:
+
+```bash
+# Import with automatic library name (derived from filename)
+snp import pet /path/to/pet-snippets.toml
+
+# Import with explicit library name
+snp import pet /path/to/pet-snippets.toml --library my-snippets
+
+# Preview without writing files
+snp import pet /path/to/pet-snippets.toml --dry-run
+
+# Merge into existing library, skipping exact duplicates
+snp import pet /path/to/pet-snippets.toml --library existing-lib --merge
+
+# Replace existing library entirely (with backup)
+snp import pet /path/to/pet-snippets.toml --library existing-lib --replace
+
+# Get a machine-readable JSON report
+snp import pet /path/to/pet-snippets.toml --report json
+```
+
+The source file is never modified. Merged and replaced libraries are backed up
+before overwrite. Use `--strict` to abort on any diagnostic error, or
+`--report-file <path>` to save a JSON report for later review.
+
+Alternatively, you can copy the file directly:
 
 ```bash
 SNP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/snp"

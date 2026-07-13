@@ -3907,3 +3907,232 @@ fn test_import_pet_merge_conflicts_with_replace() {
         "--merge and --replace should conflict"
     );
 }
+
+// --- Release 3B gap-fix tests: large file, symlink, failure injection, workflow ---
+
+#[test]
+fn test_import_pet_large_file_rejected() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let big_file = tmp.path().join("big.toml");
+
+    // Create a file larger than 16 MiB
+    {
+        let mut f = fs::File::create(&big_file).unwrap();
+        let chunk = "[[snippets]]\ndescription = \"x\"\ncommand = \"echo x\"\n";
+        // Write enough chunks to exceed 16 MiB (16 * 1024 * 1024 = 16_777_216)
+        let target = 17 * 1024 * 1024;
+        let mut written = 0usize;
+        while written < target {
+            let n = f.write(chunk.as_bytes()).unwrap();
+            written += n;
+        }
+    }
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", big_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "File >16 MiB should be rejected");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("too large") || stderr.contains("16 MiB"),
+        "Expected size error: {stderr}"
+    );
+}
+
+#[test]
+fn test_import_pet_symlink_followed() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let real_file = tmp.path().join("real_pet.toml");
+    let symlink = tmp.path().join("link_pet.toml");
+
+    // Write a valid pet file
+    fs::write(
+        &real_file,
+        r#"
+[[snippets]]
+description = "symlink test"
+command = "echo symlink"
+"#,
+    )
+    .unwrap();
+
+    // Create symlink pointing to the real file
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_file, &symlink).unwrap();
+    #[cfg(not(unix))]
+    {
+        // On Windows, just copy the file (symlink requires elevated privileges)
+        fs::copy(&real_file, &symlink).unwrap();
+    }
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", symlink.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Symlink import should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the original file is unchanged
+    let after = fs::read_to_string(&real_file).unwrap();
+    assert!(
+        after.contains("echo symlink"),
+        "Source file should be unchanged"
+    );
+
+    // Verify library was created
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "link-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+}
+
+#[test]
+fn test_import_pet_collision_leaves_no_partial_state() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // First import succeeds
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Read the original library content
+    let lib_path = config_dir.join("libraries").join("canonical-pet.toml");
+    let original_content = fs::read_to_string(&lib_path).unwrap();
+    let original_libraries_toml = fs::read_to_string(config_dir.join("libraries.toml")).unwrap();
+
+    // Second import fails (destination collision)
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+
+    // Verify library file is unchanged
+    let after_content = fs::read_to_string(&lib_path).unwrap();
+    assert_eq!(
+        original_content, after_content,
+        "Library file should not change on collision"
+    );
+
+    // Verify libraries.toml is unchanged
+    let after_libraries_toml = fs::read_to_string(config_dir.join("libraries.toml")).unwrap();
+    assert_eq!(
+        original_libraries_toml, after_libraries_toml,
+        "Libraries metadata should not change on collision"
+    );
+}
+
+#[test]
+fn test_import_pet_library_list_csv() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // Import
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // List as CSV
+    let output = snp_in(&config_dir)
+        .args(["list", "--csv", "--library", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "list --csv should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // CSV should have a header row and data rows
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines.len() > 1,
+        "CSV should have header + data rows, got {} lines",
+        lines.len()
+    );
+    // Header should contain expected columns
+    assert!(
+        lines[0].contains("description") && lines[0].contains("command"),
+        "CSV header should contain description and command: {}",
+        lines[0]
+    );
+}
+
+#[test]
+fn test_import_pet_select_raw_output() {
+    // NOTE: snp select requires a terminal (ratatui TUI), so we cannot test
+    // it directly in an integration test. Instead, verify the imported library
+    // is fully usable by testing list --json with various queries.
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // Import
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Verify the library can be set as primary
+    let output = snp_in(&config_dir)
+        .args(["library", "set-primary", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "set-primary on imported library should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify library show works
+    let output = snp_in(&config_dir)
+        .args(["library", "show", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("canonical-pet"),
+        "library show should display name: {stdout}"
+    );
+
+    // Verify list --json returns all snippets with expected fields
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 5);
+    // Each snippet should have the expected fields
+    for s in &snippets {
+        assert!(
+            s["description"].is_string(),
+            "snippet should have description"
+        );
+        assert!(
+            !s["command"].as_str().unwrap().is_empty(),
+            "snippet should have non-empty command"
+        );
+    }
+}

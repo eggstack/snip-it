@@ -208,6 +208,24 @@ Status messages are split across both streams. No consistent convention.
 | `search` | Matching libraries | "Sync not enabled" |
 | `update` | Diff stats + confirmation | "Sync not enabled" |
 
+#### `snp import`
+
+| Situation | Stream | Method |
+|-----------|--------|--------|
+| Human report (default) | stderr | `eprintln!` |
+| JSON report (`--report json`) | stdout | `println!` |
+| `--report-file` write | file | `write_private_atomic` |
+| Import errors (source not found, TOML parse, collision) | stderr | via `SnipError` |
+| Dry-run success message | stderr | `eprintln!` |
+
+**Exit codes**: 0 on success (including dry-run), 1 on any `SnipError` (source
+missing, invalid TOML, destination collision, strict-mode abort, file too
+large).
+
+**Stream split**: Clean — human-readable report always goes to stderr;
+machine-readable JSON always goes to stdout. Piping `snp import pet --report json`
+produces only JSON on stdout; the human report appears on stderr.
+
 ### Important Observations
 
 1. **TUI commands** (`run`, `clip`, `search`) render directly to the terminal

@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Golden command corpus expanded from 15 to 24 entries including tabs, trailing spaces, CRLF, mixed newlines, and combinations with quotes and backslashes.
 
 ### Added
+- **Explicit pet import command (Release 3B)**
+  - `snp import pet <path>` creates a native named library from a pet TOML file. Source files are never modified.
+  - Options: `--library <name>`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file <path>`.
+  - Atomic writes via temp-file-and-rename; existing libraries are backed up before merge/replace.
+  - Duplicate detection: exact duplicates (same command + description) are skipped during merge; semantic warnings for same-command-different-description and same-description-different-command.
+  - Diagnostics: unknown TOML fields, missing description, empty command, choice variables, output fields preserved.
+  - Human-readable report to stderr; JSON report to stdout; `--report-file` for persistent JSON output.
+  - Library name derived from source filename when `--library` is omitted.
+  - 35 new tests: 20 integration tests (default create, explicit name, collision, merge, dry-run, source untouched, JSON report, error cases, strict/permissive, replace, command preservation, choice variables, mixed aliases, help, flag conflicts) and 15 unit tests (name derivation, duplicate detection, TOML parsing, entry conversion).
 - **Pet multiple-choice variable compatibility (Release 3A)**
   - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).
