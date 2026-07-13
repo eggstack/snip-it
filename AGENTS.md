@@ -44,6 +44,10 @@ cargo test --lib new_cmd
 cargo test --lib shell_cmd
 cargo test --test integration -- new_editor new_from_file command_stdin golden_corpus multiline
 
+# Release 3B pet import tests
+cargo test --test integration import_pet
+cargo test --lib import
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -107,6 +111,7 @@ snip-it/
 │   │   ├── register_cmd.rs
 │   │   ├── library_cmd.rs
 │   │   ├── premade_cmd.rs
+│   │   ├── import_cmd.rs    # Pet import (snp import pet <path>)
 │   │   ├── cron_cmd.rs
 │   │   └── keybindings_cmd.rs
 │   └── utils/
@@ -244,6 +249,17 @@ snip-it/
 - Schema created inline in `Database::connect()` (no migration framework)
 - `migrate_plaintext_api_keys()` backfills hashes for legacy data
 
+### Pet Import (`snp import pet`)
+- `src/commands/import_cmd.rs` implements `snp import pet <path>` with options: `--library`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file`
+- Import modes: `Create` (default, fails if destination exists), `Merge` (skip exact duplicates), `Replace` (backup then overwrite)
+- Source is never modified; validated for UTF-8, file size (16 MiB cap), no NUL bytes
+- Entry conversion: `convert_entry()` maps pet fields to native `Snippet` with fresh UUIDs and timestamps
+- Duplicate detection: exact duplicate = same command + same description; semantic warnings for same-command-different-description and same-description-different-command
+- Library name derived from source filename via `derive_library_name()` (sanitize, lowercase, replace non-alphanumeric with hyphens)
+- Atomic writes via `save_library()`; library manager config updated via `add_existing_library()`
+- Human report to stderr, JSON to stdout; `--report-file` for persistent reports
+- Security: no command execution, no variable expansion, no source modification, no sync side effects
+
 ## Configuration Files
 
 - `~/.config/snp/snippets.toml` — Main snippet storage (or per-library in `libraries/`)
@@ -280,3 +296,5 @@ snip-it/
 - Utils tests cover escape sequences, nested brackets, chained backslashes
 - Sync tests cover device conflict detection
 - snip-sync has 78 tests (unit + integration)
+- Pet import tests (`tests/integration.rs`) cover: default create, explicit library, collision, merge, dry-run, source untouched, JSON report, invalid inputs, strict/permissive modes, replace with backup, command preservation, choice variables, mixed aliases, help text, flag conflicts
+- Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, duplicate detection, source file validation, TOML parsing, entry conversion

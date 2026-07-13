@@ -242,6 +242,12 @@ enum Commands {
         #[command(subcommand)]
         command: PremadeCommands,
     },
+    /// Import snippets from external formats
+    #[command(alias = "i")]
+    Import {
+        #[command(subcommand)]
+        command: ImportSubcommands,
+    },
     /// Generate shell completions
     #[command(alias = "g")]
     Completions {
@@ -305,6 +311,38 @@ enum ShellCommands {
         /// Shell to generate integration for
         #[arg(value_enum)]
         shell: ShellIntegration,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ImportSubcommands {
+    /// Import a Pet snippet file into a native library
+    #[command(alias = "p")]
+    Pet {
+        /// Path to the Pet TOML snippet file
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Destination library name (derived from filename if omitted)
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Import into an existing library, skipping duplicates
+        #[arg(long, conflicts_with = "replace")]
+        merge: bool,
+        /// Replace the destination library entirely (with backup)
+        #[arg(long, conflicts_with = "merge")]
+        replace: bool,
+        /// Preview changes without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Abort on any error-severity diagnostic
+        #[arg(long)]
+        strict: bool,
+        /// Report output format
+        #[arg(long, value_enum, default_value = "human")]
+        report: commands::import_cmd::ReportFormat,
+        /// Write JSON report to a file
+        #[arg(long)]
+        report_file: Option<PathBuf>,
     },
 }
 
@@ -472,6 +510,36 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     ShellIntegration::Fish => commands::shell_cmd::ShellType::Fish,
                 };
                 commands::shell_cmd::run(shell_type)?;
+            }
+        },
+        Some(Commands::Import { command }) => match command {
+            ImportSubcommands::Pet {
+                path,
+                library,
+                merge,
+                replace,
+                dry_run,
+                strict,
+                report,
+                report_file,
+            } => {
+                let mode = if replace {
+                    commands::import_cmd::ImportMode::Replace
+                } else if merge {
+                    commands::import_cmd::ImportMode::Merge
+                } else {
+                    commands::import_cmd::ImportMode::Create
+                };
+                let options = commands::import_cmd::PetImportOptions {
+                    source: path,
+                    destination_library: library,
+                    mode,
+                    strict,
+                    dry_run,
+                    report_format: report,
+                    report_file,
+                };
+                commands::import_cmd::run_import_pet(options)?;
             }
         },
     }

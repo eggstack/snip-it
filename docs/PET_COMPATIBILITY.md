@@ -180,7 +180,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Import | `pet import` (imports from various sources) | Not implemented. | Planned | R3 | Will add `snp import pet <path>` with `--library`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report json` options. |
+| Import | `pet import` (imports from various sources) | `snp import pet <path>` with `--library`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file` options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. Duplicate detection and diagnostics. |
 | Export | `pet export` (exports to various formats) | Not implemented. | Under consideration | — | Structured export may be added. Not on current roadmap. |
 
 ---
@@ -259,9 +259,9 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Direct file loading | N/A | Pet TOML files load directly in snp — same `[[snippets]]` table, same field names. | Full | — | No conversion needed for basic migration. |
-| Explicit import command | `pet import` | Not implemented. | Planned | R3 | Will add `snp import pet <path>` with diagnostics, dry-run, and merge options. |
+| Explicit import command | `pet import` | `snp import pet <path>` with diagnostics, dry-run, merge, replace, strict, and report options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. |
 | Diagnostic tool | Not built-in | Not implemented. | Planned | R3 | `snp doctor --pet-file <path>` for compatibility diagnostics. |
-| Migration strategy | N/A | 1. Copy `~/.config/pet/snippets.toml` to `~/.config/snp/libraries/pet-snippets.toml`. 2. Or use `snp import pet <path>` for explicit migration with report. | Planned | R3 | Two paths: manual copy (works today) and explicit import (R3). |
+| Migration strategy | N/A | 1. Copy `~/.config/pet/snippets.toml` to `~/.config/snp/libraries/pet-snippets.toml`. 2. Or use `snp import pet <path>` for explicit migration with report. | Full | R3B | Two paths: manual copy (works today) and explicit import (implemented). |
 | Metadata loss | N/A | Pet files lose no data on import. snp adds IDs, timestamps, and device_id automatically. | Full | — | Forward-compatible — pet ignores unknown fields. |
 | Round-trip editing | N/A | If both pet and snp edit the same file, snp-only metadata (IDs, timestamps, folders, favorites) may be lost when pet writes the file. | Documented | — | Documented caveat. Not recommended for concurrent editing. |
 
@@ -288,6 +288,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | --- | --- | --- |
 | Themes | Halloy-compatible TOML themes. 50 bundled themes. `ThemeManager` with live preview. | Current |
 | Premade libraries | Browse/download community snippet collections from sync server. | Current |
+| Pet import | `snp import pet <path>` — import pet snippet files with diagnostics, dry-run, merge, and JSON reports. | R3B |
 | Backup & recovery | Automatic timestamped backups before saves (max 10 per library). | Current |
 | Audit log | `~/.config/snp/audit.log` — tracks snippet operations (create, execute, copy, delete). | Current |
 | Structured output | `snp list --json` / `snp list --csv` for scripting and spreadsheet import. | Current |

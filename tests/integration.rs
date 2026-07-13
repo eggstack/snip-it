@@ -3352,3 +3352,558 @@ fn test_choice_variable_fixture_file_loads() {
         "echo <only=|_one_||>"
     );
 }
+
+// === Pet Import Tests ===
+
+#[test]
+fn test_import_pet_default_creates_library() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import pet failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the library was created and listed (filename uses hyphens)
+    let output = snp_in(&config_dir)
+        .args(["library", "list"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("canonical-pet"),
+        "Expected 'canonical-pet' in library list: {stdout}"
+    );
+
+    // Verify snippets were imported
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        snippets.len(),
+        5,
+        "Expected 5 snippets from canonical pet fixture"
+    );
+}
+
+#[test]
+fn test_import_pet_explicit_library_name() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            fixture.to_str().unwrap(),
+            "--library",
+            "my-pet-snippets",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import pet failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["library", "list"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("my-pet-snippets"));
+}
+
+#[test]
+fn test_import_pet_destination_collision_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // First import succeeds
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Second import fails (destination exists)
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "Second import should fail when destination exists"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already exists"),
+        "Expected 'already exists' error: {stderr}"
+    );
+}
+
+#[test]
+fn test_import_pet_merge_skips_duplicates() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_with_duplicates.toml");
+
+    // First import (creates with 3 entries, including 1 in-file duplicate)
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Verify initial count (3 entries in the source, including 1 in-file duplicate)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "pet-with-duplicates"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let initial: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(initial.len(), 3, "First import should create all 3 entries");
+
+    // Merge the same file again (should skip all 3 as duplicates)
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap(), "--merge"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "merge import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Should still have 3 entries (no new entries added)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "pet-with-duplicates"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let after: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(after.len(), 3, "Merge should not add duplicates");
+}
+
+#[test]
+fn test_import_pet_dry_run_no_mutation() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["import", "pet", fixture.to_str().unwrap(), "--dry-run"]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "dry-run import failed: stdout={stdout} stderr={stderr}"
+    );
+
+    // Verify no library was created
+    let list_output = snp_in(&config_dir)
+        .args(["library", "list"])
+        .output()
+        .unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        !list_stdout.contains("canonical-pet"),
+        "dry-run should not create a library: {list_stdout}"
+    );
+
+    // Verify dry-run message in stderr
+    assert!(
+        stderr.contains("dry run") || stderr.contains("no files were modified"),
+        "Expected 'dry run' in stderr, got (len={}): {stderr}",
+        stderr.len()
+    );
+}
+
+#[test]
+fn test_import_pet_source_untouched() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let original_content = fs::read_to_string(&fixture).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after_content = fs::read_to_string(&fixture).unwrap();
+    assert_eq!(
+        original_content, after_content,
+        "Source file should not be modified"
+    );
+}
+
+#[test]
+fn test_import_pet_json_report() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["total_entries"], 5);
+    assert_eq!(report["imported"], 5);
+    assert_eq!(report["skipped"], 0);
+    assert_eq!(report["dry_run"], false);
+}
+
+#[test]
+fn test_import_pet_nonexistent_source_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", "/nonexistent/file.toml"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found"));
+}
+
+#[test]
+fn test_import_pet_invalid_toml_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let bad_file = tmp.path().join("bad.toml");
+    fs::write(&bad_file, "invalid = [toml").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", bad_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("TOML"));
+}
+
+#[test]
+fn test_import_pet_empty_file_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let empty_file = tmp.path().join("empty.toml");
+    fs::write(&empty_file, "").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", empty_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Empty"));
+}
+
+#[test]
+fn test_import_pet_directory_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", _tmp.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("directory"));
+}
+
+#[test]
+fn test_import_pet_strict_mode_empty_command_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let bad_file = tmp.path().join("bad_entries.toml");
+    fs::write(
+        &bad_file,
+        r#"
+[[snippets]]
+description = "valid entry"
+command = "echo valid"
+
+[[snippets]]
+description = "empty command"
+command = ""
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", bad_file.to_str().unwrap(), "--strict"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "strict mode should fail on error-severity diagnostic"
+    );
+}
+
+#[test]
+fn test_import_pet_permissive_imports_valid_entries() {
+    let (_tmp, config_dir) = setup_test_env();
+    let tmp = TempDir::new().unwrap();
+    let bad_file = tmp.path().join("mixed_entries.toml");
+    fs::write(
+        &bad_file,
+        r#"
+[[snippets]]
+description = "valid entry"
+command = "echo valid"
+
+[[snippets]]
+description = "empty command"
+command = ""
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", bad_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "permissive mode should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Should import the valid entry
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "mixed-entries"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1, "Only the valid entry should be imported");
+    assert_eq!(snippets[0]["command"].as_str().unwrap(), "echo valid");
+}
+
+#[test]
+fn test_import_pet_replace_with_backup() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // First import
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Import a different file with --replace (use same derived library name)
+    let edge_fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_edge_cases.toml");
+
+    let output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            edge_fixture.to_str().unwrap(),
+            "--library",
+            "canonical-pet",
+            "--replace",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "replace import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the library now has the edge_cases content
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        snippets.len() >= 3,
+        "Expected edge case snippets after replace, got {}",
+        snippets.len()
+    );
+}
+
+#[test]
+fn test_import_pet_preserves_command_text() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "canonical-pet"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Verify exact command text preservation (including quotes and special chars)
+    let git_cmd = snippets[0]["command"].as_str().unwrap();
+    assert!(
+        git_cmd.contains(r#"git commit -m "<msg>""#),
+        "Expected preserved command with quotes: {git_cmd}"
+    );
+}
+
+#[test]
+fn test_import_pet_choice_variables_preserved() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_choice_variables.toml");
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "pet-choice-variables"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 2);
+
+    // Verify choice variable syntax preserved exactly
+    assert_eq!(
+        snippets[0]["command"].as_str().unwrap(),
+        "echo <editor=|_vim_||_nvim_||_emacs_||>"
+    );
+    assert_eq!(snippets[1]["command"].as_str().unwrap(), "echo <greeting>");
+}
+
+#[test]
+fn test_import_pet_mixed_aliases() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_mixed_aliases.toml");
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json", "--library", "pet-mixed-aliases"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 2);
+
+    // Both entries should be imported (aliases handled by serde)
+    let descs: Vec<&str> = snippets
+        .iter()
+        .map(|s| s["description"].as_str().unwrap())
+        .collect();
+    assert!(descs.contains(&"legacy uppercase description"));
+    assert!(descs.contains(&"pet name alias"));
+}
+
+#[test]
+fn test_import_pet_help() {
+    let output = snp_cmd().args(["import", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Import snippets"));
+    assert!(stdout.contains("pet"));
+}
+
+#[test]
+fn test_import_pet_subcommand_help() {
+    let output = snp_cmd()
+        .args(["import", "pet", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--library"));
+    assert!(stdout.contains("--merge"));
+    assert!(stdout.contains("--replace"));
+    assert!(stdout.contains("--dry-run"));
+    assert!(stdout.contains("--strict"));
+    assert!(stdout.contains("--report"));
+    assert!(stdout.contains("--report-file"));
+}
+
+#[test]
+fn test_import_pet_merge_conflicts_with_replace() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            fixture.to_str().unwrap(),
+            "--merge",
+            "--replace",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "--merge and --replace should conflict"
+    );
+}

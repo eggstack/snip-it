@@ -1,0 +1,12 @@
+# Pet file with multiline commands.
+
+[[snippets]]
+description = "multiline git commit"
+command = """
+git add . && \\
+git commit -m "feat: add new feature" \\
+  --author="Test User <test@example.com>" \\
+  --no-verify
+"""
+output = ""
+tag = ["git", "multiline"]

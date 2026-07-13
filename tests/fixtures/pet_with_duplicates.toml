@@ -1,0 +1,19 @@
+# Pet file with duplicate entries for merge testing.
+
+[[snippets]]
+description = "git commit with message"
+command = "git commit -m \"<msg>\""
+output = ""
+tag = ["git"]
+
+[[snippets]]
+description = "docker ps running containers"
+command = "docker ps --format \"table {{.Names}}\\t{{.Status}}\""
+output = ""
+tag = ["docker"]
+
+[[snippets]]
+description = "git commit with message"
+command = "git commit -m \"<msg>\""
+output = ""
+tag = ["git"]

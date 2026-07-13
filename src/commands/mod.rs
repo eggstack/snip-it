@@ -6,6 +6,7 @@
 pub mod clip_cmd;
 pub mod cron_cmd;
 pub mod edit_cmd;
+pub mod import_cmd;
 pub mod keybindings_cmd;
 pub mod library_cmd;
 pub mod list_cmd;

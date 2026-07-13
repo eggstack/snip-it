@@ -1,0 +1,13 @@
+# Pet file with choice variables (Release 3A syntax).
+
+[[snippets]]
+description = "choose editor"
+command = "echo <editor=|_vim_||_nvim_||_emacs_||>"
+output = ""
+tag = ["editor"]
+
+[[snippets]]
+description = "simple required var"
+command = "echo <greeting>"
+output = ""
+tag = ["test"]

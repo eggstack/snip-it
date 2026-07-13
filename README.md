@@ -215,6 +215,21 @@ and sync timestamps is preserved when snip-it writes a library. See
 [USER_GUIDE.md](USER_GUIDE.md) for library layout, import/export, and the full
 configuration reference.
 
+### Importing from pet
+
+Import existing pet snippet files into snip-it named libraries:
+
+```bash
+snp import pet ~/.config/pet/snippets.toml
+snp import pet snippets.toml --library my-snippets
+snp import pet snippets.toml --merge        # skip exact duplicates
+snp import pet snippets.toml --dry-run      # preview without writing
+snp import pet snippets.toml --report json  # machine-readable output
+```
+
+The source file is never modified. Imported commands preserve exact text
+including variables, shell metacharacters, and whitespace.
+
 ## Themes
 
 Snip-it reads the same color-theme TOML files used by Halloy. A Halloy theme
@@ -309,6 +324,7 @@ snp search       Search and inspect snippets
 snp edit         Edit a snippet library in $EDITOR
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
+snp import       Import snippets from external formats (e.g., pet)
 snp register     Register with a snip-sync server
 snp sync         Push, pull, or bidirectionally sync libraries
 snp cron         Print a periodic sync schedule

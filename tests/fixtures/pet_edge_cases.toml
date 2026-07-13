@@ -1,0 +1,25 @@
+# Pet file with edge cases.
+
+[[snippets]]
+description = ""
+command = "echo empty-desc"
+output = ""
+tag = []
+
+[[snippets]]
+description = "empty command test"
+command = ""
+output = ""
+tag = []
+
+[[snippets]]
+description = "unicode test"
+command = "echo 'こんにちは世界 🌍'"
+output = ""
+tag = ["unicode"]
+
+[[snippets]]
+description = "shell metacharacters"
+command = "echo \"hello world\" | grep 'hello' && echo done"
+output = ""
+tag = ["shell"]

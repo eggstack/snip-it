@@ -15,7 +15,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### CLI (`src/main.rs`, `src/commands/`)
 - Clap derive CLI with `Option<Commands>` — no subcommand defaults to `run` (TUI selector)
-- 14 command modules, each with a public `run()` entry function
+- 15 command modules, each with a public `run()` entry function
 - `RUNTIME: LazyLock<Runtime>` — lazy Tokio async runtime, only initialized by async commands
 - `dispatch_command()` — top-level match on `Option<Commands>`
 - Shared helpers in `src/commands/mod.rs`:
@@ -43,6 +43,19 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Selection uses the existing temp-file output contract; capture helpers pass command text to `snp new --command-stdin` without evaluation.
 - Current-buffer helpers use Readline, ZLE, or `commandline`; previous helpers use native `fc` or Fish `history search` and never parse history files.
 - No keybindings are installed automatically. Metadata is forwarded as shell argument arrays/lists, and capture helpers preserve the current buffer.
+
+### Pet Import (`src/commands/import_cmd.rs`)
+- `snp import pet <path>` — first-class import command for pet snippet files.
+- Domain model: `PetImportOptions`, `PetImportReport`, `ImportMode` (Create/Merge/Replace), `ReportFormat` (Human/Json).
+- Source loading: `read_source_file()` validates UTF-8, file size (16 MiB cap), no NUL bytes, rejects directories.
+- Entry conversion: `convert_entry()` maps pet fields to native `Snippet` with fresh UUIDs and timestamps.
+- Duplicate detection: exact (same command + description), semantic warnings for same-command-different-description and same-description-different-command.
+- Library name derivation: `derive_library_name()` sanitizes source filename (lowercase, replace non-alphanumeric with hyphens).
+- Atomic writes via `save_library()`; library config updated via `add_existing_library()`.
+- Dry-run mode: all parsing and validation without file mutation.
+- Strict mode: any error-severity diagnostic aborts the entire import.
+- Human report to stderr, JSON to stdout; optional `--report-file` for persistent reports.
+- Security: no command execution, no variable expansion, no source modification, no sync side effects.
 
 ### Error Handling (`src/error.rs`)
 - `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`

@@ -1,0 +1,12 @@
+# Pet file with mixed field aliases for compatibility testing.
+
+[[snippets]]
+Description = "legacy uppercase description"
+Command = "echo legacy"
+Output = "legacy output"
+Tag = ["legacy"]
+
+[[snippets]]
+name = "pet name alias"
+cmd = "echo pet-alias"
+tags = ["pet-alias"]
