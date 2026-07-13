@@ -29,6 +29,8 @@ machines.
 - Keyboard-first navigation with Vim bindings for quickly moving through large
   snippet libraries.
 - Runtime variables such as `<host>` and `<branch=main>`.
+- Pet-compatible multiple-choice variables such as
+  `<color=|_red_||_green_||_blue_||>` for selecting from a predefined list.
 - 50 bundled [Halloy](https://github.com/squidowl/halloy)-compatible themes,
   plus support for dropping in additional Halloy theme files.
 - Optional self-hosted sync using AES-256-GCM encryption and Argon2id key
@@ -134,8 +136,11 @@ snp search
 `snp new` prompts for a description (or accepts `--description`). `--tags`
 retains its prompt behavior when passed without a value, and also accepts
 comma/space-separated values such as `--tags git,release`. Variable values are
-requested when a snippet is run or copied. In the TUI, press `d` in normal mode
-and confirm with `y` to delete the selected snippet; any other key cancels.
+requested when a snippet is run or copied. Multiple-choice variables use
+Pet-compatible syntax — `<color=|_red_||_green_||_blue_||>` presents a
+navigable list where the first choice is the default. In the TUI, press `d` in
+normal mode and confirm with `y` to delete the selected snippet; any other key
+cancels.
 
 For exact command ingestion from a pipe or shell helper, provide metadata
 non-interactively and let `snp` own stdin for the command body:

@@ -19,6 +19,7 @@
 //! value boundary.
 
 use std::io;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
@@ -203,15 +204,38 @@ fn next_char_boundary(s: &str, idx: usize) -> usize {
 }
 
 fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResult> {
+    if !std::io::stdin().is_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "Cannot prompt for variables: no interactive terminal available",
+        ));
+    }
+
+    // Deduplicate variables by name: prompt once per unique name, reuse
+    // the selected value for all occurrences with the same name.
+    let mut seen_names = std::collections::HashMap::new();
+    let mut deduped_vars: Vec<Variable> = Vec::new();
+    let mut field_index_for_var: Vec<usize> = Vec::with_capacity(vars.len());
+    for var in &vars {
+        if let Some(&idx) = seen_names.get(&var.name) {
+            field_index_for_var.push(idx);
+        } else {
+            let idx = deduped_vars.len();
+            seen_names.insert(var.name.clone(), idx);
+            deduped_vars.push(var.clone());
+            field_index_for_var.push(idx);
+        }
+    }
+
     let mut terminal = ratatui::init();
     let _guard = TerminalGuard; // Ensures terminal is restored on any exit path
 
-    let defaults: Vec<String> = vars
+    let defaults: Vec<String> = deduped_vars
         .iter()
         .map(|v| v.default.clone().unwrap_or_default())
         .collect();
 
-    let mut fields: Vec<PromptField> = vars
+    let mut fields: Vec<PromptField> = deduped_vars
         .iter()
         .map(|v| match &v.kind {
             VariableKind::Choices {
@@ -254,7 +278,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 .borders(Borders::ALL)
                 .style(style_fg(theme.border));
 
-            let var_chunks: Vec<_> = vars
+            let var_chunks: Vec<_> = deduped_vars
                 .iter()
                 .enumerate()
                 .map(|(i, _var)| {
@@ -288,7 +312,7 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 .constraints(var_constraints)
                 .split(chunks[0]);
 
-            for (i, var) in vars.iter().enumerate() {
+            for (i, var) in deduped_vars.iter().enumerate() {
                 let var_block = Block::default()
                     .title(var.name.as_str())
                     .borders(Borders::ALL)
@@ -438,8 +462,20 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
 
     let result: Vec<(String, String)> = vars
         .iter()
-        .zip(fields.iter())
-        .map(|(v, f)| (v.name.clone(), f.value_string().trim().to_string()))
+        .enumerate()
+        .map(|(i, v)| {
+            let field_idx = field_index_for_var[i];
+            let val = if let Some(text_field) = fields[field_idx].as_text() {
+                if text_field.value.is_empty() {
+                    defaults[field_idx].clone()
+                } else {
+                    text_field.value.clone()
+                }
+            } else {
+                fields[field_idx].value_string()
+            };
+            (v.name.clone(), val.trim().to_string())
+        })
         .collect();
     Ok(VariablePromptResult::Values(result))
 }

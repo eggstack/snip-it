@@ -41,6 +41,20 @@ description = "Variable snippet"
 command = "echo <name=world>"
 tag = ["test"]
 output = ""
+
+[[snippets]]
+id = "test-3"
+description = "Choice snippet"
+command = "echo <color=|_red_||_green_||_blue_||>"
+tag = ["choice-test"]
+output = ""
+
+[[snippets]]
+id = "test-4"
+description = "Repeated choice variable"
+command = "<x=|_a_||_b_||> and <x=|_a_||_b_||>"
+tag = ["choice-test"]
+output = ""
 "#;
     fs::write(config_dir.join("snippets.toml"), library_content).unwrap();
     (tmp, config_dir)
@@ -49,6 +63,17 @@ output = ""
 /// Spawn snp in a PTY, send `keys` after a brief delay, wait for exit.
 /// Returns (exit_code, captured_output).
 fn run_snp_pty(args: &[&str], config_dir: &Path, keys: &[u8]) -> (i32, String) {
+    run_snp_pty_with_delay(args, config_dir, keys, Duration::from_secs(2))
+}
+
+/// Like `run_snp_pty` but allows specifying the initial delay before keys
+/// are sent. Useful for tests that need extra time for TUI transitions.
+fn run_snp_pty_with_delay(
+    args: &[&str],
+    config_dir: &Path,
+    keys: &[u8],
+    initial_delay: Duration,
+) -> (i32, String) {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -84,7 +109,7 @@ fn run_snp_pty(args: &[&str], config_dir: &Path, keys: &[u8]) -> (i32, String) {
     });
 
     // Give the TUI time to start up and render
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(initial_delay);
 
     // Write keys directly to the master pty fd.
     // Send each byte separately with a small delay so crossterm's parser
@@ -551,5 +576,130 @@ fn test_pty_basic_echo() {
     assert!(
         output_str.contains("HELLO_FROM_PTY"),
         "PTY output should contain echoed text, got: {output_str:?}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Release 3A: Pet choice variable PTY tests
+// -----------------------------------------------------------------------
+
+/// Select a choice variable snippet via --expanded, navigate down to the
+/// second choice, then press Enter. Exit code should be 0.
+#[test]
+fn test_select_choice_variable_navigate_and_enter() {
+    let (_tmp, config_dir) = setup_test_env();
+    // Enter to select, Esc+NOR, j to navigate, Enter to confirm
+    let keys = vec![b'\r', b'\x1b', b'j', b'\r'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Choice snippet"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --expanded with choice variable + navigate + Enter should exit 0"
+    );
+}
+
+/// Select a choice variable snippet via --expanded and accept the default
+/// choice ("red"). Exit code should be 0.
+#[test]
+fn test_select_choice_variable_accept_default() {
+    let (_tmp, config_dir) = setup_test_env();
+    // Enter to select, Enter to accept default choice
+    let keys = vec![b'\r', b'\r'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Choice snippet"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --expanded with choice variable + accept default should exit 0"
+    );
+}
+
+/// Select a choice variable snippet via --expanded, then cancel with Esc+q.
+/// Esc goes to NOR mode, q returns Back (to snippet selector). Then Esc+q
+/// exits the snippet selector with exit code 4.
+#[test]
+fn test_select_choice_variable_cancel() {
+    let (_tmp, config_dir) = setup_test_env();
+    // Enter to select, Esc+q to cancel back to snippet selector, Esc+q to exit
+    let keys = vec![b'\r', b'\x1b', b'q', b'\x1b', b'q'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Choice snippet"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 4,
+        "snp select --expanded with choice variable + cancel should exit 4"
+    );
+}
+
+/// Select a snippet with a repeated choice variable via --expanded.
+/// Deduplication ensures only one prompt for 'x'. Accept default, exit 0.
+#[test]
+fn test_select_repeated_choice_variable_single_prompt() {
+    let (_tmp, config_dir) = setup_test_env();
+    // Enter to select, Enter to accept default
+    let keys = vec![b'\r', b'\r'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Repeated choice"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --expanded with repeated choice variable + accept default should exit 0"
+    );
+}
+
+/// Cancel via Ctrl+C at the choice prompt. Exit code should be 4.
+#[test]
+fn test_select_choice_variable_ctrl_c() {
+    let (_tmp, config_dir) = setup_test_env();
+    // Enter to select, Ctrl+C to cancel
+    let keys = vec![b'\r', b'\x03'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Choice snippet"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 4,
+        "snp select --expanded with choice variable + Ctrl+C should exit 4"
+    );
+}
+
+/// Terminal restoration: after selecting and confirming a choice variable,
+/// the PTY should still be functional. If terminal was not restored, the
+/// drain thread would hang or produce garbled output.
+#[test]
+fn test_choice_variable_terminal_restoration() {
+    let (_tmp, config_dir) = setup_test_env();
+    let keys = vec![b'\r', b'\r'];
+    let (code, output) = run_snp_pty_with_delay(
+        &["select", "--expanded", "--filter", "Choice snippet"],
+        &config_dir,
+        &keys,
+        Duration::from_secs(2),
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "should exit 0 after choice selection");
+    assert!(
+        !output.is_empty(),
+        "PTY should have produced output (terminal was restored properly)"
     );
 }

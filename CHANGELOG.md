@@ -25,8 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).
   - `expand_command` expands choice variables with the selected value, just like required variables.
   - Raw command text is preserved in storage — choices are only expanded during interactive prompting.
-  - Parser diagnostics warn on malformed choice syntax and duplicate variable names.
-  - 58+ new unit and integration tests covering choice parsing, prompting, expansion, serialization roundtrips, and edge cases.
+  - Parser diagnostics warn on malformed choice syntax and duplicate variable names. Diagnostics now include machine-readable `code` and optional `suggested_fix` fields.
+  - Repeated variables with the same name are deduplicated in the prompt — the user is prompted once and the value is reused for all occurrences.
+  - Non-interactive fallback: `prompt_variables` returns an error when no controlling terminal is available instead of panicking.
+  - Fuzz tests (500 iterations) verify the parser, expansion, and choice extraction never panic on arbitrary input. One subtraction-with-overflow bug in `extract_choices` was found and fixed.
+  - 65+ new unit and integration tests covering choice parsing, prompting, expansion, serialization roundtrips, PTY end-to-end selection/default/cancel/dedup/restore, and edge cases.
 - New unit tests in `src/commands/new_cmd.rs`: stdin rejection of empty/whitespace input, oversize-input rejection via the shared validator, symlink-following and broken-symlink behavior, FIFO/character-device rejection, `shell-words` parsing of editor specs, and ten multiline-prompt tests.
 - New integration tests in `tests/integration.rs`: editor-source golden corpus round-trip, multiline terminator limitation, exact select-storage round-trip, backup-preserves-command, sync round-trip preservation, and run-storage plumbing.
 - New Bash behavioral tests: `snp_new_previous` preserves leading tabs and quoted/backslash content.

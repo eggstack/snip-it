@@ -20,6 +20,10 @@ pub struct VariableDiagnostic {
     pub severity: DiagnosticSeverity,
     pub message: String,
     pub span: Option<std::ops::Range<usize>>,
+    /// Machine-readable diagnostic code (e.g., `"choice.malformed"`, `"var.duplicate"`).
+    pub code: &'static str,
+    /// Optional suggested correction the caller may present to the user.
+    pub suggested_fix: Option<String>,
 }
 
 /// The kind of a parsed variable, determining how it should be prompted.
@@ -112,14 +116,14 @@ fn extract_choices(choice_content: &str) -> Option<Vec<String>> {
     let len = bytes.len();
     let mut i = 0;
 
-    while i < len - 1 {
+    while i + 1 < len {
         // Look for `|_` opener
         if bytes[i] == b'|' && bytes[i + 1] == b'_' {
             i += 2; // skip `|_`
             // Find the matching `_|`
             let start = i;
             let mut found = false;
-            while i < len - 1 {
+            while i + 1 < len {
                 if bytes[i] == b'_' && bytes[i + 1] == b'|' {
                     let value = &choice_content[start..i];
                     choices.push(value.to_string());
@@ -409,6 +413,10 @@ pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<Variabl
                                 severity: DiagnosticSeverity::Warning,
                                 message: format!("Malformed choice syntax for variable '{name}'"),
                                 span: Some(start_pos..start_pos + c.len_utf8() + full.len() + 1),
+                                code: "choice.malformed",
+                                suggested_fix: Some(format!(
+                                    "Use valid syntax: <{name}=|_opt1_||_opt2_||>"
+                                )),
                             });
                         } else if let Some(choices) = extract_choices(&default_val)
                             && choices.is_empty()
@@ -417,6 +425,10 @@ pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<Variabl
                                 severity: DiagnosticSeverity::Warning,
                                 message: format!("Empty choices list for variable '{name}'"),
                                 span: Some(start_pos..start_pos + c.len_utf8() + full.len() + 1),
+                                code: "choice.empty",
+                                suggested_fix: Some(format!(
+                                    "Add at least one choice: <{name}=|_opt1_||>"
+                                )),
                             });
                         }
                     } else if !default_val.ends_with("_|") || default_val == "|_" {
@@ -425,6 +437,10 @@ pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<Variabl
                             severity: DiagnosticSeverity::Warning,
                             message: format!("Unclosed choice syntax for variable '{name}'"),
                             span: Some(start_pos..start_pos + c.len_utf8() + full.len() + 1),
+                            code: "choice.unclosed",
+                            suggested_fix: Some(format!(
+                                "Close the choices with ||>: <{name}=|_opt1_||_opt2_||>"
+                            )),
                         });
                     }
                 }
@@ -442,6 +458,8 @@ pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<Variabl
                 severity: DiagnosticSeverity::Warning,
                 message: format!("Duplicate variable name '{name}'", name = token.name),
                 span: None,
+                code: "var.duplicate",
+                suggested_fix: Some("Rename the duplicate variable to a unique name".to_string()),
             });
         }
     }
@@ -1560,5 +1578,120 @@ mod tests {
             vars[0].kind,
             VariableKind::DefaultValue("/data|_backup".to_string())
         );
+    }
+
+    // ========================================================================
+    // Fuzz/property tests — no-panic invariant for the parser
+    // ========================================================================
+
+    /// Simple deterministic PRNG for reproducible fuzz inputs.
+    struct FuzzRng {
+        state: u64,
+    }
+
+    impl FuzzRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            // SplitMix64
+            self.state = self.state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = self.state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            z ^ (z >> 31)
+        }
+
+        fn next_u32(&mut self) -> u32 {
+            (self.next_u64() >> 32) as u32
+        }
+
+        fn gen_range(&mut self, bound: u32) -> u32 {
+            if bound == 0 {
+                return 0;
+            }
+            self.next_u32() % bound
+        }
+    }
+
+    fn gen_fuzz_string(rng: &mut FuzzRng, max_len: usize) -> String {
+        // Character pool weighted toward variable-relevant characters
+        const POOL: &[u8] = b"<>=|_\\!@#$%^&*(){}[]:;\"'/?,.\n\t abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let len = rng.gen_range(max_len as u32 + 1) as usize;
+        let mut s = String::with_capacity(len);
+        for _ in 0..len {
+            let idx = rng.gen_range(POOL.len() as u32) as usize;
+            s.push(POOL[idx] as char);
+        }
+        s
+    }
+
+    #[test]
+    fn fuzz_parse_variables_no_panic() {
+        let mut rng = FuzzRng::new(42);
+        for _ in 0..500 {
+            let input = gen_fuzz_string(&mut rng, 200);
+            // Must not panic regardless of input
+            let _ = parse_variables(&input);
+            let _ = parse_variables_diagnostics(&input);
+            let _ = extract_variables_for_display(&input);
+            let _ = has_unmatched_angle_bracket(&input);
+        }
+    }
+
+    #[test]
+    fn fuzz_expand_command_no_panic() {
+        let mut rng = FuzzRng::new(123);
+        for _ in 0..500 {
+            let input = gen_fuzz_string(&mut rng, 200);
+            let val_count = rng.gen_range(5) as usize;
+            let values: Vec<(String, String)> = (0..val_count)
+                .map(|_| {
+                    let name = gen_fuzz_string(&mut rng, 10);
+                    let val = gen_fuzz_string(&mut rng, 20);
+                    (name, val)
+                })
+                .collect();
+            // Must not panic
+            let _ = expand_command(&input, &values);
+        }
+    }
+
+    #[test]
+    fn fuzz_strip_escape_sequences_no_panic() {
+        let mut rng = FuzzRng::new(789);
+        for _ in 0..500 {
+            let input = gen_fuzz_string(&mut rng, 200);
+            let _ = strip_escape_sequences(&input);
+        }
+    }
+
+    #[test]
+    fn fuzz_extract_choices_no_panic() {
+        let mut rng = FuzzRng::new(999);
+        for _ in 0..500 {
+            let input = gen_fuzz_string(&mut rng, 100);
+            let _ = extract_choices(&input);
+        }
+    }
+
+    #[test]
+    fn fuzz_roundtrip_expand_parse_no_panic() {
+        let mut rng = FuzzRng::new(555);
+        for _ in 0..200 {
+            let input = gen_fuzz_string(&mut rng, 100);
+            let vars = parse_variables(&input);
+            let values: Vec<(String, String)> = vars
+                .iter()
+                .map(|v| {
+                    let val = gen_fuzz_string(&mut rng, 10);
+                    (v.name.clone(), val)
+                })
+                .collect();
+            let expanded = expand_command(&input, &values);
+            // Parsing the expanded result must not panic
+            let _ = parse_variables(&expanded);
+        }
     }
 }
