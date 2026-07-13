@@ -122,6 +122,17 @@ Generated `snp_new_current` and `snp_new_previous` helpers pass command text to
 this mode using the active shell's buffer/history API. They do not execute the
 text, parse history files, or install keybindings automatically.
 
+#### Release 2B file and editor ingestion
+
+`snp new --from-file` reads a file as exact UTF-8 command data. Symlinks are
+followed; the resolved target must be a regular file. The same validation as
+stdin applies (16 MiB, UTF-8, no NUL, no empty/whitespace-only).
+
+`snp new --editor` resolves `$VISUAL` → `$EDITOR` → `vim` and parses the editor
+specification with `shell-words` (no shell invoked). Editor errors identify the
+executable and exit status but never the command body. All exact sources share
+`validate_exact_command_bytes()` — there is no source-specific validation path.
+
 Interactive prompts use `io::stdout().flush()` and `io::stdin().read_line()`
 directly — they do not go through the TUI layer.
 

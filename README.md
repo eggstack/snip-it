@@ -161,9 +161,18 @@ snp new --from-file ./deploy.sh --description 'Deploy service'
 snp new --editor --description 'Complex pipeline'
 ```
 
-`--from-file` reads the file as-is (valid UTF-8 required, no execution). `--editor`
-opens `$EDITOR` (falling back to `vim`) for authoring the command body, then
-continues with normal description and tag handling.
+`--from-file` reads the file as-is (valid UTF-8 required, no execution). Symlinks
+are followed; the resolved target must be a regular file. `--editor`
+opens `$VISUAL` (if set), then `$EDITOR`, then `vim` for authoring the command
+body. The editor command may include arguments (e.g., `code --wait`, `nvim -f`)
+which are parsed with shell-word semantics and passed through directly — no
+shell is invoked. After the editor exits, normal description and tag handling
+continues.
+
+All exact sources (stdin, file, editor) share the same validation: 16 MiB cap,
+valid UTF-8, no NUL bytes, and no empty/whitespace-only input. The command body
+is stored exactly as provided — including supplied trailing newlines — and never
+evaluated or echoed.
 
 ### Snippet files
 

@@ -86,7 +86,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | --- | --- | --- | --- | --- | --- |
 | Command | `pet new` | `snp new` (alias: `n`) | Supported differently | — | Both create snippets interactively. |
 | Interactive prompts | Prompts for command, description, tag | Prompts for command, description, tags. Color-coded prompts (yellow/green/cyan). | Full | — | Equivalent workflow. |
-| CLI arguments | `pet new [command]` | `snp new [command] [-d description] [-t [tags]] [-m multiline] [--command-stdin] [--library lib]` | Supported differently | R2A | `--tags` without a value still prompts; a value is comma/space-separated. `--command-stdin` is exact UTF-8 ingestion for shell helpers. |
+| CLI arguments | `pet new [command]` | `snp new [command] [-d description] [-t [tags]] [-m multiline] [--command-stdin] [--from-file] [--editor] [--library lib]` | Supported differently | R2A-R2B | `--tags` without a value still prompts; a value is comma/space-separated. `--command-stdin` is exact UTF-8 ingestion for shell helpers. `--from-file` follows symlinks (resolved target must be a regular file). `--editor` supports `$VISUAL`/`$EDITOR` with arguments via shell-words parsing. |
 | Multiline support | `pet new --multiline` | `snp new --multiline` (alias: `-m`). Reads from stdin terminated by two blank lines. | Full | — | Equivalent. Multiline input from stdin. |
 | Library target | Single file only | `--library` flag to target a specific library. Falls back to primary library or legacy path. | New | — | snp-only. |
 | Config override | N/A | `--config` flag for custom config path. | New | — | snp-only. |
@@ -109,6 +109,21 @@ leaving positional `snp new` behavior unchanged.
   capture the helper call as the new snippet;
 - shell history can contain credentials, tokens, private URLs, and other
   secrets. Review history before saving and avoid putting secrets in it.
+
+### Release 2B: File and editor creation
+
+Release 2B adds `snp new --from-file` and `snp new --editor`.
+
+- `--from-file` follows symlinks; the resolved target must be a regular file.
+  Directories, FIFOs, sockets, and device nodes are rejected. Broken symlinks
+  produce an error. Content is stored verbatim with the same validation as
+  stdin (16 MiB, UTF-8, no NUL, no empty/whitespace-only).
+- `--editor` resolves `$VISUAL` (if set), then `$EDITOR`, then `vim`. The editor
+  specification is parsed with `shell-words` so arguments like `code --wait`
+  work without invoking a shell. Temp files are created atomically via
+  `tempfile::Builder` with `0600` permissions on Unix and RAII cleanup.
+- Pet does not have `--from-file` or `--editor` equivalents. These are snp
+  extensions for users who prefer external editing workflows.
 
 ### 3.3 search
 

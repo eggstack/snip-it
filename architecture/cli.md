@@ -31,7 +31,7 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | Command | Alias | Module | Async | Description |
 |---------|-------|--------|-------|-------------|
 | `version` | `v` | — | No | Print version |
-| `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, or exact command stdin |
+| `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor |
 | `list` | `l` | `list_cmd` | No | List snippets (with fuzzy filter) |
 | `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell |
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard |
@@ -68,6 +68,14 @@ Most TUI commands (`run`, `clip`, `search`) follow the same pattern:
 5. Handle result (Cancel/Continue/Done)
 6. Optionally trigger sync on exit
 
+### Exact-Source Validation Pipeline
+
+All exact command sources (`--command-stdin`, `--from-file`, `--editor`) share
+`validate_exact_command_bytes()` for: 16 MiB cap, valid UTF-8, no NUL bytes,
+and no empty/whitespace-only input. Source resolution completes before library
+mutation, so partial failures cannot corrupt the snippet collection. The editor
+command specification is parsed with `shell-words` — no shell is invoked.
+
 ## Key Files
 
 - `src/main.rs` — CLI definition, signal handling, command dispatch
@@ -75,7 +83,7 @@ Most TUI commands (`run`, `clip`, `search`) follow the same pattern:
 - `src/commands/run_cmd.rs` — Shell execution with output file support
 - `src/commands/clip_cmd.rs` — Clipboard copy with audit logging
 - `src/commands/search_cmd.rs` — Display snippet details
-- `src/commands/new_cmd.rs` — Unified snippet creation pipeline (positional, prompts, multiline, and `--command-stdin`)
+- `src/commands/new_cmd.rs` — Unified snippet creation pipeline (positional, prompts, multiline, `--command-stdin`, `--from-file`, `--editor`)
 - `src/commands/sync_cmd.rs` — Server library linking, conflict resolution
 - `src/commands/library_cmd.rs` — Library CRUD operations
 - `src/commands/premade_cmd.rs` — Premade library browsing/downloading

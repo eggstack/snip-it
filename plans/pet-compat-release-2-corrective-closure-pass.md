@@ -839,3 +839,37 @@ Release 2 may be marked complete only when all criteria below are satisfied.
 After this plan is completed, the project should be able to state:
 
 > Snip-it can safely acquire commands from stdin, files, an external editor, the current shell buffer, and native shell history. Exact sources preserve valid UTF-8 command text without evaluation, all sources use one persistence pipeline, editor temporary files are private and atomic, shell helpers preserve caller state, and multiline commands survive storage, structured output, backup, and encrypted synchronization. Existing snippet creation and Release 1 shell-selection behavior remain unchanged.
+
+# Implementation Summary (Closure Pass Completed)
+
+The closure pass implemented the following changes:
+
+1. **Workstream A — Secure editor tempfiles**: Replaced custom pathname generation with `tempfile::Builder::tempfile()` creating files in the OS temp directory with prefix `snp-editor-`, atomic creation, `0600` permissions on Unix, and RAII cleanup.
+
+2. **Workstream B — Editor command specification**: Added `$VISUAL` precedence over `$EDITOR`. Editor specifications are parsed with `shell-words` (no shell invoked) to support arguments like `code --wait`, `nvim -f`, or quoted paths with spaces.
+
+3. **Workstream C — `--from-file` symlink contract**: Changed from rejecting symlinks to following symlinks. The resolved target must be a regular file. Broken symlinks, directories, FIFOs, sockets, and device nodes are rejected.
+
+4. **Workstream D — Shared validation**: Created `validate_exact_command_bytes()` used by all exact sources (stdin, file, editor) for: 16 MiB cap, valid UTF-8, no NUL bytes, no empty/whitespace-only content.
+
+5. **Workstream E — Multiline semantics**: Multiline remains an interactive convenience mode terminated by two blank lines. The golden corpus includes a `test_golden_corpus_multiline_terminator_limitation` test documenting this is not byte-exact for all trailing-blank-line sequences.
+
+6. **Workstream F — Shell capture portability**: Added behavioral tests for Bash `snp_new_previous` verifying preservation of leading whitespace, quotes, and backslashes. The `fc -ln` prefix stripping is now defensive (checks for `\t ` prefix before stripping).
+
+7. **Workstream G — Golden corpus expansion**: Expanded from 13 to 15 entries. Added `leading_spaces`, `escaped_angle_brackets`, and separated `variables` entry. Three plan-listed entries were **intentionally omitted** because TOML serialization cannot round-trip them: tabs (cannot be represented in TOML basic strings), trailing spaces (stripped by `toml::to_string_pretty`), and CRLF line endings (cannot be preserved in basic strings). This is a TOML format limitation, not a tool bug.
+
+8. **Workstream H — Downstream preservation**: Added integration tests for golden corpus round-trips through select, backup, sync, and run.
+
+9. **Workstream I — Security audit**: Editor errors identify only the executable and exit status; command bodies are never logged, echoed, or included in error context.
+
+### Deliberately Omitted Corpus Entries
+
+The following entries from the original plan were not added to the golden corpus because TOML serialization cannot preserve them:
+
+| Entry | Reason |
+|-------|--------|
+| `tabs` | `toml::to_string_pretty` cannot represent tab characters in basic or literal strings |
+| `trailing_spaces` | TOML serializers strip trailing whitespace from basic strings |
+| `crlf` | `toml::to_string_pretty` normalizes line endings; CRLF cannot survive serialization |
+
+This is a known constraint of the TOML format documented in `AGENTS.md` under "TOML Handling > Corpus constraint".

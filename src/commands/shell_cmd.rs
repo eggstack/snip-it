@@ -137,12 +137,22 @@ snp_new_previous() {
     return 1
   fi
 
-  # Bash's `fc -ln` formatter prefixes the first line with tab+space. Remove
-  # only that formatter prefix so leading spaces in the command remain data.
-  tail -c +3 "$tmp_file" | command snp new --command-stdin "$@"
-  local -a pipe_status=("${PIPESTATUS[@]}")
-  rm -f "$tmp_file"
-  return "${pipe_status[1]:-1}"
+  # `fc -ln` always prefixes the first line with exactly two formatter
+  # bytes: a tab followed by a space. We strip those two bytes from the
+  # first line only, leaving any continuation lines untouched so legitimate
+  # leading whitespace in the captured command is preserved as data. Using
+  # a byte-precise slice keeps Bash 3.2 and Bash 4+ output identical.
+  if [[ $(head -c 2 "$tmp_file") == $'\t ' ]]; then
+    tail -c +3 "$tmp_file" | command snp new --command-stdin "$@"
+    local -a pipe_status=("${PIPESTATUS[@]}")
+    rm -f "$tmp_file"
+    return "${pipe_status[1]:-1}"
+  else
+    command snp new --command-stdin "$@" <"$tmp_file"
+    local rc=$?
+    rm -f "$tmp_file"
+    return "$rc"
+  fi
 }
 
 # To bind manually, add to your .bashrc:
@@ -884,6 +894,64 @@ mod tests {
             std::fs::read(&stdin_capture).unwrap(),
             b"printf '%s' 'previous'\n"
         );
+    }
+
+    #[test]
+    fn test_bash_new_previous_preserves_leading_whitespace_in_command() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let stdin_capture = tmp_dir.path().join("stdin.capture");
+        make_stub_snp(
+            tmp_dir.path(),
+            "#!/bin/bash\ncat > \"$SNP_STDIN_CAPTURE\"\nexit 0\n",
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            "export PATH=\"{}:$PATH\"\nexport SNP_STDIN_CAPTURE=\"{}\"\n{}\nhistory -c\nhistory -s $'echo leading_tab\\tcontent'\nsnp_new_previous --description history\nprintf 'RC=%s\\n' \"$?\"\n",
+            tmp_dir.path().to_str().unwrap(),
+            stdin_capture.to_str().unwrap(),
+            code
+        );
+
+        let (ok, _stdout, stderr) = run_bash_interactive(&script);
+        assert!(ok, "interactive bash failed: {stderr}");
+        let captured = std::fs::read(&stdin_capture).unwrap();
+        // The captured command must keep its inner tab character. We compare
+        // bytes (not strings) so we don't lose the embedded \t.
+        assert_eq!(captured, b"echo leading_tab\tcontent\n");
+    }
+
+    #[test]
+    fn test_bash_new_previous_preserves_quotes_and_backslashes() {
+        if !shell_exists("bash") {
+            eprintln!("skipping: bash not found");
+            return;
+        }
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let stdin_capture = tmp_dir.path().join("stdin.capture");
+        make_stub_snp(
+            tmp_dir.path(),
+            "#!/bin/bash\ncat > \"$SNP_STDIN_CAPTURE\"\nexit 0\n",
+        );
+
+        let code = generate_bash();
+        let script = format!(
+            "export PATH=\"{}:$PATH\"\nexport SNP_STDIN_CAPTURE=\"{}\"\n{}\nhistory -c\nhistory -s $'echo \"q\" \\\\\\\\path'\nsnp_new_previous --description history\nprintf 'RC=%s\\n' \"$?\"\n",
+            tmp_dir.path().to_str().unwrap(),
+            stdin_capture.to_str().unwrap(),
+            code
+        );
+
+        let (ok, _stdout, stderr) = run_bash_interactive(&script);
+        assert!(ok, "interactive bash failed: {stderr}");
+        let captured = std::fs::read(&stdin_capture).unwrap();
+        assert_eq!(captured, b"echo \"q\" \\\\path\n");
     }
 
     #[test]

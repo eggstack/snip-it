@@ -184,11 +184,17 @@ snp new --editor --description 'Complex pipeline'
 ```
 
 `--from-file` reads the specified file as exact UTF-8 command data. It rejects
-invalid UTF-8, NUL bytes, files larger than 16 MiB, directories, and symlinks.
-The file content is stored verbatim — no trimming, evaluation, or execution.
+invalid UTF-8, NUL bytes, files larger than 16 MiB, and non-regular files
+(directories, FIFOs, sockets, device nodes, broken symlinks). Symlinks to
+regular files are followed. The file content is stored verbatim — no trimming,
+evaluation, or execution.
 
-`--editor` opens `$EDITOR` (falling back to `vim`) with a temporary file. The
-temp file is created with `0600` permissions and cleaned up automatically. After
+`--editor` opens `$VISUAL` (if set), then `$EDITOR`, falling back to `vim`, with
+a temporary file. The temp file is created atomically in the OS temp directory
+with `0600` permissions and cleaned up automatically after the editor exits.
+Editor command specifications support arguments — values like `code --wait`,
+`nvim -f`, or `"/path with spaces/bin/code" --wait` are parsed with shell-word
+semantics and passed through to the editor directly; no shell is invoked. After
 the editor exits, empty content or a failed invocation returns an error.
 Non-empty content is stored verbatim.
 
@@ -453,7 +459,8 @@ Useful environment variables:
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
 | `SNP_THEME` | Legacy theme or theme filename | bundled default |
 | `SNP_LOG` / `RUST_LOG` | Tracing filters | `snp=info` |
-| `EDITOR` | Editor for `snp edit` | `vim` |
+| `EDITOR` | Editor for `snp edit` and fallback for `snp new --editor` | `vim` |
+| `VISUAL` | Editor for `snp new --editor` (overrides `EDITOR` if non-empty) | unset |
 
 ## Automation
 

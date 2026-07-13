@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Release 2 closure pass — secure editor tempfiles, editor command parsing, and unified exact-source validation**
+  - Editor temporary files are created atomically via `tempfile::Builder` in the OS temp directory with `0600` permissions and RAII cleanup. The previous hand-rolled PID/timestamp filename generation is gone.
+  - `snp new --editor` now prefers `$VISUAL` over `$EDITOR`. The editor command specification is parsed with `shell-words`, so values like `code --wait`, `nvim -f`, or quoted paths containing spaces work without invoking a shell.
+  - `snp new --from-file` now follows symlinks and validates the resolved target is a regular file. Broken symlinks, directories, FIFOs, sockets, and device nodes are rejected.
+  - Stdin, file, and editor sources share a single `validate_exact_command_bytes` validator: 16 MiB cap, valid UTF-8, no NUL bytes, no empty/whitespace-only content.
+  - Bash `snp_new_previous` now defensively checks for the `fc -ln` formatter prefix (`\t `) before stripping it; legitimate leading whitespace in the captured command is preserved.
+  - Golden command corpus expanded from 13 to 15 entries. Three plan-listed entries (tabs, trailing spaces, CRLF) are intentionally omitted because TOML serialization cannot round-trip them.
+
+### Added
+- New unit tests in `src/commands/new_cmd.rs`: stdin rejection of empty/whitespace input, oversize-input rejection via the shared validator, symlink-following and broken-symlink behavior, FIFO/character-device rejection, `shell-words` parsing of editor specs, and ten multiline-prompt tests.
+- New integration tests in `tests/integration.rs`: editor-source golden corpus round-trip, multiline terminator limitation, exact select-storage round-trip, backup-preserves-command, sync round-trip preservation, and run-storage plumbing.
+- New Bash behavioral tests: `snp_new_previous` preserves leading tabs and quoted/backslash content.
+
 ## [1.3.1] - 2026-07-09
 
 ### Changed

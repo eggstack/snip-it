@@ -113,7 +113,7 @@ enum Commands {
             conflicts_with_all = ["command", "command_stdin", "editor"]
         )]
         from_file: Option<PathBuf>,
-        /// Open $EDITOR to write the command body.
+        /// Open $VISUAL (or $EDITOR) to write the command body.
         #[arg(
             long,
             action = clap::ArgAction::SetTrue,

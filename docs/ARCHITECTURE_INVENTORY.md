@@ -27,11 +27,15 @@ A concise map of the snp internal architecture for contributors working on pet-c
   - `ExpandedCommand` enum — `Cancel`, `Skip`, `Expanded(String)`
 
 ### Creation Pipeline (`src/commands/new_cmd.rs`)
-- `CommandSource` separates positional, interactive, multiline, and stdin command bodies before persistence.
+- `CommandSource` separates positional, interactive, multiline, stdin, file, and editor command bodies before persistence.
 - `read_command_stdin()` reads at most 16 MiB, validates UTF-8, rejects NUL bytes, and preserves all other bytes including trailing newlines.
+- `read_command_from_file()` follows symlinks and validates the resolved target is a regular file (directories, FIFOs, sockets, device nodes rejected).
+- `read_command_from_editor()` resolves `$VISUAL` → `$EDITOR` → `vim`. The editor spec is parsed with `shell-words` (no shell invoked). Temp files use `tempfile::Builder` in the OS temp dir with `0600` permissions and RAII cleanup.
+- All exact sources (stdin, file, editor) share `validate_exact_command_bytes()` for: 16 MiB cap, valid UTF-8, no NUL bytes, no empty/whitespace-only content.
 - `--command-stdin` requires `--description` and never reuses command stdin for metadata prompts.
-- Positional, prompt, and stdin sources converge on `Snippet::new()` and the existing `save_library()` / `save_snippets()` backup and atomic-write paths.
+- Positional, prompt, stdin, file, and editor sources converge on `Snippet::new()` and the existing `save_library()` / `save_snippets()` backup and atomic-write paths.
 - Stdin command bodies are never echoed or logged as part of ingestion; the command is data and is not executed.
+- Editor errors identify only the editor executable and exit status — never the command body.
 
 ### Shell Integration (`src/commands/shell_cmd.rs`)
 - `snp shell init` generates Bash, Zsh, and Fish code at runtime.
@@ -131,11 +135,12 @@ A concise map of the snp internal architecture for contributors working on pet-c
 | `signal-hook` | Unix signal handling |
 | `clap_complete` | Shell completions |
 | `tracing` | Structured logging |
-| `tempfile` | Atomic writes |
+| `tempfile` | Atomic writes, editor temp files |
+| `shell-words` | Editor command specification parsing (no shell invocation) |
 
 ## Test Infrastructure
 
-- `tests/integration.rs` — CLI integration tests (28 tests, `TempDir` + `XDG_CONFIG_HOME` override)
+- `tests/integration.rs` — CLI integration tests (34 tests, `TempDir` + `XDG_CONFIG_HOME` override)
 - `tests/pty_integration.rs` — PTY end-to-end tests (10 tests, `portable-pty` crate, runs with `--test-threads=1`)
 - `tests/sync_integration.rs` — gRPC integration tests (4 async `#[tokio::test]`, in-process server via `test-helpers` feature)
 - Inline `#[cfg(test)]` modules in every source file
