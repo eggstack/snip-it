@@ -85,7 +85,7 @@ uuid = { version = "1", features = ["v4"] }
 tonic = { version = "0.14", features = ["tls-ring"] }
 prost = "0.14"
 tonic-prost = "0.14"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 argon2 = "0.5"
 base64 = "0.22"
 
