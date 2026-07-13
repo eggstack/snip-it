@@ -2019,3 +2019,524 @@ fn test_select_rejects_sync_flag() {
         "Expected error for --sync on select: {stderr}"
     );
 }
+
+// ============================================================
+// Release 2C: Golden command corpus and cross-source equivalence
+// ============================================================
+
+/// Golden command corpus covering every edge case from the R2C plan D1.
+/// Each entry is (label, command_str).
+fn golden_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // 1. Single-line ASCII
+        ("ascii_simple", "echo hello world"),
+        // 2. Command beginning with a hyphen
+        ("leading_hyphen", "-n echo 'leading flag'"),
+        // 3. Single and double quotes
+        ("quotes", "echo \"double\" 'single'"),
+        // 4. Backslashes and Windows-like paths
+        ("backslashes", "echo C:\\Users\\test\\file.txt"),
+        // 5. Pipes, redirects, semicolons, and ampersands
+        ("shell_ops", "echo foo | grep bar > out.txt; echo baz &"),
+        // 6. $() and backticks
+        ("substitution", "echo $(date) `whoami`"),
+        // 7. Unicode
+        ("unicode", "echo '日本語 test café'"),
+        // 8. Multiline shell script
+        (
+            "multiline_script",
+            "if true; then\n  echo yes\nelse\n  echo no\nfi\n",
+        ),
+        // 9. Blank internal lines
+        ("blank_lines", "echo before\n\necho after\n"),
+        // 10. No trailing newline
+        ("no_trailing_newline", "echo no_newline"),
+        // 11. One trailing newline
+        ("one_trailing_newline", "echo with_newline\n"),
+        // 12. Multiple trailing newlines
+        ("multi_trailing_newlines", "echo multi\n\n\n"),
+        // 13. Variable placeholders and escaped angle brackets
+        ("variables_and_escapes", "ssh <user>@<host> -p <port=22>"),
+    ]
+}
+
+#[test]
+fn test_golden_corpus_stdin_preserves_all_commands() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    for (label, command_str) in golden_corpus() {
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            &format!("golden-{label}"),
+        ]);
+        let output = output_with_stdin(cmd, command_str.as_bytes());
+        assert!(
+            output.status.success(),
+            "golden corpus '{label}' failed via --command-stdin: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Verify all snippets were created
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), golden_corpus().len());
+
+    // Verify each command matches exactly
+    for (label, command_str) in golden_corpus() {
+        let found = snippets.iter().find(|s| {
+            s["description"]
+                .as_str()
+                .map(|d| d == format!("golden-{label}"))
+                .unwrap_or(false)
+        });
+        let snippet = found.unwrap_or_else(|| panic!("snippet for golden-{label} not found"));
+        assert_eq!(
+            snippet["command"].as_str().unwrap(),
+            command_str,
+            "golden corpus '{label}' round-trip failed"
+        );
+    }
+}
+
+#[test]
+fn test_golden_corpus_file_preserves_all_commands() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    for (label, command_str) in golden_corpus() {
+        let from_file = _tmp.path().join(format!("golden_{label}.txt"));
+        std::fs::write(&from_file, command_str.as_bytes()).unwrap();
+
+        let output = snp_in(&config_dir)
+            .args([
+                "new",
+                "--from-file",
+                from_file.to_str().unwrap(),
+                "--description",
+                &format!("golden-file-{label}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "golden corpus '{label}' failed via --from-file: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Verify each command matches exactly
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    for (label, command_str) in golden_corpus() {
+        let found = snippets.iter().find(|s| {
+            s["description"]
+                .as_str()
+                .map(|d| d == format!("golden-file-{label}"))
+                .unwrap_or(false)
+        });
+        let snippet = found.unwrap_or_else(|| panic!("snippet for golden-file-{label} not found"));
+        assert_eq!(
+            snippet["command"].as_str().unwrap(),
+            command_str,
+            "golden corpus file '{label}' round-trip failed"
+        );
+    }
+}
+
+#[test]
+fn test_cross_source_equivalence_stdin_vs_file() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // For each golden command, create via stdin and file, then compare
+    for (label, command_str) in golden_corpus() {
+        // Via stdin
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            &format!("xs-stdin-{label}"),
+        ]);
+        let output = output_with_stdin(cmd, command_str.as_bytes());
+        assert!(
+            output.status.success(),
+            "stdin creation failed for '{label}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // Via file
+        let from_file = _tmp.path().join(format!("xs_{label}.txt"));
+        std::fs::write(&from_file, command_str.as_bytes()).unwrap();
+        let output = snp_in(&config_dir)
+            .args([
+                "new",
+                "--from-file",
+                from_file.to_str().unwrap(),
+                "--description",
+                &format!("xs-file-{label}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "file creation failed for '{label}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Verify all pairs match
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    for (label, _) in golden_corpus() {
+        let stdin_snippet = snippets
+            .iter()
+            .find(|s| {
+                s["description"]
+                    .as_str()
+                    .map(|d| d == format!("xs-stdin-{label}"))
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("stdin snippet for '{label}' not found"));
+        let file_snippet = snippets
+            .iter()
+            .find(|s| {
+                s["description"]
+                    .as_str()
+                    .map(|d| d == format!("xs-file-{label}"))
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("file snippet for '{label}' not found"));
+        assert_eq!(
+            stdin_snippet["command"], file_snippet["command"],
+            "cross-source mismatch for '{label}': stdin vs file"
+        );
+    }
+}
+
+#[test]
+fn test_golden_corpus_storage_roundtrip_no_progressive_normalization() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Create all golden commands via stdin
+    for (label, command_str) in golden_corpus() {
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            &format!("roundtrip-{label}"),
+        ]);
+        let output = output_with_stdin(cmd, command_str.as_bytes());
+        assert!(output.status.success());
+    }
+
+    // Read all commands from JSON (first round)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets_round1: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Trigger a save by adding and deleting a dummy snippet, forcing a full rewrite
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["new", "--description", "dummy", "echo dummy"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    // Read all commands again (second round)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets_round2: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Compare: every golden snippet's command must be identical across rounds
+    for (label, _) in golden_corpus() {
+        let desc = format!("roundtrip-{label}");
+        let cmd1 = snippets_round1
+            .iter()
+            .find(|s| s["description"].as_str() == Some(&desc))
+            .unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let cmd2 = snippets_round2
+            .iter()
+            .find(|s| s["description"].as_str() == Some(&desc))
+            .unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            cmd1, cmd2,
+            "progressive normalization detected for '{label}': round1 != round2"
+        );
+    }
+}
+
+#[test]
+fn test_golden_corpus_csv_output_valid() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Create a few representative golden commands
+    let representative = [
+        ("csv_ascii", "echo hello"),
+        ("csv_quotes", "echo \"double\" 'single'"),
+        ("csv_unicode", "echo '日本語'"),
+        ("csv_newlines", "echo line1\necho line2\n"),
+    ];
+
+    for (label, command_str) in &representative {
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            &format!("golden-{label}"),
+        ]);
+        let output = output_with_stdin(cmd, command_str.as_bytes());
+        assert!(output.status.success());
+    }
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--csv"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Header + 4 data lines
+    assert!(
+        lines.len() >= 5,
+        "Expected at least 5 CSV lines (header + 4 data), got {}",
+        lines.len()
+    );
+    assert_eq!(lines[0], "description,command,output,tags,folders,favorite");
+}
+
+// ============================================================
+// Release 2C: Shell init output validity (H2)
+// ============================================================
+
+#[test]
+fn test_shell_init_bash_output_valid() {
+    let output = snp_cmd().args(["shell", "init", "bash"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "snp shell init bash failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("snp_select_raw"),
+        "bash init must contain snp_select_raw: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_select_expanded"),
+        "bash init must contain snp_select_expanded: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_current"),
+        "bash init must contain snp_new_current: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_previous"),
+        "bash init must contain snp_new_previous: {stdout}"
+    );
+    assert!(
+        stdout.contains("__snp_select"),
+        "bash init must contain __snp_select helper: {stdout}"
+    );
+    assert!(
+        !stdout.contains("eval "),
+        "bash init must not contain eval on captured content: {stdout}"
+    );
+}
+
+#[test]
+fn test_shell_init_zsh_output_valid() {
+    let output = snp_cmd().args(["shell", "init", "zsh"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "snp shell init zsh failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("snp_select_raw"),
+        "zsh init must contain snp_select_raw: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_select_expanded"),
+        "zsh init must contain snp_select_expanded: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_current"),
+        "zsh init must contain snp_new_current: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_previous"),
+        "zsh init must contain snp_new_previous: {stdout}"
+    );
+    assert!(
+        stdout.contains("zle -N"),
+        "zsh init must register ZLE widgets: {stdout}"
+    );
+    assert!(
+        !stdout.contains("eval "),
+        "zsh init must not contain eval on captured content: {stdout}"
+    );
+}
+
+#[test]
+fn test_shell_init_fish_output_valid() {
+    let output = snp_cmd().args(["shell", "init", "fish"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "snp shell init fish failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("snp_select_raw"),
+        "fish init must contain snp_select_raw: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_select_expanded"),
+        "fish init must contain snp_select_expanded: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_current"),
+        "fish init must contain snp_new_current: {stdout}"
+    );
+    assert!(
+        stdout.contains("snp_new_previous"),
+        "fish init must contain snp_new_previous: {stdout}"
+    );
+    assert!(
+        stdout.contains("function"),
+        "fish init must use 'function' keyword: {stdout}"
+    );
+    assert!(
+        !stdout.contains("eval "),
+        "fish init must not contain eval on captured content: {stdout}"
+    );
+}
+
+#[test]
+fn test_shell_init_bash_syntax_check() {
+    let output = snp_cmd().args(["shell", "init", "bash"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Write to temp file and check syntax with bash -n
+    let tmp = tempfile::TempDir::new().unwrap();
+    let script_path = tmp.path().join("init.bash");
+    std::fs::write(&script_path, stdout.as_bytes()).unwrap();
+
+    let check = Command::new("bash")
+        .args(["-n", script_path.to_str().unwrap()])
+        .output();
+    match check {
+        Ok(out) => assert!(
+            out.status.success(),
+            "bash -n syntax check failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(_) => eprintln!("bash not available, skipping syntax check"),
+    }
+}
+
+#[test]
+fn test_shell_init_zsh_syntax_check() {
+    let output = snp_cmd().args(["shell", "init", "zsh"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let script_path = tmp.path().join("init.zsh");
+    std::fs::write(&script_path, stdout.as_bytes()).unwrap();
+
+    let check = Command::new("zsh")
+        .args(["-n", script_path.to_str().unwrap()])
+        .output();
+    match check {
+        Ok(out) => assert!(
+            out.status.success(),
+            "zsh -n syntax check failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(_) => eprintln!("zsh not available, skipping syntax check"),
+    }
+}
+
+#[test]
+fn test_shell_init_fish_syntax_check() {
+    let output = snp_cmd().args(["shell", "init", "fish"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let script_path = tmp.path().join("init.fish");
+    std::fs::write(&script_path, stdout.as_bytes()).unwrap();
+
+    let check = Command::new("fish")
+        .args(["--no-execute", script_path.to_str().unwrap()])
+        .output();
+    match check {
+        Ok(out) => assert!(
+            out.status.success(),
+            "fish --no-execute syntax check failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(_) => eprintln!("fish not available, skipping syntax check"),
+    }
+}
+
+#[test]
+fn test_shell_init_all_shells_no_history_file_references() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = snp_cmd().args(["shell", "init", shell]).output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains(".bash_history"),
+            "{shell} init must not reference .bash_history"
+        );
+        assert!(
+            !stdout.contains(".zsh_history"),
+            "{shell} init must not reference .zsh_history"
+        );
+        assert!(
+            !stdout.contains("fish_history"),
+            "{shell} init must not reference fish_history"
+        );
+    }
+}
+
+#[test]
+fn test_shell_init_all_shells_use_output_file_flag() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = snp_cmd().args(["shell", "init", shell]).output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("--output-file"),
+            "{shell} init must use --output-file for selection transport"
+        );
+    }
+}

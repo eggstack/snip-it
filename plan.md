@@ -35,17 +35,20 @@
   - [x] Add tests for conflict detection (device ID mismatch)
   - [x] Add tests for error handling (server unavailable, auth failures)
 
-### TEST-3: TUI Integration Tests
-- **Status:** Deferred (requires PTY/terminal emulation)
-- **Files:** `tests/tui_integration.rs` (new)
-- **Description:** Add integration tests for the TUI workflow
+### TEST-3: TUI Integration Tests (via PTY)
+- **Status:** Completed (via portable-pty)
+- **Files:** `tests/pty_integration.rs`
+- **Description:** Add PTY-based integration tests for TUI cancellation contracts and shell-buffer capture flows
 - **Tasks:**
-  - [ ] Create `tests/tui_integration.rs`
-  - [ ] Add tests for snippet selection flow
-  - [ ] Add tests for fuzzy filtering
-  - [ ] Add tests for visual mode operations
-  - [ ] Add tests for variable prompts
-- **Blocked by:** Requires terminal emulation library (vterm, pty-process)
+  - [x] Create `tests/pty_integration.rs` using portable-pty
+  - [x] Add tests for select cancellation (Esc+q, Ctrl+C → exit 4)
+  - [x] Add tests for run/clip/search cancellation (exit 0)
+  - [x] Add tests for output-file cleanup on cancel
+  - [x] Add tests for expanded cancel before variable prompt
+  - [x] Add tests for Bash current-buffer capture via real PTY
+  - [x] Add tests for command-stdin via PTY transport
+  - [x] Add PTY diagnostics (stdin readability, echo)
+- **Note:** Requires `--test-threads=1` due to PTY resource sharing
 
 ### TEST-4: Additional CLI Integration Tests
 - **Status:** Completed

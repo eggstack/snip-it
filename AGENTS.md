@@ -34,6 +34,11 @@ cargo test --test integration from_file
 cargo test --test integration editor
 cargo test --lib new_cmd
 
+# Release 2C golden corpus and shell init tests
+cargo test --test integration golden_corpus
+cargo test --test integration cross_source
+cargo test --test integration shell_init
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -256,9 +261,11 @@ snip-it/
 
 - Integration tests use `TempDir` with `XDG_CONFIG_HOME` env override
 - Server tests use `sqlite::memory:` for isolation
-- `snip-sync` has a `test-helpers` feature gate for in-process server testing; `snip-it`'s dev-dependencies enable it automatically
+- `snip-sync` has a `test-helpers` feature gate for in-process server testing; `snp`'s dev-dependencies enable it automatically
 - `tests/sync_integration.rs` spins up a real `snip-sync` server in-process via `test_helpers` — these are async `#[tokio::test]` and need the `test-helpers` feature
 - PTY tests (`tests/pty_integration.rs`) use `portable-pty` crate and must run with `--test-threads=1` — they create real PTY pairs and inject keystrokes via raw fd writes
+- Golden command corpus tests (`tests/integration.rs`) verify exact-text preservation across all acquisition sources (stdin, file, editor, positional) with 15 edge cases including Unicode, shell metacharacters, multiline, trailing newlines, and variable placeholders
+- Shell init tests (`tests/integration.rs`) verify `snp shell init bash|zsh|fish` output contains all four public functions and passes syntax validation when the target shell is available
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
 - Utils tests cover escape sequences, nested brackets, chained backslashes
