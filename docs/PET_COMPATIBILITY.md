@@ -194,7 +194,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Escaped brackets | Not supported | `\<` and `\>` produce literal `<` and `>`. Parsed by `strip_escape_sequences()`. | New | — | snp-only extension. |
 | Nested brackets | Not supported | `<a<b>>` — outer variable `a` with default `b>`. | New | — | snp-only extension. |
 | Variable prompting | CLI prompt (text-based) | TUI-based prompt with color-coded input. Supports Cancel, Back, Skip. | Supported differently | — | snp has richer TUI prompting. |
-| Multiple-choice defaults | Pet-specific syntax `Choice\|choice1\|choice2\|choice3` | Not yet first-class. | Planned | R3 | Will add pet multiple-choice parameter compatibility. |
+| Multiple-choice defaults | `<param=\|_opt1_\|\|_opt2_\|\|_opt3_\|\|>` syntax | Recognized and prompted as a list selector. Raw text preserved in storage. | Full | R3A | Choice syntax parsed into `VariableKind::Choices`. First choice is default. |
 | Chained variables | `<a><b>` — two adjacent variables | Supported. Each variable prompted independently. | Full | — | Equivalent. |
 | Variables in quoted shell text | Standard behavior | Supported. Variables work inside quotes. | Full | — | Equivalent. |
 

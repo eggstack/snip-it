@@ -1,0 +1,17 @@
+[[snippets]]
+description = "choice variable — simple"
+command = "echo <color=|_red_||_green_||_blue_||>"
+output = ""
+tag = ["choices"]
+
+[[snippets]]
+description = "choice variable — mixed with text"
+command = "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+output = ""
+tag = ["choices"]
+
+[[snippets]]
+description = "choice variable — single choice"
+command = "echo <only=|_one_||>"
+output = ""
+tag = ["choices"]

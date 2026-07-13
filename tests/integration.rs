@@ -3021,3 +3021,334 @@ fn test_shell_init_all_shells_use_output_file_flag() {
         );
     }
 }
+
+// ============================================================
+// Release 3A: Pet choice variable serialization compatibility (E)
+// ============================================================
+
+const CHOICE_FIXTURE_TOML: &str = r#"[[snippets]]
+description = "choice variable — simple"
+command = "echo <color=|_red_||_green_||_blue_||>"
+output = ""
+tag = ["choices"]
+
+[[snippets]]
+description = "choice variable — mixed with text"
+command = "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+output = ""
+tag = ["choices"]
+
+[[snippets]]
+description = "choice variable — single choice"
+command = "echo <only=|_one_||>"
+output = ""
+tag = ["choices"]
+"#;
+
+#[test]
+fn test_choice_variable_fixture_loads_correctly() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-fixture"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("choice-fixture.toml"),
+        CHOICE_FIXTURE_TOML,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-fixture"]);
+    cmd.output().unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 3);
+
+    assert_eq!(
+        snippets[0]["command"],
+        "echo <color=|_red_||_green_||_blue_||>"
+    );
+    assert_eq!(
+        snippets[1]["command"],
+        "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+    );
+    assert_eq!(snippets[2]["command"], "echo <only=|_one_||>");
+}
+
+#[test]
+fn test_choice_variable_toml_load_save_roundtrip() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-roundtrip"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("choice-roundtrip.toml"),
+        CHOICE_FIXTURE_TOML,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-roundtrip"]);
+    cmd.output().unwrap();
+
+    // Read via list --json (first round)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets_r1: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Trigger a save by adding a dummy snippet
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["new", "--description", "trigger-save", "echo dummy"]);
+    cmd.output().unwrap();
+
+    // Read again (second round)
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets_r2: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Filter to only the choice snippets (exclude dummy)
+    let choice_r1: Vec<_> = snippets_r1
+        .iter()
+        .filter(|s| {
+            s["description"]
+                .as_str()
+                .map(|d| d.contains("choice variable"))
+                .unwrap_or(false)
+        })
+        .collect();
+    let choice_r2: Vec<_> = snippets_r2
+        .iter()
+        .filter(|s| {
+            s["description"]
+                .as_str()
+                .map(|d| d.contains("choice variable"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(choice_r1.len(), 3);
+    assert_eq!(choice_r2.len(), 3);
+
+    for i in 0..3 {
+        assert_eq!(
+            choice_r1[i]["command"], choice_r2[i]["command"],
+            "Choice syntax round-trip failed for snippet {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn test_choice_variable_list_json_raw_syntax() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-json"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(libraries_dir.join("choice-json.toml"), CHOICE_FIXTURE_TOML).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-json"]);
+    cmd.output().unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("Expected valid JSON output");
+
+    // Verify the raw choice syntax is preserved in JSON output
+    let simple = parsed
+        .iter()
+        .find(|s| s["description"].as_str() == Some("choice variable — simple"))
+        .expect("simple choice snippet not found");
+    assert_eq!(
+        simple["command"].as_str().unwrap(),
+        "echo <color=|_red_||_green_||_blue_||>"
+    );
+
+    let mixed = parsed
+        .iter()
+        .find(|s| s["description"].as_str() == Some("choice variable — mixed with text"))
+        .expect("mixed choice snippet not found");
+    assert_eq!(
+        mixed["command"].as_str().unwrap(),
+        "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+    );
+
+    let single = parsed
+        .iter()
+        .find(|s| s["description"].as_str() == Some("choice variable — single choice"))
+        .expect("single choice snippet not found");
+    assert_eq!(single["command"].as_str().unwrap(), "echo <only=|_one_||>");
+}
+
+#[test]
+fn test_choice_variable_list_csv_raw_syntax() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-csv"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(libraries_dir.join("choice-csv.toml"), CHOICE_FIXTURE_TOML).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-csv"]);
+    cmd.output().unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--csv"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Verify the raw choice syntax appears in CSV output
+    assert!(
+        stdout.contains("echo <color=|_red_||_green_||_blue_||>"),
+        "CSV output must contain raw choice syntax: {stdout}"
+    );
+    assert!(
+        stdout.contains("ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"),
+        "CSV output must contain raw mixed choice syntax: {stdout}"
+    );
+    assert!(
+        stdout.contains("echo <only=|_one_||>"),
+        "CSV output must contain raw single choice syntax: {stdout}"
+    );
+}
+
+#[test]
+fn test_choice_variable_expansion() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Create a snippet with choice variable via --command-stdin
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "choice-expand-test",
+    ]);
+    let output = output_with_stdin(cmd, b"echo <color=|_red_||_green_||_blue_||>");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the stored command is the raw choice syntax
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(
+        snippets[0]["command"].as_str().unwrap(),
+        "echo <color=|_red_||_green_||_blue_||>"
+    );
+}
+
+#[test]
+fn test_choice_variable_raw_preserved_in_storage() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-raw"]);
+    cmd.output().unwrap();
+
+    // Write choice fixture TOML directly
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(libraries_dir.join("choice-raw.toml"), CHOICE_FIXTURE_TOML).unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-raw"]);
+    cmd.output().unwrap();
+
+    // Read the raw TOML file and verify choice syntax is preserved verbatim
+    let toml_content = fs::read_to_string(libraries_dir.join("choice-raw.toml")).unwrap();
+    assert!(
+        toml_content.contains("echo <color=|_red_||_green_||_blue_||>"),
+        "Raw TOML must contain choice syntax: {toml_content}"
+    );
+    assert!(
+        toml_content.contains("ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"),
+        "Raw TOML must contain mixed choice syntax: {toml_content}"
+    );
+    assert!(
+        toml_content.contains("echo <only=|_one_||>"),
+        "Raw TOML must contain single choice syntax: {toml_content}"
+    );
+}
+
+#[test]
+fn test_choice_variable_fixture_file_loads() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "choice-file"]);
+    cmd.output().unwrap();
+
+    // Copy the fixture file into the library directory
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::copy(
+        "tests/fixtures/choice_variables.toml",
+        libraries_dir.join("choice-file.toml"),
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "choice-file"]);
+    cmd.output().unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snippets: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snippets.len(), 3);
+
+    // Verify each command preserves the exact choice syntax
+    assert_eq!(
+        snippets[0]["command"].as_str().unwrap(),
+        "echo <color=|_red_||_green_||_blue_||>"
+    );
+    assert_eq!(
+        snippets[1]["command"].as_str().unwrap(),
+        "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+    );
+    assert_eq!(
+        snippets[2]["command"].as_str().unwrap(),
+        "echo <only=|_one_||>"
+    );
+}

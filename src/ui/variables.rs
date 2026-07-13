@@ -29,7 +29,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::utils::variables::Variable;
+use crate::utils::variables::{Variable, VariableKind};
 
 use super::get_terminate;
 use super::state::is_ctrl_key;
@@ -145,6 +145,41 @@ impl Field {
     }
 }
 
+/// A prompt field — either a text input or a choice selector.
+#[derive(Clone)]
+enum PromptField {
+    /// Free-text input field.
+    Text(Field),
+    /// Multiple-choice selector (Pet-style variables).
+    Choice {
+        choices: Vec<String>,
+        selected: usize,
+    },
+}
+
+impl PromptField {
+    fn as_text(&self) -> Option<&Field> {
+        match self {
+            PromptField::Text(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    fn as_text_mut(&mut self) -> Option<&mut Field> {
+        match self {
+            PromptField::Text(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    fn value_string(&self) -> String {
+        match self {
+            PromptField::Text(f) => f.value.clone(),
+            PromptField::Choice { choices, selected } => choices[*selected].clone(),
+        }
+    }
+}
+
 /// Returns the byte index of the char boundary strictly before `idx` in `s`.
 /// `idx` is assumed to be a char boundary (`> 0` and `<= s.len()`).
 fn prev_char_boundary(s: &str, idx: usize) -> usize {
@@ -176,7 +211,22 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
         .map(|v| v.default.clone().unwrap_or_default())
         .collect();
 
-    let mut fields: Vec<Field> = defaults.iter().map(|d| Field::new(d)).collect();
+    let mut fields: Vec<PromptField> = vars
+        .iter()
+        .map(|v| match &v.kind {
+            VariableKind::Choices {
+                values,
+                default_index,
+            } => PromptField::Choice {
+                choices: values.clone(),
+                selected: default_index.unwrap_or(0),
+            },
+            VariableKind::Required | VariableKind::DefaultValue(_) => {
+                let default = v.default.as_deref().unwrap_or("");
+                PromptField::Text(Field::new(default))
+            }
+        })
+        .collect();
     let mut selected = 0usize;
     let mut show_defaults = true;
     let mut insert_mode = true;
@@ -204,22 +254,38 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 .borders(Borders::ALL)
                 .style(style_fg(theme.border));
 
-            let num_vars = fields.len();
-            let var_height = num_vars * 3;
+            let var_chunks: Vec<_> = vars
+                .iter()
+                .enumerate()
+                .map(|(i, _var)| {
+                    let height: u16 = match &fields[i] {
+                        PromptField::Choice { choices, .. } => {
+                            (choices.len() as u16 + 1).min(8) // cap at 8 lines visible
+                        }
+                        PromptField::Text(_) => 3,
+                    };
+                    height
+                })
+                .collect();
+            let total_var_height: u16 = var_chunks.iter().sum();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(2)
                 .constraints([
-                    Constraint::Length(var_height.min(u16::MAX as usize) as u16),
+                    Constraint::Length(total_var_height),
                     Constraint::Length(1),
                 ])
                 .split(size);
 
             f.render_widget(block, size);
 
-            let var_chunks = Layout::default()
+            let var_constraints: Vec<_> = var_chunks
+                .iter()
+                .map(|&h| Constraint::Length(h))
+                .collect();
+            let var_areas = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(vec![Constraint::Length(3); num_vars])
+                .constraints(var_constraints)
                 .split(chunks[0]);
 
             for (i, var) in vars.iter().enumerate() {
@@ -232,39 +298,87 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                         TuiStyle::default()
                     });
 
-                let prefix = if i == selected { "▶ " } else { "  " };
-                let display_value = if show_defaults
-                    && fields[i].value == defaults[i]
-                    && !defaults[i].is_empty()
-                {
-                    format!("{} (default: {})", fields[i].value, defaults[i])
-                } else if fields[i].value.is_empty() {
-                    "_".to_string()
-                } else {
-                    fields[i].value.clone()
-                };
-                let text = format!("{prefix}{display_value}");
+                match &fields[i] {
+                    PromptField::Text(field) => {
+                        let prefix = if i == selected { "▶ " } else { "  " };
+                        let display_value = if show_defaults
+                            && field.value == defaults[i]
+                            && !defaults[i].is_empty()
+                        {
+                            format!("{} (default: {})", field.value, defaults[i])
+                        } else if field.value.is_empty() {
+                            "_".to_string()
+                        } else {
+                            field.value.clone()
+                        };
+                        let text = format!("{prefix}{display_value}");
 
-                let p = Paragraph::new(text)
-                    .block(var_block)
-                    .style(style_fg(theme.text));
+                        let p = Paragraph::new(text)
+                            .block(var_block)
+                            .style(style_fg(theme.text));
 
-                f.render_widget(p, var_chunks[i]);
+                        f.render_widget(p, var_areas[i]);
+                    }
+                    PromptField::Choice { choices, selected: sel } => {
+                        let area = var_areas[i];
+                        // Draw the block border
+                        f.render_widget(var_block, area);
+                        // Render choices inside the block's inner area
+                        let inner = ratatui::layout::Rect {
+                            x: area.x + 1,
+                            y: area.y + 1,
+                            width: area.width.saturating_sub(2),
+                            height: area.height.saturating_sub(2),
+                        };
+                        // Show at most `inner.height` choices, centered on selected
+                        let visible_count = inner.height as usize;
+                        let total = choices.len();
+                        let scroll = if total <= visible_count {
+                            0
+                        } else {
+                            sel.saturating_sub(visible_count / 2).min(total - visible_count)
+                        };
+                        for row in 0..visible_count.min(total) {
+                            let idx = scroll + row;
+                            if idx >= total {
+                                break;
+                            }
+                            let is_selected = idx == *sel;
+                            let marker = if is_selected { "▶ " } else { "  " };
+                            let text = format!("{}{}", marker, choices[idx]);
+                            let style = if is_selected {
+                                style_fg(theme.accent)
+                            } else {
+                                style_fg(theme.text)
+                            };
+                            let line = Line::from(Span::styled(text, style));
+                            let p = Paragraph::new(line);
+                            let row_area = ratatui::layout::Rect {
+                                x: inner.x,
+                                y: inner.y + row as u16,
+                                width: inner.width,
+                                height: 1,
+                            };
+                            f.render_widget(p, row_area);
+                        }
+                    }
+                }
             }
 
             // Position the cursor inside the selected field at the tracked
             // byte offset.
-            if selected < fields.len() {
+            if selected < fields.len()
+                && let Some(field) = fields[selected].as_text()
+            {
                 use unicode_width::UnicodeWidthStr;
                 let prefix_len = 2;
-                let field = &fields[selected];
                 let cursor_byte = field.cursor.min(field.value.len());
                 let prefix_str = field.value.get(..cursor_byte).unwrap_or("");
-                let cursor_x = var_chunks[selected].x
+                let cursor_x = var_areas[selected].x
                     + 1
                     + prefix_len
                     + prefix_str.width().min(u16::MAX as usize) as u16;
-                let cursor_y = var_chunks[selected].y + 1;
+                let cursor_y = var_areas[selected].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }
 
@@ -314,22 +428,25 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
     }
 
     for (field, default) in fields.iter_mut().zip(defaults.iter()) {
-        if field.value.is_empty() && !default.is_empty() {
-            field.value = default.clone();
+        if let Some(text_field) = field.as_text_mut()
+            && text_field.value.is_empty()
+            && !default.is_empty()
+        {
+            text_field.value = default.clone();
         }
     }
 
     let result: Vec<(String, String)> = vars
         .iter()
         .zip(fields.iter())
-        .map(|(v, f)| (v.name.clone(), f.value.trim().to_string()))
+        .map(|(v, f)| (v.name.clone(), f.value_string().trim().to_string()))
         .collect();
     Ok(VariablePromptResult::Values(result))
 }
 
 fn handle_insert_key(
     key: crossterm::event::KeyEvent,
-    fields: &mut [Field],
+    fields: &mut [PromptField],
     selected: &mut usize,
     defaults: &[String],
     insert_mode: &mut bool,
@@ -339,16 +456,33 @@ fn handle_insert_key(
         KeyCode::Esc => {
             *insert_mode = false;
         }
-        KeyCode::Up => {
-            if *selected > 0 {
-                *selected -= 1;
+        KeyCode::Up => match &mut fields[*selected] {
+            PromptField::Choice { selected: sel, .. } => {
+                if *sel > 0 {
+                    *sel -= 1;
+                }
             }
-        }
-        KeyCode::Down => {
-            if *selected + 1 < num_vars {
-                *selected += 1;
+            _ => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
             }
-        }
+        },
+        KeyCode::Down => match &mut fields[*selected] {
+            PromptField::Choice {
+                choices,
+                selected: sel,
+            } => {
+                if *sel + 1 < choices.len() {
+                    *sel += 1;
+                }
+            }
+            _ => {
+                if *selected + 1 < num_vars {
+                    *selected += 1;
+                }
+            }
+        },
         KeyCode::Tab => {
             if *selected + 1 < num_vars {
                 *selected += 1;
@@ -367,23 +501,30 @@ fn handle_insert_key(
             }
         }
         KeyCode::Left => {
-            fields[*selected].move_left();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_left();
+            }
         }
         KeyCode::Right => {
-            fields[*selected].move_right();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_right();
+            }
         }
         KeyCode::Backspace => {
-            fields[*selected].backspace();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.backspace();
+            }
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let field = &mut fields[*selected];
-            if field.cursor >= field.value.len()
-                && !defaults[*selected].is_empty()
-                && field.value == defaults[*selected]
-            {
-                field.clear();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                if field.cursor >= field.value.len()
+                    && !defaults[*selected].is_empty()
+                    && field.value == defaults[*selected]
+                {
+                    field.clear();
+                }
+                field.insert_char(c);
             }
-            field.insert_char(c);
         }
         KeyCode::Enter => {}
         _ => {}
@@ -393,7 +534,7 @@ fn handle_insert_key(
 
 fn handle_normal_key(
     key: crossterm::event::KeyEvent,
-    fields: &mut [Field],
+    fields: &mut [PromptField],
     selected: &mut usize,
     show_defaults: &mut bool,
     insert_mode: &mut bool,
@@ -406,45 +547,80 @@ fn handle_normal_key(
             *insert_mode = true;
         }
         KeyCode::Char('a') => {
-            fields[*selected].move_right();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_right();
+            }
             *insert_mode = true;
         }
         KeyCode::Char('A') => {
-            fields[*selected].move_end();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_end();
+            }
             *insert_mode = true;
         }
         KeyCode::Char('I') => {
-            fields[*selected].move_start();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_start();
+            }
             *insert_mode = true;
         }
         KeyCode::Char('h') | KeyCode::Left => {
-            fields[*selected].move_left();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_left();
+            }
         }
         KeyCode::Char('l') | KeyCode::Right => {
-            fields[*selected].move_right();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_right();
+            }
         }
         KeyCode::Char('0') => {
-            fields[*selected].move_start();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_start();
+            }
         }
         KeyCode::Char('$') => {
-            fields[*selected].move_end();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.move_end();
+            }
         }
         KeyCode::Char('x') | KeyCode::Delete => {
-            fields[*selected].delete();
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.delete();
+            }
         }
         KeyCode::Backspace => {
-            fields[*selected].backspace();
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            if *selected + 1 < num_vars {
-                *selected += 1;
+            if let Some(field) = fields[*selected].as_text_mut() {
+                field.backspace();
             }
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if *selected > 0 {
-                *selected -= 1;
+        KeyCode::Char('j') | KeyCode::Down => match &mut fields[*selected] {
+            PromptField::Choice {
+                choices,
+                selected: sel,
+            } => {
+                if *sel + 1 < choices.len() {
+                    *sel += 1;
+                }
             }
-        }
+            _ => {
+                if *selected + 1 < num_vars {
+                    *selected += 1;
+                }
+            }
+        },
+        KeyCode::Char('k') | KeyCode::Up => match &mut fields[*selected] {
+            PromptField::Choice { selected: sel, .. } => {
+                if *sel > 0 {
+                    *sel -= 1;
+                }
+            }
+            _ => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+        },
         KeyCode::Tab => {
             if *selected + 1 < num_vars {
                 *selected += 1;
@@ -580,9 +756,29 @@ mod tests {
         }
     }
 
+    fn press_key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent {
+            code,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    fn text_field(value: &str) -> PromptField {
+        PromptField::Text(Field::new(value))
+    }
+
+    fn choice_field(choices: Vec<&str>, selected: usize) -> PromptField {
+        PromptField::Choice {
+            choices: choices.into_iter().map(String::from).collect(),
+            selected,
+        }
+    }
+
     #[test]
     fn ins_mode_inserts_alphanumerics_including_q() {
-        let mut fields = vec![Field::new("")];
+        let mut fields = vec![text_field("")];
         let mut selected = 0;
         let defaults = vec![String::new()];
         let mut insert_mode = true;
@@ -599,15 +795,12 @@ mod tests {
             assert_eq!(action, KeyAction::Continue, "{c:?} should continue");
             assert!(insert_mode, "{c:?} should keep INS mode");
         }
-        assert_eq!(fields[0].value, "djckDJCKqQ");
+        assert_eq!(fields[0].value_string(), "djckDJCKqQ");
     }
 
     #[test]
     fn ins_mode_q_inserts_as_char() {
-        // 'q' is reserved as "back to selector" in NOR mode, but in INS mode
-        // it must type as a regular character so words like "queue" or "q1"
-        // can be entered.
-        let mut fields = vec![Field::new("")];
+        let mut fields = vec![text_field("")];
         let mut selected = 0;
         let defaults = vec![String::new()];
         let mut insert_mode = true;
@@ -623,12 +816,12 @@ mod tests {
             .unwrap();
             assert_eq!(action, KeyAction::Continue);
         }
-        assert_eq!(fields[0].value, "queue");
+        assert_eq!(fields[0].value_string(), "queue");
     }
 
     #[test]
     fn ins_mode_ctrl_d_moves_to_next_var() {
-        let mut fields = vec![Field::new("a"), Field::new("b"), Field::new("c")];
+        let mut fields = vec![text_field("a"), text_field("b"), text_field("c")];
         let mut selected = 0;
         let defaults = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let mut insert_mode = true;
@@ -648,7 +841,7 @@ mod tests {
 
     #[test]
     fn ins_mode_ctrl_d_at_last_var_clamps() {
-        let mut fields = vec![Field::new("a"), Field::new("b")];
+        let mut fields = vec![text_field("a"), text_field("b")];
         let mut selected = 1;
         let defaults = vec!["a".to_string(), "b".to_string()];
         let mut insert_mode = true;
@@ -667,7 +860,7 @@ mod tests {
 
     #[test]
     fn ins_mode_ctrl_u_moves_to_prev_var() {
-        let mut fields = vec![Field::new("a"), Field::new("b"), Field::new("c")];
+        let mut fields = vec![text_field("a"), text_field("b"), text_field("c")];
         let mut selected = 2;
         let defaults = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let mut insert_mode = true;
@@ -687,7 +880,7 @@ mod tests {
 
     #[test]
     fn ins_mode_ctrl_u_at_first_var_clamps() {
-        let mut fields = vec![Field::new("a"), Field::new("b")];
+        let mut fields = vec![text_field("a"), text_field("b")];
         let mut selected = 0;
         let defaults = vec!["a".to_string(), "b".to_string()];
         let mut insert_mode = true;
@@ -706,7 +899,7 @@ mod tests {
 
     #[test]
     fn ins_mode_plain_d_still_inserts() {
-        let mut fields = vec![Field::new("")];
+        let mut fields = vec![text_field("")];
         let mut selected = 0;
         let defaults = vec![String::new()];
         let mut insert_mode = true;
@@ -720,12 +913,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(action, KeyAction::Continue);
-        assert_eq!(fields[0].value, "d");
+        assert_eq!(fields[0].value_string(), "d");
     }
 
     #[test]
     fn ins_mode_plain_u_still_inserts() {
-        let mut fields = vec![Field::new("")];
+        let mut fields = vec![text_field("")];
         let mut selected = 0;
         let defaults = vec![String::new()];
         let mut insert_mode = true;
@@ -739,12 +932,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(action, KeyAction::Continue);
-        assert_eq!(fields[0].value, "u");
+        assert_eq!(fields[0].value_string(), "u");
     }
 
     #[test]
     fn ins_mode_typing_into_default_clears_then_inserts() {
-        let mut fields = vec![Field::new("any.com")];
+        let mut fields = vec![text_field("any.com")];
         let mut selected = 0;
         let defaults = vec!["any.com".to_string()];
         let mut insert_mode = true;
@@ -760,12 +953,12 @@ mod tests {
             .unwrap();
             assert_eq!(action, KeyAction::Continue);
         }
-        assert_eq!(fields[0].value, "dandy.com");
+        assert_eq!(fields[0].value_string(), "dandy.com");
     }
 
     #[test]
     fn nor_mode_q_returns_back_action() {
-        let mut fields = vec![Field::new("hello")];
+        let mut fields = vec![text_field("hello")];
         let mut selected = 0;
         let mut show_defaults = true;
         let mut insert_mode = false;
@@ -779,16 +972,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(action, KeyAction::Back);
-        assert_eq!(fields[0].value, "hello");
+        assert_eq!(fields[0].value_string(), "hello");
     }
 
     #[test]
     fn ins_mode_ctrl_c_is_not_treated_as_char() {
-        // The dispatcher checks Ctrl+C before the handler, but verify the
-        // INS handler itself would not blindly insert a control-modified
-        // character: with the CONTROL guard, Char(c) is only matched when
-        // the modifier is absent.
-        let mut fields = vec![Field::new("")];
+        let mut fields = vec![text_field("")];
         let mut selected = 0;
         let defaults = vec![String::new()];
         let mut insert_mode = true;
@@ -802,7 +991,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(action, KeyAction::Continue);
-        assert_eq!(fields[0].value, "", "Ctrl+C must not insert 'c'");
+        assert_eq!(fields[0].value_string(), "", "Ctrl+C must not insert 'c'");
     }
 
     #[test]
@@ -842,5 +1031,488 @@ mod tests {
             _ => vec![],
         };
         assert!(values.is_empty(), "Skip variant must not carry any values");
+    }
+
+    // ========================================================================
+    // Choice field tests
+    // ========================================================================
+
+    #[test]
+    fn choice_field_value_string_returns_selected() {
+        let f = choice_field(vec!["red", "green", "blue"], 1);
+        assert_eq!(f.value_string(), "green");
+    }
+
+    #[test]
+    fn choice_field_value_string_first() {
+        let f = choice_field(vec!["a", "b", "c"], 0);
+        assert_eq!(f.value_string(), "a");
+    }
+
+    #[test]
+    fn choice_field_value_string_last() {
+        let f = choice_field(vec!["x", "y", "z"], 2);
+        assert_eq!(f.value_string(), "z");
+    }
+
+    #[test]
+    fn prompt_field_is_text() {
+        assert!(text_field("hello").as_text().is_some());
+        assert!(choice_field(vec!["a", "b"], 0).as_text().is_none());
+    }
+
+    #[test]
+    fn prompt_field_as_text() {
+        assert!(text_field("hello").as_text().is_some());
+        assert!(choice_field(vec!["a", "b"], 0).as_text().is_none());
+    }
+
+    #[test]
+    fn ins_mode_up_down_on_text_moves_between_fields() {
+        let mut fields = vec![text_field("a"), text_field("b"), text_field("c")];
+        let mut selected = 1;
+        let defaults = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Up),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 0);
+
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 1);
+
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 2);
+
+        // Down at end clamps
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 2);
+    }
+
+    #[test]
+    fn ins_mode_up_down_on_choice_cycles_choices() {
+        let mut fields = vec![choice_field(vec!["a", "b", "c"], 0)];
+        let mut selected = 0;
+        let defaults = vec!["a".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 0); // stays on same field
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 2),
+            _ => panic!("expected choice"),
+        }
+
+        // Down at end clamps
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 2),
+            _ => panic!("expected choice"),
+        }
+
+        handle_insert_key(
+            press_key(KeyCode::Up),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+
+        // Up at start clamps
+        handle_insert_key(
+            press_key(KeyCode::Up),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+
+        handle_insert_key(
+            press_key(KeyCode::Up),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn nor_mode_jk_on_choice_cycles_choices() {
+        let mut fields = vec![choice_field(vec!["red", "green", "blue"], 0)];
+        let mut selected = 0;
+        let mut show_defaults = true;
+        let mut insert_mode = false;
+
+        handle_normal_key(
+            press('j'),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+
+        handle_normal_key(
+            press('j'),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 2),
+            _ => panic!("expected choice"),
+        }
+
+        handle_normal_key(
+            press('k'),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn mixed_text_and_choice_fields_tab_navigates() {
+        let mut fields = vec![
+            text_field("default"),
+            choice_field(vec!["opt1", "opt2"], 0),
+            text_field("other"),
+        ];
+        let mut selected = 0;
+        let defaults = vec![
+            "default".to_string(),
+            "opt1".to_string(),
+            "other".to_string(),
+        ];
+        let mut insert_mode = true;
+
+        // Tab from text to choice
+        handle_insert_key(
+            press_key(KeyCode::Tab),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 1);
+
+        // Tab from choice to text
+        handle_insert_key(
+            press_key(KeyCode::Tab),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 2);
+
+        // Tab wraps around
+        handle_insert_key(
+            press_key(KeyCode::Tab),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(selected, 0);
+    }
+
+    #[test]
+    fn choice_field_left_right_are_noop() {
+        let mut fields = vec![choice_field(vec!["a", "b"], 0)];
+        let mut selected = 0;
+        let defaults = vec!["a".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Left),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        handle_insert_key(
+            press_key(KeyCode::Right),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn choice_field_backspace_is_noop() {
+        let mut fields = vec![choice_field(vec!["a", "b"], 1)];
+        let mut selected = 0;
+        let defaults = vec!["a".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Backspace),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn choice_field_char_input_is_noop() {
+        let mut fields = vec![choice_field(vec!["a", "b"], 0)];
+        let mut selected = 0;
+        let defaults = vec!["a".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press('z'),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn nor_mode_arrow_keys_on_choice() {
+        let mut fields = vec![choice_field(vec!["x", "y", "z"], 0)];
+        let mut selected = 0;
+        let mut show_defaults = true;
+        let mut insert_mode = false;
+
+        handle_normal_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 1),
+            _ => panic!("expected choice"),
+        }
+
+        handle_normal_key(
+            press_key(KeyCode::Up),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn choice_field_single_choice() {
+        let mut fields = vec![choice_field(vec!["only"], 0)];
+        let mut selected = 0;
+        let defaults = vec!["only".to_string()];
+        let mut insert_mode = true;
+
+        // Down at end of single choice clamps
+        handle_insert_key(
+            press_key(KeyCode::Down),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Choice { selected: s, .. } => assert_eq!(*s, 0),
+            _ => panic!("expected choice"),
+        }
+    }
+
+    #[test]
+    fn text_field_left_right_still_work() {
+        let mut fields = vec![text_field("hello")];
+        let mut selected = 0;
+        let defaults = vec!["hello".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Left),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Text(f) => assert_eq!(f.cursor, 4),
+            _ => panic!("expected text"),
+        }
+
+        handle_insert_key(
+            press_key(KeyCode::Right),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        match &fields[0] {
+            PromptField::Text(f) => assert_eq!(f.cursor, 5),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn text_field_backspace_still_works() {
+        let mut fields = vec![text_field("hello")];
+        let mut selected = 0;
+        let defaults = vec!["hello".to_string()];
+        let mut insert_mode = true;
+
+        handle_insert_key(
+            press_key(KeyCode::Backspace),
+            &mut fields,
+            &mut selected,
+            &defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(fields[0].value_string(), "hell");
+    }
+
+    #[test]
+    fn choice_field_nor_mode_q_still_returns_back() {
+        let mut fields = vec![choice_field(vec!["a", "b"], 0)];
+        let mut selected = 0;
+        let mut show_defaults = true;
+        let mut insert_mode = false;
+
+        let action = handle_normal_key(
+            press('q'),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert_eq!(action, KeyAction::Back);
+    }
+
+    #[test]
+    fn choice_field_nor_mode_i_enters_insert() {
+        let mut fields = vec![choice_field(vec!["a", "b"], 0)];
+        let mut selected = 0;
+        let mut show_defaults = true;
+        let mut insert_mode = false;
+
+        handle_normal_key(
+            press('i'),
+            &mut fields,
+            &mut selected,
+            &mut show_defaults,
+            &mut insert_mode,
+        )
+        .unwrap();
+        assert!(insert_mode);
     }
 }

@@ -65,7 +65,9 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Signal handling: `TERMINATE` atomic flag, registered via `signal-hook` on Unix
 
 ### Variable System (`src/utils/variables.rs`)
-- `Variable` struct: `name: String`, `default: Option<String>`
+- `Variable` struct: `name: String`, `kind: VariableKind`, `default: Option<String>`
+- `VariableKind` enum: `Required`, `DefaultValue(String)`, `Choices { values, default_index }`
+- Pet choice syntax `<name=|_opt1_||_opt2_||>` detected via `is_choice_syntax()` and `extract_choices()`
 - `extract_variable_tokens()` — handles escaped brackets (`\<`, `\>`), nested brackets (`<a<b>>`), chained backslashes
 - `parse_variables()` — returns `Vec<Variable>`
 - `expand_command()` — replaces tokens with values, preserves unmatched `<` as literals

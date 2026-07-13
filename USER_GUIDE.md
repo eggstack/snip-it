@@ -417,6 +417,7 @@ Variables are expanded when a snippet is run or copied:
 | --- | --- |
 | `<name>` | Prompt for a required value |
 | `<name=default>` | Show a default that can be replaced |
+| `<name=\|_opt1_\|\|_opt2_\|\|_opt3_\|\|>` | Pet-style multiple choice selector |
 | `\<` or `\>` | Use a literal angle bracket |
 
 Example:
@@ -427,6 +428,24 @@ description = "SSH connection"
 command = "ssh <user=root>@<host> -p <port=22>"
 tag = ["ssh"]
 ```
+
+### Pet Multiple-Choice Variables
+
+snip-it recognizes Pet-compatible multiple-choice syntax:
+
+```toml
+[[snippets]]
+description = "Deploy target"
+command = "ssh <user>@<host> -p <port=|_22_||_8022_||_2222_||>"
+tag = ["ssh"]
+```
+
+When the snippet is executed or copied, a list selector is shown with the
+available choices. The first choice is the default. Use arrow keys (or `j`/`k`
+in normal mode) to select, then press Enter.
+
+The raw command text is preserved in storage — choices are only expanded
+during interactive prompting.
 
 Shell expressions such as `$HOME` or `$(date)` are passed to the selected
 shell; snp does not expand them itself.

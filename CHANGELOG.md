@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Golden command corpus expanded from 15 to 24 entries including tabs, trailing spaces, CRLF, mixed newlines, and combinations with quotes and backslashes.
 
 ### Added
+- **Pet multiple-choice variable compatibility (Release 3A)**
+  - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
+  - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).
+  - `expand_command` expands choice variables with the selected value, just like required variables.
+  - Raw command text is preserved in storage — choices are only expanded during interactive prompting.
+  - Parser diagnostics warn on malformed choice syntax and duplicate variable names.
+  - 58+ new unit and integration tests covering choice parsing, prompting, expansion, serialization roundtrips, and edge cases.
 - New unit tests in `src/commands/new_cmd.rs`: stdin rejection of empty/whitespace input, oversize-input rejection via the shared validator, symlink-following and broken-symlink behavior, FIFO/character-device rejection, `shell-words` parsing of editor specs, and ten multiline-prompt tests.
 - New integration tests in `tests/integration.rs`: editor-source golden corpus round-trip, multiline terminator limitation, exact select-storage round-trip, backup-preserves-command, sync round-trip preservation, and run-storage plumbing.
 - New Bash behavioral tests: `snp_new_previous` preserves leading tabs and quoted/backslash content.
