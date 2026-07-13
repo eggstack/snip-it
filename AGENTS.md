@@ -163,7 +163,8 @@ snip-it/
 - `quote_strings_containing_backslashes()` does the reverse on save
 - Both live in `src/utils/toml_helpers.rs`
 - **Important:** These only handle single-line strings. Triple-quoted (`"""`) TOML strings are not processed (acceptable since snippet commands are single-line)
-- **Corpus constraint:** TOML serialization cannot round-trip certain byte sequences. The golden corpus intentionally omits entries containing tabs, trailing spaces, and CRLF line endings because `toml::to_string_pretty` cannot preserve these in basic or literal strings. This is a known limitation of the TOML format, not a bug in the tool.
+- **Save path:** snip-it writes `toml::to_string_pretty` output directly without post-processing. The earlier `quote_strings_containing_backslashes` post-processing pass was removed because it silently corrupted tabs, trailing whitespace, and CRLF: its regex could not distinguish triple-quoted multi-line strings from ordinary double-quoted strings, and its single-quoted output preserved TOML escape sequences like `\t` as literal two-character pairs. The helper is retained as a public utility for callers that hand-write TOML.
+- **Corpus constraint:** The golden command corpus includes tabs, trailing spaces, and CRLF line endings. These byte sequences survive the full save/load pipeline (`toml::to_string_pretty` + `load_library` via `fix_invalid_toml_escapes` + `toml::from_str`) and are tested through all acquisition sources (stdin, file, editor, positional).
 
 ### Snippet Variables
 - Syntax: `<name>` or `<name=default>` in command strings
@@ -272,7 +273,7 @@ snip-it/
 - `snip-sync` has a `test-helpers` feature gate for in-process server testing; `snp`'s dev-dependencies enable it automatically
 - `tests/sync_integration.rs` spins up a real `snip-sync` server in-process via `test_helpers` — these are async `#[tokio::test]` and need the `test-helpers` feature
 - PTY tests (`tests/pty_integration.rs`) use `portable-pty` crate and must run with `--test-threads=1` — they create real PTY pairs and inject keystrokes via raw fd writes
-- Golden command corpus tests (`tests/integration.rs`) verify exact-text preservation across all acquisition sources (stdin, file, editor, positional) with 15 edge cases including Unicode, shell metacharacters, multiline, trailing newlines, and variable placeholders
+- Golden command corpus tests (`tests/integration.rs`) verify exact-text preservation across all acquisition sources (stdin, file, editor, positional) with 24 edge cases including tabs, trailing spaces, CRLF, Unicode, shell metacharacters, multiline, trailing newlines, and variable placeholders
 - Shell init tests (`tests/integration.rs`) verify `snp shell init bash|zsh|fish` output contains all four public functions and passes syntax validation when the target shell is available
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation

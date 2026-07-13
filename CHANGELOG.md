@@ -8,13 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Release 2 closure pass — secure editor tempfiles, editor command parsing, and unified exact-source validation**
+- **Release 2 final serialization corrective — exact TOML round-trips for tabs, trailing spaces, and CRLF**
+  - Removed `quote_strings_containing_backslashes` from the save pipeline (`save_library`, `save_snippets`, `save_config`, `save_sync_settings`). The helper silently corrupted tabs, trailing whitespace, and CRLF: its regex could not distinguish triple-quoted multi-line strings from ordinary double-quoted strings, and its single-quoted output preserved TOML escape sequences like `\t` as literal two-character pairs. The `toml::to_string_pretty` serializer already picks the correct quoting and escapes for every character.
+  - Rewrote `fix_invalid_toml_escapes` as a hand-written TOML token scanner that correctly recognizes triple-quoted strings (`"""..."""` and `'''...'''`), single-quoted literal strings, line/block comments, and single-line basic strings. The previous regex-based implementation greedily consumed triple-quoted delimiters, corrupting multi-line TOML content.
+  - **Release 2 closure pass — secure editor tempfiles, editor command parsing, and unified exact-source validation**
   - Editor temporary files are created atomically via `tempfile::Builder` in the OS temp directory with `0600` permissions and RAII cleanup. The previous hand-rolled PID/timestamp filename generation is gone.
   - `snp new --editor` now prefers `$VISUAL` over `$EDITOR`. The editor command specification is parsed with `shell-words`, so values like `code --wait`, `nvim -f`, or quoted paths containing spaces work without invoking a shell.
   - `snp new --from-file` now follows symlinks and validates the resolved target is a regular file. Broken symlinks, directories, FIFOs, sockets, and device nodes are rejected.
   - Stdin, file, and editor sources share a single `validate_exact_command_bytes` validator: 16 MiB cap, valid UTF-8, no NUL bytes, no empty/whitespace-only content.
   - Bash `snp_new_previous` now defensively checks for the `fc -ln` formatter prefix (`\t `) before stripping it; legitimate leading whitespace in the captured command is preserved.
-  - Golden command corpus expanded from 13 to 15 entries. Three plan-listed entries (tabs, trailing spaces, CRLF) are intentionally omitted because TOML serialization cannot round-trip them.
+  - Golden command corpus expanded from 15 to 24 entries including tabs, trailing spaces, CRLF, mixed newlines, and combinations with quotes and backslashes.
 
 ### Added
 - New unit tests in `src/commands/new_cmd.rs`: stdin rejection of empty/whitespace input, oversize-input rejection via the shared validator, symlink-following and broken-symlink behavior, FIFO/character-device rejection, `shell-words` parsing of editor specs, and ten multiline-prompt tests.

@@ -5,7 +5,7 @@
 
 use crate::error::{SnipError, SnipResult};
 pub use crate::utils::config::get_sync_config_path;
-use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
+use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -368,7 +368,6 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let content = toml::to_string_pretty(&config)
         .map_err(|e| SnipError::toml_error("serialize sync config", e))?;
 
-    let content = quote_strings_containing_backslashes(&content);
     let checksum = compute_crc32(&content);
     let content_with_integrity = format!("# integrity: {checksum}\n{content}");
 

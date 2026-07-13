@@ -108,7 +108,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - `mod.rs` — re-exports: `parse_variables`, `expand_command`, `strip_escape_sequences`, `extract_variables_for_display`, `has_unmatched_angle_bracket`
 - `config.rs` — `get_config_dir()`, `get_snippets_path()`, `get_sync_config_path()`, macOS migration
 - `variables.rs` — variable parsing/expansion
-- `toml_helpers.rs` — `fix_invalid_toml_escapes()`, `quote_strings_containing_backslashes()`
+- `toml_helpers.rs` — `fix_invalid_toml_escapes()` (hand-written TOML token scanner for legacy files), `quote_strings_containing_backslashes()` (public utility, no longer called by snip-it's own save pipeline)
 - `shell_keywords.rs` — ~190 shell command names for syntax highlighting
 - `tempfile_guard.rs` — RAII temp file cleanup
 - `atomic.rs` — `write_private_atomic()` (temp file + rename, 0600 permissions on Unix)

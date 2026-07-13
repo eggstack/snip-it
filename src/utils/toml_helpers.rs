@@ -7,49 +7,163 @@
 //! TOML double-quoted strings interpret `\<` as an escape sequence, which fails
 //! because `\<` is not a valid TOML escape. This module converts such strings
 //! to single-quoted TOML strings which are raw literals.
+//!
+//! # Scope
+//!
+//! Both helpers operate on hand-written TOML files that pre-date this code
+//! path. snip-it's own save pipeline writes `toml::to_string_pretty` output
+//! verbatim and does not call these helpers on its own output. That is
+//! deliberate: the helpers cannot reliably distinguish TOML escape sequences
+//! from content inside triple-quoted multi-line strings, and converting
+//! basic-string `\t`, `\r`, `\n` escapes into a single-quoted raw literal
+//! would silently corrupt those bytes. The helpers therefore scan only
+//! single-line double-quoted strings and skip triple-quoted regions.
 
-use regex::Regex;
-use std::sync::LazyLock;
-
-static TOML_STRING_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""([^"\\]*(?:\\.[^"\\]*)*)""#).expect("Invalid regex"));
-
-/// Internal helper that applies a condition to decide whether to convert
-/// double-quoted TOML strings to single-quoted (or escape backslashes).
+/// Applies `needs_fix` to each single-line double-quoted TOML string,
+/// rewriting it as a single-quoted raw literal (or with escaped backslashes
+/// inside double quotes) when the condition is true.
+///
+/// The scanner is hand-written so it correctly recognizes TOML token
+/// boundaries: line and block comments, table / array-of-tables headers,
+/// keys, single-quoted literal strings, multi-line basic strings
+/// (`"""..."""`), multi-line literal strings (`'''...'''`), and ordinary
+/// single-line basic strings. Only single-line basic strings are passed to
+/// `needs_fix`. Triple-quoted multi-line regions are left untouched because
+/// they always contain valid TOML escapes and the helper cannot safely
+/// rewrite them.
 fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String {
-    let mut result = String::with_capacity(toml_str.len());
-    let mut last_end = 0;
+    let mut out = String::with_capacity(toml_str.len());
+    let bytes = toml_str.as_bytes();
+    let mut i = 0;
 
-    for cap in TOML_STRING_PATTERN.captures_iter(toml_str) {
-        let full_match = cap.get(0).expect("regex match guarantees group 0");
-        let content = cap.get(1).expect("regex pattern captures group 1").as_str();
+    while i < bytes.len() {
+        let c = bytes[i];
 
-        result.push_str(&toml_str[last_end..full_match.start()]);
-
-        if needs_fix(content) {
-            if content.contains('\'') {
-                let escaped = content.replace('\\', "\\\\");
-                result.push('"');
-                result.push_str(&escaped);
-                result.push('"');
-            } else {
-                // Unescape TOML double-quote escapes so single-quoted output
-                // preserves the original literal content. Single-quoted TOML
-                // strings are raw, so \\ must become \ and \" must become ".
-                let unescaped = content.replace("\\\\", "\\").replace("\\\"", "\"");
-                result.push('\'');
-                result.push_str(&unescaped);
-                result.push('\'');
+        // Skip line comments until end of line.
+        if c == b'#' {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
             }
-        } else {
-            result.push_str(full_match.as_str());
+            out.push_str(&toml_str[start..i]);
+            continue;
         }
 
-        last_end = full_match.end();
+        // Whitespace and structural TOML bytes pass through unchanged.
+        if c <= b' ' {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+
+        // Multi-line basic string: """ ...""" — copy verbatim, never rewrite.
+        if c == b'"' && bytes.get(i + 1) == Some(&b'"') && bytes.get(i + 2) == Some(&b'"') {
+            let start = i;
+            i += 3;
+            while i < bytes.len() {
+                if bytes[i] == b'"'
+                    && bytes.get(i + 1) == Some(&b'"')
+                    && bytes.get(i + 2) == Some(&b'"')
+                {
+                    i += 3;
+                    break;
+                }
+                i += 1;
+            }
+            out.push_str(&toml_str[start..i]);
+            continue;
+        }
+
+        // Multi-line literal string: '''...''' — copy verbatim.
+        if c == b'\'' && bytes.get(i + 1) == Some(&b'\'') && bytes.get(i + 2) == Some(&b'\'') {
+            let start = i;
+            i += 3;
+            while i < bytes.len() {
+                if bytes[i] == b'\''
+                    && bytes.get(i + 1) == Some(&b'\'')
+                    && bytes.get(i + 2) == Some(&b'\'')
+                {
+                    i += 3;
+                    break;
+                }
+                i += 1;
+            }
+            out.push_str(&toml_str[start..i]);
+            continue;
+        }
+
+        // Single-line literal string: 'foo' — copy verbatim (no escapes).
+        if c == b'\'' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'\'' {
+                if bytes[i] == b'\n' {
+                    break;
+                }
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'\'' {
+                i += 1;
+            }
+            out.push_str(&toml_str[start..i]);
+            continue;
+        }
+
+        // Single-line basic string: "foo" — capture content, possibly rewrite.
+        if c == b'"' {
+            let start = i;
+            i += 1;
+            let mut content = String::new();
+            while i < bytes.len() && bytes[i] != b'"' {
+                if bytes[i] == b'\n' {
+                    // Unterminated basic string — pass through unchanged.
+                    out.push_str(&toml_str[start..i]);
+                    i += 1;
+                    content.clear();
+                    break;
+                }
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    content.push(bytes[i] as char);
+                    content.push(bytes[i + 1] as char);
+                    i += 2;
+                } else {
+                    content.push(bytes[i] as char);
+                    i += 1;
+                }
+            }
+            if i >= bytes.len() {
+                out.push_str(&toml_str[start..i]);
+                break;
+            }
+            if bytes[i] == b'\n' {
+                continue;
+            }
+            i += 1;
+
+            if needs_fix(&content) {
+                if content.contains('\'') {
+                    let escaped = content.replace('\\', "\\\\");
+                    out.push('"');
+                    out.push_str(&escaped);
+                    out.push('"');
+                } else {
+                    let unescaped = content.replace("\\\\", "\\").replace("\\\"", "\"");
+                    out.push('\'');
+                    out.push_str(&unescaped);
+                    out.push('\'');
+                }
+            } else {
+                // Reuse the original bytes so non-ASCII UTF-8 survives intact.
+                out.push_str(&toml_str[start..i]);
+            }
+            continue;
+        }
+
+        out.push(c as char);
+        i += 1;
     }
 
-    result.push_str(&toml_str[last_end..]);
-    result
+    out
 }
 
 /// Converts double-quoted strings in TOML to single-quoted strings if they contain
@@ -58,19 +172,31 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
 ///
 /// For strings containing both backslashes and single quotes, the backslash is
 /// escaped instead (using \\) to maintain valid TOML with double quotes.
+///
+/// **Do not call this on output produced by `toml::to_string_pretty`.** The
+/// serializer already picks the correct quoting style for any string and uses
+/// TOML native escapes (`\t`, `\r`, `\n`) inside basic strings. Running this
+/// helper on that output silently corrupts tabs, carriage returns, and newlines
+/// (the basic-string `\t` becomes the two literal characters `\` and `t` in the
+/// raw single-quoted string) and it also mangles triple-quoted multi-line
+/// strings. snip-it's own save pipeline writes `toml::to_string_pretty` output
+/// verbatim. This helper is retained for callers that hand-write TOML and need
+/// the same conversion.
+#[allow(dead_code)]
 pub fn quote_strings_containing_backslashes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| content.contains('\\'))
 }
 
-/// Fixes invalid TOML escape sequences in double-quoted strings before parsing.
-/// Handles `\<` and `\>` which are not valid TOML escape sequences.
+/// Fixes invalid TOML escape sequences in single-line double-quoted strings
+/// before parsing. Handles `\<` and `\>` which are not valid TOML escape
+/// sequences.
 ///
 /// For double-quoted strings containing `\<` or `\>`:
 /// - If no single quotes in string: converts the string to single-quoted (preserving content)
 /// - If single quotes present: escapes backslash with \\ in double quotes
 ///
-/// Note: This regex only matches single-line strings. Multi-line TOML strings (triple-quoted)
-/// are not processed, which is acceptable because snippet commands are single-line.
+/// Multi-line basic strings (`"""..."""`) are passed through verbatim because
+/// the serializer always emits them with valid TOML escape sequences inside.
 pub fn fix_invalid_toml_escapes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| {
         content.contains("\\<") || content.contains("\\>")
@@ -167,12 +293,8 @@ mod tests {
 
     #[test]
     fn test_fix_invalid_escape_with_escaped_quote() {
-        // Input: "it's a \"test\" \<value\>"
-        // The regex captures the full content including \" as escaped chars.
-        // Since content has single quotes, backslashes are doubled.
         let input = "command = \"it's a \\\"test\\\" \\<value\\>\"";
         let result = fix_invalid_toml_escapes(input);
-        // Content: it's a \"test\" \<value\>  →  it's a \\"test\\" \\<value\\>
         assert!(result.contains("\\\\\"test\\\\\""));
         assert!(result.contains("\\\\<value\\\\>"));
     }
@@ -185,19 +307,114 @@ mod tests {
     }
 
     #[test]
-    fn test_multiline_string_ignored() {
-        // TOML triple-quoted multiline strings use """...""".
-        // The regex processes them as individual double-quoted segments,
-        // which may produce unexpected results. This test documents the
-        // behavior. Since snippet commands are always single-line, this
-        // edge case doesn't affect normal usage.
-        let input = "key = \"no escapes here\"";
+    fn test_fix_invalid_escape_in_triple_quoted_basic_string() {
+        let input = "command = \"\"\"echo \\<start\\>\nend\"\"\"\n";
         let result = fix_invalid_toml_escapes(input);
         assert_eq!(result, input);
+    }
 
-        // Strings without invalid escapes are left unchanged
-        let input2 = "command = \"echo hello\"";
-        let result2 = fix_invalid_toml_escapes(input2);
-        assert_eq!(result2, input2);
+    #[test]
+    fn test_fix_invalid_escape_in_triple_quoted_basic_string_with_crlf() {
+        let input = "command = \"\"\"echo \\<start\\>\r\necho \\<end\\>\"\"\"\n";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_quote_strings_in_triple_quoted_basic_string_with_backslash() {
+        let input = "command = \"\"\"path \\\\foo\\<bar\\>\"\"\"\n";
+        let result = quote_strings_containing_backslashes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_fix_invalid_escape_in_triple_quoted_literal_string() {
+        let input = "command = '''echo \\<literal\\>\n'''\n";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_quote_strings_with_triple_quote_inside_double_quoted() {
+        let input = "key = \"contains \"\" pair\"";
+        let result = quote_strings_containing_backslashes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_line_comment_with_backslash_passes_through() {
+        let input = "# legacy: command = \"bad \\<thing\\>\"\nkey = \"ok\"";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_multiple_strings_mixed() {
+        let input =
+            "a = \"hello\\<x\\>\"\nb = 'plain'\nc = \"\"\"multi\nline\\<y\\>\"\"\"\nd = \"plain\"";
+        let result = fix_invalid_toml_escapes(input);
+        assert!(result.contains("a = 'hello\\<x\\>'"));
+        assert!(result.contains("b = 'plain'"));
+        assert!(result.contains("c = \"\"\"multi\nline\\<y\\>\"\"\""));
+        assert!(result.contains("d = \"plain\""));
+    }
+
+    #[test]
+    fn test_utf8_strings_preserved_in_double_quoted() {
+        let input = "description = \"Ünïcödé test 🎉\"";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_utf8_strings_preserved_in_single_quoted() {
+        let input = "description = 'Ünïcödé test 🎉'";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_utf8_strings_preserved_in_triple_quoted() {
+        let input = "description = \"\"\"Ünïcödé test 🎉\"\"\"";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_utf8_strings_preserved_when_quote_strings_helper_runs() {
+        let input = "description = \"Ünïcödé test 🎉\"";
+        let result = quote_strings_containing_backslashes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_save_then_load_round_trip_with_escapes_and_crlf() {
+        // The input TOML below is the literal byte-for-byte output produced
+        // by `toml::to_string_pretty` for a snippet whose `command` Rust
+        // String is `echo \<start\>\r\necho \<end\>`. The scanner must leave
+        // the triple-quoted region alone.
+        let toml = "\
+[[snippets]]
+description = \"desc\"
+command = \"\"\"echo \\\\<start\\\\>\r\necho \\\\<end\\\\>\"\"\"
+tag = []
+output = \"\"
+";
+        let fixed = fix_invalid_toml_escapes(toml);
+        assert_eq!(fixed, toml);
+        #[derive(serde::Deserialize)]
+        struct S {
+            snippets: Vec<Snippet>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Snippet {
+            command: String,
+        }
+        let parsed: S = toml::from_str(&fixed).unwrap();
+        assert_eq!(parsed.snippets.len(), 1);
+        assert_eq!(
+            parsed.snippets[0].command,
+            "echo \\<start\\>\r\necho \\<end\\>"
+        );
     }
 }

@@ -20,7 +20,7 @@ pub mod sync_cmd;
 
 use crate::config::invalidate_toml_cache;
 use crate::error::{SnipError, SnipResult};
-use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
+use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use std::path::PathBuf;
 
 /// Result of expanding a snippet command with variables.
@@ -164,8 +164,6 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 
     let toml_str =
         toml::to_string_pretty(s).map_err(|e| SnipError::toml_error("serialize config", e))?;
-
-    let toml_str = quote_strings_containing_backslashes(&toml_str);
 
     let temp_prefix = path
         .file_stem()

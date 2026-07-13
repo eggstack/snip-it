@@ -2028,19 +2028,15 @@ fn test_select_rejects_sync_flag() {
 // Release 2C: Golden command corpus and cross-source equivalence
 // ============================================================
 
-/// Golden command corpus covering every edge case from the R2C plan G1.
+/// Golden command corpus covering every edge case from the R2C plan G1
+/// plus the R2 Final Corrective serialization matrix.
 /// Each entry is (label, command_str).
 ///
-/// 15 entries: entries from the plan's list minus those that cannot
-/// survive TOML round-trips due to existing serialization constraints:
-/// - trailing spaces (TOML strips trailing whitespace in basic strings)
-/// - tabs (toml::to_string_pretty produces triple-quoted strings for
-///   content with control chars; the quote_strings_containing_backslashes
-///   regex corrupts triple-quoted delimiters)
-/// - CRLF (\r characters corrupt TOML literal block strings)
-///
-/// Variables and escaped_angle_brackets are split from the original
-/// combined entry.
+/// 24 entries: the original 15 plus 9 entries that were previously excluded
+/// on the (incorrect) premise that TOML cannot preserve them. The TOML
+/// format and the `toml` crate's serializer do preserve all of these values;
+/// the earlier corruption was caused by the `quote_strings_containing_backslashes`
+/// post-processing helper which is no longer applied to snip-it's own output.
 fn golden_corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         // 1. Single-line ASCII
@@ -2076,6 +2072,24 @@ fn golden_corpus() -> Vec<(&'static str, &'static str)> {
         ("variables", "ssh <user>@<host> -p <port=22>"),
         // 15. Escaped angle brackets (literal < and >)
         ("escaped_angle_brackets", "echo \\<literal\\> text"),
+        // 16. Internal tab character
+        ("tab_internal", "echo\there"),
+        // 17. Makefile-style leading tabs
+        ("tab_makefile", "if true; then\n\techo yes\nfi\n"),
+        // 18. Trailing space
+        ("trailing_space", "echo hello "),
+        // 19. Multiple trailing spaces
+        ("trailing_spaces_multi", "echo hello   "),
+        // 20. CRLF line endings
+        ("crlf", "echo foo\r\necho bar\r\n"),
+        // 21. Mixed LF and CRLF line endings
+        ("mixed_newlines", "echo foo\r\necho bar\n"),
+        // 22. Tab + backslash
+        ("tab_backslash", "echo \\path\\there"),
+        // 23. Tab + quotes
+        ("tab_quotes", "echo \"hello\tworld\""),
+        // 24. Tab + spaces before newline
+        ("tab_trailing", "echo hello\t  \r\n"),
     ]
 }
 

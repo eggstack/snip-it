@@ -17,7 +17,7 @@
 use crate::config::{cached_read_toml, invalidate_toml_cache};
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::{get_config_dir, get_snippets_path};
-use crate::utils::toml_helpers::{fix_invalid_toml_escapes, quote_strings_containing_backslashes};
+use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -639,8 +639,6 @@ snippets = []
         let toml_str = toml::to_string_pretty(&self.config)
             .map_err(|e| SnipError::toml_error("serialize libraries config", e))?;
 
-        let toml_str = quote_strings_containing_backslashes(&toml_str);
-
         crate::utils::atomic::write_private_atomic(&config_path, &toml_str, "libraries")?;
         invalidate_toml_cache(&config_path);
 
@@ -715,6 +713,16 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
 /// Saves a snippet library to a TOML file using atomic write.
 ///
 /// Creates a backup before saving and sorts snippets by `updated_at` descending.
+///
+/// The serialized output is written verbatim from `toml::to_string_pretty`.
+/// snip-it does not post-process the TOML body because the serializer already
+/// picks correct quoting and escapes for every character, including tabs,
+/// trailing whitespace, and CRLF. The earlier `quote_strings_containing_backslashes`
+/// post-processing pass silently corrupted those byte sequences (its regex
+/// could not tell TOML triple-quoted multi-line strings from ordinary
+/// double-quoted strings, and its single-quoted output preserved TOML escape
+/// sequences like `\t` as literal two-character pairs). The helper remains
+/// available for callers that hand-write TOML and need the same conversion.
 pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     if let Err(e) = backup_library(path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
@@ -727,8 +735,6 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
 
     let toml_str = toml::to_string_pretty(&sorted)
         .map_err(|e| SnipError::toml_error("serialize snippets", e))?;
-
-    let toml_str = quote_strings_containing_backslashes(&toml_str);
 
     let temp_prefix = path
         .file_stem()
@@ -1733,5 +1739,293 @@ Command = "cmd2"
             reloaded.snippets[0].description,
             "has \"quotes\" & ampersand <> angle brackets"
         );
+    }
+
+    // ============================================================
+    // Release 2 Final Corrective: Direct serialization matrix
+    // ============================================================
+    //
+    // These tests pin down the contract that the exact Rust `String` value of
+    // every snippet field survives the full save / load pipeline. They cover
+    // every byte sequence previously excluded from the golden corpus on the
+    // (incorrect) premise that TOML cannot preserve them. The TOML format and
+    // the `toml` crate's serializer do preserve all of these values; the
+    // corruption that motivated their original exclusion came from the
+    // custom `quote_strings_containing_backslashes` post-processing helper,
+    // which snip-it no longer applies to its own output.
+
+    fn snippet_with_command(command: &str) -> Snippets {
+        Snippets {
+            snippets: vec![Snippet {
+                id: "test-id".to_string(),
+                description: "test description".to_string(),
+                command: command.to_string(),
+                ..Default::default()
+            }],
+            folders: vec![],
+        }
+    }
+
+    fn snippet_with_description(command: &str, description: &str) -> Snippets {
+        Snippets {
+            snippets: vec![Snippet {
+                id: "test-id".to_string(),
+                description: description.to_string(),
+                command: command.to_string(),
+                ..Default::default()
+            }],
+            folders: vec![],
+        }
+    }
+
+    fn assert_command_survives_pretty_roundtrip(label: &str, command: &str) {
+        let library = snippet_with_command(command);
+        let serialized = toml::to_string_pretty(&library)
+            .unwrap_or_else(|e| panic!("serialize failed for {label}: {e}"));
+        let recovered: Snippets = toml::from_str(&serialized)
+            .unwrap_or_else(|e| panic!("parse failed for {label}: {e}\nTOML:\n{serialized}"));
+        assert_eq!(
+            recovered.snippets[0].command, command,
+            "round-trip mismatch for {label}: original = {command:?}, recovered = {:?}",
+            recovered.snippets[0].command
+        );
+    }
+
+    fn assert_command_survives_save_load(label: &str, command: &str) {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("matrix.toml");
+        let library = snippet_with_command(command);
+        save_library(&path, &library).unwrap_or_else(|e| panic!("save failed for {label}: {e}"));
+        let loaded = load_library(&path).unwrap_or_else(|e| panic!("load failed for {label}: {e}"));
+        assert_eq!(loaded.snippets.len(), 1, "{label}: snippet count");
+        assert_eq!(
+            loaded.snippets[0].command, command,
+            "{label}: save/load round-trip mismatch\noriginal = {command:?}\nrecovered = {:?}",
+            loaded.snippets[0].command
+        );
+    }
+
+    #[test]
+    fn test_serialization_matrix_internal_tab() {
+        assert_command_survives_pretty_roundtrip("internal_tab", "pre\tpost");
+        assert_command_survives_save_load("internal_tab", "pre\tpost");
+    }
+
+    #[test]
+    fn test_serialization_matrix_leading_tab() {
+        assert_command_survives_pretty_roundtrip("leading_tab", "\tpre");
+        assert_command_survives_save_load("leading_tab", "\tpre");
+    }
+
+    #[test]
+    fn test_serialization_matrix_trailing_tab() {
+        assert_command_survives_pretty_roundtrip("trailing_tab", "pre\t");
+        assert_command_survives_save_load("trailing_tab", "pre\t");
+    }
+
+    #[test]
+    fn test_serialization_matrix_only_tab() {
+        assert_command_survives_pretty_roundtrip("only_tab", "\t");
+        assert_command_survives_save_load("only_tab", "\t");
+    }
+
+    #[test]
+    fn test_serialization_matrix_one_trailing_space() {
+        assert_command_survives_pretty_roundtrip("one_trailing_space", "pre ");
+        assert_command_survives_save_load("one_trailing_space", "pre ");
+    }
+
+    #[test]
+    fn test_serialization_matrix_multi_trailing_spaces() {
+        assert_command_survives_pretty_roundtrip("multi_trailing_spaces", "pre   ");
+        assert_command_survives_save_load("multi_trailing_spaces", "pre   ");
+    }
+
+    #[test]
+    fn test_serialization_matrix_spaces_before_newline() {
+        assert_command_survives_pretty_roundtrip("spaces_before_newline", "pre   \n");
+        assert_command_survives_save_load("spaces_before_newline", "pre   \n");
+    }
+
+    #[test]
+    fn test_serialization_matrix_crlf() {
+        assert_command_survives_pretty_roundtrip("crlf", "a\r\nb");
+        assert_command_survives_save_load("crlf", "a\r\nb");
+    }
+
+    #[test]
+    fn test_serialization_matrix_mixed_lf_crlf() {
+        assert_command_survives_pretty_roundtrip("mixed_lf_crlf", "a\nb\r\nc");
+        assert_command_survives_save_load("mixed_lf_crlf", "a\nb\r\nc");
+    }
+
+    #[test]
+    fn test_serialization_matrix_final_carriage_return() {
+        assert_command_survives_pretty_roundtrip("final_cr", "a\r");
+        assert_command_survives_save_load("final_cr", "a\r");
+    }
+
+    #[test]
+    fn test_serialization_matrix_lone_crlf() {
+        assert_command_survives_pretty_roundtrip("lone_crlf", "\r\n");
+        assert_command_survives_save_load("lone_crlf", "\r\n");
+    }
+
+    #[test]
+    fn test_serialization_matrix_tab_with_quotes() {
+        assert_command_survives_pretty_roundtrip("tab_with_quotes", "a\t\"b\"c");
+        assert_command_survives_save_load("tab_with_quotes", "a\t\"b\"c");
+    }
+
+    #[test]
+    fn test_serialization_matrix_tab_with_backslashes() {
+        assert_command_survives_pretty_roundtrip("tab_with_backslashes", "a\t\\b");
+        assert_command_survives_save_load("tab_with_backslashes", "a\t\\b");
+    }
+
+    #[test]
+    fn test_serialization_matrix_all_problematic() {
+        assert_command_survives_pretty_roundtrip("all_problematic", "\t  \r\n");
+        assert_command_survives_save_load("all_problematic", "\t  \r\n");
+    }
+
+    #[test]
+    fn test_serialization_matrix_makefile_leading_tabs() {
+        let command = "if true; then\n\techo yes\nelse\n\techo no\nfi";
+        assert_command_survives_pretty_roundtrip("makefile_leading_tabs_no_nl", command);
+        assert_command_survives_save_load("makefile_leading_tabs_no_nl", command);
+    }
+
+    #[test]
+    fn test_serialization_matrix_makefile_leading_tabs_with_trailing_newline() {
+        let command = "if true; then\n\techo yes\nelse\n\techo no\nfi\n";
+        assert_command_survives_pretty_roundtrip("makefile_leading_tabs_trailing_nl", command);
+        assert_command_survives_save_load("makefile_leading_tabs_trailing_nl", command);
+    }
+
+    #[test]
+    fn test_serialization_matrix_variable_syntax_with_tab() {
+        let command = "ssh\t<host=localhost>\t-p\t<port=22>";
+        assert_command_survives_pretty_roundtrip("variable_with_tab", command);
+        assert_command_survives_save_load("variable_with_tab", command);
+    }
+
+    #[test]
+    fn test_serialization_matrix_escaped_angle_brackets_with_crlf() {
+        let command = "echo \\<start\\>\r\necho \\<end\\>";
+        assert_command_survives_pretty_roundtrip("escaped_brackets_crlf", command);
+        assert_command_survives_save_load("escaped_brackets_crlf", command);
+    }
+
+    #[test]
+    fn test_serialization_matrix_description_with_tab_and_trailing_space() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("desc.toml");
+        let library = snippet_with_description("echo test", "  hello\t");
+        save_library(&path, &library).unwrap();
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets[0].description, "  hello\t");
+    }
+
+    #[test]
+    fn test_serialization_matrix_tag_with_internal_tab() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("tag.toml");
+        let library = Snippets {
+            snippets: vec![Snippet {
+                id: "id".to_string(),
+                description: "tagged".to_string(),
+                command: "echo tag".to_string(),
+                tags: vec!["docker\tbuild".to_string()],
+                ..Default::default()
+            }],
+            folders: vec![],
+        };
+        save_library(&path, &library).unwrap();
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets[0].tags, vec!["docker\tbuild"]);
+    }
+
+    #[test]
+    fn test_serialization_matrix_repeated_save_load_idempotent() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("idempotent.toml");
+        let command = "echo\there\r\nwith\ttabs and trailing space ";
+
+        let mut library = snippet_with_command(command);
+        for round in 0..5 {
+            save_library(&path, &library).unwrap();
+            let loaded = load_library(&path).unwrap();
+            assert_eq!(
+                loaded.snippets[0].command, command,
+                "round {round}: command diverged"
+            );
+            library = loaded;
+        }
+    }
+
+    #[test]
+    fn test_serialization_matrix_pretty_and_compact_agree() {
+        let command = "echo\there\nwith\ttabs\r\nand \"quotes\" and trailing space ";
+        let library = snippet_with_command(command);
+
+        let pretty = toml::to_string_pretty(&library).unwrap();
+        let compact = toml::to_string(&library).unwrap();
+
+        let from_pretty: Snippets = toml::from_str(&pretty).unwrap();
+        let from_compact: Snippets = toml::from_str(&compact).unwrap();
+
+        assert_eq!(from_pretty.snippets[0].command, command);
+        assert_eq!(from_compact.snippets[0].command, command);
+    }
+
+    #[test]
+    fn test_serialization_matrix_handwritten_backslash_escape_still_loads() {
+        // Hand-written double-quoted TOML with `\<` / `\>` is invalid TOML but
+        // a long-standing legacy convention. `fix_invalid_toml_escapes`
+        // converts it to single-quoted raw form on load so legacy files
+        // continue to work.
+        let legacy_toml = "\
+[[snippets]]
+description = \"legacy\"
+command = \"ping \\<website\\>\"
+tag = []
+output = \"\"
+";
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("legacy.toml");
+        std::fs::write(&path, legacy_toml).unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets.len(), 1);
+        assert_eq!(loaded.snippets[0].command, "ping \\<website\\>");
+    }
+
+    #[test]
+    fn test_serialization_matrix_no_normalization_strip_or_trim() {
+        // Save / load / re-save / re-load many times, then confirm the byte
+        // content is unchanged across every round. This guards against any
+        // silent normalization (trim, line-ending rewrite, escape collapse)
+        // creeping back into the pipeline.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("norewrite.toml");
+        let command = "echo start\there\t with trailing tab\tand trailing space \r\nand CRLF\r";
+
+        let library = snippet_with_command(command);
+        save_library(&path, &library).unwrap();
+
+        let disk_after_first = std::fs::read(&path).unwrap();
+        for _ in 0..10 {
+            let loaded = load_library(&path).unwrap();
+            save_library(&path, &loaded).unwrap();
+            let disk_now = std::fs::read(&path).unwrap();
+            assert_eq!(
+                disk_now, disk_after_first,
+                "file content changed across save rounds — normalization regression"
+            );
+        }
+
+        let final_loaded = load_library(&path).unwrap();
+        assert_eq!(final_loaded.snippets[0].command, command);
     }
 }
