@@ -306,6 +306,8 @@ writable = false
 
 This feature must not be required to complete the core migration roadmap.
 
+**Status (2026-07-14): Deferred.** Gate 0 evaluation found zero user demand, a sufficient existing workflow (`snp import pet --merge`), and high implementation cost touching every mutation path. External library support remains on the roadmap as a future option if demand materializes. See `plans/pet-compat-release-4c-external-libraries.md` for the full deferral rationale and future interface design.
+
 ## Release 5: Synchronization Convenience
 
 Add optional post-mutation synchronization for users accustomed to pet's `auto_sync` convenience.

@@ -311,3 +311,43 @@ Release 4C is complete in one of two states.
 - the decision and future interface are documented;
 - no inactive or misleading configuration surface was added;
 - Release 4A and 4B can close independently.
+
+## Decision: Deferred
+
+**Date**: 2026-07-14
+**Decision**: Defer with documented rationale
+
+### Rationale
+
+1. **Zero user demand**: No GitHub issues, PRs, or user feedback request external library support. The pet migration roadmap lists R4-C as optional and subordinate to named libraries.
+2. **Existing workflow is sufficient**: `snp import pet --merge` handles the use case (dotfiles repos, project directories) with full edit/delete/sync/backup/usage support and zero architectural complexity. Re-importing is idempotent.
+3. **High implementation cost**: Would touch every mutation path (edit, delete, favorite, sync, backup, usage), the TUI, the `SnippetData`/`Snippet` types, and the `LibraryManager`. The plan identifies 9 workstreams and 19 required tests.
+4. **No inactive config surface**: Deferring means no dead `external_libraries` field in `libraries.toml`.
+
+### Risks of Deferral
+
+- Users who symlink pet files into `~/.config/snp/libraries/` already get read-only indexing as a side effect (standard file I/O follows symlinks). This undocumented behavior is not a compatibility risk since snp already handles symlinked files via `load_library()`.
+- Future demand may materialize if the user base grows and users maintain snippet collections outside snp's config directory.
+
+### Future Interface (When Revisited)
+
+If demand materializes, the recommended entry point is:
+
+```toml
+[[external_libraries]]
+name = "project"
+path = "/path/to/repo/.snippets"
+recursive = true
+writable = false
+```
+
+Key design constraints for a future implementation:
+- External sources are always read-only; `writable = true` is rejected.
+- Native named libraries remain canonical and primary.
+- External failures never corrupt native library state.
+- Provenance metadata lives outside the snippet record.
+- All mutation paths (edit, delete, favorite, sync, backup, usage) reject external snippets with an actionable diagnostic.
+- Traversal is bounded (max depth 16, max files 10,000 per external library).
+- No execution, variable expansion, or shell glob during indexing.
+- Source provenance is visible where needed (e.g., `[external:project]` marker).
+- A documented `snp import external <name> --library <target>` workflow for copying external snippets into native libraries for editing.

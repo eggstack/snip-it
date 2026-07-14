@@ -66,6 +66,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
 - Reuses the same source validation, TOML parsing, and entry analysis as `import_cmd` for consistency
 - Security: doctor never mutates source, destination, config, or library state
+- External library support (R4-C) is deferred: no runtime behavior, no config surface, no provenance tracking. See `plans/pet-compat-release-4c-external-libraries.md` for rationale.
 
 ### Error Handling (`src/error.rs`)
 - `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`

@@ -315,6 +315,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | R3C | Compatibility diagnostics | `snp doctor --pet-file <path>`, `--compatibility`, `--library <name>`, `--check-shell <shell>` — shared diagnostic model with import, `SourceSpan` type for byte-offset location tracking |
 | R4A | Optional sorting | `--sort relevance/recent/last-used/most-used/description/command` |
 | R4B | Output & notes presentation | Expose `output` field in preview, editing, export |
+| R4C | External libraries (deferred) | Deferred — zero demand, sufficient import workflow, high implementation cost | Deferred |
 | R5 | Auto-sync | `auto_sync = true` with debounce and failure handling |
 
 ---

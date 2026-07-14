@@ -211,6 +211,8 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 | `~/.config/snp/logs/` | Rolling log files |
 | `~/.config/snp/audit.log` | Audit log |
 
+**Note:** External library paths (`[[external_libraries]]`) are not supported. All snippet libraries reside under `~/.config/snp/libraries/`. See `plans/pet-compat-release-4c-external-libraries.md` for the deferral decision.
+
 ### Data Flow: Running a Snippet
 
 1. `snp run` → `main.rs::dispatch_command()` → `commands::run_cmd::run()`

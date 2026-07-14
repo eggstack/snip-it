@@ -344,6 +344,7 @@ snip-it/
 ## Deferred Items
 
 - **TUI pre-computed highlights memory pressure** (lazy computation for large libraries)
+- **Release 4C: Optional external libraries** — deferred (zero demand, sufficient `snp import pet --merge` workflow, high implementation cost). See `plans/pet-compat-release-4c-external-libraries.md`.
 
 ## Testing Notes
 
