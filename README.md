@@ -230,6 +230,14 @@ snp import pet snippets.toml --report json  # machine-readable output
 The source file is never modified. Imported commands preserve exact text
 including variables, shell metacharacters, and whitespace.
 
+### Diagnose before you migrate
+
+```bash
+snp doctor --pet-file ~/.config/pet/snippets.toml
+snp doctor --pet-file snippets.toml --report json   # machine-readable
+snp doctor --compatibility                           # audit snp environment
+```
+
 ## Themes
 
 Snip-it reads the same color-theme TOML files used by Halloy. A Halloy theme
@@ -325,6 +333,7 @@ snp edit         Edit a snippet library in $EDITOR
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)
+snp doctor       Diagnose pet file compatibility or snp environment
 snp register     Register with a snip-sync server
 snp sync         Push, pull, or bidirectionally sync libraries
 snp cron         Print a periodic sync schedule

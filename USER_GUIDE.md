@@ -74,7 +74,13 @@ The variable syntax is shared too: `<name>` prompts for a value and
 `<name=default>` provides a default. Snip-it accepts pet files directly; no
 conversion script is needed for ordinary command snippets.
 
-The first-class import command migrates pet files into named snp libraries:
+The recommended migration workflow starts with diagnostics:
+
+```bash
+snp doctor --pet-file /path/to/pet-snippets.toml
+```
+
+Then import based on the findings:
 
 ```bash
 # Import with automatic library name (derived from filename)
@@ -95,6 +101,33 @@ snp import pet /path/to/pet-snippets.toml --library existing-lib --replace
 # Get a machine-readable JSON report
 snp import pet /path/to/pet-snippets.toml --report json
 ```
+
+#### Pre-migration diagnostics
+
+Before importing, you can analyze a pet file without modifying anything:
+
+```bash
+snp doctor --pet-file ~/.config/pet/snippets.toml
+```
+
+This reports TOML parse status, unknown fields, missing required fields, empty
+commands, choice variables, duplicates, and output fields. It suggests the
+exact import command to run based on findings.
+
+For machine-readable output:
+
+```bash
+snp doctor --pet-file snippets.toml --report json
+```
+
+To audit your installed snp environment:
+
+```bash
+snp doctor --compatibility
+```
+
+This checks binary version, config directory, library setup, sync config, and
+shell availability. Strict mode (`--strict`) treats warnings as errors.
 
 The source file is never modified. Merged and replaced libraries are backed up
 before overwrite. Use `--strict` to abort on any diagnostic error, or

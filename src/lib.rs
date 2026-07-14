@@ -30,6 +30,8 @@ pub(crate) mod library;
 pub(crate) mod sync_commands;
 pub(crate) mod utils;
 
+pub mod diagnostics;
+
 pub use error::{SnipError, SnipResult};
 
 /// Aggregated data for all snippets passed to the TUI selector.

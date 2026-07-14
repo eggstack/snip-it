@@ -4136,3 +4136,156 @@ fn test_import_pet_select_raw_output() {
         );
     }
 }
+
+// --- Doctor command ---
+
+#[test]
+fn test_doctor_pet_file_valid() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Doctor Report"));
+    assert!(stderr.contains("Entries:"));
+}
+
+#[test]
+fn test_doctor_pet_file_json() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["schema_version"], "1.0.0");
+    assert_eq!(json["dry_run"], true);
+    assert!(json["total_entries"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn test_doctor_pet_file_nonexistent() {
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", "/nonexistent/file.toml"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_doctor_pet_file_with_choice_variables() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_choice_variables.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("choice_variables") || stderr.contains("Choice"));
+}
+
+#[test]
+fn test_doctor_compatibility() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Doctor Report"));
+    assert!(stderr.contains("binary") || stderr.contains("version"));
+}
+
+#[test]
+fn test_doctor_no_mode_fails() {
+    let output = snp_cmd().args(["doctor"]).output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_doctor_pet_file_strict_with_errors() {
+    // Use a file that has empty commands to trigger error diagnostics
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("bad_pet.toml");
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = "empty cmd"
+command = ""
+
+[[snippets]]
+description = "valid"
+command = "echo ok"
+"#,
+    )
+    .unwrap();
+    let output = snp_in(&config_dir)
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    // Strict mode + error diagnostics = exit 2
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn test_doctor_help() {
+    let output = snp_cmd().args(["doctor", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--pet-file"));
+    assert!(stdout.contains("--compatibility"));
+    assert!(stdout.contains("--strict"));
+    assert!(stdout.contains("--report"));
+}
+
+#[test]
+fn test_doctor_json_no_mutation() {
+    // Verify doctor --pet-file does not modify the source file
+    let (_tmp, _config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("test_pet.toml");
+    let content = r#"
+[[snippets]]
+description = "test"
+command = "echo hello"
+"#;
+    std::fs::write(&pet_path, content).unwrap();
+    let before = std::fs::read_to_string(&pet_path).unwrap();
+
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after = std::fs::read_to_string(&pet_path).unwrap();
+    assert_eq!(before, after, "Doctor should not modify the source file");
+}

@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Human-readable report to stderr; JSON report to stdout; `--report-file` for persistent JSON output.
   - Library name derived from source filename when `--library` is omitted.
   - 35 new tests: 20 integration tests (default create, explicit name, collision, merge, dry-run, source untouched, JSON report, error cases, strict/permissive, replace, command preservation, choice variables, mixed aliases, help, flag conflicts) and 15 unit tests (name derivation, duplicate detection, TOML parsing, entry conversion).
+- **Compatibility diagnostics (Release 3C)**
+  - `snp doctor --pet-file <path>` performs read-only analysis of pet snippet files: TOML parse status, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, and recommended import command.
+  - `snp doctor --compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, and shell availability.
+  - Shared diagnostic model (`src/diagnostics.rs`) used by both import and doctor: `CompatibilityDiagnostic`, `DoctorReport`, `PetImportReport` with stable machine-readable codes.
+  - Options: `--strict` (treat warnings as errors), `--report human|json` (output format).
+  - Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found).
+  - Human-readable report to stderr; JSON report to stdout (same stream convention as `snp import`).
+  - Doctor never mutates source, destination, config, or library state.
+  - 9 integration tests and 6 unit tests covering file analysis, JSON output, compatibility audit, strict mode, and non-mutation.
 - **Pet multiple-choice variable compatibility (Release 3A)**
   - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).

@@ -1,7 +1,10 @@
+use crate::diagnostics::{
+    CompatibilityDiagnostic, DiagnosticSeverity, ImportDuplicate, NormalizationRecord,
+    PetImportReport,
+};
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippet, Snippets};
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -40,78 +43,6 @@ pub struct PetImportOptions {
     pub dry_run: bool,
     pub report_format: ReportFormat,
     pub report_file: Option<PathBuf>,
-}
-
-/// Severity level for compatibility diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DiagnosticSeverity {
-    /// Informational message.
-    Info,
-    /// Recoverable issue; entry imported with changes.
-    Warning,
-    /// Entry cannot be imported safely.
-    Error,
-}
-
-/// A single compatibility diagnostic produced during import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompatibilityDiagnostic {
-    pub entry_index: usize,
-    pub field: Option<String>,
-    pub severity: DiagnosticSeverity,
-    pub message: String,
-}
-
-/// A duplicate entry that was skipped during import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportDuplicate {
-    pub source_index: usize,
-    pub destination_index: usize,
-    pub description: String,
-    pub reason: String,
-}
-
-/// A field that was normalized during import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NormalizationRecord {
-    pub entry_index: usize,
-    pub field: String,
-    pub original: String,
-    pub normalized: String,
-}
-
-/// Complete report of an import operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PetImportReport {
-    pub source: String,
-    pub destination: Option<String>,
-    pub total_entries: usize,
-    pub imported: usize,
-    pub skipped: usize,
-    pub duplicates: Vec<ImportDuplicate>,
-    pub diagnostics: Vec<CompatibilityDiagnostic>,
-    pub normalizations: Vec<NormalizationRecord>,
-    pub dry_run: bool,
-    pub strict_mode: bool,
-    pub had_fatal_error: bool,
-}
-
-impl PetImportReport {
-    fn new(source: &Path, destination: Option<&str>, dry_run: bool, strict_mode: bool) -> Self {
-        Self {
-            source: source.display().to_string(),
-            destination: destination.map(String::from),
-            total_entries: 0,
-            imported: 0,
-            skipped: 0,
-            duplicates: Vec::new(),
-            diagnostics: Vec::new(),
-            normalizations: Vec::new(),
-            dry_run,
-            strict_mode,
-            had_fatal_error: false,
-        }
-    }
 }
 
 /// Read and validate a pet TOML source file.
@@ -237,10 +168,12 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
         for key in table.keys() {
             if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
                 diagnostics.push(CompatibilityDiagnostic {
-                    entry_index: i,
+                    entry_index: Some(i),
                     field: Some(key.clone()),
                     severity: DiagnosticSeverity::Info,
                     message: format!("Unknown field '{}' will be ignored", key),
+                    code: "I-FIELD-UNKNOWN".to_string(),
+                    suggestion: None,
                 });
             }
         }
@@ -251,10 +184,12 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("name")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                entry_index: i,
+                entry_index: Some(i),
                 field: Some("description".to_string()),
                 severity: DiagnosticSeverity::Warning,
                 message: "Entry missing 'description' field (will be empty)".to_string(),
+                code: "W-DESC-MISSING".to_string(),
+                suggestion: None,
             });
         }
 
@@ -263,10 +198,12 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("cmd")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                entry_index: i,
+                entry_index: Some(i),
                 field: Some("command".to_string()),
                 severity: DiagnosticSeverity::Warning,
                 message: "Entry missing 'command' field (will be empty)".to_string(),
+                code: "W-CMD-MISSING".to_string(),
+                suggestion: None,
             });
         }
     }
@@ -310,20 +247,24 @@ fn convert_entry(
     // Diagnostic: empty description
     if snippet.description.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            entry_index: index,
+            entry_index: Some(index),
             field: Some("description".to_string()),
             severity: DiagnosticSeverity::Warning,
             message: "Entry has empty description".to_string(),
+            code: "W-DESC-EMPTY".to_string(),
+            suggestion: None,
         });
     }
 
     // Diagnostic: empty command (would have been rejected by Snippet::new)
     if snippet.command.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            entry_index: index,
+            entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Error,
             message: "Entry has empty command".to_string(),
+            code: "E-CMD-EMPTY".to_string(),
+            suggestion: None,
         });
     }
 
@@ -333,20 +274,24 @@ fn convert_entry(
     // Diagnostic: output field present
     if !snippet.output.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            entry_index: index,
+            entry_index: Some(index),
             field: Some("output".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry has output field (preserved)".to_string(),
+            code: "I-OUTPUT-PRESENT".to_string(),
+            suggestion: None,
         });
     }
 
     // Diagnostic: empty tags array
     if snippet.tags.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            entry_index: index,
+            entry_index: Some(index),
             field: Some("tag".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry has no tags".to_string(),
+            code: "I-TAGS-EMPTY".to_string(),
+            suggestion: None,
         });
     }
 
@@ -359,10 +304,12 @@ fn convert_entry(
         )
     }) {
         diagnostics.push(CompatibilityDiagnostic {
-            entry_index: index,
+            entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry contains choice variables".to_string(),
+            code: "I-VAR-CHOICES".to_string(),
+            suggestion: None,
         });
     }
 
@@ -466,7 +413,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
 
     // Phase 4: Convert all entries (in memory)
     let mut report = PetImportReport::new(
-        &options.source,
+        options.source.to_str().unwrap_or(""),
         Some(&dest_name),
         options.dry_run,
         options.strict,
@@ -561,22 +508,26 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                     for existing_snippet in &existing.snippets {
                         if same_command_different_description(candidate, existing_snippet) {
                             report.diagnostics.push(CompatibilityDiagnostic {
-                                entry_index: i,
+                                entry_index: Some(i),
                                 field: Some("command".to_string()),
                                 severity: DiagnosticSeverity::Warning,
                                 message: format!(
                                     "Same command as existing '{}' but different description",
                                     existing_snippet.description
                                 ),
+                                code: "W-CMD-DUPLICATE".to_string(),
+                                suggestion: None,
                             });
                         }
                         if same_description_different_command(candidate, existing_snippet) {
                             report.diagnostics.push(CompatibilityDiagnostic {
-                                entry_index: i,
+                                entry_index: Some(i),
                                 field: Some("description".to_string()),
                                 severity: DiagnosticSeverity::Warning,
                                 message: "Same description as existing entry but different command"
                                     .to_string(),
+                                code: "W-DESC-DUPLICATE".to_string(),
+                                suggestion: None,
                             });
                         }
                     }
@@ -686,7 +637,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                     };
                     eprintln!(
                         "  [{icon}] [{}] {}: {}",
-                        diag.entry_index,
+                        diag.entry_index.unwrap_or(0),
                         diag.field.as_deref().unwrap_or("-"),
                         diag.message
                     );

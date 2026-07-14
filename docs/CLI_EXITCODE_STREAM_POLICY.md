@@ -226,6 +226,21 @@ large).
 machine-readable JSON always goes to stdout. Piping `snp import pet --report json`
 produces only JSON on stdout; the human report appears on stderr.
 
+#### `snp doctor`
+
+| Situation | Stream | Method |
+|-----------|--------|--------|
+| Human report (default) | stderr | `eprintln!` |
+| JSON report (`--report json`) | stdout | `println!` |
+| Operational errors (file not found, unreadable) | stderr | via `SnipError` |
+
+**Exit codes**: 0 on success (no error-severity diagnostics), 1 on operational failure
+(source not found, unreadable, not a file), 2 if error-severity diagnostics are detected
+(incompatible entries in the analyzed file).
+
+**Stream split**: Clean — human-readable report always goes to stderr;
+machine-readable JSON always goes to stdout. Same convention as `snp import`.
+
 ### Important Observations
 
 1. **TUI commands** (`run`, `clip`, `search`) render directly to the terminal

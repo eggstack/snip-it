@@ -242,6 +242,25 @@ enum Commands {
         #[command(subcommand)]
         command: PremadeCommands,
     },
+    /// Diagnose pet file compatibility or installed snp environment
+    Doctor {
+        /// Path to a pet TOML snippet file to analyze
+        #[arg(
+            long = "pet-file",
+            value_name = "PATH",
+            conflicts_with = "compatibility"
+        )]
+        pet_file: Option<PathBuf>,
+        /// Audit the installed snp environment
+        #[arg(long, conflicts_with = "pet_file")]
+        compatibility: bool,
+        /// Treat warnings as errors
+        #[arg(long)]
+        strict: bool,
+        /// Report output format
+        #[arg(long, value_enum, default_value = "human")]
+        report: commands::doctor_cmd::DiagnosticReportFormat,
+    },
     /// Import snippets from external formats
     #[command(alias = "i")]
     Import {
@@ -501,6 +520,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Completions { shell }) => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "snp", &mut std::io::stdout());
+        }
+        Some(Commands::Doctor {
+            pet_file,
+            compatibility,
+            strict,
+            report,
+        }) => {
+            commands::doctor_cmd::run(pet_file, compatibility, strict, report)?;
         }
         Some(Commands::Shell { command }) => match command {
             ShellCommands::Init { shell } => {

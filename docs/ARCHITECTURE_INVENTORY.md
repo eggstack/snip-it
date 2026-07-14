@@ -57,6 +57,16 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Human report to stderr, JSON to stdout; optional `--report-file` for persistent reports.
 - Security: no command execution, no variable expansion, no source modification, no sync side effects.
 
+### Compatibility Diagnostics (`src/commands/doctor_cmd.rs`, `src/diagnostics.rs`)
+- `snp doctor --pet-file <path>` — read-only analysis of pet snippet files without creating a destination library
+- `snp doctor --compatibility` — audits installed snp environment (binary, config, libraries, sync, shells)
+- Shared diagnostic model in `src/diagnostics.rs`: `DiagnosticSeverity`, `CompatibilityDiagnostic`, `DoctorReport`, `PetImportReport`
+- Diagnostic codes are stable and machine-readable (e.g., `entry.empty_command`, `compat.config_dir.ok`)
+- Human-readable report to stderr; JSON to stdout; `--strict` treats warnings as errors
+- Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
+- Reuses the same source validation, TOML parsing, and entry analysis as `import_cmd` for consistency
+- Security: doctor never mutates source, destination, config, or library state
+
 ### Error Handling (`src/error.rs`)
 - `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`
 - `SnipResult<T>` type alias

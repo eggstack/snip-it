@@ -48,6 +48,13 @@ cargo test --test integration -- new_editor new_from_file command_stdin golden_c
 cargo test --test integration import_pet
 cargo test --lib import
 
+# Release 3C doctor tests
+cargo test --test integration doctor
+
+# Release 3C doctor and diagnostics tests
+cargo test -p snip-it -- diagnostics
+cargo test --test integration doctor
+
 # Run only server (snip-sync) tests
 cargo test -p snip-sync
 
@@ -86,6 +93,7 @@ snip-it/
 │   ├── config.rs       # Sync settings (SyncSettings, SyncDirection)
 │   ├── encryption.rs   # AES-256-GCM + Argon2id key derivation
 │   ├── error.rs        # SnipError enum, SnipResult type alias
+│   ├── diagnostics.rs  # Shared diagnostic model (CompatibilityDiagnostic, DoctorReport)
 │   ├── library.rs      # Snippet/Snippets structs, LibraryManager
 │   ├── logging.rs      # Tracing-based logging, audit log
 │   ├── sync.rs         # gRPC client for snip-sync server
@@ -112,6 +120,7 @@ snip-it/
 │   │   ├── library_cmd.rs
 │   │   ├── premade_cmd.rs
 │   │   ├── import_cmd.rs    # Pet import (snp import pet <path>)
+│   │   ├── doctor_cmd.rs     # Compatibility diagnostics (snp doctor)
 │   │   ├── cron_cmd.rs
 │   │   └── keybindings_cmd.rs
 │   └── utils/
@@ -260,6 +269,16 @@ snip-it/
 - Human report to stderr, JSON to stdout; `--report-file` for persistent reports
 - Security: no command execution, no variable expansion, no source modification, no sync side effects
 
+### Compatibility Diagnostics (`snp doctor`)
+- `src/commands/doctor_cmd.rs` implements `snp doctor --pet-file <path>` and `snp doctor --compatibility`
+- `--pet-file` performs read-only analysis of pet snippet files: TOML parse, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, and recommended import command
+- `--compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability (bash/zsh/fish)
+- Options: `--strict` (treat warnings as errors), `--report human|json` (output format)
+- Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
+- Human-readable report to stderr; JSON to stdout
+- Never mutates source, destination, config, or library state
+- Uses the shared diagnostic model from `src/diagnostics.rs` for consistency with import
+
 ## Configuration Files
 
 - `~/.config/snp/snippets.toml` — Main snippet storage (or per-library in `libraries/`)
@@ -298,3 +317,4 @@ snip-it/
 - snip-sync has 78 tests (unit + integration)
 - Pet import tests (`tests/integration.rs`) cover: default create, explicit library, collision, merge, dry-run, source untouched, JSON report, invalid inputs, strict/permissive modes, replace with backup, command preservation, choice variables, mixed aliases, help text, flag conflicts
 - Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, duplicate detection, source file validation, TOML parsing, entry conversion
+- Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, and source non-mutation
