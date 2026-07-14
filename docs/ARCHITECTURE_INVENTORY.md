@@ -87,6 +87,32 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - `SnippetSelection` enum — `Selected(idx, copy_flag)`, `Delete(idx)`
 - Signal handling: `TERMINATE` atomic flag, registered via `signal-hook` on Unix
 
+### Sort and Ranking (`src/sort.rs`)
+- `SnippetSort` enum: `Relevance` (default), `Recent`, `LastUsed`, `MostUsed`, `Description`, `Command`
+- `SnippetSort` derives `clap::ValueEnum` with `#[value(rename_all = "kebab-case")]`
+- `SortOptions` struct: `mode: SnippetSort`, `favorites_first: bool`
+- `rank_snippets()` — deterministic sort with tie-break chain:
+  1. Primary key (sort mode)
+  2. Favorites-first grouping (orthogonal modifier)
+  3. Fuzzy relevance (for Relevance mode)
+  4. Normalized description (case-insensitive)
+  5. Original index (stable)
+- CLI flags `--sort` and `--favorites-first` on: run, clip, search, select, list
+- TUI interactive sort via `n` key (cycles modes), `o` key (toggles favorites-first)
+- TUI sort indicators: `[new]`, `[old]`, `[a-z]`, `[z-a]`, `[used]`, `[freq]`
+
+### Usage Tracking (`src/usage.rs`)
+- `UsageIndex` struct: `entries: Vec<UsageEntry>`
+- `UsageEntry`: `id: String`, `use_count: u64`, `last_used_at: Option<i64>`
+- `UsageData`: return type for `get_usage()` — zeroed defaults for unknown IDs
+- Persistence: `~/.config/snp/usage.toml` (TOML array-of-tables)
+- Atomic writes via `write_private_atomic()`
+- Fail-open: missing/corrupt file returns empty index
+- `record_use()` — increments count, sets timestamp
+- `prune()` — removes entries for deleted snippets
+- Recorded on: successful `run` and `clip` operations only
+- Local-only: never synced, never written to library TOML, no command text logged
+
 ### Variable System (`src/utils/variables.rs`)
 - `Variable` struct: `name: String`, `kind: VariableKind`, `default: Option<String>`
 - `VariableKind` enum: `Required`, `DefaultValue(String)`, `Choices { values, default_index }`
@@ -165,13 +191,15 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ## Test Infrastructure
 
-- `tests/integration.rs` — CLI integration tests (34 tests, `TempDir` + `XDG_CONFIG_HOME` override)
-- `tests/pty_integration.rs` — PTY end-to-end tests (10 tests, `portable-pty` crate, runs with `--test-threads=1`)
+- `tests/integration.rs` — CLI integration tests (45+ tests, `TempDir` + `XDG_CONFIG_HOME` override)
+- `tests/pty_integration.rs` — PTY end-to-end tests (21 tests, `portable-pty` crate, runs with `--test-threads=1`)
 - `tests/sync_integration.rs` — gRPC integration tests (4 async `#[tokio::test]`, in-process server via `test-helpers` feature)
 - Inline `#[cfg(test)]` modules in every source file
 - All test data is inline — no fixture files
 - Encryption tests verify roundtrip, tamper detection, wrong key rejection
 - Sync merge tests cover: server wins, local wins, new snippets, deleted snippets, local-only preservation
+- Sort unit tests (`src/sort.rs`): 32 tests covering all sort modes, tie-breakers, favorites-first, edge cases
+- Usage unit tests (`src/usage.rs`): 7 tests covering load/save, record, prune, corruption fail-open
 
 ## Data Flow: Run Command
 
@@ -182,6 +210,7 @@ main.rs::dispatch_command()
       → get_library_path() → LibraryManager → resolve .toml path
       → library::load_library() → parse TOML, deduplicate IDs
       → get_snippet_data() → parallel arrays (filter deleted)
+      → sort::rank_snippets() → apply --sort mode + --favorites-first
       → ui::select_snippet() → TUI event loop (fuzzy search, navigation)
       → User selects snippet
         → expand_snippet_command() → parse_variables()
@@ -193,6 +222,7 @@ main.rs::dispatch_command()
           → Else: spawn shell with $SHELL -c (or $COMSPEC /C on Windows)
           → wait_for_command() → optional timeout via $SNP_COMMAND_TIMEOUT
           → audit_log("execute" or "copy")
+          → usage::UsageIndex::record_use() → persist to usage.toml
     → If --sync: sync_commands::run_default_sync()
   → Exit with status code
 ```
@@ -214,6 +244,7 @@ main.rs::dispatch_command()
 | `~/.config/snp/sync.toml` | Sync settings (server URL, API key, direction) |
 | `~/.config/snp/themes/<name>.toml` | Custom themes (Halloy format) |
 | `~/.config/snp/themes.toml` | Active theme preference |
+| `~/.config/snp/usage.toml` | Local usage metadata (use count, last used timestamps) |
 | `~/.config/snp/logs/` | Rolling log files (daily rotation) |
 | `~/.config/snp/audit.log` | Audit log for snippet operations |
 | `~/.config/snp/backups/` | Timestamped library backups (max 10/library) |

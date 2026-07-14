@@ -48,6 +48,8 @@ None of these map to distinct exit codes today.
 - **stderr**: Error messages via `eprintln!` from the main error handler.
 - **Exit**: 0 on success (even if the executed command exits non-zero — the
   snippet ran, which counts as success). 1 on `SnipError`.
+- **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
+  Sorting affects the TUI display order but not the exit code or output.
 
 #### `snp list` (alias `l`)
 
@@ -63,6 +65,10 @@ All three formats write to **stdout** via `println!`.
 Default format uses `crossterm` styling — piping it will include ANSI escape
 sequences. Errors (e.g., failed library load) go to stderr.
 
+**Sort flags**: `--sort <mode>` and `--favorites-first` affect the output
+ordering of all three formats. `--json` and `--csv` respect explicit sort
+flags. Without flags, output uses the default relevance ordering.
+
 #### `snp search` (alias `s`)
 
 - **TUI**: Renders directly to the terminal via crossterm.
@@ -72,6 +78,8 @@ sequences. Errors (e.g., failed library load) go to stderr.
 - **stderr**: Error messages from the main error handler.
 - **Exit**: 0 on success (even if user presses `q` — returns `Ok(())`).
   1 on `SnipError`.
+- **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
+  Sorting affects the TUI display order but not the exit code or output.
 
 #### `snp clip` (alias `c`)
 
@@ -80,6 +88,8 @@ sequences. Errors (e.g., failed library load) go to stderr.
   message is returned but never printed to any stream.
 - **stderr**: Error messages (clipboard failure, etc.) from the main handler.
 - **Exit**: 0 on success, 1 on error.
+- **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
+  Sorting affects the TUI display order but not the exit code or output.
 
 #### `snp select` (alias `sel`)
 
@@ -95,6 +105,9 @@ sequences. Errors (e.g., failed library load) go to stderr.
 - **Return type**: `SnipResult<CommandOutcome>` — `CommandOutcome::Success` or
   `CommandOutcome::Cancelled`. Exit code 4 is mapped at the CLI boundary in
   `main.rs`.
+- **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
+  Sorting affects the TUI display order. The `--query` (alias `--filter`)
+  flag pre-fills the search. Sorting and filtering are orthogonal.
 
 #### `snp new` (alias `n`)
 

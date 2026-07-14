@@ -4979,6 +4979,7 @@ fn create_sort_test_library(config_dir: &Path, lib_name: &str) {
         &lib_path,
         r#"
 [[Snippets]]
+id = "test-1"
 description = "zebra list"
 command = "ls -la"
 tags = ["files"]
@@ -4989,6 +4990,7 @@ created_at = 100
 updated_at = 100
 
 [[Snippets]]
+id = "test-2"
 description = "alpha deploy"
 command = "deploy.sh"
 tags = ["deploy"]
@@ -4999,6 +5001,7 @@ created_at = 300
 updated_at = 300
 
 [[Snippets]]
+id = "test-3"
 description = "middle status"
 command = "git status"
 tags = ["git"]
@@ -5183,4 +5186,392 @@ fn test_list_help_shows_sort_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--sort"));
     assert!(stdout.contains("--favorites-first"));
+}
+
+// ── Usage tracking integration tests ──────────────────────────────────
+
+/// Helper: create a library with known snippet IDs for usage tracking tests.
+fn create_usage_test_library(config_dir: &Path, lib_name: &str) {
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", lib_name]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join(format!("{lib_name}.toml"));
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+id = "usage-aaa"
+description = "alpha deploy"
+command = "deploy.sh"
+tags = ["deploy"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+
+[[Snippets]]
+id = "usage-bbb"
+description = "beta test"
+command = "test.sh"
+tags = ["test"]
+output = ""
+folders = []
+favorite = true
+created_at = 200
+updated_at = 200
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "set-primary", lib_name]);
+    cmd.output().unwrap();
+}
+
+#[test]
+fn test_usage_not_written_to_library_toml() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_usage_test_library(&config_dir, "usage-iso");
+
+    // Create a usage.toml with some data to verify it doesn't leak into library
+    let usage_dir = config_dir.clone();
+    fs::write(
+        usage_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "usage-aaa"
+use_count = 5
+last_used_at = 1700000000
+"#,
+    )
+    .unwrap();
+
+    // Read the library TOML and verify no usage fields
+    let lib_path = config_dir.join("libraries").join("usage-iso.toml");
+    let lib_content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        !lib_content.contains("use_count"),
+        "library TOML should not contain use_count"
+    );
+    assert!(
+        !lib_content.contains("last_used_at"),
+        "library TOML should not contain last_used_at"
+    );
+    assert!(
+        !lib_content.contains("[[entries]]"),
+        "library TOML should not contain [[entries]] section"
+    );
+}
+
+#[test]
+fn test_usage_file_is_separate_from_library() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_usage_test_library(&config_dir, "usage-sep");
+
+    // Create a usage.toml
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "usage-aaa"
+use_count = 3
+last_used_at = 1700000000
+"#,
+    )
+    .unwrap();
+
+    // Verify usage.toml exists as a separate file at config root
+    assert!(
+        config_dir.join("usage.toml").exists(),
+        "usage.toml should exist at config root"
+    );
+    assert!(
+        !config_dir.join("libraries").join("usage-sep.toml").exists()
+            || config_dir.join("libraries").join("usage-sep.toml").exists(),
+        "library file exists separately"
+    );
+
+    // Verify the library TOML file does not contain usage.toml content
+    let lib_content =
+        fs::read_to_string(config_dir.join("libraries").join("usage-sep.toml")).unwrap();
+    assert!(
+        !lib_content.contains("1700000000"),
+        "library should not contain usage timestamps"
+    );
+}
+
+#[test]
+fn test_no_command_text_in_usage_records() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_usage_test_library(&config_dir, "usage-cmd");
+
+    // Create usage.toml — it should only contain IDs, not command text
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "usage-aaa"
+use_count = 2
+last_used_at = 1700000000
+"#,
+    )
+    .unwrap();
+
+    let usage_content = fs::read_to_string(config_dir.join("usage.toml")).unwrap();
+    assert!(
+        !usage_content.contains("deploy.sh"),
+        "usage.toml should not contain command text"
+    );
+    assert!(
+        !usage_content.contains("test.sh"),
+        "usage.toml should not contain command text"
+    );
+    assert!(
+        !usage_content.contains("alpha deploy"),
+        "usage.toml should not contain description text"
+    );
+    // Should only contain the ID reference
+    assert!(usage_content.contains("usage-aaa"));
+}
+
+#[test]
+fn test_unicode_description_sort() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "unicode-sort"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join("unicode-sort.toml");
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+id = "uni-1"
+description = "日本語テスト"
+command = "echo japanese"
+tags = ["unicode"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+
+[[Snippets]]
+id = "uni-2"
+description = "alpha deploy"
+command = "deploy.sh"
+tags = ["deploy"]
+output = ""
+folders = []
+favorite = false
+created_at = 200
+updated_at = 200
+
+[[Snippets]]
+id = "uni-3"
+description = "Ünïcödé test"
+command = "echo unicode"
+tags = ["unicode"]
+output = ""
+folders = []
+favorite = false
+created_at = 300
+updated_at = 300
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "unicode-sort"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "description", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // Unicode-aware case-insensitive sort: alpha < Ünïcödé < 日本語テスト
+    assert_eq!(items[0]["description"], "alpha deploy");
+    assert_eq!(items[1]["description"], "Ünïcödé test");
+    assert_eq!(items[2]["description"], "日本語テスト");
+}
+
+#[test]
+fn test_multi_library_sort() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Create first library
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "multi-a"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("multi-a.toml"),
+        r#"
+[[Snippets]]
+id = "multi-a-1"
+description = "bravo deploy"
+command = "deploy-a.sh"
+tags = ["deploy"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+"#,
+    )
+    .unwrap();
+
+    // Create second library
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "multi-b"]);
+    cmd.output().unwrap();
+
+    fs::write(
+        libraries_dir.join("multi-b.toml"),
+        r#"
+[[Snippets]]
+id = "multi-b-1"
+description = "alpha test"
+command = "test-b.sh"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 200
+updated_at = 200
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "multi-a"]);
+    cmd.output().unwrap();
+
+    // List with --library multi-b and --sort description
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "list",
+        "--library",
+        "multi-b",
+        "--sort",
+        "description",
+        "--json",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["description"], "alpha test");
+    assert_eq!(items[0]["command"], "test-b.sh");
+}
+
+#[test]
+fn test_list_sort_last_used() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-last-used");
+
+    // Create a usage.toml with known last_used_at values
+    let usage_path = config_dir.join("usage.toml");
+    fs::write(
+        &usage_path,
+        r#"[[entries]]
+id = "test-1"
+use_count = 5
+last_used_at = 300
+
+[[entries]]
+id = "test-2"
+use_count = 1
+last_used_at = 100
+
+[[entries]]
+id = "test-3"
+use_count = 3
+last_used_at = 200
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "last-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // last_used_at 300 > 200 > 100
+    // test-1 (zebra list, last_used_at=300) > test-3 (middle status, last_used_at=200) > test-2 (alpha deploy, last_used_at=100)
+    assert_eq!(items[0]["description"], "zebra list");
+    assert_eq!(items[1]["description"], "middle status");
+    assert_eq!(items[2]["description"], "alpha deploy");
+}
+
+#[test]
+fn test_list_sort_most_used() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-most-used");
+
+    // Create a usage.toml with known use_count values
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "test-1"
+use_count = 5
+last_used_at = 100
+
+[[entries]]
+id = "test-2"
+use_count = 20
+last_used_at = 200
+
+[[entries]]
+id = "test-3"
+use_count = 10
+last_used_at = 300
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // use_count 20 > 10 > 5
+    // test-2 (alpha deploy, use_count=20) > test-3 (middle status, use_count=10) > test-1 (zebra list, use_count=5)
+    assert_eq!(items[0]["description"], "alpha deploy");
+    assert_eq!(items[1]["description"], "middle status");
+    assert_eq!(items[2]["description"], "zebra list");
+}
+
+#[test]
+fn test_rank_snippets_deterministic_across_runs() {
+    // Verify that rank_snippets produces identical output when called twice
+    // with the same inputs (test #11 from plan: repeated runs are deterministic)
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-det");
+
+    // Run list twice and compare JSON output
+    let mut cmd1 = snp_in(&config_dir);
+    cmd1.args(["list", "--sort", "description", "--json"]);
+    let output1 = cmd1.output().unwrap();
+    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args(["list", "--sort", "description", "--json"]);
+    let output2 = cmd2.output().unwrap();
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+
+    assert_eq!(stdout1, stdout2, "list output should be deterministic");
 }

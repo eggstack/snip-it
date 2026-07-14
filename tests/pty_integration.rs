@@ -703,3 +703,175 @@ fn test_choice_variable_terminal_restoration() {
         "PTY should have produced output (terminal was restored properly)"
     );
 }
+
+// ── Sort through real selector ────────────────────────────────────────
+
+/// Helper: create a PTY test library with snippets for sort testing.
+fn setup_sort_pty_env() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    let library_content = r#"[[snippets]]
+id = "sort-alpha"
+description = "alpha deploy"
+command = "deploy-alpha.sh"
+tag = ["deploy"]
+output = ""
+
+[[snippets]]
+id = "sort-beta"
+description = "beta test"
+command = "test-beta.sh"
+tag = ["test"]
+output = ""
+
+[[snippets]]
+id = "sort-gamma"
+description = "gamma status"
+command = "status-gamma.sh"
+tag = ["status"]
+output = ""
+"#;
+    fs::write(config_dir.join("snippets.toml"), library_content).unwrap();
+    (tmp, config_dir)
+}
+
+#[test]
+fn test_select_with_sort_description_selects_first_alphabetically() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("sort_output.txt");
+
+    // Use --sort description so "alpha deploy" should be first
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "description",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --sort description with Enter should exit 0"
+    );
+
+    // The first item alphabetically by description is "alpha deploy"
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "first item by description sort should be alpha deploy"
+    );
+}
+
+#[test]
+fn test_select_with_sort_command_selects_first_alphabetically_by_command() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("sort_cmd_output.txt");
+
+    // Use --sort command so "deploy-alpha.sh" should be first
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "command",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --sort command with Enter should exit 0"
+    );
+
+    // First item alphabetically by command: deploy-alpha.sh < status-gamma.sh < test-beta.sh
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "first item by command sort should be deploy-alpha.sh"
+    );
+}
+
+// ── Usage tracking through PTY ────────────────────────────────────────
+
+#[test]
+fn test_select_usage_recorded_after_selection() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("usage_output.txt");
+
+    let (code, output) = run_snp_pty(
+        &["select", "--output-file", output_path.to_str().unwrap()],
+        &config_dir,
+        b"\r", // Enter to select
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select with Enter should exit 0");
+
+    // Verify output file was written
+    assert!(
+        output_path.exists(),
+        "output file should exist after selection"
+    );
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        !selected.trim().is_empty(),
+        "selected command should not be empty"
+    );
+}
+
+#[test]
+fn test_cancel_no_usage_recorded() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+
+    let usage_path = config_dir.join("usage.toml");
+
+    let (code, output) = run_snp_pty(&["select"], &config_dir, b"\x1bq");
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 4, "snp select with Esc+q should exit 4");
+
+    // Verify no usage.toml was created
+    assert!(
+        !usage_path.exists(),
+        "usage.toml should not exist after cancellation"
+    );
+}
+
+#[test]
+fn test_run_records_usage_exactly_once() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let usage_path = config_dir.join("usage.toml");
+
+    // Run the snippet (echo hello completes instantly)
+    let (code, output) = run_snp_pty(&["run"], &config_dir, b"\r");
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp run with Enter should exit 0");
+
+    // Verify usage.toml was created
+    assert!(
+        usage_path.exists(),
+        "usage.toml should exist after successful run"
+    );
+
+    // Parse and verify exactly one entry with correct count
+    let content = fs::read_to_string(&usage_path).unwrap();
+    let idx: snip_it::usage::UsageIndex = toml::from_str(&content).unwrap();
+    assert_eq!(
+        idx.entries().len(),
+        1,
+        "usage should have exactly 1 entry after one run"
+    );
+    let entry = &idx.entries()[0];
+    assert_eq!(entry.id, "test-1", "usage entry should reference test-1");
+    assert_eq!(entry.use_count, 1, "use_count should be 1 after first run");
+    assert!(entry.last_used_at.is_some(), "last_used_at should be set");
+}

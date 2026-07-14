@@ -62,8 +62,14 @@ pub fn run(
     // Apply sort if specified
     if let Some(ref opts) = sort_opts {
         let indices: Vec<usize> = filtered.iter().map(|(i, _)| *i).collect();
+        let usage_idx = crate::usage::UsageIndex::load();
+        let usage_data: Vec<crate::usage::UsageData> = snippets
+            .snippets
+            .iter()
+            .map(|s| usage_idx.get_usage(&s.id))
+            .collect();
         let sorted_indices =
-            crate::sort::rank_snippets(&indices, &snippets.snippets, None, None, opts);
+            crate::sort::rank_snippets(&indices, &snippets.snippets, None, Some(&usage_data), opts);
         let rank_map: std::collections::HashMap<usize, usize> = sorted_indices
             .iter()
             .enumerate()

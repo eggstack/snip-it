@@ -33,6 +33,11 @@ machines.
   `<color=|_red_||_green_||_blue_||>` for selecting from a predefined list.
 - 50 bundled [Halloy](https://github.com/squidowl/halloy)-compatible themes,
   plus support for dropping in additional Halloy theme files.
+- Optional sorting modes (`--sort`) for large collections: relevance (default),
+  recent, last-used, most-used, description, and command.
+- `--favorites-first` groups favorited snippets before others in any sort mode.
+- Local-only usage tracking: use count and last-used timestamps recorded on
+  successful run and clip operations, stored separately from snippet data.
 - Optional self-hosted sync using AES-256-GCM encryption and Argon2id key
   derivation. The server stores encrypted snippet payloads, not their
   descriptions or commands.
@@ -326,11 +331,11 @@ data.
 
 ```text
 snp new          Create a snippet (--command-stdin, --from-file, --editor, --multiline)
-snp list         List snippets
-snp run          Run a snippet from the TUI
-snp clip         Copy a snippet from the TUI
+snp list         List snippets (--sort, --favorites-first, --json, --csv)
+snp run          Run a snippet from the TUI (--sort, --favorites-first)
+snp clip         Copy a snippet from the TUI (--sort, --favorites-first)
 snp select       Select a snippet and print its command (no execution)
-snp search       Search and inspect snippets
+snp search       Search and inspect snippets (--sort, --favorites-first)
 snp edit         Edit a snippet library in $EDITOR
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
@@ -412,6 +417,7 @@ The client configuration root is `$XDG_CONFIG_HOME/snp` when
 | `sync.toml` | Sync server settings and direction |
 | `themes/*.toml` | Halloy-compatible theme files |
 | `themes.toml` | Active theme selection |
+| `usage.toml` | Local usage metadata (use count, last used) |
 
 API keys are stored in the operating system keychain when available. Set
 `SNP_ALLOW_PLAINTEXT_API_KEY=true` only for a deliberately controlled headless

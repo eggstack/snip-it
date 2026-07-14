@@ -249,7 +249,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Search engine | External: `fzf`, `peco`, or custom (via `pet.config`) | Native: `fuzzy-matcher` crate (skim algorithm). Built into TUI. | Supported differently | — | snp has zero external dependencies for search. |
 | Fuzzy matching | Delegated to external tool | Built-in skim algorithm. Debounced filter updates (150ms). | Supported differently | — | Equivalent user experience, different implementation. |
 | TUI interaction | N/A (external tool handles UI) | Full TUI with Vim keybindings, preview, sorting, folder/favorite filtering. | New | — | snp-only rich TUI. |
-| Sorting | Configurable via pet config | `SortMode` enum in `ui/state.rs`. Relevance-based (fuzzy score). | Partial | R4A | Optional sort modes (recent, last-used, most-used, description, command) planned for R4. |
+| Sorting | Configurable via pet config | `SortMode` enum in `ui/state.rs`. Relevance-based (fuzzy score). | Supported | R4A | Optional sort modes (recent, last-used, most-used, description, command) via `--sort`. Favorites-first via `--favorites-first`. Usage-aware ranking via local usage metadata. |
 | Initial query | Shell buffer content | `--filter` flag. No shell buffer integration yet. | Partial | R1B | Will accept initial query from shell buffer. |
 
 ---

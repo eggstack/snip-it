@@ -13,6 +13,7 @@ and automation.
 - [Sync](#sync)
 - [Syncing one account across environments](#syncing-one-account-across-environments)
 - [Premade libraries](#premade-libraries)
+- [Sorting and ranking](#sorting-and-ranking)
 - [Variables](#variables)
 - [Configuration](#configuration)
 - [Automation](#automation)
@@ -474,6 +475,73 @@ snp premade update docker-essentials
 Server administrators can add `.toml` files to the server's configured
 `premade-libraries` directory. The server reads the same snippet format shown
 above.
+
+## Sorting and ranking
+
+`run`, `clip`, `search`, `select`, and `list` accept `--sort` to choose an
+explicit ordering mode. The default remains fuzzy relevance, so existing
+invocations without `--sort` are unchanged.
+
+### Sort modes
+
+| Mode | Behavior |
+| --- | --- |
+| `relevance` (default) | Fuzzy score descending. Usage counts and timestamps are used only as bounded tie-breakers. |
+| `recent` | `updated_at` descending, then `created_at` descending. Malformed timestamps sort after valid ones. |
+| `last-used` | Local `last_used_at` descending. Never-used snippets follow used snippets. |
+| `most-used` | Local `use_count` descending, then `last_used_at` descending. |
+| `description` | Case-insensitive alphabetical. |
+| `command` | Case-insensitive alphabetical. |
+
+### Favorites first
+
+`--favorites-first` groups favorited snippets before non-favorites in any sort
+mode. Within each group, the selected sort mode applies unchanged. This flag
+can be combined with any `--sort` value.
+
+### Usage tracking
+
+Successful `run` and `clip` operations record usage metadata locally:
+
+- `use_count` — incremented on each successful operation
+- `last_used_at` — set to the current Unix timestamp
+
+Usage data is stored in `~/.config/snp/usage.toml`, separate from snippet
+libraries. It is never synced, never written into library TOML files, and never
+logged as command text. Corrupt or missing usage data fails open to zero usage.
+
+Cancellation and failed operations do not update usage. Search preview and
+browsing do not count as usage.
+
+### TUI sort indicators
+
+The TUI shows the active sort mode in the status bar:
+
+| Indicator | Mode |
+| --- | --- |
+| (none) | Relevance (default) |
+| `[new]` | Recent |
+| `[old]` | Oldest first (future) |
+| `[a-z]` | Description A→Z |
+| `[z-a]` | Description Z→A (future) |
+| `[used]` | Last used |
+| `[freq]` | Most used |
+
+Press `n` to cycle through sort modes interactively. Press `o` to toggle
+favorites-first.
+
+### Machine output ordering
+
+`list --json` and `list --csv` output respects `--sort` and
+`--favorites-first` flags. Without explicit flags, output uses the default
+relevance ordering.
+
+### Determinism
+
+Sorting is fully deterministic. Identical inputs always produce identical
+output, including tie-breaks. Ties are resolved by: primary sort key,
+favorites-first grouping, fuzzy relevance (when meaningful), normalized
+description, and original index.
 
 ## Variables
 

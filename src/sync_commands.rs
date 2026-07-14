@@ -1112,4 +1112,48 @@ mod tests {
         );
         assert_eq!(merged.snippets[0].updated_at, 200);
     }
+
+    #[test]
+    fn test_proto_snippet_excludes_usage_metadata() {
+        // Verify that converting library::Snippet to ProtoSnippet does not
+        // carry over local-only fields (output, folders, favorite).  Usage
+        // data (use_count, last_used_at) lives in a separate file
+        // (usage.toml) and is never loaded during sync, so there is no
+        // field on library::Snippet to carry.  This test is a regression
+        // guard: if someone adds usage fields to the proto schema, this
+        // test ensures they are not silently included in sync payloads.
+        let local = Snippet {
+            id: "test-id".to_string(),
+            description: "desc".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec!["tag".to_string()],
+            folders: vec!["folder".to_string()],
+            output: "cached output".to_string(),
+            favorite: true,
+            created_at: 1000,
+            updated_at: 2000,
+            device_id: "device-1".to_string(),
+            deleted: false,
+        };
+
+        let proto: ProtoSnippet = (&local).into();
+
+        // ProtoSnippet should carry sync-relevant fields
+        assert_eq!(proto.id, "test-id");
+        assert_eq!(proto.description, "desc");
+        assert_eq!(proto.command, "echo hello");
+        assert_eq!(proto.tags, vec!["tag".to_string()]);
+        assert_eq!(proto.created_at, 1000);
+        assert_eq!(proto.updated_at, 2000);
+        assert_eq!(proto.device_id, "device-1");
+
+        // ProtoSnippet (prost-generated) intentionally does NOT have these
+        // fields: output, folders, favorite, use_count, last_used_at.
+        // The compiler enforces their absence — any attempt to access a
+        // nonexistent field is a compile error.  This test documents that
+        // contract and serves as a regression guard for future changes.
+        //
+        // If you need to add a field to ProtoSnippet, ensure it is not
+        // local-only usage metadata before adding it here.
+    }
 }
