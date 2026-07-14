@@ -93,7 +93,7 @@ snip-it/
 │   ├── config.rs       # Sync settings (SyncSettings, SyncDirection)
 │   ├── encryption.rs   # AES-256-GCM + Argon2id key derivation
 │   ├── error.rs        # SnipError enum, SnipResult type alias
-│   ├── diagnostics.rs  # Shared diagnostic model (CompatibilityDiagnostic, DoctorReport)
+│   ├── diagnostics.rs  # Shared diagnostic model (SourceSpan, CompatibilityDiagnostic, DoctorReport, PetImportReport)
 │   ├── library.rs      # Snippet/Snippets structs, LibraryManager
 │   ├── logging.rs      # Tracing-based logging, audit log
 │   ├── sync.rs         # gRPC client for snip-sync server
@@ -270,14 +270,17 @@ snip-it/
 - Security: no command execution, no variable expansion, no source modification, no sync side effects
 
 ### Compatibility Diagnostics (`snp doctor`)
-- `src/commands/doctor_cmd.rs` implements `snp doctor --pet-file <path>` and `snp doctor --compatibility`
+- `src/commands/doctor_cmd.rs` implements `snp doctor` with four modes: `--pet-file <path>`, `--compatibility`, `--library <name>`, and `--check-shell <bash|zsh|fish>`
 - `--pet-file` performs read-only analysis of pet snippet files: TOML parse, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, and recommended import command
-- `--compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability (bash/zsh/fish)
+- `--compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability (bash/zsh/fish), shell init syntax validation, editor configuration, legacy paths, Release 1 select availability, Release 2 acquisition flags, and Release 3 choice-variable parser
+- `--library <name>` analyzes a specific library file (resolved from `~/.config/snp/libraries/` or literal path)
+- `--check-shell <shell>` validates `snp shell init` output syntax for the specified shell
 - Options: `--strict` (treat warnings as errors), `--report human|json` (output format)
 - Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
 - Human-readable report to stderr; JSON to stdout
 - Never mutates source, destination, config, or library state
 - Uses the shared diagnostic model from `src/diagnostics.rs` for consistency with import
+- `src/diagnostics.rs` provides `SourceSpan`, `CompatibilityDiagnostic`, `DiagnosticSeverity`, `DoctorReport`, `PetImportReport` with stable machine-readable codes (E-/W-/I- prefix convention)
 
 ## Configuration Files
 
@@ -317,4 +320,6 @@ snip-it/
 - snip-sync has 78 tests (unit + integration)
 - Pet import tests (`tests/integration.rs`) cover: default create, explicit library, collision, merge, dry-run, source untouched, JSON report, invalid inputs, strict/permissive modes, replace with backup, command preservation, choice variables, mixed aliases, help text, flag conflicts
 - Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, duplicate detection, source file validation, TOML parsing, entry conversion
-- Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, and source non-mutation
+- Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, and empty file
+- Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: file validation, TOML parsing, entry analysis, duplicate detection, and recommended command generation
+- Diagnostics unit tests (`src/diagnostics.rs`) cover: counts, report constructors, version, severity serialization, diagnostic serialization, source span, span skip-none, diagnostic ordering, severity ranking, stable code convention, strict-mode classification, bounded messages, recommendation generation, empty counts, and full PetImportReport roundtrip

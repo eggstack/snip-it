@@ -1,3 +1,4 @@
+use crate::commands::shell_cmd::{self, ShellType};
 use crate::diagnostics::{
     CompatibilityDiagnostic, DiagnosticSeverity, DoctorReport, ImportDuplicate, diagnostic_counts,
     version,
@@ -135,12 +136,13 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
         for key in table.keys() {
             if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
                 diagnostics.push(CompatibilityDiagnostic {
-                    code: format!("field.unknown.{key}"),
+                    code: "I-FIELD-UNKNOWN".to_string(),
                     entry_index: Some(i),
                     field: Some(key.clone()),
                     severity: DiagnosticSeverity::Info,
                     message: format!("Unknown field '{}' will be ignored", key),
                     suggestion: None,
+                    span: None,
                 });
             }
         }
@@ -150,12 +152,13 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("name")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                code: "field.missing.description".to_string(),
+                code: "W-DESC-MISSING".to_string(),
                 entry_index: Some(i),
                 field: Some("description".to_string()),
                 severity: DiagnosticSeverity::Warning,
                 message: "Entry missing 'description' field (will be empty)".to_string(),
                 suggestion: None,
+                span: None,
             });
         }
 
@@ -164,12 +167,13 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("cmd")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                code: "field.missing.command".to_string(),
+                code: "W-CMD-MISSING".to_string(),
                 entry_index: Some(i),
                 field: Some("command".to_string()),
                 severity: DiagnosticSeverity::Warning,
                 message: "Entry missing 'command' field (will be empty)".to_string(),
                 suggestion: None,
+                span: None,
             });
         }
     }
@@ -183,45 +187,49 @@ fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic> {
 
     if pet.description.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "entry.empty_description".to_string(),
+            code: "W-DESC-EMPTY".to_string(),
             entry_index: Some(index),
             field: Some("description".to_string()),
             severity: DiagnosticSeverity::Warning,
             message: "Entry has empty description".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
     if pet.command.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "entry.empty_command".to_string(),
+            code: "E-CMD-EMPTY".to_string(),
             entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Error,
             message: "Entry has empty command".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
     if !pet.output.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "entry.output_field".to_string(),
+            code: "I-OUTPUT-PRESENT".to_string(),
             entry_index: Some(index),
             field: Some("output".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry has output field (preserved)".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
     if pet.tags.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "entry.no_tags".to_string(),
+            code: "I-TAGS-EMPTY".to_string(),
             entry_index: Some(index),
             field: Some("tag".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry has no tags".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -233,12 +241,13 @@ fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic> {
         )
     }) {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "entry.choice_variables".to_string(),
+            code: "I-CHOICE-VARS".to_string(),
             entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Info,
             message: "Entry contains choice variables".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -302,7 +311,7 @@ fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResu
                 &pet_snippets.snippets[j],
             ) {
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "duplicate.same_command".to_string(),
+                    code: "W-DUP-CMD".to_string(),
                     entry_index: Some(i),
                     field: Some("command".to_string()),
                     severity: DiagnosticSeverity::Warning,
@@ -311,18 +320,20 @@ fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResu
                         j, pet_snippets.snippets[j].description
                     ),
                     suggestion: None,
+                    span: None,
                 });
             } else if same_description_different_command(
                 &pet_snippets.snippets[i],
                 &pet_snippets.snippets[j],
             ) {
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "duplicate.same_description".to_string(),
+                    code: "W-DUP-DESC".to_string(),
                     entry_index: Some(i),
                     field: Some("description".to_string()),
                     severity: DiagnosticSeverity::Warning,
                     message: format!("Same description as entry {} but different command", j),
                     suggestion: None,
+                    span: None,
                 });
             }
         }
@@ -419,6 +430,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         severity: DiagnosticSeverity::Info,
         message: format!("snp version {} ({})", version(), exe_display),
         suggestion: None,
+        span: None,
     });
 
     // Check config directory
@@ -438,6 +450,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     config_dir.display()
                 ),
                 suggestion: None,
+                span: None,
             });
         } else {
             report.diagnostics.push(CompatibilityDiagnostic {
@@ -447,6 +460,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 severity: DiagnosticSeverity::Warning,
                 message: format!("Config directory is read-only: {}", config_dir.display()),
                 suggestion: Some("Fix permissions so snp can write config files".to_string()),
+                span: None,
             });
         }
     } else {
@@ -457,6 +471,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             severity: DiagnosticSeverity::Warning,
             message: format!("Config directory does not exist: {}", config_dir.display()),
             suggestion: Some("Run any snp command to create the config directory".to_string()),
+            span: None,
         });
     }
 
@@ -470,6 +485,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             severity: DiagnosticSeverity::Info,
             message: format!("Library directory exists: {}", libraries_dir.display()),
             suggestion: None,
+            span: None,
         });
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
@@ -482,6 +498,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 libraries_dir.display()
             ),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -510,6 +527,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                         primary.filename, snippet_count
                     ),
                     suggestion: None,
+                    span: None,
                 });
             }
             None => {
@@ -522,6 +540,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     suggestion: Some(
                         "Create a library with 'snp library create <name>'".to_string(),
                     ),
+                    span: None,
                 });
             }
         },
@@ -533,6 +552,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 severity: DiagnosticSeverity::Warning,
                 message: format!("Failed to initialize library manager: {e}"),
                 suggestion: None,
+                span: None,
             });
         }
     }
@@ -550,6 +570,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                         severity: DiagnosticSeverity::Info,
                         message: format!("Sync enabled (server: {})", settings.server_url),
                         suggestion: None,
+                        span: None,
                     });
                 } else {
                     report.diagnostics.push(CompatibilityDiagnostic {
@@ -559,6 +580,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                         severity: DiagnosticSeverity::Info,
                         message: "Sync config present but disabled".to_string(),
                         suggestion: None,
+                        span: None,
                     });
                 }
             }
@@ -570,6 +592,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     severity: DiagnosticSeverity::Warning,
                     message: format!("Failed to load sync config: {e}"),
                     suggestion: Some("Check ~/.config/snp/sync.toml for syntax errors".to_string()),
+                    span: None,
                 });
             }
         }
@@ -581,6 +604,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             severity: DiagnosticSeverity::Info,
             message: "No sync configuration found".to_string(),
             suggestion: Some("Run 'snp register' to set up sync".to_string()),
+            span: None,
         });
     }
 
@@ -602,6 +626,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 severity: DiagnosticSeverity::Info,
                 message: format!("{shell_name} found on PATH"),
                 suggestion: None,
+                span: None,
             });
         } else {
             report.diagnostics.push(CompatibilityDiagnostic {
@@ -611,6 +636,315 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 severity: DiagnosticSeverity::Info,
                 message: format!("{shell_name} not found on PATH"),
                 suggestion: None,
+                span: None,
+            });
+        }
+    }
+
+    // Release 1: Check snp select availability
+    let select_available = std::process::Command::new("snp")
+        .args(["select", "--help"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if select_available {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.select.ok".to_string(),
+            entry_index: None,
+            field: Some("select".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: "snp select command is available".to_string(),
+            suggestion: None,
+            span: None,
+        });
+    } else {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.select.missing".to_string(),
+            entry_index: None,
+            field: Some("select".to_string()),
+            severity: DiagnosticSeverity::Warning,
+            message: "snp select command is not available".to_string(),
+            suggestion: Some("Ensure snp is installed and on PATH".to_string()),
+            span: None,
+        });
+    }
+
+    // Release 2: Check acquisition flags in snp new --help
+    let new_help = std::process::Command::new("snp")
+        .args(["new", "--help"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    let has_command_stdin = new_help.contains("--command-stdin");
+    let has_from_file = new_help.contains("--from-file");
+    let has_editor_flag = new_help.contains("--editor");
+
+    report.diagnostics.push(CompatibilityDiagnostic {
+        code: "compat.acquire.command_stdin".to_string(),
+        entry_index: None,
+        field: Some("acquire".to_string()),
+        severity: if has_command_stdin {
+            DiagnosticSeverity::Info
+        } else {
+            DiagnosticSeverity::Warning
+        },
+        message: if has_command_stdin {
+            "snp new supports --command-stdin".to_string()
+        } else {
+            "snp new missing --command-stdin flag".to_string()
+        },
+        suggestion: if has_command_stdin {
+            None
+        } else {
+            Some("Upgrade snp to a version with --command-stdin support".to_string())
+        },
+        span: None,
+    });
+
+    report.diagnostics.push(CompatibilityDiagnostic {
+        code: "compat.acquire.from_file".to_string(),
+        entry_index: None,
+        field: Some("acquire".to_string()),
+        severity: if has_from_file {
+            DiagnosticSeverity::Info
+        } else {
+            DiagnosticSeverity::Warning
+        },
+        message: if has_from_file {
+            "snp new supports --from-file".to_string()
+        } else {
+            "snp new missing --from-file flag".to_string()
+        },
+        suggestion: if has_from_file {
+            None
+        } else {
+            Some("Upgrade snp to a version with --from-file support".to_string())
+        },
+        span: None,
+    });
+
+    report.diagnostics.push(CompatibilityDiagnostic {
+        code: "compat.acquire.editor".to_string(),
+        entry_index: None,
+        field: Some("acquire".to_string()),
+        severity: if has_editor_flag {
+            DiagnosticSeverity::Info
+        } else {
+            DiagnosticSeverity::Warning
+        },
+        message: if has_editor_flag {
+            "snp new supports --editor".to_string()
+        } else {
+            "snp new missing --editor flag".to_string()
+        },
+        suggestion: if has_editor_flag {
+            None
+        } else {
+            Some("Upgrade snp to a version with --editor support".to_string())
+        },
+        span: None,
+    });
+
+    // Release 3: Verify choice-variable parser
+    let choice_test =
+        crate::utils::variables::parse_variables("echo <color=|_red_||_green_||_blue_||>");
+    let has_choice_support = choice_test.iter().any(|v| {
+        matches!(
+            v.kind,
+            crate::utils::variables::VariableKind::Choices { .. }
+        )
+    });
+
+    if has_choice_support {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.choice_parser.ok".to_string(),
+            entry_index: None,
+            field: Some("choice_parser".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: "Choice variable parser is functional".to_string(),
+            suggestion: None,
+            span: None,
+        });
+    } else {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.choice_parser.missing".to_string(),
+            entry_index: None,
+            field: Some("choice_parser".to_string()),
+            severity: DiagnosticSeverity::Warning,
+            message: "Choice variable parser did not produce expected result".to_string(),
+            suggestion: Some("Report this issue; choice variables may not work".to_string()),
+            span: None,
+        });
+    }
+
+    // Shell syntax validation: generate snp shell init and check syntax
+    for shell_name in &["bash", "zsh", "fish"] {
+        let shell_found = std::process::Command::new("which")
+            .arg(shell_name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !shell_found {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_syntax.{shell_name}.unavailable"),
+                entry_index: None,
+                field: Some(format!("shell_syntax_{shell_name}")),
+                severity: DiagnosticSeverity::Info,
+                message: format!("{shell_name} not found; skipping syntax check"),
+                suggestion: None,
+                span: None,
+            });
+            continue;
+        }
+
+        let init_output = std::process::Command::new("snp")
+            .args(["shell", "init", shell_name])
+            .output();
+
+        match init_output {
+            Ok(output) if output.status.success() => {
+                let check_arg = match *shell_name {
+                    "bash" | "zsh" => "-n",
+                    "fish" => "--no-execute",
+                    _ => unreachable!(),
+                };
+
+                let syntax_check = std::process::Command::new(shell_name)
+                    .arg(check_arg)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        if let Some(ref mut stdin) = child.stdin {
+                            stdin.write_all(&output.stdout)?;
+                        }
+                        child.wait()
+                    });
+
+                match syntax_check {
+                    Ok(status) if status.success() => {
+                        report.diagnostics.push(CompatibilityDiagnostic {
+                            code: format!("compat.shell_syntax.{shell_name}.ok"),
+                            entry_index: None,
+                            field: Some(format!("shell_syntax_{shell_name}")),
+                            severity: DiagnosticSeverity::Info,
+                            message: format!("snp shell init {shell_name} passes syntax check"),
+                            suggestion: None,
+                            span: None,
+                        });
+                    }
+                    _ => {
+                        report.diagnostics.push(CompatibilityDiagnostic {
+                            code: format!("compat.shell_syntax.{shell_name}.invalid"),
+                            entry_index: None,
+                            field: Some(format!("shell_syntax_{shell_name}")),
+                            severity: DiagnosticSeverity::Warning,
+                            message: format!("snp shell init {shell_name} produced invalid syntax"),
+                            suggestion: Some(format!(
+                                "Run 'snp shell init {shell_name}' and inspect the output"
+                            )),
+                            span: None,
+                        });
+                    }
+                }
+            }
+            _ => {
+                report.diagnostics.push(CompatibilityDiagnostic {
+                    code: format!("compat.shell_syntax.{shell_name}.init_failed"),
+                    entry_index: None,
+                    field: Some(format!("shell_syntax_{shell_name}")),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("snp shell init {shell_name} failed to generate output"),
+                    suggestion: Some(format!(
+                        "Run 'snp shell init {shell_name}' manually to diagnose"
+                    )),
+                    span: None,
+                });
+            }
+        }
+    }
+
+    // Editor configuration
+    let editor = std::env::var("EDITOR").ok();
+    let visual = std::env::var("VISUAL").ok();
+
+    if editor.is_some() || visual.is_some() {
+        let editor_display = match (&visual, &editor) {
+            (Some(v), Some(e)) => format!("VISUAL={v}, EDITOR={e}"),
+            (Some(v), None) => format!("VISUAL={v}"),
+            (None, Some(e)) => format!("EDITOR={e}"),
+            (None, None) => unreachable!(),
+        };
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.editor.ok".to_string(),
+            entry_index: None,
+            field: Some("editor".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: format!("Editor configured ({editor_display})"),
+            suggestion: None,
+            span: None,
+        });
+    } else {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.editor.unset".to_string(),
+            entry_index: None,
+            field: Some("editor".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: "Neither $EDITOR nor $VISUAL is set (snp new --editor will use vim)"
+                .to_string(),
+            suggestion: None,
+            span: None,
+        });
+    }
+
+    // Known legacy paths
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        let legacy_single_file = PathBuf::from(&home).join(".config/snippets.toml");
+        if legacy_single_file.exists() {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.legacy.single_file".to_string(),
+                entry_index: None,
+                field: Some("legacy".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: format!(
+                    "Legacy single-file config found: {}",
+                    legacy_single_file.display()
+                ),
+                suggestion: Some(
+                    "Consider migrating to the library-based layout with 'snp library create'"
+                        .to_string(),
+                ),
+                span: None,
+            });
+        }
+
+        let legacy_config_dir = PathBuf::from(&home).join(".snip-it");
+        if legacy_config_dir.exists() {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.legacy.config_dir".to_string(),
+                entry_index: None,
+                field: Some("legacy".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: format!(
+                    "Legacy config directory found: {}",
+                    legacy_config_dir.display()
+                ),
+                suggestion: Some(
+                    "Consider migrating to ~/.config/snp/ and removing the old directory"
+                        .to_string(),
+                ),
+                span: None,
             });
         }
     }
@@ -717,14 +1051,194 @@ fn emit_human_report(report: &DoctorReport) {
     }
 }
 
+/// Resolve a library name to a TOML file path.
+///
+/// Checks `~/.config/snp/libraries/<name>.toml` first, then treats as a literal path.
+fn resolve_library_path(name: &str) -> SnipResult<PathBuf> {
+    let as_literal = PathBuf::from(name);
+    if as_literal.is_file() {
+        return Ok(as_literal);
+    }
+
+    let config_dir = crate::utils::config::get_config_dir();
+    let libraries_dir = config_dir.join("libraries");
+    let by_name = libraries_dir.join(format!("{name}.toml"));
+    if by_name.is_file() {
+        return Ok(by_name);
+    }
+
+    Err(SnipError::runtime_error(
+        "Library not found",
+        Some(&format!(
+            "'{name}' is not a file and no library named '{name}' exists in {}",
+            libraries_dir.display()
+        )),
+    ))
+}
+
+/// Validate shell init output by piping through the shell's syntax checker.
+fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
+    let shell_type = match shell_name {
+        "bash" => ShellType::Bash,
+        "zsh" => ShellType::Zsh,
+        "fish" => ShellType::Fish,
+        _ => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_init.{shell_name}.unknown"),
+                entry_index: None,
+                field: Some(shell_name.to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("Unknown shell type: {shell_name}"),
+                suggestion: Some("Use bash, zsh, or fish".to_string()),
+                span: None,
+            });
+            return;
+        }
+    };
+
+    // Generate the init code
+    let code = match shell_type {
+        ShellType::Bash => shell_cmd::generate_bash(),
+        ShellType::Zsh => shell_cmd::generate_zsh(),
+        ShellType::Fish => shell_cmd::generate_fish(),
+    };
+
+    // Check if shell is available
+    let shell_found = std::process::Command::new("which")
+        .arg(shell_name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !shell_found {
+        let severity = if strict {
+            DiagnosticSeverity::Error
+        } else {
+            DiagnosticSeverity::Warning
+        };
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: format!("compat.shell_init.{shell_name}.unavailable"),
+            entry_index: None,
+            field: Some(shell_name.to_string()),
+            severity,
+            message: format!("{shell_name} not found on PATH; cannot validate init output"),
+            suggestion: Some(format!(
+                "Install {shell_name} to enable shell init validation"
+            )),
+            span: None,
+        });
+        return;
+    }
+
+    // Write init code to a temp file for syntax checking
+    let tmp = match tempfile::NamedTempFile::new() {
+        Ok(t) => t,
+        Err(e) => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_init.{shell_name}.error"),
+                entry_index: None,
+                field: Some(shell_name.to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("Failed to create temp file for shell check: {e}"),
+                suggestion: None,
+                span: None,
+            });
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(tmp.path(), &code) {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: format!("compat.shell_init.{shell_name}.error"),
+            entry_index: None,
+            field: Some(shell_name.to_string()),
+            severity: DiagnosticSeverity::Warning,
+            message: format!("Failed to write temp file for shell check: {e}"),
+            suggestion: None,
+            span: None,
+        });
+        return;
+    }
+
+    // Run syntax check
+    let output = match shell_type {
+        ShellType::Bash => std::process::Command::new("bash")
+            .args(["-n", tmp.path().to_str().unwrap()])
+            .output(),
+        ShellType::Zsh => std::process::Command::new("zsh")
+            .args(["-n", tmp.path().to_str().unwrap()])
+            .output(),
+        ShellType::Fish => std::process::Command::new("fish")
+            .args(["--no-execute", tmp.path().to_str().unwrap()])
+            .output(),
+    };
+
+    match output {
+        Ok(o) if o.status.success() => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_init.{shell_name}.ok"),
+                entry_index: None,
+                field: Some(shell_name.to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: format!("{shell_name} init syntax valid ({} bytes)", code.len()),
+                suggestion: None,
+                span: None,
+            });
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let severity = if strict {
+                DiagnosticSeverity::Error
+            } else {
+                DiagnosticSeverity::Warning
+            };
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_init.{shell_name}.invalid"),
+                entry_index: None,
+                field: Some(shell_name.to_string()),
+                severity,
+                message: format!("{shell_name} init syntax check failed: {stderr}"),
+                suggestion: Some("Run 'snp shell init <shell>' and review the output".to_string()),
+                span: None,
+            });
+        }
+        Err(e) => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: format!("compat.shell_init.{shell_name}.error"),
+                entry_index: None,
+                field: Some(shell_name.to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("Failed to run {shell_name} syntax check: {e}"),
+                suggestion: None,
+                span: None,
+            });
+        }
+    }
+}
+
 /// Execute the doctor command.
 pub fn run(
     pet_file: Option<PathBuf>,
     compatibility: bool,
+    check_shell: Option<String>,
+    library: Option<String>,
     strict: bool,
     report_format: DiagnosticReportFormat,
 ) -> SnipResult<()> {
-    let report = if let Some(ref path) = pet_file {
+    let has_file_mode = pet_file.is_some() || library.is_some();
+    let has_mode = has_file_mode || compatibility || check_shell.is_some();
+
+    if !has_mode {
+        return Err(SnipError::runtime_error(
+            "No mode selected",
+            Some(
+                "Specify --pet-file <path>, --library <name>, --compatibility, or --check-shell <shell>",
+            ),
+        ));
+    }
+
+    let mut report = if let Some(ref path) = pet_file {
         let content = read_source_file(path)?;
 
         if content.trim().is_empty() {
@@ -735,14 +1249,28 @@ pub fn run(
         }
 
         build_pet_report(path, &content, strict)?
+    } else if let Some(ref lib_name) = library {
+        let path = resolve_library_path(lib_name)?;
+        let content = read_source_file(&path)?;
+
+        if content.trim().is_empty() {
+            return Err(SnipError::runtime_error(
+                "Empty library file",
+                Some("Library file contains no data"),
+            ));
+        }
+
+        build_pet_report(&path, &content, strict)?
     } else if compatibility {
         build_compatibility_report(strict)?
     } else {
-        return Err(SnipError::runtime_error(
-            "No mode selected",
-            Some("Specify --pet-file <path> or --compatibility"),
-        ));
+        DoctorReport::new(strict)
     };
+
+    // Run shell init checks if requested
+    if let Some(ref shell_name) = check_shell {
+        check_shell_init(shell_name, &mut report, strict);
+    }
 
     // Emit report
     match report_format {

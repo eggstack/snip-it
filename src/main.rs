@@ -242,18 +242,28 @@ enum Commands {
         #[command(subcommand)]
         command: PremadeCommands,
     },
-    /// Diagnose pet file compatibility or installed snp environment
+    /// Diagnose pet file compatibility, installed snp environment, or shell init syntax
     Doctor {
         /// Path to a pet TOML snippet file to analyze
         #[arg(
             long = "pet-file",
             value_name = "PATH",
-            conflicts_with = "compatibility"
+            conflicts_with_all = ["compatibility", "library"]
         )]
         pet_file: Option<PathBuf>,
         /// Audit the installed snp environment
-        #[arg(long, conflicts_with = "pet_file")]
+        #[arg(long, conflicts_with_all = ["pet_file", "library"])]
         compatibility: bool,
+        /// Check shell init output syntax for a specific shell (bash, zsh, fish)
+        #[arg(long, value_enum)]
+        check_shell: Option<ShellIntegration>,
+        /// Check a specific library file for compatibility
+        #[arg(
+            long,
+            value_name = "NAME_OR_PATH",
+            conflicts_with_all = ["pet_file", "compatibility"]
+        )]
+        library: Option<String>,
         /// Treat warnings as errors
         #[arg(long)]
         strict: bool,
@@ -524,10 +534,24 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Doctor {
             pet_file,
             compatibility,
+            check_shell,
+            library,
             strict,
             report,
         }) => {
-            commands::doctor_cmd::run(pet_file, compatibility, strict, report)?;
+            let check_shell_str = check_shell.map(|s| match s {
+                ShellIntegration::Bash => "bash".to_string(),
+                ShellIntegration::Zsh => "zsh".to_string(),
+                ShellIntegration::Fish => "fish".to_string(),
+            });
+            commands::doctor_cmd::run(
+                pet_file,
+                compatibility,
+                check_shell_str,
+                library,
+                strict,
+                report,
+            )?;
         }
         Some(Commands::Shell { command }) => match command {
             ShellCommands::Init { shell } => {

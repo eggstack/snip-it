@@ -104,34 +104,42 @@ snp import pet /path/to/pet-snippets.toml --report json
 
 #### Pre-migration diagnostics
 
-Before importing, you can analyze a pet file without modifying anything:
+`snp doctor` has four modes:
+
+- **`--pet-file <path>`** — Analyze a pet snippet file for compatibility issues.
+  Reports TOML parse status, unknown fields, missing required fields, empty
+  commands, choice variables, duplicates, output fields, and normalization
+  previews. Suggests the exact import command to run based on findings.
+
+- **`--compatibility`** — Audit the installed snp environment. Checks binary
+  version, config directory, library directory, primary library, sync config,
+  shell availability (bash/zsh/fish), shell init syntax validation, editor
+  configuration, legacy paths, Release 1 `snp select` availability, Release 2
+  acquisition flags (`--command-stdin`, `--from-file`, `--editor`), and Release 3
+  choice-variable parser.
+
+- **`--library <name>`** — Analyze a specific library file (resolved from
+  `~/.config/snp/libraries/` or a literal path). Same analysis as `--pet-file`
+  but targets a snp library.
+
+- **`--check-shell <bash|zsh|fish>`** — Validate the syntax of `snp shell init`
+  output for the specified shell. Generates the init code, then runs the shell's
+  syntax checker (`bash -n`, `zsh -n`, or `fish --no-execute`).
+
+All modes support `--report human|json` for output format and `--strict` to
+treat warnings as errors. Use `--report-file <path>` to save a JSON report for
+later review. Diagnostics include `SourceSpan` byte-offset locations for precise
+positioning within the source file.
 
 ```bash
 snp doctor --pet-file ~/.config/pet/snippets.toml
-```
-
-This reports TOML parse status, unknown fields, missing required fields, empty
-commands, choice variables, duplicates, and output fields. It suggests the
-exact import command to run based on findings.
-
-For machine-readable output:
-
-```bash
 snp doctor --pet-file snippets.toml --report json
-```
-
-To audit your installed snp environment:
-
-```bash
 snp doctor --compatibility
+snp doctor --check-shell zsh
 ```
-
-This checks binary version, config directory, library setup, sync config, and
-shell availability. Strict mode (`--strict`) treats warnings as errors.
 
 The source file is never modified. Merged and replaced libraries are backed up
-before overwrite. Use `--strict` to abort on any diagnostic error, or
-`--report-file <path>` to save a JSON report for later review.
+before overwrite.
 
 Alternatively, you can copy the file directly:
 

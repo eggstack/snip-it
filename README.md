@@ -236,6 +236,8 @@ including variables, shell metacharacters, and whitespace.
 snp doctor --pet-file ~/.config/pet/snippets.toml
 snp doctor --pet-file snippets.toml --report json   # machine-readable
 snp doctor --compatibility                           # audit snp environment
+snp doctor --check-shell zsh                         # validate shell init
+snp doctor --library my-snippets                     # analyze a library file
 ```
 
 ## Themes
@@ -333,7 +335,7 @@ snp edit         Edit a snippet library in $EDITOR
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)
-snp doctor       Diagnose pet file compatibility or snp environment
+snp doctor       Diagnose pet file, library, environment, or shell init syntax
 snp register     Register with a snip-sync server
 snp sync         Push, pull, or bidirectionally sync libraries
 snp cron         Print a periodic sync schedule

@@ -11,6 +11,13 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
+/// Byte-offset span within the source file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
 /// A single compatibility diagnostic produced during import or doctor checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompatibilityDiagnostic {
@@ -20,6 +27,8 @@ pub struct CompatibilityDiagnostic {
     pub entry_index: Option<usize>,
     pub field: Option<String>,
     pub suggestion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<SourceSpan>,
 }
 
 /// A duplicate entry that was skipped during import.
@@ -161,6 +170,7 @@ mod tests {
             entry_index: None,
             field: None,
             suggestion: None,
+            span: None,
         }
     }
 
@@ -240,6 +250,7 @@ mod tests {
             entry_index: Some(5),
             field: Some("command".to_string()),
             suggestion: Some("Use single-quoted string".to_string()),
+            span: None,
         };
 
         let json = serde_json::to_string(&diagnostic).unwrap();
@@ -254,5 +265,218 @@ mod tests {
             roundtripped.suggestion,
             Some("Use single-quoted string".to_string())
         );
+    }
+
+    #[test]
+    fn test_source_span_serialization() {
+        let span = SourceSpan { start: 10, end: 20 };
+        let json = serde_json::to_string(&span).unwrap();
+        let roundtripped: SourceSpan = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped.start, 10);
+        assert_eq!(roundtripped.end, 20);
+    }
+
+    #[test]
+    fn test_diagnostic_span_skip_none() {
+        let diag = CompatibilityDiagnostic {
+            code: "TEST".to_string(),
+            severity: DiagnosticSeverity::Info,
+            message: "test".to_string(),
+            entry_index: None,
+            field: None,
+            suggestion: None,
+            span: None,
+        };
+        let json = serde_json::to_string(&diag).unwrap();
+        assert!(
+            !json.contains("span"),
+            "span field should be skipped when None"
+        );
+    }
+
+    #[test]
+    fn test_diagnostic_ordering_preserved() {
+        let mut diagnostics = Vec::new();
+        for i in 0..10 {
+            diagnostics.push(CompatibilityDiagnostic {
+                code: format!("CODE-{i}"),
+                severity: DiagnosticSeverity::Info,
+                message: format!("msg {i}"),
+                entry_index: Some(i),
+                field: None,
+                suggestion: None,
+                span: None,
+            });
+        }
+        for (i, d) in diagnostics.iter().enumerate() {
+            assert_eq!(d.code, format!("CODE-{i}"));
+            assert_eq!(d.entry_index, Some(i));
+        }
+    }
+
+    #[test]
+    fn test_severity_ranking() {
+        assert_ne!(DiagnosticSeverity::Info, DiagnosticSeverity::Warning);
+        assert_ne!(DiagnosticSeverity::Warning, DiagnosticSeverity::Error);
+        assert_ne!(DiagnosticSeverity::Info, DiagnosticSeverity::Error);
+
+        let info_json = serde_json::to_string(&DiagnosticSeverity::Info).unwrap();
+        let warn_json = serde_json::to_string(&DiagnosticSeverity::Warning).unwrap();
+        let err_json = serde_json::to_string(&DiagnosticSeverity::Error).unwrap();
+        assert_ne!(info_json, warn_json);
+        assert_ne!(warn_json, err_json);
+        assert_ne!(info_json, err_json);
+    }
+
+    #[test]
+    fn test_diagnostic_codes_follow_convention() {
+        let codes = vec![
+            "E-CMD-EMPTY",
+            "W-DESC-EMPTY",
+            "W-DESC-MISSING",
+            "W-CMD-MISSING",
+            "I-FIELD-UNKNOWN",
+            "I-OUTPUT-PRESENT",
+            "I-TAGS-EMPTY",
+            "I-CHOICE-VARS",
+            "W-DUP-CMD",
+            "W-DUP-DESC",
+        ];
+        for code in &codes {
+            let prefix = &code[..2];
+            assert!(
+                prefix == "E-" || prefix == "W-" || prefix == "I-",
+                "Code '{}' should start with E-, W-, or I-",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_strict_mode_error_classification() {
+        let diagnostics = vec![
+            CompatibilityDiagnostic {
+                code: "W-DESC-EMPTY".to_string(),
+                severity: DiagnosticSeverity::Warning,
+                message: "warn".to_string(),
+                entry_index: Some(0),
+                field: None,
+                suggestion: None,
+                span: None,
+            },
+            CompatibilityDiagnostic {
+                code: "I-TAGS-EMPTY".to_string(),
+                severity: DiagnosticSeverity::Info,
+                message: "info".to_string(),
+                entry_index: Some(0),
+                field: None,
+                suggestion: None,
+                span: None,
+            },
+        ];
+
+        let has_errors = diagnostics
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error);
+        assert!(!has_errors);
+
+        let mut diagnostics_with_error = diagnostics.clone();
+        diagnostics_with_error.push(CompatibilityDiagnostic {
+            code: "E-CMD-EMPTY".to_string(),
+            severity: DiagnosticSeverity::Error,
+            message: "error".to_string(),
+            entry_index: Some(1),
+            field: None,
+            suggestion: None,
+            span: None,
+        });
+        let has_errors = diagnostics_with_error
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error);
+        assert!(has_errors);
+    }
+
+    #[test]
+    fn test_diagnostic_bounded_message() {
+        let long_message = "x".repeat(1000);
+        let diag = CompatibilityDiagnostic {
+            code: "TEST".to_string(),
+            severity: DiagnosticSeverity::Info,
+            message: long_message.clone(),
+            entry_index: None,
+            field: None,
+            suggestion: None,
+            span: None,
+        };
+        assert_eq!(diag.message.len(), 1000);
+
+        let json = serde_json::to_string(&diag).unwrap();
+        let roundtripped: CompatibilityDiagnostic = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped.message.len(), 1000);
+    }
+
+    #[test]
+    fn test_doctor_report_recommendation() {
+        let mut report = DoctorReport::new(false);
+        report.recommended_import_command = Some("snp import pet /path/to/file.toml".to_string());
+
+        let json = serde_json::to_string(&report).unwrap();
+        let roundtripped: DoctorReport = serde_json::from_str(&json).unwrap();
+        assert!(roundtripped.recommended_import_command.is_some());
+        assert!(
+            roundtripped
+                .recommended_import_command
+                .unwrap()
+                .contains("snp import pet")
+        );
+    }
+
+    #[test]
+    fn test_diagnostic_counts_empty() {
+        let (info, warning, error) = diagnostic_counts(&[]);
+        assert_eq!(info, 0);
+        assert_eq!(warning, 0);
+        assert_eq!(error, 0);
+    }
+
+    #[test]
+    fn test_pet_import_report_full_roundtrip() {
+        let mut report = PetImportReport::new("/tmp/pet.toml", Some("mylib"), true, false);
+        report.total_entries = 5;
+        report.imported = 3;
+        report.skipped = 2;
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "W-DESC-EMPTY".to_string(),
+            severity: DiagnosticSeverity::Warning,
+            message: "Empty description".to_string(),
+            entry_index: Some(0),
+            field: Some("description".to_string()),
+            suggestion: None,
+            span: None,
+        });
+        report.duplicates.push(ImportDuplicate {
+            source_index: 0,
+            destination_index: 2,
+            description: "test".to_string(),
+            reason: "Exact duplicate".to_string(),
+        });
+        report.normalizations.push(NormalizationRecord {
+            entry_index: 1,
+            field: "tags".to_string(),
+            original: "git".to_string(),
+            normalized: "[\"git\"]".to_string(),
+        });
+
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let roundtripped: PetImportReport = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtripped.total_entries, 5);
+        assert_eq!(roundtripped.imported, 3);
+        assert_eq!(roundtripped.skipped, 2);
+        assert_eq!(roundtripped.diagnostics.len(), 1);
+        assert_eq!(roundtripped.duplicates.len(), 1);
+        assert_eq!(roundtripped.normalizations.len(), 1);
+        assert!(!roundtripped.mutation_flag);
+        assert!(roundtripped.dry_run);
     }
 }

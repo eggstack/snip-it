@@ -31,13 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 35 new tests: 20 integration tests (default create, explicit name, collision, merge, dry-run, source untouched, JSON report, error cases, strict/permissive, replace, command preservation, choice variables, mixed aliases, help, flag conflicts) and 15 unit tests (name derivation, duplicate detection, TOML parsing, entry conversion).
 - **Compatibility diagnostics (Release 3C)**
   - `snp doctor --pet-file <path>` performs read-only analysis of pet snippet files: TOML parse status, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, and recommended import command.
-  - `snp doctor --compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, and shell availability.
-  - Shared diagnostic model (`src/diagnostics.rs`) used by both import and doctor: `CompatibilityDiagnostic`, `DoctorReport`, `PetImportReport` with stable machine-readable codes.
+  - `snp doctor --compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability, shell init syntax validation (bash -n/zsh -n/fish --no-execute), editor configuration ($EDITOR/$VISUAL), legacy paths, Release 1 select availability, Release 2 acquisition flags, and Release 3 choice-variable parser.
+  - `snp doctor --library <name>` analyzes a specific library file using the same analysis as --pet-file.
+  - `snp doctor --check-shell <bash|zsh|fish>` validates `snp shell init` output syntax for the specified shell.
+  - Shared diagnostic model (`src/diagnostics.rs`) with `SourceSpan` type for byte-offset source positions, used by both import and doctor: `CompatibilityDiagnostic`, `DoctorReport`, `PetImportReport` with stable machine-readable codes (E-/W-/I- prefix convention).
   - Options: `--strict` (treat warnings as errors), `--report human|json` (output format).
   - Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found).
   - Human-readable report to stderr; JSON report to stdout (same stream convention as `snp import`).
   - Doctor never mutates source, destination, config, or library state.
-  - 9 integration tests and 6 unit tests covering file analysis, JSON output, compatibility audit, strict mode, and non-mutation.
+  - 29 integration tests and 18 unit tests covering file analysis, JSON output, compatibility audit, strict mode, non-mutation, command execution prevention, variable expansion prevention, API key leakage prevention, config preservation, and import/doctor consistency.
 - **Pet multiple-choice variable compatibility (Release 3A)**
   - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).

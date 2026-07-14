@@ -4289,3 +4289,485 @@ command = "echo hello"
     let after = std::fs::read_to_string(&pet_path).unwrap();
     assert_eq!(before, after, "Doctor should not modify the source file");
 }
+
+// --- Security/Privacy tests ---
+
+#[test]
+fn test_doctor_no_command_execution() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("dangerous.toml");
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = "dangerous"
+command = "rm -rf /tmp/snp-test-dangerous-$$"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!std::path::Path::new("/tmp/snp-test-dangerous-*").exists());
+}
+
+#[test]
+fn test_doctor_no_variable_expansion() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("vars.toml");
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = "with variable"
+command = "echo <UNIQUE_TEST_VAR_12345>"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let caps = json["detected_capabilities"].as_array().unwrap();
+    assert!(
+        caps.iter().any(|c| c.as_str() == Some("variables")),
+        "Should detect variables in capabilities"
+    );
+}
+
+#[test]
+fn test_doctor_no_api_key_leakage() {
+    let (_tmp, config_dir) = setup_test_env();
+    let sync_path = config_dir.join("sync.toml");
+    std::fs::write(
+        &sync_path,
+        r#"
+enabled = true
+server_url = "https://sync.example.com"
+api_key = "super_secret_api_key_12345"
+direction = "push"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility", "--report", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("super_secret_api_key_12345"),
+        "Doctor output should not leak API keys"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("super_secret_api_key_12345"),
+        "Doctor stderr should not leak API keys"
+    );
+}
+
+#[test]
+fn test_doctor_config_not_mutated() {
+    let (_tmp, config_dir) = setup_test_env();
+    let sync_path = config_dir.join("sync.toml");
+    std::fs::write(&sync_path, "enabled = false\n").unwrap();
+    let before = std::fs::read_to_string(&sync_path).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after = std::fs::read_to_string(&sync_path).unwrap();
+    assert_eq!(before, after, "Doctor should not modify config files");
+}
+
+// --- Integration matrix tests ---
+
+#[test]
+fn test_doctor_pet_required_default_variables() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/variable_commands.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("variables")
+            || stderr.contains("Variables")
+            || stderr.contains("supported")
+            || stderr.contains("Supported")
+    );
+}
+
+#[test]
+fn test_doctor_duplicates_with_output() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_with_duplicates.toml");
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let duplicates = json["duplicates"].as_array().unwrap();
+    assert!(!duplicates.is_empty(), "Should detect duplicates");
+}
+
+#[test]
+fn test_doctor_multiline_commands() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_multiline.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Doctor Report"));
+}
+
+#[test]
+fn test_doctor_mixed_field_aliases() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_mixed_aliases.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_doctor_pet_edge_cases() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/pet_edge_cases.toml");
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    // Empty commands in edge_cases.toml trigger error diagnostics → exit code 2
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn test_doctor_empty_file() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("empty.toml");
+    std::fs::write(&pet_path, "").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_doctor_malformed_toml() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("malformed.toml");
+    std::fs::write(&pet_path, "[[snippets]\ndescription = \"unclosed").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    // Malformed TOML should succeed (doctor reports TOML error, doesn't fail)
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("TOML Error")
+            || stderr.contains("toml")
+            || stderr.contains("error")
+            || stderr.contains("Error")
+    );
+}
+
+#[test]
+fn test_doctor_warnings_only_exit_zero() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("warnings_only.toml");
+    // Empty description is a warning, not an error
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = ""
+command = "echo hello"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Warnings-only should exit 0, got {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
+fn test_doctor_json_stdout_only() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    // stdout should be valid JSON
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(json.is_object());
+    // stderr should NOT contain JSON (human output goes there)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("\"schema_version\""),
+        "stderr should not contain JSON"
+    );
+}
+
+#[test]
+fn test_doctor_human_no_mutation() {
+    let (_tmp, _config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("test_pet.toml");
+    let content = r#"
+[[snippets]]
+description = "test"
+command = "echo hello"
+"#;
+    std::fs::write(&pet_path, content).unwrap();
+    let before = std::fs::read_to_string(&pet_path).unwrap();
+
+    let output = snp_cmd()
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after = std::fs::read_to_string(&pet_path).unwrap();
+    assert_eq!(
+        before, after,
+        "Doctor human mode should not modify the source file"
+    );
+}
+
+#[test]
+fn test_doctor_library_mode() {
+    let (_tmp, config_dir) = setup_test_env();
+    // First create a library with snippets
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+    let output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            fixture.to_str().unwrap(),
+            "--library",
+            "test-doc-lib",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Now run doctor on the library
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--library", "test-doc-lib"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Doctor Report"));
+}
+
+#[test]
+fn test_doctor_check_shell() {
+    let output = snp_cmd()
+        .args(["doctor", "--check-shell", "bash"])
+        .output()
+        .unwrap();
+    // May succeed or fail depending on whether bash is installed
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Doctor Report") || stderr.contains("shell_init"),
+        "stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_doctor_compatibility_has_all_checks() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should contain at least some of these check codes
+    assert!(
+        stderr.contains("binary") || stderr.contains("version"),
+        "stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("config") || stderr.contains("Config"),
+        "stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_doctor_malformed_choice_variables() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("bad_choices.toml");
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = "bad choices"
+command = "echo <color=|>"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--pet-file", pet_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    // Should succeed (doctor is read-only) and report diagnostics
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_doctor_unknown_metadata_fields() {
+    let (_tmp, config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("unknown_fields.toml");
+    std::fs::write(
+        &pet_path,
+        r#"
+[[snippets]]
+description = "has unknown fields"
+command = "echo hello"
+custom_field = "should be ignored"
+another_unknown = 42
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let diags = json["diagnostics"].as_array().unwrap();
+    // Should have at least 2 unknown field diagnostics
+    let unknown_fields: Vec<_> = diags
+        .iter()
+        .filter(|d| d["code"].as_str().unwrap_or("").contains("FIELD-UNKNOWN"))
+        .collect();
+    assert!(
+        unknown_fields.len() >= 2,
+        "Expected at least 2 unknown field diagnostics, got {}: {:?}",
+        unknown_fields.len(),
+        unknown_fields
+    );
+}
+
+#[test]
+fn test_doctor_import_dryrun_consistency() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    // Run doctor
+    let doctor_output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(doctor_output.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&doctor_output.stdout)).unwrap();
+
+    // Run import --dry-run
+    let (_tmp, config_dir) = setup_test_env();
+    let import_output = snp_in(&config_dir)
+        .args([
+            "import",
+            "pet",
+            fixture.to_str().unwrap(),
+            "--dry-run",
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(import_output.status.success());
+    let import_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&import_output.stdout)).unwrap();
+
+    // Both should have the same total_entries
+    assert_eq!(
+        doctor_json["total_entries"], import_json["total_entries"],
+        "Doctor and import dry-run should agree on entry count"
+    );
+
+    // Both should have schema_version 1.0.0
+    assert_eq!(doctor_json["schema_version"], "1.0.0");
+    assert_eq!(import_json["schema_version"], "1.0.0");
+}

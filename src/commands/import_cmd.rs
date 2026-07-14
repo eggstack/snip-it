@@ -174,6 +174,7 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
                     message: format!("Unknown field '{}' will be ignored", key),
                     code: "I-FIELD-UNKNOWN".to_string(),
                     suggestion: None,
+                    span: None,
                 });
             }
         }
@@ -190,6 +191,7 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
                 message: "Entry missing 'description' field (will be empty)".to_string(),
                 code: "W-DESC-MISSING".to_string(),
                 suggestion: None,
+                span: None,
             });
         }
 
@@ -204,6 +206,7 @@ fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
                 message: "Entry missing 'command' field (will be empty)".to_string(),
                 code: "W-CMD-MISSING".to_string(),
                 suggestion: None,
+                span: None,
             });
         }
     }
@@ -253,6 +256,7 @@ fn convert_entry(
             message: "Entry has empty description".to_string(),
             code: "W-DESC-EMPTY".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -265,6 +269,7 @@ fn convert_entry(
             message: "Entry has empty command".to_string(),
             code: "E-CMD-EMPTY".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -280,6 +285,7 @@ fn convert_entry(
             message: "Entry has output field (preserved)".to_string(),
             code: "I-OUTPUT-PRESENT".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -292,6 +298,7 @@ fn convert_entry(
             message: "Entry has no tags".to_string(),
             code: "I-TAGS-EMPTY".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -310,6 +317,7 @@ fn convert_entry(
             message: "Entry contains choice variables".to_string(),
             code: "I-VAR-CHOICES".to_string(),
             suggestion: None,
+            span: None,
         });
     }
 
@@ -517,6 +525,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                 ),
                                 code: "W-CMD-DUPLICATE".to_string(),
                                 suggestion: None,
+                                span: None,
                             });
                         }
                         if same_description_different_command(candidate, existing_snippet) {
@@ -528,6 +537,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                     .to_string(),
                                 code: "W-DESC-DUPLICATE".to_string(),
                                 suggestion: None,
+                                span: None,
                             });
                         }
                     }
