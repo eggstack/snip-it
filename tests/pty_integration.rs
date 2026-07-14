@@ -875,3 +875,53 @@ fn test_run_records_usage_exactly_once() {
     assert_eq!(entry.use_count, 1, "use_count should be 1 after first run");
     assert!(entry.last_used_at.is_some(), "last_used_at should be set");
 }
+
+// ── TUI output preview ──────────────────────────────────────────────
+
+/// Helper: create a library with snippets that have non-empty output fields.
+fn setup_test_env_with_output() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let library_content = r#"[[snippets]]
+id = "output-1"
+description = "Snippet with output"
+command = "echo hello"
+tag = ["test"]
+output = "sample output text"
+
+[[snippets]]
+id = "output-2"
+description = "Another snippet"
+command = "echo world"
+tag = ["test"]
+output = "secondary output"
+"#;
+    fs::write(libraries_dir.join("output-test.toml"), library_content).unwrap();
+
+    let libraries_config = r#"[[libraries]]
+filename = "output-test"
+is_primary = true
+"#;
+    fs::write(config_dir.join("libraries.toml"), libraries_config).unwrap();
+
+    (tmp, config_dir)
+}
+
+#[test]
+fn test_tui_output_preview_shows_output_content() {
+    let (_tmp, config_dir) = setup_test_env_with_output();
+    let keys = vec![b'\x1b', b'q']; // Esc to NORMAL mode, then q to quit
+    let (code, output) = run_snp_pty(&["select", "--library", "output-test"], &config_dir, &keys);
+    assert_eq!(code, 4, "select cancel should exit 4");
+    assert!(
+        output.contains("--- Output / Notes ---"),
+        "PTY output should contain '--- Output / Notes ---' separator. Got: {output}"
+    );
+    assert!(
+        output.contains("sample output text"),
+        "PTY output should contain the output content. Got: {output}"
+    );
+}

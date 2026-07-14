@@ -32,11 +32,11 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 |---------|-------|--------|-------|-------------|
 | `version` | `v` | — | No | Print version |
 | `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor |
-| `list` | `l` | `list_cmd` | No | List snippets (with fuzzy filter) |
+| `list` | `l` | `list_cmd` | No | List snippets (fuzzy filter; `--search-output` includes output in match) |
 | `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell |
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard |
 | `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |
-| `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR` |
+| `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`) |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
 | `sync` | `y` | `sync_cmd` | Yes | Sync snippets with server |
 | `cron` | — | `cron_cmd` | No | Generate crontab entry for auto-sync |
@@ -87,8 +87,9 @@ command specification is parsed with `shell-words` — no shell is invoked.
 - `src/commands/sync_cmd.rs` — Server library linking, conflict resolution
 - `src/commands/library_cmd.rs` — Library CRUD operations
 - `src/commands/premade_cmd.rs` — Premade library browsing/downloading
-- `src/commands/edit_cmd.rs` — Editor resolution (absolute, relative, PATH search)
+- `src/commands/edit_cmd.rs` — Editor resolution (absolute, relative, PATH search); output/notes editing (`--output`, `--output-stdin`, `--clear-output`)
 - `src/commands/cron_cmd.rs` — Crontab entry generation
 - `src/commands/register_cmd.rs` — Account registration
 - `src/commands/keybindings_cmd.rs` — Keybinding reference display
 - `src/commands/list_cmd.rs` — CLI-based snippet listing with fuzzy filter
+- `src/output.rs` — Output/notes presentation model, terminal sanitization, search scoring

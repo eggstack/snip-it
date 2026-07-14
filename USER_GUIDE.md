@@ -543,6 +543,37 @@ output, including tie-breaks. Ties are resolved by: primary sort key,
 favorites-first grouping, fuzzy relevance (when meaningful), normalized
 description, and original index.
 
+### Output / notes metadata
+
+Each snippet can store descriptive metadata in the `output` field (also
+called "notes"). This field is preserved during import, sync, and backup.
+It is never automatically captured from command execution.
+
+In the TUI preview, output appears below the command separated by
+`--- Output / Notes ---` when present. Empty output is hidden.
+
+#### Editing output
+
+```bash
+snp edit --output "Example output for this command" --filter "ssh"
+snp edit --output-stdin --filter "ssh" < notes.txt
+snp edit --clear-output --filter "ssh"
+```
+
+`--output`, `--output-stdin`, and `--clear-output` are mutually exclusive.
+`--filter` is required and matches by description or command substring.
+
+#### Output-aware search
+
+```bash
+snp list --search-output --filter "sample"
+```
+
+By default, fuzzy search matches description and command only. The
+`--search-output` flag includes the output field in fuzzy matching
+(bounded to 512 characters for scoring). Output is always included
+in JSON and CSV export regardless of this flag.
+
 ## Variables
 
 Variables are expanded when a snippet is run or copied:
@@ -623,6 +654,7 @@ Useful environment variables:
 snp list --json
 snp list --csv
 snp list --filter docker --json
+snp list --search-output --filter sample
 ```
 
 `snp cron` prints a cron entry and offers to copy it to the clipboard:

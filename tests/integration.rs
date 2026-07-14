@@ -6122,3 +6122,57 @@ fn test_edit_output_help_text() {
     assert!(stdout.contains("--output-stdin"));
     assert!(stdout.contains("--clear-output"));
 }
+
+#[test]
+fn test_search_output_default_excludes_output_from_matching() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // The "single line output" snippet has output "This is a sample output"
+    // but its description is "single line output" and command is "echo hello"
+    // Without --search-output, searching for "sample" should NOT match it
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--filter", "sample"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // "sample" only appears in the output field, not in description or command
+    assert!(
+        !stdout.contains("single line output"),
+        "Without --search-output, 'sample' should not match. Got: {stdout}"
+    );
+}
+
+#[test]
+fn test_legacy_snippet_without_output_field_loads() {
+    let (_tmp, config_dir) = setup_test_env();
+    let lib_dir = config_dir.join("libraries");
+    fs::create_dir_all(&lib_dir).unwrap();
+
+    // Create the library first (creates an empty TOML file)
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "legacy"]);
+    cmd.output().unwrap();
+
+    // Overwrite with legacy-format snippet without the output field
+    fs::write(
+        lib_dir.join("legacy.toml"),
+        r#"[[snippets]]
+description = "legacy snippet"
+command = "echo legacy"
+tag = ["old"]
+"#,
+    )
+    .unwrap();
+
+    // List should succeed and show the snippet
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "legacy", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["description"], "legacy snippet");
+    // output should default to empty string
+    assert_eq!(items[0]["output"], "");
+}

@@ -1156,4 +1156,43 @@ mod tests {
         // If you need to add a field to ProtoSnippet, ensure it is not
         // local-only usage metadata before adding it here.
     }
+
+    #[test]
+    fn test_merge_preserves_local_output_when_server_wins() {
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "local desc".to_string(),
+                command: "echo local".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: "local output metadata".to_string(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d".to_string(),
+                deleted: false,
+            }],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "server desc".to_string(),
+            command: "echo server".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200, // server is newer
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 1);
+        // Server wins on description/command (newer timestamp)
+        assert_eq!(merged.snippets[0].description, "server desc");
+        assert_eq!(merged.snippets[0].command, "echo server");
+        // But local output is preserved (it's a local-only field)
+        assert_eq!(merged.snippets[0].output, "local output metadata");
+    }
 }
