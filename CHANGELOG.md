@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Golden command corpus expanded from 15 to 24 entries including tabs, trailing spaces, CRLF, mixed newlines, and combinations with quotes and backslashes.
 
 ### Added
+- Sort and ranking system (`--sort` and `--favorites-first` flags) for run, clip, search, select, and list commands
+  - Sort modes: relevance (default), recent, last-used, most-used, description, command
+  - `--favorites-first` groups favorited snippets before others
+- Local-only usage tracking: records use count and last-used timestamp on successful run/clip
+- Usage metadata stored in `~/.config/snp/usage.toml` (atomic writes, fail-open on corruption)
+- Shared sort model in `src/sort.rs` with deterministic tie-break chain
+- TUI sort indicators for all modes including `[used]` and `[freq]`
+- Integration tests for sort flags, favorites-first, and CSV/JSON sort output
 - **Explicit pet import command (Release 3B)**
   - `snp import pet <path>` creates a native named library from a pet TOML file. Source files are never modified.
   - Options: `--library <name>`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file <path>`.

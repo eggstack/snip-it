@@ -23,6 +23,7 @@ pub mod sync_cmd;
 
 use crate::config::invalidate_toml_cache;
 use crate::error::{SnipError, SnipResult};
+use crate::sort::SortOptions;
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use std::path::PathBuf;
 
@@ -246,6 +247,7 @@ pub fn run_snippet_selection<F>(
     filter: Option<String>,
     library: Option<String>,
     do_sync: bool,
+    sort_opts: Option<SortOptions>,
     runtime: &tokio::runtime::Runtime,
     mut process_fn: F,
 ) -> crate::error::SnipResult<crate::SelectionOutcome>
@@ -278,6 +280,7 @@ where
             favorites: &snippet_data.favorites,
             snippets: &snippets.snippets,
             original_indices: &original_indices,
+            sort_opts: sort_opts.as_ref(),
         })?;
         if let Some(result) = result {
             match result {

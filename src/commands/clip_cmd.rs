@@ -19,6 +19,12 @@ fn process_snippet(
     if let Err(e) = audit_log("copy", snippet, None) {
         tracing::debug!("Audit log write failed: {}", e);
     }
+    // Record usage for sorting
+    let mut usage_idx = crate::usage::UsageIndex::load();
+    usage_idx.record_use(&snippet.id);
+    if let Err(e) = usage_idx.save() {
+        tracing::debug!("Usage save failed: {}", e);
+    }
     Ok(crate::ProcessResult::Done(
         "Copied to clipboard".to_string(),
     ))
@@ -30,11 +36,16 @@ pub fn run(
     do_sync: bool,
     library: Option<String>,
     _config: Option<PathBuf>,
+    sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    let _outcome =
-        run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
-            process_snippet(snippet, copy_flag)
-        })?;
+    let _outcome = run_snippet_selection(
+        filter,
+        library,
+        do_sync,
+        sort_opts,
+        runtime,
+        process_snippet,
+    )?;
     Ok(())
 }

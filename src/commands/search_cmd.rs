@@ -8,6 +8,7 @@ pub fn run(
     do_sync: bool,
     library: Option<String>,
     config: Option<PathBuf>,
+    sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
     // Propagate --config to the snippet selection pipeline
@@ -22,6 +23,7 @@ pub fn run(
         filter,
         effective_library,
         do_sync,
+        sort_opts,
         runtime,
         |snippet, _copy_flag| {
             println!("Description: {}", snippet.description);

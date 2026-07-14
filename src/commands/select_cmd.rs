@@ -51,6 +51,7 @@ pub fn run(
     _raw: bool,
     expanded: bool,
     output_file: Option<PathBuf>,
+    sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<CommandOutcome> {
     let mode = if expanded {
@@ -61,14 +62,20 @@ pub fn run(
     let cancelled = Cell::new(false);
     let selected_command = Cell::new(None);
 
-    let selection_outcome =
-        run_snippet_selection(filter, library, false, runtime, |snippet, _copy_flag| {
+    let selection_outcome = run_snippet_selection(
+        filter,
+        library,
+        false,
+        sort_opts,
+        runtime,
+        |snippet, _copy_flag| {
             let result = process_snippet(snippet, mode, &cancelled)?;
             if let crate::ProcessResult::Done(cmd) = &result {
                 selected_command.set(Some(cmd.clone()));
             }
             Ok(result)
-        })?;
+        },
+    )?;
 
     match (selection_outcome, cancelled.get(), selected_command.take()) {
         (SelectionOutcome::Cancelled, _, _) | (_, true, _) => {

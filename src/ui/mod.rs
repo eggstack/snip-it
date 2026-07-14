@@ -190,12 +190,23 @@ fn sort_filtered_indices(
     snippets: &[crate::library::Snippet],
     display_lower: &[String],
     has_filter: bool,
+    favorites_first: bool,
 ) {
-    if filter_state.sort_mode == SortMode::None && !has_filter {
+    if filter_state.sort_mode == SortMode::None && !has_filter && !favorites_first {
         return;
     }
 
     filtered.sort_unstable_by(|a, b| {
+        // Favorites-first is an orthogonal grouping modifier
+        if favorites_first {
+            let fav_a = snippets.get(a.0).map(|s| s.favorite).unwrap_or(false);
+            let fav_b = snippets.get(b.0).map(|s| s.favorite).unwrap_or(false);
+            match fav_b.cmp(&fav_a) {
+                std::cmp::Ordering::Equal => {}
+                other => return other,
+            }
+        }
+
         let score_cmp = match (a.1, b.1) {
             (Some(sa), Some(sb)) => sb.cmp(&sa),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -225,6 +236,30 @@ fn sort_filtered_indices(
                                 .created_at
                                 .cmp(&b_snip.created_at)
                                 .then_with(|| a.0.cmp(&b.0))
+                        })
+                }
+                SortMode::LastUsed => {
+                    // Proxy: sort by updated_at descending (usage data not available in TUI)
+                    snippets
+                        .get(b.0)
+                        .zip(snippets.get(a.0))
+                        .map(|(b_snip, a_snip)| {
+                            b_snip
+                                .updated_at
+                                .cmp(&a_snip.updated_at)
+                                .then_with(|| b.0.cmp(&a.0))
+                        })
+                }
+                SortMode::MostUsed => {
+                    // Proxy: sort by updated_at descending (usage data not available in TUI)
+                    snippets
+                        .get(b.0)
+                        .zip(snippets.get(a.0))
+                        .map(|(b_snip, a_snip)| {
+                            b_snip
+                                .updated_at
+                                .cmp(&a_snip.updated_at)
+                                .then_with(|| b.0.cmp(&a.0))
                         })
                 }
                 _ => None,
@@ -458,6 +493,7 @@ pub struct SnippetListParams<'a> {
     pub favorites: &'a [bool],
     pub snippets: &'a [crate::library::Snippet],
     pub original_indices: &'a [usize],
+    pub sort_opts: Option<&'a crate::sort::SortOptions>,
 }
 
 /// Action returned by the snippet selector after the user leaves the TUI.
@@ -486,6 +522,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         favorites,
         snippets,
         original_indices: _original_indices,
+        sort_opts,
     } = params;
     // Enable mouse capture before initializing terminal
     // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
@@ -508,7 +545,23 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
     let mut incremental_search = String::new();
     // input_text tracks what user types in insert mode - displayed in filter input box, NOT in title bar
     let mut input_text = String::new();
-    let mut filter_state = FilterState::default();
+    let mut filter_state = if let Some(opts) = sort_opts {
+        let mode = match opts.mode {
+            crate::sort::SnippetSort::Relevance => state::SortMode::None,
+            crate::sort::SnippetSort::Recent => state::SortMode::Newest,
+            crate::sort::SnippetSort::LastUsed => state::SortMode::LastUsed,
+            crate::sort::SnippetSort::MostUsed => state::SortMode::MostUsed,
+            crate::sort::SnippetSort::Description => state::SortMode::AlphaAsc,
+            crate::sort::SnippetSort::Command => state::SortMode::AlphaDesc,
+        };
+        FilterState {
+            sort_mode: mode,
+            tag_filter_text: String::new(),
+        }
+    } else {
+        FilterState::default()
+    };
+    let _favorites_first = sort_opts.is_some_and(|o| o.favorites_first);
     let mut filtered: Vec<usize> = (0..descriptions.len()).collect();
     let mut insert_mode = true;
     let mut tag_filter_mode = false;
@@ -695,6 +748,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 snippets,
                 &all_display_lower,
                 has_filter,
+                _favorites_first,
             );
 
             filtered.clear();
@@ -749,6 +803,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 SortMode::Oldest => "[old]".to_string(),
                 SortMode::AlphaAsc => "[a-z]".to_string(),
                 SortMode::AlphaDesc => "[z-a]".to_string(),
+                SortMode::LastUsed => "[used]".to_string(),
+                SortMode::MostUsed => "[freq]".to_string(),
             };
 
             let draw_result = terminal.draw(|f| {

@@ -22,6 +22,7 @@ pub fn run(
     config: Option<PathBuf>,
     library: Option<String>,
     format: ListFormat,
+    sort_opts: Option<crate::sort::SortOptions>,
 ) -> SnipResult<()> {
     let snippets = if config.is_some() {
         load_snippets(&config)?
@@ -38,7 +39,7 @@ pub fn run(
 
     let matcher = SkimMatcherV2::default();
 
-    let filtered: Vec<_> = if let Some(ref filter_str) = filter {
+    let mut filtered: Vec<_> = if let Some(ref filter_str) = filter {
         snippets
             .snippets
             .iter()
@@ -57,6 +58,19 @@ pub fn run(
             .filter(|(_, s)| !s.deleted)
             .collect()
     };
+
+    // Apply sort if specified
+    if let Some(ref opts) = sort_opts {
+        let indices: Vec<usize> = filtered.iter().map(|(i, _)| *i).collect();
+        let sorted_indices =
+            crate::sort::rank_snippets(&indices, &snippets.snippets, None, None, opts);
+        let rank_map: std::collections::HashMap<usize, usize> = sorted_indices
+            .iter()
+            .enumerate()
+            .map(|(rank, &idx)| (idx, rank))
+            .collect();
+        filtered.sort_by_key(|(i, _)| rank_map.get(i).copied().unwrap_or(usize::MAX));
+    }
 
     match format {
         ListFormat::Json => {

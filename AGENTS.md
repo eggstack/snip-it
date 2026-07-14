@@ -105,6 +105,8 @@ snip-it/
 │   │   ├── highlight.rs # Syntax highlighting for commands
 │   │   ├── variables.rs # Variable prompting UI
 │   │   └── _generated_bundled_themes.rs # LZMA-compressed bundled themes (build-time)
+│   ├── sort.rs         # Shared sort/rank model (SnippetSort enum, rank_snippets)
+│   ├── usage.rs        # Local-only usage metadata (UsageIndex, usage.toml)
 │   ├── commands/       # One module per CLI subcommand
 │   │   ├── mod.rs      # Shared helpers: expand_snippet_command, get_library_path
 │   │   ├── run_cmd.rs  # Snippet execution via shell
@@ -197,6 +199,22 @@ snip-it/
 - Debounced filter updates (150ms)
 - Theme picker: press `e` in normal mode to open; `j`/`k` to preview live, `i` to filter, `Enter` to commit, `e`/`q`/`Esc` to cancel. INS sub-mode mirrors the snippet browser INS UX.
 - Theme: Halloy-compatible TOML at `~/.config/snp/themes/<name>.toml`; active theme persisted in `~/.config/snp/themes.toml`. `SNP_THEME` env var still works for backward compat.
+
+### Sorting and Ranking (Release 4A)
+- `SnippetSort` enum in `src/sort.rs`: Relevance (default), Recent, LastUsed, MostUsed, Description, Command
+- `rank_snippets()` provides deterministic, stable sorting with tie-break chain:
+  1. Primary key (sort mode)
+  2. Favorites-first grouping (orthogonal modifier)
+  3. Fuzzy relevance (for Relevance mode)
+  4. Normalized description
+  5. Original index (stable)
+- CLI flags `--sort <mode>` and `--favorites-first` on: run, clip, search, select, list
+- TUI interactive sort keybinds (n/o/a/z) still work; CLI --sort sets the initial mode
+- `--sort` affects list JSON/CSV output ordering
+- Usage tracking via `src/usage.rs`: `UsageIndex` persists to `~/.config/snp/usage.toml`
+- Usage recorded on successful `run` and `clip` operations
+- Usage data is local-only, not synchronized
+- Missing/corrupt usage data fails open to zero usage
 
 ### Selection Outcome Architecture
 - **Three-layer outcome model:**
@@ -298,6 +316,7 @@ snip-it/
 - `~/.config/snp/premade/*.toml` — Downloaded premade libraries
 - `~/.config/snp/logs/` — Rolling log files (daily rotation)
 - `~/.config/snp/audit.log` — Audit log for snippet operations
+- `~/.config/snp/usage.toml` — Local usage metadata (use_count, last_used_at per snippet)
 
 ## Design Decisions
 
@@ -327,6 +346,7 @@ snip-it/
 - snip-sync has 78 tests (unit + integration)
 - Pet import tests (`tests/integration.rs`) cover: default create, explicit library, collision, merge, dry-run, source untouched, JSON report, invalid inputs, strict/permissive modes, replace with backup, command preservation, choice variables, mixed aliases, help text, flag conflicts
 - Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, entry conversion, command preservation, normalization recording, and output diagnostics
+- Sort integration tests (`tests/integration.rs`) cover: description sort, command sort, recent sort, favorites-first, default relevance, CSV sort, invalid sort value, help text for sort flags on all 5 commands
 - Pet analysis unit tests (`src/commands/pet_analysis.rs`) cover: source file validation, TOML parsing, field detection, entry analysis, duplicate detection, malformed variable detection, and library name sanitization
 - Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, empty file, normalization preview, malformed variable detection, canonical Pet TOML loading check, and library state non-mutation
 - Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: library name sanitization, and malformed variable detection

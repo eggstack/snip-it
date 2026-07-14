@@ -8,6 +8,8 @@ pub(super) enum SortMode {
     Oldest,
     AlphaAsc,
     AlphaDesc,
+    LastUsed,
+    MostUsed,
 }
 
 #[derive(Clone, Default)]
@@ -93,6 +95,22 @@ impl FilterState {
             SortMode::None
         } else {
             SortMode::AlphaDesc
+        };
+    }
+    #[allow(dead_code)]
+    pub fn toggle_sort_last_used(&mut self) {
+        self.sort_mode = if self.sort_mode == SortMode::LastUsed {
+            SortMode::None
+        } else {
+            SortMode::LastUsed
+        };
+    }
+    #[allow(dead_code)]
+    pub fn toggle_sort_most_used(&mut self) {
+        self.sort_mode = if self.sort_mode == SortMode::MostUsed {
+            SortMode::None
+        } else {
+            SortMode::MostUsed
         };
     }
 }

@@ -4964,3 +4964,223 @@ command = "echo <name"
         "Should detect malformed variable placeholder"
     );
 }
+
+// --- Sort and Ranking (Release 4A) ---
+
+fn create_sort_test_library(config_dir: &Path, lib_name: &str) {
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", lib_name]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    let lib_path = libraries_dir.join(format!("{lib_name}.toml"));
+    fs::write(
+        &lib_path,
+        r#"
+[[Snippets]]
+description = "zebra list"
+command = "ls -la"
+tags = ["files"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+
+[[Snippets]]
+description = "alpha deploy"
+command = "deploy.sh"
+tags = ["deploy"]
+output = ""
+folders = []
+favorite = true
+created_at = 300
+updated_at = 300
+
+[[Snippets]]
+description = "middle status"
+command = "git status"
+tags = ["git"]
+output = ""
+folders = []
+favorite = false
+created_at = 200
+updated_at = 200
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "set-primary", lib_name]);
+    cmd.output().unwrap();
+}
+
+#[test]
+fn test_list_sort_by_description() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-desc");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "description", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // alphabetical: alpha < middle < zebra
+    assert_eq!(items[0]["description"], "alpha deploy");
+    assert_eq!(items[1]["description"], "middle status");
+    assert_eq!(items[2]["description"], "zebra list");
+}
+
+#[test]
+fn test_list_sort_by_command() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-cmd");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "command", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // alphabetical by command: deploy.sh < git status < ls -la
+    assert_eq!(items[0]["command"], "deploy.sh");
+    assert_eq!(items[1]["command"], "git status");
+    assert_eq!(items[2]["command"], "ls -la");
+}
+
+#[test]
+fn test_list_sort_by_recent() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-recent");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "recent", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // most recently updated first: updated_at 300 > 200 > 100
+    assert_eq!(items[0]["description"], "alpha deploy");
+    assert_eq!(items[1]["description"], "middle status");
+    assert_eq!(items[2]["description"], "zebra list");
+}
+
+#[test]
+fn test_list_favorites_first() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-fav");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "list",
+        "--sort",
+        "description",
+        "--favorites-first",
+        "--json",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // favorite first (alpha deploy), then alphabetical: middle < zebra
+    assert_eq!(items[0]["description"], "alpha deploy");
+    assert!(items[0]["favorite"].as_bool().unwrap());
+    assert_eq!(items[1]["description"], "middle status");
+    assert_eq!(items[2]["description"], "zebra list");
+}
+
+#[test]
+fn test_list_sort_default_is_relevance() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-default");
+
+    // Without --sort flag, output should use default (relevance) ordering
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+}
+
+#[test]
+fn test_list_sort_csv_respects_sort() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-csv");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "description", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Header + 3 data rows
+    assert_eq!(lines.len(), 4);
+    // First data row should be "alpha deploy"
+    assert!(lines[1].contains("alpha deploy"));
+    assert!(lines[2].contains("middle status"));
+    assert!(lines[3].contains("zebra list"));
+}
+
+#[test]
+fn test_list_sort_invalid_value_rejected() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_sort_test_library(&config_dir, "sort-invalid");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "bogus"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_run_help_shows_sort_flag() {
+    let output = snp_cmd().args(["run", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--sort"));
+    assert!(stdout.contains("--favorites-first"));
+}
+
+#[test]
+fn test_clip_help_shows_sort_flag() {
+    let output = snp_cmd().args(["clip", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--sort"));
+    assert!(stdout.contains("--favorites-first"));
+}
+
+#[test]
+fn test_search_help_shows_sort_flag() {
+    let output = snp_cmd().args(["search", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--sort"));
+    assert!(stdout.contains("--favorites-first"));
+}
+
+#[test]
+fn test_select_help_shows_sort_flag() {
+    let output = snp_cmd().args(["select", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--sort"));
+    assert!(stdout.contains("--favorites-first"));
+}
+
+#[test]
+fn test_list_help_shows_sort_flag() {
+    let output = snp_cmd().args(["list", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--sort"));
+    assert!(stdout.contains("--favorites-first"));
+}

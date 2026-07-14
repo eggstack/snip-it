@@ -31,6 +31,8 @@ pub(crate) mod sync_commands;
 pub(crate) mod utils;
 
 pub mod diagnostics;
+pub mod sort;
+pub mod usage;
 
 pub use error::{SnipError, SnipResult};
 

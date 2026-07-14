@@ -142,6 +142,12 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         #[arg(conflicts_with = "json")]
         csv: bool,
+        /// Sort mode for snippet ordering
+        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
+        sort: snip_it::sort::SnippetSort,
+        /// Show favorites before other snippets
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        favorites_first: bool,
     },
     /// Run a snippet via TUI selection (r)
     #[command(alias = "r")]
@@ -152,6 +158,12 @@ enum Commands {
         sync: bool,
         #[arg(short, long)]
         library: Option<String>,
+        /// Sort mode for snippet ordering
+        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
+        sort: snip_it::sort::SnippetSort,
+        /// Show favorites before other snippets
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        favorites_first: bool,
     },
     /// Copy a snippet to clipboard via TUI selection (c)
     #[command(alias = "c")]
@@ -162,6 +174,12 @@ enum Commands {
         sync: bool,
         #[arg(short, long)]
         library: Option<String>,
+        /// Sort mode for snippet ordering
+        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
+        sort: snip_it::sort::SnippetSort,
+        /// Show favorites before other snippets
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        favorites_first: bool,
     },
     /// Search for a snippet via TUI selection (s)
     #[command(alias = "s")]
@@ -172,6 +190,12 @@ enum Commands {
         sync: bool,
         #[arg(short, long)]
         library: Option<String>,
+        /// Sort mode for snippet ordering
+        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
+        sort: snip_it::sort::SnippetSort,
+        /// Show favorites before other snippets
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        favorites_first: bool,
     },
     /// Select a snippet and print its command to stdout (no execution)
     #[command(alias = "sel")]
@@ -190,6 +214,12 @@ enum Commands {
         /// Write selection to file instead of stdout (used by shell integration)
         #[arg(long)]
         output_file: Option<PathBuf>,
+        /// Sort mode for snippet ordering
+        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
+        sort: snip_it::sort::SnippetSort,
+        /// Show favorites before other snippets
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        favorites_first: bool,
     },
     /// Edit the config file in $EDITOR (e)
     #[command(alias = "e")]
@@ -388,7 +418,7 @@ enum ShellIntegration {
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
-            commands::run_cmd::run(None, false, None, &RUNTIME)?;
+            commands::run_cmd::run(None, false, None, None, &RUNTIME)?;
         }
         Some(Commands::Version) => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
@@ -427,6 +457,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             library,
             json,
             csv,
+            sort,
+            favorites_first,
         }) => {
             let format = if json {
                 commands::list_cmd::ListFormat::Json
@@ -435,28 +467,50 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             } else {
                 commands::list_cmd::ListFormat::Default
             };
-            commands::list_cmd::run(filter, config, library, format)?;
+            let sort_opts = snip_it::sort::SortOptions {
+                mode: sort,
+                favorites_first,
+            };
+            commands::list_cmd::run(filter, config, library, format, Some(sort_opts))?;
         }
         Some(Commands::Run {
             filter,
             sync,
             library,
+            sort,
+            favorites_first,
         }) => {
-            commands::run_cmd::run(filter, sync, library, &RUNTIME)?;
+            let sort_opts = snip_it::sort::SortOptions {
+                mode: sort,
+                favorites_first,
+            };
+            commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
         }
         Some(Commands::Clip {
             filter,
             sync,
             library,
+            sort,
+            favorites_first,
         }) => {
-            commands::clip_cmd::run(filter, sync, library, None, &RUNTIME)?;
+            let sort_opts = snip_it::sort::SortOptions {
+                mode: sort,
+                favorites_first,
+            };
+            commands::clip_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
         }
         Some(Commands::Search {
             filter,
             sync,
             library,
+            sort,
+            favorites_first,
         }) => {
-            commands::search_cmd::run(filter, sync, library, None, &RUNTIME)?;
+            let sort_opts = snip_it::sort::SortOptions {
+                mode: sort,
+                favorites_first,
+            };
+            commands::search_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
         }
         Some(Commands::Select {
             filter,
@@ -465,14 +519,21 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             raw,
             expanded,
             output_file,
+            sort,
+            favorites_first,
         }) => {
             let effective_filter = filter.or(query);
+            let sort_opts = snip_it::sort::SortOptions {
+                mode: sort,
+                favorites_first,
+            };
             return commands::select_cmd::run(
                 effective_filter,
                 library,
                 raw,
                 expanded,
                 output_file,
+                Some(sort_opts),
                 &RUNTIME,
             );
         }

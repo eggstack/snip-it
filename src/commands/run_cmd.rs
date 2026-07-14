@@ -102,6 +102,12 @@ fn handle_command_result(
         if let Err(e) = audit_log("execute", snippet, None) {
             tracing::debug!("Audit log write failed: {}", e);
         }
+        // Record usage for sorting
+        let mut usage_idx = crate::usage::UsageIndex::load();
+        usage_idx.record_use(&snippet.id);
+        if let Err(e) = usage_idx.save() {
+            tracing::debug!("Usage save failed: {}", e);
+        }
         Ok(())
     } else {
         Err(format!("exit code: {result}"))
@@ -223,12 +229,17 @@ pub fn run(
     filter: Option<String>,
     do_sync: bool,
     library: Option<String>,
+    sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    let _outcome =
-        run_snippet_selection(filter, library, do_sync, runtime, |snippet, copy_flag| {
-            process_snippet(snippet, copy_flag.is_some())
-        })?;
+    let _outcome = run_snippet_selection(
+        filter,
+        library,
+        do_sync,
+        sort_opts,
+        runtime,
+        |snippet, copy_flag| process_snippet(snippet, copy_flag.is_some()),
+    )?;
     Ok(())
 }
 
