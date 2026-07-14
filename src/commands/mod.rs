@@ -268,6 +268,13 @@ where
     };
     let mut snippets = crate::library::load_library(&lib_path)?;
 
+    let usage_index = crate::usage::UsageIndex::load();
+    let usage_data: Vec<crate::usage::UsageData> = snippets
+        .snippets
+        .iter()
+        .map(|s| usage_index.get_usage(&s.id))
+        .collect();
+
     let mut selected_and_processed = false;
     let mut cancelled = false;
     loop {
@@ -283,6 +290,7 @@ where
             snippets: &snippets.snippets,
             original_indices: &original_indices,
             sort_opts: sort_opts.as_ref(),
+            usage: Some(&usage_data),
         })?;
         if let Some(result) = result {
             match result {

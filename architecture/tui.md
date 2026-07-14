@@ -23,10 +23,14 @@ pub struct SelectState {
 }
 
 pub struct FilterState {
-    pub sort_mode: SortMode,           // None, Newest, Oldest, AlphaAsc, AlphaDesc
+    pub sort_mode: SortMode,           // None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed
     pub tag_filter_text: String,       // Tag filter input
 }
 ```
+
+### Usage Data Integration
+
+The TUI receives a `usage: Option<&[UsageData]>` parameter via `SnippetListParams`, loaded once per selection session from `~/.config/snp/usage.toml`. This data is used by `sort_filtered_indices()` for real `LastUsed` and `MostUsed` sorting instead of proxying through `updated_at`. The usage slice is indexed by the same `original_indices` mapping as snippets, ensuring identity stability across sort/filter transitions.
 
 ### Fuzzy Matching
 

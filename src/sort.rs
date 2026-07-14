@@ -867,4 +867,391 @@ mod tests {
         // Non-fav: b, d (same desc → index order)
         assert_eq!(result, vec![0, 2, 1, 3]);
     }
+
+    // ── Favorites-first + usage sort combinations ──────────────────
+
+    #[test]
+    fn favorites_first_with_last_used() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", true),
+            snippet("c", "C", "cmd c", false),
+            snippet("d", "D", "cmd d", true),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(1, Some(300)),
+            usage(1, Some(200)),
+            usage(1, Some(50)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::LastUsed,
+            favorites_first: true,
+        };
+        let result = rank_snippets(
+            &default_indices(4),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // Fav: b (300), d (50) — last_used desc within favorites
+        // Non-fav: c (200), a (100) — last_used desc within non-favorites
+        assert_eq!(result, vec![1, 3, 2, 0]);
+    }
+
+    #[test]
+    fn favorites_first_with_most_used() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", true),
+            snippet("c", "C", "cmd c", false),
+            snippet("d", "D", "cmd d", true),
+        ];
+        let usage_data = vec![
+            usage(5, Some(100)),
+            usage(10, Some(300)),
+            usage(3, Some(200)),
+            usage(15, Some(50)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::MostUsed,
+            favorites_first: true,
+        };
+        let result = rank_snippets(
+            &default_indices(4),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // Fav: d (15), b (10) — use_count desc within favorites
+        // Non-fav: a (5), c (3) — use_count desc within non-favorites
+        assert_eq!(result, vec![3, 1, 0, 2]);
+    }
+
+    // ── Never-used snippets sort after used snippets ───────────────
+
+    #[test]
+    fn last_used_never_used_after_used() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+            snippet("c", "C", "cmd c", false),
+        ];
+        let usage_data = vec![
+            usage(1, None),      // never used
+            usage(1, Some(200)), // used
+            usage(1, None),      // never used
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::LastUsed,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // b (used) first, then a, c (never used, index order)
+        assert_eq!(result, vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn most_used_never_used_after_used() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+            snippet("c", "C", "cmd c", false),
+        ];
+        let usage_data = vec![
+            usage(0, None),      // never used (count=0)
+            usage(5, Some(200)), // used 5 times
+            usage(0, None),      // never used
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::MostUsed,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // b (5 uses) first, then a, c (0 uses, index order)
+        assert_eq!(result, vec![1, 0, 2]);
+    }
+
+    // ── Equal counts tie-break by last_used_at ─────────────────────
+
+    #[test]
+    fn most_used_equal_counts_tie_by_last_used_at() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+            snippet("c", "C", "cmd c", false),
+        ];
+        let usage_data = vec![
+            usage(5, Some(100)),
+            usage(5, Some(300)),
+            usage(5, Some(200)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::MostUsed,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // All equal count=5, tie by last_used_at desc: b (300), c (200), a (100)
+        assert_eq!(result, vec![1, 2, 0]);
+    }
+
+    // ── Divergent metadata fixture ─────────────────────────────────
+
+    /// Fixture from the plan: updated_at, use_count, and last_used_at all disagree.
+    /// Snippet A: updated_at=300, use_count=1, last_used_at=100
+    /// Snippet B: updated_at=100, use_count=9, last_used_at=200
+    /// Snippet C: updated_at=200, use_count=2, last_used_at=900
+    #[test]
+    fn divergent_metadata_recent_order() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "A", "cmd a", false, 300, 100),
+            snippet_with_timestamps("b", "B", "cmd b", false, 100, 50),
+            snippet_with_timestamps("c", "C", "cmd c", false, 200, 50),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(9, Some(200)),
+            usage(2, Some(900)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::Recent,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // Recent: by updated_at desc → A (300), C (200), B (100)
+        assert_eq!(result, vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn divergent_metadata_most_used_order() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "A", "cmd a", false, 300, 100),
+            snippet_with_timestamps("b", "B", "cmd b", false, 100, 50),
+            snippet_with_timestamps("c", "C", "cmd c", false, 200, 50),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(9, Some(200)),
+            usage(2, Some(900)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::MostUsed,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // Most-used: by use_count desc → B (9), C (2), A (1)
+        assert_eq!(result, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn divergent_metadata_last_used_order() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "A", "cmd a", false, 300, 100),
+            snippet_with_timestamps("b", "B", "cmd b", false, 100, 50),
+            snippet_with_timestamps("c", "C", "cmd c", false, 200, 50),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(9, Some(200)),
+            usage(2, Some(900)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::LastUsed,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // Last-used: by last_used_at desc → C (900), B (200), A (100)
+        assert_eq!(result, vec![2, 1, 0]);
+    }
+
+    // ── Default relevance tie: no usage influence ───────────────────
+
+    #[test]
+    fn relevance_equal_scores_tie_by_index_not_usage() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+        ];
+        let mut scores = HashMap::new();
+        scores.insert(0, 10);
+        scores.insert(1, 10);
+        let usage_data = vec![
+            usage(100, Some(900)), // heavily used
+            usage(0, None),        // never used
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::Relevance,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(2),
+            &snippets,
+            Some(&scores),
+            Some(&usage_data),
+            &opts,
+        );
+        // Equal scores → index order, NOT usage order
+        assert_eq!(result, vec![0, 1]);
+    }
+
+    #[test]
+    fn relevance_none_scores_sorted_by_index_not_usage() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+            snippet("c", "C", "cmd c", false),
+        ];
+        // No fuzzy scores at all (no filter active)
+        let usage_data = vec![usage(100, Some(900)), usage(0, None), usage(50, Some(500))];
+
+        let opts = SortOptions {
+            mode: SnippetSort::Relevance,
+            ..Default::default()
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        // All None scores → index order, usage has no effect
+        assert_eq!(result, vec![0, 1, 2]);
+    }
+
+    // ── Deleted snippets absent from candidates ────────────────────
+
+    #[test]
+    fn deleted_snippets_not_in_candidate_indices() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "A", "cmd a", false),
+            snippet("b", "B", "cmd b", false),
+            snippet("c", "C", "cmd c", false),
+        ];
+        // Only pass indices 0 and 2 (skipping deleted index 1)
+        let opts = SortOptions {
+            mode: SnippetSort::Description,
+            ..Default::default()
+        };
+        let result = rank_snippets(&[0, 2], &snippets, None, None, &opts);
+        // Should only contain indices 0 and 2
+        assert!(result.contains(&0));
+        assert!(result.contains(&2));
+        assert!(!result.contains(&1));
+        assert_eq!(result.len(), 2);
+    }
+
+    // ── Duplicate descriptions remain distinct by ID/index ─────────
+
+    #[test]
+    fn duplicate_descriptions_distinct_by_index() {
+        let snippets: Vec<Snippet> = vec![
+            snippet("a", "same", "cmd a", false),
+            snippet("b", "same", "cmd b", false),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::Description,
+            ..Default::default()
+        };
+        let result = rank_snippets(&default_indices(2), &snippets, None, None, &opts);
+        // Both have same description → index order
+        assert_eq!(result, vec![0, 1]);
+    }
+
+    // ── CLI/TUI mode mapping exhaustiveness ────────────────────────
+
+    #[test]
+    fn all_sort_variants_produce_deterministic_output() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "Zebra", "echo z", false, 300, 100),
+            snippet_with_timestamps("b", "Alpha", "echo a", false, 100, 200),
+            snippet_with_timestamps("c", "Middle", "echo m", false, 200, 150),
+        ];
+        let usage_data = vec![
+            usage(5, Some(300)),
+            usage(1, Some(100)),
+            usage(3, Some(200)),
+        ];
+        let mut scores = HashMap::new();
+        scores.insert(0, 10);
+        scores.insert(1, 30);
+        scores.insert(2, 20);
+
+        for mode in [
+            SnippetSort::Relevance,
+            SnippetSort::Recent,
+            SnippetSort::LastUsed,
+            SnippetSort::MostUsed,
+            SnippetSort::Description,
+            SnippetSort::Command,
+        ] {
+            let opts = SortOptions {
+                mode,
+                favorites_first: false,
+            };
+            let r1 = rank_snippets(
+                &default_indices(3),
+                &snippets,
+                Some(&scores),
+                Some(&usage_data),
+                &opts,
+            );
+            let r2 = rank_snippets(
+                &default_indices(3),
+                &snippets,
+                Some(&scores),
+                Some(&usage_data),
+                &opts,
+            );
+            assert_eq!(r1, r2, "sort mode {mode:?} must be deterministic");
+        }
+    }
 }

@@ -52,7 +52,8 @@ Returns sorted indices. The input `indices` need not be contiguous — the funct
 - **CLI flags** (`--sort`, `--favorites-first`): Available on `run`, `clip`, `search`, `select`, `list` commands. Parsed by clap via `clap::ValueEnum`.
 - **TUI keybinds** (`n`/`o`/`a`/`z`): Toggle interactive sort modes in the selector. The TUI maintains its own `ui/state.rs::SortMode` enum and maps to `SnippetSort` when initializing.
 - **Fuzzy matching**: `SkimMatcherV2` produces scores that are passed to `rank_snippets()` for `Relevance` mode.
-- **Usage data**: `UsageData` is loaded from `usage.toml` and passed by slice for `LastUsed`/`MostUsed` modes.
+- **Usage data**: `UsageData` is loaded from `usage.toml` once per selection session, passed to the TUI via `SnippetListParams.usage`, and used by `sort_filtered_indices()` for `LastUsed`/`MostUsed` modes.
+- **Shared ranking policy**: Both the `list` command (`rank_snippets()`) and the TUI (`sort_filtered_indices()`) use the same sorting semantics for all modes. The TUI does not use proxy values.
 
 ## Invariants
 
@@ -60,7 +61,8 @@ Returns sorted indices. The input `indices` need not be contiguous — the funct
 - All explicit sorts are deterministic: same inputs always produce same output.
 - Usage metadata is never written by the sort module — it is read-only.
 - The sort module does not mutate the original snippet library or TOML order.
+- Default relevance tie behavior is compatibility-first: usage metadata has no effect unless `--sort last-used` or `--sort most-used` is explicitly selected.
 
 ## Test Coverage
 
-32 unit tests covering all sort modes, tie-break chains, edge cases (empty input, single element, all-equal, non-contiguous indices), favorites-first grouping, and default options. Integration tests verify CLI flags and TUI sort-through-selector behavior.
+50 unit tests covering all sort modes, tie-break chains, edge cases (empty input, single element, all-equal, non-contiguous indices), favorites-first grouping, favorites-first + usage sort combinations, divergent metadata fixtures, relevance tie behavior, and default options. Integration tests verify CLI flags, divergent metadata ordering (recent/most-used/last-used), favorites-first + usage combinations, and CSV output.

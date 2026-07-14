@@ -5577,6 +5577,400 @@ fn test_rank_snippets_deterministic_across_runs() {
 }
 
 // =====================================================================
+// Release 4 corrective pass: divergent-metadata fixture tests
+// =====================================================================
+
+/// Create a library with deliberately divergent updated_at, use_count, and last_used_at.
+///
+/// | Snippet | updated_at | use_count | last_used_at |
+/// | --- | ---: | ---: | ---: |
+/// | A | 300 | 1 | 100 |
+/// | B | 100 | 9 | 200 |
+/// | C | 200 | 2 | 900 |
+fn create_divergent_metadata_library(config_dir: &Path, lib_name: &str) {
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", lib_name]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join(format!("{lib_name}.toml")),
+        r#"[[snippets]]
+id = "div-A"
+description = "snippet A"
+command = "echo A"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 300
+
+[[snippets]]
+id = "div-B"
+description = "snippet B"
+command = "echo B"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 50
+updated_at = 100
+
+[[snippets]]
+id = "div-C"
+description = "snippet C"
+command = "echo C"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 50
+updated_at = 200
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "set-primary", lib_name]);
+    cmd.output().unwrap();
+}
+
+fn write_divergent_usage(config_dir: &Path) {
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "div-A"
+use_count = 1
+last_used_at = 100
+
+[[entries]]
+id = "div-B"
+use_count = 9
+last_used_at = 200
+
+[[entries]]
+id = "div-C"
+use_count = 2
+last_used_at = 900
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_divergent_metadata_list_recent() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_divergent_metadata_library(&config_dir, "div-recent");
+    write_divergent_usage(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "recent", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // Recent: by updated_at desc → A (300), C (200), B (100)
+    assert_eq!(items[0]["description"], "snippet A");
+    assert_eq!(items[1]["description"], "snippet C");
+    assert_eq!(items[2]["description"], "snippet B");
+}
+
+#[test]
+fn test_divergent_metadata_list_most_used() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_divergent_metadata_library(&config_dir, "div-most-used");
+    write_divergent_usage(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // Most-used: by use_count desc → B (9), C (2), A (1)
+    assert_eq!(items[0]["description"], "snippet B");
+    assert_eq!(items[1]["description"], "snippet C");
+    assert_eq!(items[2]["description"], "snippet A");
+}
+
+#[test]
+fn test_divergent_metadata_list_last_used() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_divergent_metadata_library(&config_dir, "div-last-used");
+    write_divergent_usage(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "last-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 3);
+    // Last-used: by last_used_at desc → C (900), B (200), A (100)
+    assert_eq!(items[0]["description"], "snippet C");
+    assert_eq!(items[1]["description"], "snippet B");
+    assert_eq!(items[2]["description"], "snippet A");
+}
+
+#[test]
+fn test_divergent_metadata_list_recent_csv() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_divergent_metadata_library(&config_dir, "div-recent-csv");
+    write_divergent_usage(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "recent", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Header + 3 data rows
+    assert_eq!(lines.len(), 4);
+    // Recent: A, C, B
+    assert!(lines[1].contains("snippet A"));
+    assert!(lines[2].contains("snippet C"));
+    assert!(lines[3].contains("snippet B"));
+}
+
+#[test]
+fn test_divergent_metadata_list_most_used_csv() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_divergent_metadata_library(&config_dir, "div-most-used-csv");
+    write_divergent_usage(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4);
+    // Most-used: B, C, A
+    assert!(lines[1].contains("snippet B"));
+    assert!(lines[2].contains("snippet C"));
+    assert!(lines[3].contains("snippet A"));
+}
+
+#[test]
+fn test_favorites_first_with_last_used_list() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "fav-last-used"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("fav-last-used.toml"),
+        r#"[[snippets]]
+id = "fl-1"
+description = "non-fav old"
+command = "echo old"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+
+[[snippets]]
+id = "fl-2"
+description = "fav recent"
+command = "echo recent"
+tags = ["test"]
+output = ""
+folders = []
+favorite = true
+created_at = 200
+updated_at = 200
+
+[[snippets]]
+id = "fl-3"
+description = "non-fav recent"
+command = "echo nrecent"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 300
+updated_at = 300
+
+[[snippets]]
+id = "fl-4"
+description = "fav old"
+command = "echo fold"
+tags = ["test"]
+output = ""
+folders = []
+favorite = true
+created_at = 50
+updated_at = 50
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "fav-last-used"]);
+    cmd.output().unwrap();
+
+    // Usage: fav old was used more recently than fav recent
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "fl-1"
+use_count = 1
+last_used_at = 100
+
+[[entries]]
+id = "fl-2"
+use_count = 1
+last_used_at = 200
+
+[[entries]]
+id = "fl-3"
+use_count = 1
+last_used_at = 300
+
+[[entries]]
+id = "fl-4"
+use_count = 1
+last_used_at = 500
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "last-used", "--favorites-first", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 4);
+    // Fav: fav old (500), fav recent (200)
+    // Non-fav: non-fav recent (300), non-fav old (100)
+    assert_eq!(items[0]["description"], "fav old");
+    assert!(items[0]["favorite"].as_bool().unwrap());
+    assert_eq!(items[1]["description"], "fav recent");
+    assert!(items[1]["favorite"].as_bool().unwrap());
+    assert_eq!(items[2]["description"], "non-fav recent");
+    assert!(!items[2]["favorite"].as_bool().unwrap());
+    assert_eq!(items[3]["description"], "non-fav old");
+    assert!(!items[3]["favorite"].as_bool().unwrap());
+}
+
+#[test]
+fn test_favorites_first_with_most_used_list() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "fav-most-used"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("fav-most-used.toml"),
+        r#"[[snippets]]
+id = "fm-1"
+description = "non-fav low"
+command = "echo low"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 100
+updated_at = 100
+
+[[snippets]]
+id = "fm-2"
+description = "fav mid"
+command = "echo mid"
+tags = ["test"]
+output = ""
+folders = []
+favorite = true
+created_at = 200
+updated_at = 200
+
+[[snippets]]
+id = "fm-3"
+description = "non-fav high"
+command = "echo high"
+tags = ["test"]
+output = ""
+folders = []
+favorite = false
+created_at = 300
+updated_at = 300
+
+[[snippets]]
+id = "fm-4"
+description = "fav highest"
+command = "echo highest"
+tags = ["test"]
+output = ""
+folders = []
+favorite = true
+created_at = 50
+updated_at = 50
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "fav-most-used"]);
+    cmd.output().unwrap();
+
+    fs::write(
+        config_dir.join("usage.toml"),
+        r#"[[entries]]
+id = "fm-1"
+use_count = 1
+last_used_at = 100
+
+[[entries]]
+id = "fm-2"
+use_count = 5
+last_used_at = 200
+
+[[entries]]
+id = "fm-3"
+use_count = 10
+last_used_at = 300
+
+[[entries]]
+id = "fm-4"
+use_count = 20
+last_used_at = 400
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--favorites-first", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 4);
+    // Fav: fav highest (20), fav mid (5)
+    // Non-fav: non-fav high (10), non-fav low (1)
+    assert_eq!(items[0]["description"], "fav highest");
+    assert!(items[0]["favorite"].as_bool().unwrap());
+    assert_eq!(items[1]["description"], "fav mid");
+    assert!(items[1]["favorite"].as_bool().unwrap());
+    assert_eq!(items[2]["description"], "non-fav high");
+    assert!(!items[2]["favorite"].as_bool().unwrap());
+    assert_eq!(items[3]["description"], "non-fav low");
+    assert!(!items[3]["favorite"].as_bool().unwrap());
+}
+
+// =====================================================================
 // Release 4B: Output / Notes Presentation Tests
 // =====================================================================
 

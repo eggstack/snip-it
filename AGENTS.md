@@ -216,6 +216,9 @@ snip-it/
 - Usage recorded on successful `run` and `clip` operations
 - Usage data is local-only, not synchronized
 - Missing/corrupt usage data fails open to zero usage
+- TUI and list surfaces share real usage metadata for `last-used` and `most-used` sort modes
+- `UsageIndex` is loaded once per selection session and passed to the TUI via `SnippetListParams`
+- Default relevance tie behavior is compatibility-first: usage data has no effect unless `--sort last-used` or `--sort most-used` is explicitly selected
 
 ### Output / Notes Presentation (Release 4B)
 - `OutputPresentation` in `src/output.rs` provides safe rendering of the `output` field
@@ -230,6 +233,7 @@ snip-it/
 - JSON and CSV output always include the `output` field exactly as stored
 - `select`, `run`, and `clip` emit/command act on `command` only, never `output`
 - Output is stored descriptive metadata, not automatically captured execution output
+- **Output sync contract**: `output` is local-only — not in `ProtoSnippet`, not uploaded or downloaded. Sync merge preserves the local value when remote data wins.
 
 ### Selection Outcome Architecture
 - **Three-layer outcome model:**

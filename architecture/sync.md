@@ -71,6 +71,10 @@ pub enum SyncDirection {
 5. **Local-only** (snippet exists only locally or only server):
    - Preserved as-is
 
+### Output Field Sync Contract
+
+The `output` field is **local-only**: it is not in `ProtoSnippet`, never uploaded or downloaded, and always preserved from the local copy during merge. Another device will not receive the value automatically.
+
 ### Result
 
 Merged snippets sorted by `updated_at` descending.

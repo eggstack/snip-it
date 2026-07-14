@@ -191,6 +191,7 @@ fn sort_filtered_indices(
     display_lower: &[String],
     has_filter: bool,
     favorites_first: bool,
+    usage: Option<&[crate::usage::UsageData]>,
 ) {
     if filter_state.sort_mode == SortMode::None && !has_filter && !favorites_first {
         return;
@@ -239,28 +240,39 @@ fn sort_filtered_indices(
                         })
                 }
                 SortMode::LastUsed => {
-                    // Proxy: sort by updated_at descending (usage data not available in TUI)
-                    snippets
-                        .get(b.0)
-                        .zip(snippets.get(a.0))
-                        .map(|(b_snip, a_snip)| {
-                            b_snip
-                                .updated_at
-                                .cmp(&a_snip.updated_at)
-                                .then_with(|| b.0.cmp(&a.0))
-                        })
+                    let ua = usage.and_then(|u| u.get(a.0));
+                    let ub = usage.and_then(|u| u.get(b.0));
+                    Some(
+                        match (
+                            &ua.and_then(|u| u.last_used_at),
+                            &ub.and_then(|u| u.last_used_at),
+                        ) {
+                            (Some(at), Some(bt)) => bt.cmp(at),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => std::cmp::Ordering::Equal,
+                        }
+                        .then_with(|| b.0.cmp(&a.0)),
+                    )
                 }
                 SortMode::MostUsed => {
-                    // Proxy: sort by updated_at descending (usage data not available in TUI)
-                    snippets
-                        .get(b.0)
-                        .zip(snippets.get(a.0))
-                        .map(|(b_snip, a_snip)| {
-                            b_snip
-                                .updated_at
-                                .cmp(&a_snip.updated_at)
-                                .then_with(|| b.0.cmp(&a.0))
-                        })
+                    let ua = usage.and_then(|u| u.get(a.0));
+                    let ub = usage.and_then(|u| u.get(b.0));
+                    let a_count = ua.map(|u| u.use_count).unwrap_or(0);
+                    let b_count = ub.map(|u| u.use_count).unwrap_or(0);
+                    Some(match b_count.cmp(&a_count) {
+                        std::cmp::Ordering::Equal => match (
+                            &ua.and_then(|u| u.last_used_at),
+                            &ub.and_then(|u| u.last_used_at),
+                        ) {
+                            (Some(at), Some(bt)) => bt.cmp(at),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => std::cmp::Ordering::Equal,
+                        }
+                        .then_with(|| b.0.cmp(&a.0)),
+                        other => other.then_with(|| b.0.cmp(&a.0)),
+                    })
                 }
                 _ => None,
             };
@@ -504,6 +516,7 @@ pub struct SnippetListParams<'a> {
     pub snippets: &'a [crate::library::Snippet],
     pub original_indices: &'a [usize],
     pub sort_opts: Option<&'a crate::sort::SortOptions>,
+    pub usage: Option<&'a [crate::usage::UsageData]>,
 }
 
 /// Action returned by the snippet selector after the user leaves the TUI.
@@ -533,6 +546,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         snippets,
         original_indices: _original_indices,
         sort_opts,
+        usage,
     } = params;
     // Enable mouse capture before initializing terminal
     // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
@@ -759,6 +773,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 &all_display_lower,
                 has_filter,
                 _favorites_first,
+                usage,
             );
 
             filtered.clear();

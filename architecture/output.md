@@ -26,6 +26,7 @@ Provides safe rendering and presentation helpers for the snippet `output` field 
 - ANSI/OSC escape sequences are stripped for display but preserved in storage and JSON/CSV.
 - No shell expansion or variable substitution is applied to output.
 - Display sanitization operates on a copy; the stored value is never mutated.
+- **Local-only sync contract**: `output` is not represented in `ProtoSnippet` (the protobuf wire format), never uploaded or downloaded during sync, and preserved locally when remote data wins the merge. Another device does not receive the value automatically.
 
 ## Integration Points
 

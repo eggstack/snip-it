@@ -56,11 +56,11 @@ Usage entries are keyed by snippet UUID (`id` field). When snippets are imported
 
 ## Integration Points
 
-- **Sort module** (`src/sort.rs`): Reads `UsageData` for `LastUsed` and `MostUsed` sort modes.
+- **Sort module** (`src/sort.rs`): Reads `UsageData` for `LastUsed` and `MostUsed` sort modes in `rank_snippets()`.
+- **TUI** (`src/ui/mod.rs`): `UsageIndex` is loaded once per selection session in `run_snippet_selection()` and passed via `SnippetListParams.usage`. The `sort_filtered_indices()` function uses real usage data for `LastUsed` and `MostUsed` interactive sort modes.
 - **Run command** (`src/commands/run_cmd.rs`): Calls `record_use()` after successful execution.
 - **Clip command** (`src/commands/clip_cmd.rs`): Calls `record_use()` after successful clipboard copy.
 - **Select command** (`src/commands/select_cmd.rs`): Calls `record_use()` after successful selection.
-- **TUI** (`src/ui/mod.rs`): Reads usage data for sort-by-usage display.
 
 ## Test Coverage
 
