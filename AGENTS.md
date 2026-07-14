@@ -285,8 +285,13 @@ snip-it/
 - Durable pending marker at `~/.config/snp/auto-sync-pending.toml` with CRC32 integrity
 - PID-file lock at `~/.config/snp/auto-sync.lock` with stale detection via `kill -0`
 - Lock permissions: 0o600 (restrictive)
-- `run_auto_sync()` wraps `sync_commands::run_default_sync` with lock acquisition and failure handling
+- `run_auto_sync()` wraps `sync_commands::run_default_sync` with lock acquisition, retry/backoff, and failure handling
 - `recover_stale_pending()` clears pending state older than 5 minutes on startup
+- Retry: configurable `max_retries` (default 1), exponential backoff with caps (1s initial, 30s max)
+- Failure policy rendering: `Warn`/`Error` modes emit user-facing stderr messages via `eprintln!`
+- **Architecture:** In-process coordinator (Option A) — the mutation command owns debounce and sync execution. Option B (detached helper process) was evaluated and rejected due to added complexity (IPC, process supervision, cross-platform detachment) for marginal benefit.
+- **Sync target:** Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries. Per-library targeting deferred until the sync protocol supports it.
+- `snp doctor --compatibility` inspects auto-sync state: pending markers, lock files, stale locks, config settings
 - Infrastructure only — no mutation command is wired until Release 5C
 
 ### snip-sync CLI
@@ -402,7 +407,7 @@ snip-it/
 - Pet analysis unit tests (`src/commands/pet_analysis.rs`) cover: source file validation, TOML parsing, field detection, entry analysis, duplicate detection, malformed variable detection, and library name sanitization
 - Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, empty file, normalization preview, malformed variable detection, canonical Pet TOML loading check, and library state non-mutation
 - Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: library name sanitization, and malformed variable detection
-- Auto-sync coordinator tests (`src/auto_sync.rs`) cover: policy resolution, debounce state transitions, rapid mutation coalescing, maximum delay bound, mutation during running, disabled policy, sync-origin suppression, pending state round-trip, lock acquire/release, stale lock detection, lock permissions, failure classification, failure policy mapping, zero debounce, multiple cycles, stale pending recovery, no secrets in serialization, request creation, status equality, Debug impl, derive_state_dir, and run_auto_sync disabled/lock behavior
+- Auto-sync coordinator tests (`src/auto_sync.rs`) cover: policy resolution, debounce state transitions, rapid mutation coalescing, maximum delay bound, mutation during running, disabled policy, sync-origin suppression, pending state round-trip, lock acquire/release, stale lock detection, lock permissions, failure classification, failure policy mapping, zero debounce, multiple cycles, stale pending recovery, no secrets in serialization, request creation, status equality, Debug impl, derive_state_dir, run_auto_sync disabled/lock behavior, retry/backoff computation, retry policy fields, timeout clamping, shutdown/signal lifecycle, stale lock recovery, crash recovery, no secrets in debug output, bounded pending state size, lock file no command bodies, retry zero config, and integration cycles/disabled/no-recursive-trigger
 - Diagnostics unit tests (`src/diagnostics.rs`) cover: counts, report constructors, version, severity serialization, diagnostic serialization, source span, span skip-none, diagnostic ordering, severity ranking, stable code convention, strict-mode classification, bounded messages, recommendation generation, empty counts, and full PetImportReport roundtrip
 - Output presentation unit tests (`src/output.rs`) cover: empty, single-line, multiline, summary truncation, ANSI sanitization, OSC hyperlinks, control character stripping, scoring budget
 - Output integration tests (`tests/integration.rs`) cover: JSON preservation, CSV preservation, default display, edit set/clear/stdin, search-output flag, multiline roundtrip, tab/special char roundtrip, no-eval security, conflict flags, ANSI preservation, help text

@@ -885,6 +885,138 @@ command = "echo ok"
         }
     }
 
+    // Auto-sync state inspection (Release 5B)
+    let state_dir = crate::auto_sync::AutoSyncCoordinator::derive_state_dir();
+    let pending_path = state_dir.join("auto-sync-pending.toml");
+    let lock_path = state_dir.join("auto-sync.lock");
+
+    // Check auto-sync pending state
+    if pending_path.exists() {
+        match fs::read_to_string(&pending_path) {
+            Ok(content) => {
+                // Try to parse the pending state to check staleness.
+                let is_stale = content
+                    .lines()
+                    .find(|l| l.starts_with("requested_at"))
+                    .and_then(|l| l.split('=').nth(1))
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+                    .map(|ts| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        now - ts > 300
+                    })
+                    .unwrap_or(false);
+
+                if is_stale {
+                    report.diagnostics.push(CompatibilityDiagnostic {
+                        code: "compat.auto_sync.pending_stale".to_string(),
+                        entry_index: None,
+                        field: Some("auto_sync".to_string()),
+                        severity: DiagnosticSeverity::Warning,
+                        message: "Stale auto-sync pending state detected (>5 min old)".to_string(),
+                        suggestion: Some(
+                            "This will be cleared automatically on next mutation or startup"
+                                .to_string(),
+                        ),
+                        span: None,
+                    });
+                } else {
+                    report.diagnostics.push(CompatibilityDiagnostic {
+                        code: "compat.auto_sync.pending_active".to_string(),
+                        entry_index: None,
+                        field: Some("auto_sync".to_string()),
+                        severity: DiagnosticSeverity::Info,
+                        message: "Auto-sync pending state is active".to_string(),
+                        suggestion: None,
+                        span: None,
+                    });
+                }
+            }
+            Err(_) => {
+                report.diagnostics.push(CompatibilityDiagnostic {
+                    code: "compat.auto_sync.pending_unreadable".to_string(),
+                    entry_index: None,
+                    field: Some("auto_sync".to_string()),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "Auto-sync pending state file exists but is unreadable".to_string(),
+                    suggestion: None,
+                    span: None,
+                });
+            }
+        }
+    }
+
+    // Check auto-sync lock file
+    if lock_path.exists() {
+        let lock_content = fs::read_to_string(&lock_path).unwrap_or_default();
+        let pid = lock_content.trim().parse::<i32>().ok();
+        let is_alive = pid
+            .map(|p| {
+                std::process::Command::new("kill")
+                    .args(["-0", &p.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        if is_alive {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.auto_sync.lock_held".to_string(),
+                entry_index: None,
+                field: Some("auto_sync".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: format!("Auto-sync lock held by process {}", pid.unwrap_or(0)),
+                suggestion: None,
+                span: None,
+            });
+        } else {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.auto_sync.lock_stale".to_string(),
+                entry_index: None,
+                field: Some("auto_sync".to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: "Auto-sync lock file exists but owner process is dead (stale)".to_string(),
+                suggestion: Some(
+                    "Stale lock will be recovered on next auto-sync attempt".to_string(),
+                ),
+                span: None,
+            });
+        }
+    }
+
+    // Check auto-sync config
+    if let Ok(settings) = crate::config::load_sync_settings() {
+        if settings.auto_sync {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.auto_sync.enabled".to_string(),
+                entry_index: None,
+                field: Some("auto_sync".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: format!(
+                    "Auto-sync enabled (debounce: {}s, failure: {})",
+                    settings.auto_sync_debounce_seconds, settings.auto_sync_failure
+                ),
+                suggestion: None,
+                span: None,
+            });
+        } else {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.auto_sync.disabled".to_string(),
+                entry_index: None,
+                field: Some("auto_sync".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: "Auto-sync is disabled".to_string(),
+                suggestion: None,
+                span: None,
+            });
+        }
+    }
+
     report.total_entries = 0;
     apply_strict_elevation(&mut report);
     Ok(report)

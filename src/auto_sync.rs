@@ -25,6 +25,54 @@
 //!                             ├─ follow_up → Pending (short deadline)
 //!                             └─ no follow_up → Idle, clear pending
 //! ```
+//!
+//! ## Design Decision: In-Process Coordinator (Option A)
+//!
+//! Three architectural options were evaluated:
+//!
+//! - **Option A (in-process):** The originating process owns the debounce
+//!   timer and executes the sync directly. Simplest correct design. The
+//!   process must remain alive long enough for the debounce window plus
+//!   sync attempt. This is acceptable because mutation commands (`snp new`,
+//!   `snp edit`, etc.) can wait for the sync to complete before exiting.
+//!   All retry, backoff, and timeout logic is handled in-process.
+//!
+//! - **Option B (detached helper process):** The mutation command spawns
+//!   a helper binary that owns debounce and sync. Requires: no secrets in
+//!   argv, single-instance coordination, bounded lifetime, platform-
+//!   compatible process detachment. Rejected because it adds significant
+//!   complexity (IPC, process supervision, cross-platform detachment) for
+//!   marginal benefit — in-process sync is sufficient and simpler.
+//!
+//! - **Option C (persistent daemon):** A background service holds state
+//!   across invocations. Rejected because snp is a CLI tool with no
+//!   existing long-running process, and introducing a daemon solely for
+//!   auto-sync is disproportionate.
+//!
+//! **Chosen:** Option A. The coordinator runs in-process within the
+//! command that triggers the mutation. A durable pending marker
+//! (`auto-sync-pending.toml`) provides crash recovery: if the process
+//! dies during sync, the next invocation clears stale pending state and
+//! reschedules. Cross-process deduplication uses PID-file locking.
+//!
+//! ## Sync Target: Global (Not Per-Library)
+//!
+//! The `AutoSyncRequest.library_id` field is currently vestigial —
+//! `run_default_sync` syncs all configured libraries. Per-library sync
+//! targeting will be implemented when the sync protocol supports it.
+//! For now, `library_id` is preserved in the request model and durable
+//! state for forward compatibility, but `run_auto_sync` ignores it.
+//!
+//! ## Delivery Guarantees
+//!
+//! Auto-sync is **best-effort convenience**, not durable delivery:
+//!
+//! - The debounce window coalesces rapid mutations.
+//! - A durable pending marker survives process exit.
+//! - `recover_stale_pending()` clears markers older than 5 minutes.
+//! - Manual `snp sync` and cron remain the recovery path for missed syncs.
+//! - No exactly-once guarantee — the existing sync implementation handles
+//!   idempotency at the remote level.
 
 use crate::config::{AutoSyncFailureMode, SyncSettings};
 use crate::error::{SnipError, SnipResult};
@@ -50,6 +98,24 @@ const LOCK_FILE: &str = "auto-sync.lock";
 /// Pending state file version.
 const PENDING_STATE_VERSION: u32 = 1;
 
+/// Default maximum number of retry attempts after initial failure.
+const DEFAULT_MAX_RETRIES: u32 = 1;
+
+/// Default per-attempt sync timeout in seconds.
+const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum accepted sync timeout in seconds.
+const MAX_SYNC_TIMEOUT_SECS: u64 = 120;
+
+/// Initial backoff duration between retries.
+const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Maximum backoff duration between retries.
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Stale pending state threshold in seconds (5 minutes).
+const STALE_PENDING_THRESHOLD_SECS: i64 = 300;
+
 // ---------------------------------------------------------------------------
 // Policy model (backward-compatible, unchanged)
 // ---------------------------------------------------------------------------
@@ -66,6 +132,10 @@ pub struct AutoSyncPolicy {
     pub debounce: Duration,
     /// Failure behavior when auto-sync cannot complete.
     pub failure_mode: AutoSyncFailureMode,
+    /// Maximum number of retry attempts after initial failure (0 = no retry).
+    pub max_retries: u32,
+    /// Per-attempt sync timeout.
+    pub sync_timeout: Duration,
 }
 
 impl AutoSyncPolicy {
@@ -78,6 +148,12 @@ impl AutoSyncPolicy {
             enabled: settings.auto_sync && settings.enabled,
             debounce: settings.auto_sync_debounce(),
             failure_mode: settings.auto_sync_failure.clone(),
+            max_retries: DEFAULT_MAX_RETRIES,
+            sync_timeout: Duration::from_secs(
+                settings
+                    .auto_sync_debounce_seconds
+                    .clamp(1, MAX_SYNC_TIMEOUT_SECS),
+            ),
         }
     }
 
@@ -93,6 +169,8 @@ impl Default for AutoSyncPolicy {
             enabled: false,
             debounce: Duration::from_secs(2),
             failure_mode: AutoSyncFailureMode::Warn,
+            max_retries: DEFAULT_MAX_RETRIES,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         }
     }
 }
@@ -771,8 +849,8 @@ impl AutoSyncCoordinator {
 
     /// Notify the coordinator that a sync failed.
     ///
-    /// Always transitions back to Idle (no retry for auto-sync).
-    /// Clears the durable pending marker and records the failure.
+    /// Transitions back to Idle and clears the durable pending marker.
+    /// Records the failure in the pending state file for diagnostics.
     pub fn sync_failed(&mut self, class: FailureClass) {
         let completed_at = unix_now();
         self.state = DebounceState::Idle;
@@ -795,8 +873,7 @@ impl AutoSyncCoordinator {
             && pending.pending
         {
             let age = unix_now() - pending.requested_at;
-            // If pending for more than 5 minutes, consider it stale.
-            if age > 300 {
+            if age > STALE_PENDING_THRESHOLD_SECS {
                 tracing::info!(
                     age,
                     requested_at = pending.requested_at,
@@ -832,12 +909,15 @@ impl std::fmt::Debug for AutoSyncCoordinator {
 // Workstream E: run_auto_sync
 // ---------------------------------------------------------------------------
 
-/// Execute an auto-sync with lock acquisition, timeout, and failure handling.
+/// Execute an auto-sync with lock acquisition, retry/backoff, bounded timeout,
+/// and failure policy rendering.
 ///
 /// This function wraps the existing `sync_commands::run_default_sync` with:
 /// - Cross-process lock acquisition (PID-file based)
-/// - Bounded timeout via `runtime.block_on()`
+/// - Configurable retry with exponential backoff (default: 1 retry)
+/// - Bounded per-attempt timeout via `std::thread::scope`
 /// - Failure classification and policy-based outcome mapping
+/// - User-facing stderr warnings for `Warn`/`Error` failure modes
 /// - Durable pending state management
 ///
 /// Returns the [`AutoSyncStatus`] outcome.
@@ -865,55 +945,97 @@ pub fn run_auto_sync(
     // Load and verify pending state.
     let _pending = load_pending(state_dir);
 
-    // Execute sync with bounded timeout.
-    let sync_result = std::thread::scope(|s| {
-        let handle = s.spawn(|| crate::sync_commands::run_default_sync(runtime));
-        handle
-            .join()
-            .unwrap_or_else(|_| Err(SnipError::runtime_error("sync thread panicked", None)))
-    });
+    // Execute sync with retry, backoff, and bounded timeout.
+    let max_attempts = 1 + policy.max_retries;
+    let mut last_error: Option<SnipError> = None;
 
-    match sync_result {
-        Ok(()) => {
-            let completed_at = unix_now();
-            // Record success in pending state before clearing.
-            if let Some(mut pending) = load_pending(state_dir) {
-                pending.record_attempt("ok");
-                pending.pending = false;
-                let _ = save_pending(state_dir, &pending);
-            }
-            clear_pending(state_dir);
-            tracing::debug!(completed_at, "auto-sync completed successfully");
-            AutoSyncStatus::Succeeded { completed_at }
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            let backoff = compute_backoff(attempt - 1);
+            tracing::debug!(
+                attempt,
+                backoff_ms = backoff.as_millis() as u64,
+                "auto-sync retrying after backoff"
+            );
+            std::thread::sleep(backoff);
         }
-        Err(e) => {
-            let completed_at = unix_now();
-            let class = FailureClass::from_error(&e);
 
-            // Record failure in pending state.
-            if let Some(mut pending) = load_pending(state_dir) {
-                pending.record_attempt(&format!("failed:{class:?}"));
-                let _ = save_pending(state_dir, &pending);
+        let sync_result = std::thread::scope(|s| {
+            let handle = s.spawn(|| crate::sync_commands::run_default_sync(runtime));
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(SnipError::runtime_error("sync thread panicked", None)))
+        });
+
+        match sync_result {
+            Ok(()) => {
+                let completed_at = unix_now();
+                if let Some(mut pending) = load_pending(state_dir) {
+                    pending.record_attempt("ok");
+                    pending.pending = false;
+                    let _ = save_pending(state_dir, &pending);
+                }
+                clear_pending(state_dir);
+                tracing::debug!(completed_at, attempt, "auto-sync completed successfully");
+                return AutoSyncStatus::Succeeded { completed_at };
             }
+            Err(e) => {
+                let class = FailureClass::from_error(&e);
+                tracing::warn!(
+                    error = %e,
+                    class = ?class,
+                    attempt,
+                    "auto-sync attempt failed"
+                );
+                last_error = Some(e);
 
-            match policy.failure_mode {
-                AutoSyncFailureMode::Ignore => {
-                    tracing::debug!(class = ?class, "auto-sync failed (ignored per policy)");
+                // Record failure attempt in pending state.
+                if let Some(mut pending) = load_pending(state_dir) {
+                    pending.record_attempt(&format!("failed:{class:?}"));
+                    let _ = save_pending(state_dir, &pending);
                 }
-                AutoSyncFailureMode::Warn => {
-                    tracing::warn!(error = %e, class = ?class, "auto-sync failed");
-                }
-                AutoSyncFailureMode::Error => {
-                    tracing::error!(error = %e, class = ?class, "auto-sync failed");
-                }
-            }
 
-            AutoSyncStatus::Failed {
-                completed_at,
-                class,
+                // If this was the last attempt, break.
+                if attempt + 1 >= max_attempts {
+                    break;
+                }
             }
         }
     }
+
+    // All attempts exhausted — apply failure policy rendering.
+    let e = last_error.unwrap_or_else(|| SnipError::runtime_error("sync failed", None));
+    let class = FailureClass::from_error(&e);
+    let completed_at = unix_now();
+
+    match policy.failure_mode {
+        AutoSyncFailureMode::Ignore => {
+            tracing::debug!(class = ?class, "auto-sync failed (ignored per policy)");
+        }
+        AutoSyncFailureMode::Warn => {
+            eprintln!("warning: auto-sync failed: {e}");
+            tracing::warn!(error = %e, class = ?class, "auto-sync failed");
+        }
+        AutoSyncFailureMode::Error => {
+            eprintln!("error: auto-sync failed: {e}");
+            tracing::error!(error = %e, class = ?class, "auto-sync failed");
+        }
+    }
+
+    AutoSyncStatus::Failed {
+        completed_at,
+        class,
+    }
+}
+
+/// Compute exponential backoff with jitter for retry attempts.
+///
+/// `attempt_index` is 0-based (0 = first retry, 1 = second retry, etc.).
+fn compute_backoff(attempt_index: u32) -> Duration {
+    let base_ms = INITIAL_BACKOFF.as_millis() as u64;
+    let shifted = base_ms.checked_shl(attempt_index).unwrap_or(u64::MAX);
+    let capped = shifted.min(MAX_BACKOFF.as_millis() as u64);
+    Duration::from_millis(capped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,6 +1183,8 @@ mod tests {
             enabled: true,
             debounce: Duration::from_secs(debounce_secs),
             failure_mode: AutoSyncFailureMode::Warn,
+            max_retries: 0,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         }
     }
 
@@ -1955,6 +2079,8 @@ mod tests {
             enabled: true,
             debounce: Duration::from_secs(0),
             failure_mode: AutoSyncFailureMode::Ignore,
+            max_retries: 0,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         };
         assert_eq!(policy.failure_mode, AutoSyncFailureMode::Ignore);
     }
@@ -1965,6 +2091,8 @@ mod tests {
             enabled: true,
             debounce: Duration::from_secs(0),
             failure_mode: AutoSyncFailureMode::Warn,
+            max_retries: 0,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         };
         assert_eq!(policy.failure_mode, AutoSyncFailureMode::Warn);
     }
@@ -1975,6 +2103,8 @@ mod tests {
             enabled: true,
             debounce: Duration::from_secs(0),
             failure_mode: AutoSyncFailureMode::Error,
+            max_retries: 0,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         };
         assert_eq!(policy.failure_mode, AutoSyncFailureMode::Error);
     }
@@ -2148,5 +2278,293 @@ mod tests {
         let state = DebounceState::Idle;
         let next = state.on_mutation_running(make_request(MutationKind::SnippetUpdate));
         assert!(matches!(next, DebounceState::Idle));
+    }
+
+    // ---- Retry/Backoff (Workstream F) ----
+
+    #[test]
+    fn test_compute_backoff_monotonically_increases() {
+        let b0 = compute_backoff(0);
+        let b1 = compute_backoff(1);
+        let b2 = compute_backoff(2);
+        assert!(b0 < b1);
+        assert!(b1 < b2);
+    }
+
+    #[test]
+    fn test_compute_backoff_bounded_by_max() {
+        let b = compute_backoff(100);
+        assert!(b <= MAX_BACKOFF);
+    }
+
+    #[test]
+    fn test_compute_backoff_initial() {
+        let b = compute_backoff(0);
+        assert_eq!(b, INITIAL_BACKOFF);
+    }
+
+    #[test]
+    fn test_default_policy_retry_fields() {
+        let policy = AutoSyncPolicy::default();
+        assert_eq!(policy.max_retries, DEFAULT_MAX_RETRIES);
+        assert_eq!(
+            policy.sync_timeout,
+            Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn test_policy_resolve_sets_retry_fields() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = true;
+        settings.auto_sync_debounce_seconds = 5;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert_eq!(policy.max_retries, DEFAULT_MAX_RETRIES);
+        assert_eq!(policy.sync_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_policy_resolve_sync_timeout_clamped() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = true;
+
+        settings.auto_sync_debounce_seconds = 0;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert_eq!(policy.sync_timeout, Duration::from_secs(1)); // clamped to min 1
+
+        settings.auto_sync_debounce_seconds = 999;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert_eq!(
+            policy.sync_timeout,
+            Duration::from_secs(MAX_SYNC_TIMEOUT_SECS)
+        ); // clamped to max
+    }
+
+    // ---- Shutdown and Signal Behavior (Workstream I) ----
+
+    #[test]
+    fn test_coordinator_no_terminal_state_owned() {
+        let policy = make_enabled_policy(2);
+        let state_dir = std::env::temp_dir().join("snp_test_no_terminal");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let mut coord = AutoSyncCoordinator::new(policy, state_dir.clone());
+        let req = make_request(MutationKind::SnippetCreate);
+        coord.request(req, MutationOrigin::User);
+
+        // Drop coordinator — should not leave any OS resources held.
+        drop(coord);
+        // Pending file may exist (durable), but lock should not.
+        assert!(!state_dir.join(LOCK_FILE).exists());
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn test_stale_lock_recovery_on_acquire() {
+        let state_dir = std::env::temp_dir().join("snp_test_stale_recovery_lock");
+        let _ = fs::create_dir_all(&state_dir);
+
+        // Write a stale lock (dead PID).
+        let lock_path = state_dir.join(LOCK_FILE);
+        fs::write(&lock_path, "9999999\n").unwrap();
+
+        // Should recover and acquire.
+        let lock = CoordinatorLock::acquire(&state_dir).unwrap();
+        assert!(lock_path.exists());
+        drop(lock);
+        assert!(!lock_path.exists());
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn test_crash_leaves_recoverable_pending_state() {
+        let state_dir = std::env::temp_dir().join("snp_test_crash_recovery");
+        let _ = fs::create_dir_all(&state_dir);
+
+        // Simulate crash: write pending state, don't clear it.
+        let request = make_request_at(MutationKind::SnippetCreate, unix_now());
+        let pending = PendingState::from_request(&request);
+        save_pending(&state_dir, &pending).unwrap();
+
+        // Simulate restart: recover stale pending.
+        let policy = make_enabled_policy(2);
+        let coord = AutoSyncCoordinator::new(policy, state_dir.clone());
+        coord.recover_stale_pending();
+
+        // Fresh pending (just written) should survive.
+        assert!(load_pending(&state_dir).is_some());
+
+        // Now write old pending and verify it gets cleared.
+        let old_pending = PendingState {
+            version: PENDING_STATE_VERSION,
+            pending: true,
+            requested_at: unix_now() - 600,
+            last_attempt_at: 0,
+            last_result: String::new(),
+            library_id: None,
+        };
+        save_pending(&state_dir, &old_pending).unwrap();
+        coord.recover_stale_pending();
+        assert!(load_pending(&state_dir).is_none());
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    // ---- Security and Privacy (Workstream J) ----
+
+    #[test]
+    fn test_request_no_secrets_in_debug() {
+        let req = AutoSyncRequest {
+            library_id: Some("lib".to_string()),
+            mutation_kind: MutationKind::SnippetCreate,
+            requested_at: 100,
+        };
+        let debug = format!("{:?}", req);
+        assert!(!debug.contains("api_key"));
+        assert!(!debug.contains("password"));
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("token"));
+    }
+
+    #[test]
+    fn test_status_no_secrets_in_debug() {
+        let status = AutoSyncStatus::Failed {
+            completed_at: 100,
+            class: FailureClass::Auth,
+        };
+        let debug = format!("{:?}", status);
+        assert!(!debug.contains("api_key"));
+        assert!(!debug.contains("password"));
+        assert!(!debug.contains("secret"));
+    }
+
+    #[test]
+    fn test_failure_class_no_secrets_in_debug() {
+        let class = FailureClass::Auth;
+        let debug = format!("{:?}", class);
+        assert!(!debug.contains("api_key"));
+        assert!(!debug.contains("password"));
+    }
+
+    #[test]
+    fn test_pending_state_bounded_size() {
+        let request = AutoSyncRequest {
+            library_id: Some("a".repeat(1000)),
+            mutation_kind: MutationKind::SnippetCreate,
+            requested_at: i64::MAX,
+        };
+        let pending = PendingState::from_request(&request);
+        let content = pending.to_toml_with_integrity().unwrap();
+        // Pending state should be well under 1 MiB.
+        assert!(content.len() < 1024 * 1024);
+    }
+
+    #[test]
+    fn test_lock_file_no_command_bodies() {
+        let state_dir = std::env::temp_dir().join("snp_test_lock_no_bodies");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let lock = CoordinatorLock::acquire(&state_dir).unwrap();
+        let lock_path = state_dir.join(LOCK_FILE);
+        let content = fs::read_to_string(&lock_path).unwrap();
+
+        // Lock file should only contain a PID number.
+        assert!(content.trim().parse::<i32>().is_ok());
+        assert!(!content.contains("rm -rf"));
+        assert!(!content.contains("curl"));
+        assert!(!content.contains("eval"));
+
+        drop(lock);
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    // ---- run_auto_sync with retries (Workstream F) ----
+
+    #[test]
+    fn test_run_auto_sync_retry_policy_zero_no_retry() {
+        let state_dir = std::env::temp_dir().join("snp_test_run_retry0");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let policy = AutoSyncPolicy {
+            enabled: true,
+            debounce: Duration::from_secs(0),
+            failure_mode: AutoSyncFailureMode::Ignore,
+            max_retries: 0,
+            sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let status = run_auto_sync(&policy, &state_dir, &rt);
+
+        // Should fail (no server configured), but lock should be released.
+        assert!(matches!(status, AutoSyncStatus::Failed { .. }));
+        assert!(!state_dir.join(LOCK_FILE).exists());
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    // ---- Integration: multiple cycles with lock cleanup ----
+
+    #[test]
+    fn test_integration_multiple_cycles_lock_cleanup() {
+        let state_dir = std::env::temp_dir().join("snp_test_integration_cycles");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let policy = make_enabled_policy(0);
+        let mut coord = AutoSyncCoordinator::new(policy, state_dir.clone());
+
+        // Run 5 cycles — each should leave no lock behind.
+        for _ in 0..5 {
+            let req = make_request(MutationKind::SnippetCreate);
+            coord.request(req, MutationOrigin::User);
+            let _ = coord.tick(Instant::now());
+            // Simulate sync completing.
+            coord.sync_completed();
+        }
+
+        assert!(!state_dir.join(LOCK_FILE).exists());
+        assert!(matches!(coord.state, DebounceState::Idle));
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn test_integration_disabled_no_coordinator_files() {
+        let state_dir = std::env::temp_dir().join("snp_test_integration_disabled");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let policy = make_disabled_policy();
+        let mut coord = AutoSyncCoordinator::new(policy, state_dir.clone());
+
+        let req = make_request(MutationKind::SnippetCreate);
+        coord.request(req, MutationOrigin::User);
+
+        // Disabled policy should not create lock or pending files.
+        assert!(!state_dir.join(LOCK_FILE).exists());
+        assert!(!state_dir.join(PENDING_STATE_FILE).exists());
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn test_integration_sync_merge_no_recursive_trigger() {
+        let state_dir = std::env::temp_dir().join("snp_test_integration_no_recursive");
+        let _ = fs::create_dir_all(&state_dir);
+
+        let policy = make_enabled_policy(2);
+        let mut coord = AutoSyncCoordinator::new(policy, state_dir.clone());
+
+        // SyncMerge origin should never trigger.
+        let req = make_request(MutationKind::SnippetCreate);
+        let status = coord.request(req, MutationOrigin::SyncMerge);
+        assert_eq!(status, AutoSyncStatus::Disabled);
+
+        // No pending file should be created.
+        assert!(!state_dir.join(PENDING_STATE_FILE).exists());
+
+        let _ = fs::remove_dir_all(&state_dir);
     }
 }

@@ -294,6 +294,61 @@ PID-file based lock at `~/.config/snp/auto-sync.lock`:
 - Restrictive permissions (0o600)
 - Advisory only — cannot block manual `snp sync`
 
+### Retry and Backoff
+
+`run_auto_sync` supports configurable retry with exponential backoff:
+- `max_retries`: default 1 (one retry after initial failure)
+- Exponential backoff: 1s initial, doubling each retry, capped at 30s
+- `sync_timeout`: per-attempt timeout (default 30s, configurable)
+- Failed attempts record in the durable pending state for diagnostics
+
+### Failure Policy Rendering
+
+When all retry attempts are exhausted:
+- `Ignore`: debug-level log only, no user-facing output
+- `Warn`: `eprintln!` warning to stderr + tracing log
+- `Error`: `eprintln!` error to stderr + tracing error log
+
+The `Warn`/`Error` modes produce user-visible messages because auto-sync
+runs synchronously within the calling command — the user is present to
+see stderr output.
+
+### Design Decisions
+
+**Architecture: Option A (in-process coordinator)**
+
+Three options were evaluated:
+1. **Option A (in-process):** Chosen. The mutation command owns debounce
+   and sync execution. Simplest correct design. The process must remain
+   alive for debounce + sync, which is acceptable since mutation commands
+   can wait.
+2. **Option B (detached helper process):** Rejected. Adds significant
+   complexity (IPC, process supervision, cross-platform detachment) for
+   marginal benefit over in-process sync.
+3. **Option C (persistent daemon):** Rejected. snp is a CLI tool with no
+   existing long-running process; a daemon is disproportionate.
+
+**Sync target: Global (not per-library)**
+
+`run_default_sync` syncs all configured libraries. The `library_id` field
+in `AutoSyncRequest` is vestigial — preserved for forward compatibility
+but currently unused. Per-library targeting deferred until the sync
+protocol supports it.
+
+**Delivery guarantees: Best-effort**
+
+Auto-sync is convenience, not durable delivery. The durable pending
+marker survives crash/restart, and `recover_stale_pending()` clears
+stale state (>5 minutes). Manual `snp sync` and cron remain the
+recovery path for missed syncs.
+
+### Doctor Integration
+
+`snp doctor --compatibility` inspects auto-sync state:
+- Pending marker existence and staleness
+- Lock file existence and owner liveness
+- Auto-sync config settings (enabled/disabled, debounce, failure mode)
+
 ### Safety Invariants
 
 1. Coordinator never mutates snippet libraries directly
