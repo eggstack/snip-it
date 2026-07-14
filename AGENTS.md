@@ -121,6 +121,7 @@ snip-it/
 │   │   ├── premade_cmd.rs
 │   │   ├── import_cmd.rs    # Pet import (snp import pet <path>)
 │   │   ├── doctor_cmd.rs     # Compatibility diagnostics (snp doctor)
+│   │   ├── pet_analysis.rs  # Shared pet TOML analysis (doctor + import)
 │   │   ├── cron_cmd.rs
 │   │   └── keybindings_cmd.rs
 │   └── utils/
@@ -269,10 +270,16 @@ snip-it/
 - Human report to stderr, JSON to stdout; `--report-file` for persistent reports
 - Security: no command execution, no variable expansion, no source modification, no sync side effects
 
+### Shared Pet Analysis (`src/commands/pet_analysis.rs`)
+- Common module used by both `import_cmd` and `doctor_cmd` for consistent analysis
+- Provides: `read_source_file()`, `parse_pet_toml()`, `detect_unknown_fields()`, `analyze_entry()`, `is_exact_duplicate()`, `same_command_different_description()`, `same_description_different_command()`, `detect_duplicates()`
+- `KNOWN_SNIPPET_FIELDS` constant defines recognized pet snippet fields (canonical + aliases)
+- Ensures doctor and import produce identical diagnostic codes for the same input
+
 ### Compatibility Diagnostics (`snp doctor`)
 - `src/commands/doctor_cmd.rs` implements `snp doctor` with four modes: `--pet-file <path>`, `--compatibility`, `--library <name>`, and `--check-shell <bash|zsh|fish>`
-- `--pet-file` performs read-only analysis of pet snippet files: TOML parse, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, and recommended import command
-- `--compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability (bash/zsh/fish), shell init syntax validation, editor configuration, legacy paths, Release 1 select availability, Release 2 acquisition flags, and Release 3 choice-variable parser
+- `--pet-file` performs read-only analysis of pet snippet files: TOML parse, unknown fields, missing required fields, empty commands, choice variables, duplicates, output fields, normalization preview, malformed placeholders, unsupported concepts, destination naming conflicts, and recommended import command
+- `--compatibility` audits the installed snp environment: binary version, config directory, library directory, primary library, sync config, shell availability (bash/zsh/fish), shell init syntax validation, editor configuration, legacy paths, canonical Pet TOML loading, Release 1 select availability, Release 2 acquisition flags, and Release 3 choice-variable parser
 - `--library <name>` analyzes a specific library file (resolved from `~/.config/snp/libraries/` or literal path)
 - `--check-shell <shell>` validates `snp shell init` output syntax for the specified shell
 - Options: `--strict` (treat warnings as errors), `--report human|json` (output format)
@@ -319,7 +326,8 @@ snip-it/
 - Sync tests cover device conflict detection
 - snip-sync has 78 tests (unit + integration)
 - Pet import tests (`tests/integration.rs`) cover: default create, explicit library, collision, merge, dry-run, source untouched, JSON report, invalid inputs, strict/permissive modes, replace with backup, command preservation, choice variables, mixed aliases, help text, flag conflicts
-- Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, duplicate detection, source file validation, TOML parsing, entry conversion
-- Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, and empty file
-- Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: file validation, TOML parsing, entry analysis, duplicate detection, and recommended command generation
+- Pet import unit tests (`src/commands/import_cmd.rs`) cover: library name derivation, entry conversion, command preservation, normalization recording, and output diagnostics
+- Pet analysis unit tests (`src/commands/pet_analysis.rs`) cover: source file validation, TOML parsing, field detection, entry analysis, duplicate detection, malformed variable detection, and library name sanitization
+- Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, empty file, normalization preview, malformed variable detection, canonical Pet TOML loading check, and library state non-mutation
+- Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: library name sanitization, and malformed variable detection
 - Diagnostics unit tests (`src/diagnostics.rs`) cover: counts, report constructors, version, severity serialization, diagnostic serialization, source span, span skip-none, diagnostic ordering, severity ranking, stable code convention, strict-mode classification, bounded messages, recommendation generation, empty counts, and full PetImportReport roundtrip

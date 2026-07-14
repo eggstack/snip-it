@@ -4770,4 +4770,197 @@ fn test_doctor_import_dryrun_consistency() {
     // Both should have schema_version 1.0.0
     assert_eq!(doctor_json["schema_version"], "1.0.0");
     assert_eq!(import_json["schema_version"], "1.0.0");
+
+    // Both should have the same diagnostic count (structural + per-entry)
+    let doctor_diag_count = doctor_json["diagnostics"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let import_diag_count = import_json["diagnostics"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    // Import may have fewer diagnostics since it doesn't detect duplicates within source
+    // (it detects source-to-dest duplicates instead), but structural and per-entry diagnostics
+    // should be the same count.
+    assert!(
+        import_diag_count >= doctor_diag_count - 2,
+        "Import diagnostics ({}) should be close to doctor diagnostics ({})",
+        import_diag_count,
+        doctor_diag_count
+    );
+
+    // Both should have detected_capabilities
+    let doctor_caps = doctor_json["detected_capabilities"].as_array();
+    let import_caps = import_json["detected_capabilities"].as_array();
+    assert!(
+        doctor_caps.is_some(),
+        "Doctor should have detected_capabilities"
+    );
+    assert!(
+        import_caps.is_some(),
+        "Import should have detected_capabilities"
+    );
+
+    // Both should have analysis_mode
+    assert!(
+        doctor_json["analysis_mode"].is_string(),
+        "Doctor should have analysis_mode"
+    );
+    assert!(
+        import_json["analysis_mode"].is_string(),
+        "Import should have analysis_mode"
+    );
+}
+
+#[test]
+fn test_doctor_library_state_not_mutated() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    // Create a library with a snippet
+    let create_output = snp_in(&config_dir)
+        .args(["library", "create", "testlib"])
+        .output()
+        .unwrap();
+    assert!(create_output.status.success());
+
+    let lib_path = config_dir.join("libraries").join("testlib.toml");
+    let lib_content = r#"[[snippets]]
+description = "existing"
+command = "echo existing"
+"#;
+    std::fs::write(&lib_path, lib_content).unwrap();
+    let before = std::fs::read_to_string(&lib_path).unwrap();
+
+    // Run doctor --compatibility (should not touch library files)
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after = std::fs::read_to_string(&lib_path).unwrap();
+    assert_eq!(
+        before, after,
+        "Doctor --compatibility should not modify library files"
+    );
+
+    // Run doctor --pet-file (should not touch library files)
+    let pet_path = _tmp.path().join("pet.toml");
+    std::fs::write(
+        &pet_path,
+        r#"[[snippets]]
+description = "test"
+command = "echo hello"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let after = std::fs::read_to_string(&lib_path).unwrap();
+    assert_eq!(
+        before, after,
+        "Doctor --pet-file should not modify library files"
+    );
+}
+
+#[test]
+fn test_doctor_compatibility_has_pet_toml_check() {
+    let (_tmp, config_dir) = setup_test_env();
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--compatibility", "--report", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let diags = json["diagnostics"].as_array().unwrap();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d["code"].as_str() == Some("compat.pet_toml.ok")),
+        "Should have compat.pet_toml.ok check. Codes: {:?}",
+        diags.iter().map(|d| d["code"].as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_doctor_pet_file_has_normalizations() {
+    let fixture = std::env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/canonical_pet.toml");
+
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            fixture.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+
+    // Normalizations should be populated (canonical_pet.toml has entries with zero timestamps)
+    let norms = json["normalizations"].as_array().unwrap();
+    assert!(
+        !norms.is_empty(),
+        "Doctor should populate normalization preview for canonical_pet.toml"
+    );
+    // Each normalization should have the required fields
+    for norm in norms {
+        assert!(norm["entry_index"].is_number());
+        assert!(norm["field"].is_string());
+        assert!(norm["original"].is_string());
+        assert!(norm["normalized"].is_string());
+    }
+}
+
+#[test]
+fn test_doctor_malformed_variable_detection() {
+    let (_tmp, _config_dir) = setup_test_env();
+    let pet_path = _tmp.path().join("malformed.toml");
+    std::fs::write(
+        &pet_path,
+        r#"[[snippets]]
+description = "bad var"
+command = "echo <name"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_cmd()
+        .args([
+            "doctor",
+            "--pet-file",
+            pet_path.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let diags = json["diagnostics"].as_array().unwrap();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d["code"].as_str() == Some("W-MALFORMED-VAR")),
+        "Should detect malformed variable placeholder"
+    );
 }

@@ -12,6 +12,7 @@ pub mod keybindings_cmd;
 pub mod library_cmd;
 pub mod list_cmd;
 pub mod new_cmd;
+pub mod pet_analysis;
 pub mod premade_cmd;
 pub mod register_cmd;
 pub mod run_cmd;

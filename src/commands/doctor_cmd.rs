@@ -1,16 +1,15 @@
+use crate::commands::pet_analysis::{
+    analyze_entry, detect_duplicates, detect_unknown_fields, parse_pet_toml, read_source_file,
+};
 use crate::commands::shell_cmd::{self, ShellType};
 use crate::diagnostics::{
-    CompatibilityDiagnostic, DiagnosticSeverity, DoctorReport, ImportDuplicate, diagnostic_counts,
-    version,
+    CompatibilityDiagnostic, DiagnosticSeverity, DoctorReport, NormalizationRecord,
+    diagnostic_counts, version,
 };
 use crate::error::{SnipError, SnipResult};
-use crate::library::{LibraryManager, Snippet, Snippets};
-use crate::utils::toml_helpers::fix_invalid_toml_escapes;
+use crate::library::{LibraryManager, Snippets};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-
-const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Output format for the doctor report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Default)]
@@ -20,257 +19,13 @@ pub enum DiagnosticReportFormat {
     Json,
 }
 
-/// Known field names for pet snippet entries (canonical + aliases).
-const KNOWN_SNIPPET_FIELDS: &[&str] = &[
-    "id",
-    "description",
-    "command",
-    "output",
-    "tag",
-    "tags",
-    "folders",
-    "favorite",
-    "created_at",
-    "updated_at",
-    "device_id",
-    "deleted",
-    "name",
-    "cmd",
-    "Tag",
-    "Tags",
-    "Description",
-    "Command",
-    "Output",
-    "Id",
-    "ID",
-];
-
-/// Read and validate a source file using the same checks as import_cmd.
-fn read_source_file(path: &Path) -> SnipResult<String> {
-    let metadata = fs::metadata(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            SnipError::runtime_error(
-                "Source file not found",
-                Some(&format!("'{}' does not exist", path.display())),
-            )
-        } else {
-            SnipError::io_error("read source file metadata", path, e)
-        }
-    })?;
-
-    if metadata.is_dir() {
-        return Err(SnipError::runtime_error(
-            "Path is a directory",
-            Some(&format!("'{}' is a directory, not a file", path.display())),
-        ));
-    }
-
-    if !metadata.is_file() {
-        return Err(SnipError::runtime_error(
-            "Unsupported file type",
-            Some(&format!("'{}' is not a regular file", path.display())),
-        ));
-    }
-
-    let mut bytes = Vec::new();
-    let file =
-        fs::File::open(path).map_err(|e| SnipError::io_error("open source file", path, e))?;
-    std::io::BufReader::new(file)
-        .take((MAX_FILE_BYTES as u64) + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| SnipError::io_error("read source file", path, e))?;
-
-    if bytes.len() > MAX_FILE_BYTES {
-        return Err(SnipError::runtime_error(
-            "Source file too large",
-            Some(&format!(
-                "Files are limited to {} MiB",
-                MAX_FILE_BYTES / (1024 * 1024)
-            )),
-        ));
-    }
-
-    let content = String::from_utf8(bytes).map_err(|_| {
-        SnipError::runtime_error(
-            "Invalid source file",
-            Some("Source file must be valid UTF-8"),
-        )
-    })?;
-
-    if content.contains('\0') {
-        return Err(SnipError::runtime_error(
-            "Invalid source file",
-            Some("Source file cannot contain NUL bytes"),
-        ));
-    }
-
-    Ok(content)
-}
-
-/// Parse raw TOML content into a `Snippets` collection.
-fn parse_pet_toml(content: &str) -> SnipResult<Snippets> {
-    let fixed = fix_invalid_toml_escapes(content);
-    toml::from_str(&fixed).map_err(|e| SnipError::toml_error("parse pet TOML", e))
-}
-
-/// Detect unknown fields, missing required keys, and structural issues.
-fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
-    let mut diagnostics = Vec::new();
-
-    let value: toml::Value = match toml::from_str(raw_toml) {
-        Ok(v) => v,
-        Err(_) => return diagnostics,
-    };
-
-    let entries = match value.get("snippets").and_then(|v| v.as_array()) {
-        Some(arr) => arr,
-        None => return diagnostics,
-    };
-
-    for (i, entry) in entries.iter().enumerate() {
-        let table = match entry.as_table() {
-            Some(t) => t,
-            None => continue,
-        };
-
-        for key in table.keys() {
-            if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
-                diagnostics.push(CompatibilityDiagnostic {
-                    code: "I-FIELD-UNKNOWN".to_string(),
-                    entry_index: Some(i),
-                    field: Some(key.clone()),
-                    severity: DiagnosticSeverity::Info,
-                    message: format!("Unknown field '{}' will be ignored", key),
-                    suggestion: None,
-                    span: None,
-                });
-            }
-        }
-
-        if !table.contains_key("description")
-            && !table.contains_key("Description")
-            && !table.contains_key("name")
-        {
-            diagnostics.push(CompatibilityDiagnostic {
-                code: "W-DESC-MISSING".to_string(),
-                entry_index: Some(i),
-                field: Some("description".to_string()),
-                severity: DiagnosticSeverity::Warning,
-                message: "Entry missing 'description' field (will be empty)".to_string(),
-                suggestion: None,
-                span: None,
-            });
-        }
-
-        if !table.contains_key("command")
-            && !table.contains_key("Command")
-            && !table.contains_key("cmd")
-        {
-            diagnostics.push(CompatibilityDiagnostic {
-                code: "W-CMD-MISSING".to_string(),
-                entry_index: Some(i),
-                field: Some("command".to_string()),
-                severity: DiagnosticSeverity::Warning,
-                message: "Entry missing 'command' field (will be empty)".to_string(),
-                suggestion: None,
-                span: None,
-            });
-        }
-    }
-
-    diagnostics
-}
-
-/// Analyze a single pet entry and produce diagnostics.
-fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic> {
-    let mut diagnostics = Vec::new();
-
-    if pet.description.trim().is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            code: "W-DESC-EMPTY".to_string(),
-            entry_index: Some(index),
-            field: Some("description".to_string()),
-            severity: DiagnosticSeverity::Warning,
-            message: "Entry has empty description".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    if pet.command.trim().is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            code: "E-CMD-EMPTY".to_string(),
-            entry_index: Some(index),
-            field: Some("command".to_string()),
-            severity: DiagnosticSeverity::Error,
-            message: "Entry has empty command".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    if !pet.output.is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            code: "I-OUTPUT-PRESENT".to_string(),
-            entry_index: Some(index),
-            field: Some("output".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry has output field (preserved)".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    if pet.tags.is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            code: "I-TAGS-EMPTY".to_string(),
-            entry_index: Some(index),
-            field: Some("tag".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry has no tags".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    let vars = crate::utils::variables::parse_variables(&pet.command);
-    if vars.iter().any(|v| {
-        matches!(
-            v.kind,
-            crate::utils::variables::VariableKind::Choices { .. }
-        )
-    }) {
-        diagnostics.push(CompatibilityDiagnostic {
-            code: "I-CHOICE-VARS".to_string(),
-            entry_index: Some(index),
-            field: Some("command".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry contains choice variables".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    diagnostics
-}
-
-/// Check if two snippets are exact duplicates (same command and description).
-fn is_exact_duplicate(a: &Snippet, b: &Snippet) -> bool {
-    a.command == b.command && a.description == b.description
-}
-
-/// Check if two snippets have the same command but different descriptions.
-fn same_command_different_description(a: &Snippet, b: &Snippet) -> bool {
-    a.command == b.command && a.description != b.description
-}
-
-/// Check if two snippets have the same description but different commands.
-fn same_description_different_command(a: &Snippet, b: &Snippet) -> bool {
-    a.description == b.description && a.command != b.command
-}
-
 /// Build a DoctorReport from a pet file analysis.
-fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResult<DoctorReport> {
+fn build_pet_report(
+    source_path: &Path,
+    content: &str,
+    strict: bool,
+    existing_library_names: &[String],
+) -> SnipResult<DoctorReport> {
     let mut report = DoctorReport::new(strict);
     report.source = Some(source_path.display().to_string());
 
@@ -296,46 +51,74 @@ fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResu
         report.diagnostics.extend(entry_diags);
     }
 
-    // Detect duplicates
-    for i in 0..pet_snippets.snippets.len() {
-        for j in (i + 1)..pet_snippets.snippets.len() {
-            if is_exact_duplicate(&pet_snippets.snippets[i], &pet_snippets.snippets[j]) {
-                report.duplicates.push(ImportDuplicate {
-                    source_index: i,
-                    destination_index: j,
-                    description: pet_snippets.snippets[i].description.clone(),
-                    reason: "Exact duplicate (same command and description)".to_string(),
-                });
-            } else if same_command_different_description(
-                &pet_snippets.snippets[i],
-                &pet_snippets.snippets[j],
-            ) {
-                report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "W-DUP-CMD".to_string(),
-                    entry_index: Some(i),
-                    field: Some("command".to_string()),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!(
-                        "Same command as entry {} ('{}') but different description",
-                        j, pet_snippets.snippets[j].description
-                    ),
-                    suggestion: None,
-                    span: None,
-                });
-            } else if same_description_different_command(
-                &pet_snippets.snippets[i],
-                &pet_snippets.snippets[j],
-            ) {
-                report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "W-DUP-DESC".to_string(),
-                    entry_index: Some(i),
-                    field: Some("description".to_string()),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!("Same description as entry {} but different command", j),
-                    suggestion: None,
-                    span: None,
-                });
-            }
+    // Detect unsupported pet-specific concepts
+    detect_unsupported_concepts(&pet_snippets, &mut report);
+
+    // Detect destination naming conflicts
+    let lib_name = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported");
+    let sanitized = sanitize_library_name(lib_name);
+    if existing_library_names.contains(&sanitized) {
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "W-DEST-CONFLICT".to_string(),
+            entry_index: None,
+            field: Some("destination".to_string()),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "Library '{}' already exists; import will need --merge or --replace",
+                sanitized
+            ),
+            suggestion: Some("Use --library <different-name> or --merge/--replace".to_string()),
+            span: None,
+        });
+    }
+
+    // Detect duplicates within the source file
+    let (duplicates, dup_diags) = detect_duplicates(&pet_snippets.snippets);
+    report.duplicates.extend(duplicates);
+    report.diagnostics.extend(dup_diags);
+
+    // Populate normalization preview
+    for (i, pet) in pet_snippets.snippets.iter().enumerate() {
+        // Timestamp normalization
+        if pet.created_at == 0 || pet.updated_at == 0 {
+            report.normalizations.push(NormalizationRecord {
+                entry_index: i,
+                field: "timestamps".to_string(),
+                original: format!(
+                    "created_at={}, updated_at={}",
+                    pet.created_at, pet.updated_at
+                ),
+                normalized: "will be set to current time".to_string(),
+            });
+        }
+        // Sync field clearing
+        if !pet.device_id.is_empty() || pet.deleted {
+            report.normalizations.push(NormalizationRecord {
+                entry_index: i,
+                field: "sync_fields".to_string(),
+                original: format!(
+                    "device_id={}, deleted={}",
+                    if pet.device_id.is_empty() {
+                        "(empty)"
+                    } else {
+                        &pet.device_id
+                    },
+                    pet.deleted
+                ),
+                normalized: "device_id cleared, deleted=false".to_string(),
+            });
+        }
+        // ID regeneration
+        if !pet.id.is_empty() {
+            report.normalizations.push(NormalizationRecord {
+                entry_index: i,
+                field: "id".to_string(),
+                original: pet.id.clone(),
+                normalized: "(will be regenerated)".to_string(),
+            });
         }
     }
 
@@ -382,10 +165,6 @@ fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResu
     }
 
     // Build recommended import command
-    let lib_name = source_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("imported");
     let (info_count, warn_count, error_count) = diagnostic_counts(&report.diagnostics);
     let has_errors = error_count > 0;
 
@@ -407,9 +186,105 @@ fn build_pet_report(source_path: &Path, content: &str, strict: bool) -> SnipResu
     }
 
     let _ = (warn_count, info_count);
-    let _ = lib_name;
 
     Ok(report)
+}
+
+/// Detect pet-specific concepts that snp cannot handle.
+fn detect_unsupported_concepts(snippets: &Snippets, report: &mut DoctorReport) {
+    for (i, pet) in snippets.snippets.iter().enumerate() {
+        // Check for malformed variable placeholders (unmatched < without >)
+        let command = &pet.command;
+        let mut angle_depth = 0i32;
+        let mut chars = command.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                // Skip escaped characters
+                chars.next();
+                continue;
+            }
+            if c == '<' {
+                angle_depth += 1;
+            } else if c == '>' {
+                angle_depth -= 1;
+                if angle_depth < 0 {
+                    // Unmatched closing >
+                    report.diagnostics.push(CompatibilityDiagnostic {
+                        code: "W-MALFORMED-VAR".to_string(),
+                        entry_index: Some(i),
+                        field: Some("command".to_string()),
+                        severity: DiagnosticSeverity::Warning,
+                        message:
+                            "Unmatched '>' in command; may be a malformed variable placeholder"
+                                .to_string(),
+                        suggestion: Some(
+                            "Check variable syntax: use <name> or <name=default>".to_string(),
+                        ),
+                        span: None,
+                    });
+                    angle_depth = 0;
+                }
+            }
+        }
+        if angle_depth > 0 {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "W-MALFORMED-VAR".to_string(),
+                entry_index: Some(i),
+                field: Some("command".to_string()),
+                severity: DiagnosticSeverity::Warning,
+                message: "Unmatched '<' in command; may be a malformed variable placeholder"
+                    .to_string(),
+                suggestion: Some("Check variable syntax: use <name> or <name=default>".to_string()),
+                span: None,
+            });
+        }
+
+        // Check for pet-specific fields that indicate unsupported concepts
+        if !pet.folders.is_empty() {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "I-FIELD-FOLDERS".to_string(),
+                entry_index: Some(i),
+                field: Some("folders".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: "Pet 'folders' field will be preserved as-is".to_string(),
+                suggestion: None,
+                span: None,
+            });
+        }
+    }
+}
+
+/// Sanitize a filename stem into a valid library name.
+fn sanitize_library_name(stem: &str) -> String {
+    let sanitized: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let mut result = String::with_capacity(sanitized.len());
+    let mut prev_hyphen = false;
+    for c in sanitized.chars() {
+        if c == '-' {
+            if !prev_hyphen {
+                result.push(c);
+            }
+            prev_hyphen = true;
+        } else {
+            result.push(c);
+            prev_hyphen = false;
+        }
+    }
+    let result = result.trim_matches('-');
+    if result.is_empty() {
+        "imported".to_string()
+    } else {
+        result.to_string()
+    }
 }
 
 /// Run the compatibility check mode.
@@ -907,6 +782,39 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     }
 
+    // Canonical Pet TOML loading check
+    let pet_parse_test = parse_pet_toml(
+        r#"
+[[snippets]]
+description = "test"
+command = "echo ok"
+"#,
+    );
+    match pet_parse_test {
+        Ok(_) => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.pet_toml.ok".to_string(),
+                entry_index: None,
+                field: Some("pet_toml".to_string()),
+                severity: DiagnosticSeverity::Info,
+                message: "Pet TOML parser is functional".to_string(),
+                suggestion: None,
+                span: None,
+            });
+        }
+        Err(e) => {
+            report.diagnostics.push(CompatibilityDiagnostic {
+                code: "compat.pet_toml.error".to_string(),
+                entry_index: None,
+                field: Some("pet_toml".to_string()),
+                severity: DiagnosticSeverity::Error,
+                message: format!("Pet TOML parser failed: {e}"),
+                suggestion: Some("Report this issue; pet import may not work".to_string()),
+                span: None,
+            });
+        }
+    }
+
     // Known legacy paths
     let home = std::env::var("HOME").unwrap_or_default();
     if !home.is_empty() {
@@ -1036,6 +944,17 @@ fn emit_human_report(report: &DoctorReport) {
         }
     }
 
+    if !report.normalizations.is_empty() {
+        eprintln!();
+        eprintln!("Normalizations ({}):", report.normalizations.len());
+        for norm in &report.normalizations {
+            eprintln!(
+                "  [{}] {}: '{}' -> '{}'",
+                norm.entry_index, norm.field, norm.original, norm.normalized
+            );
+        }
+    }
+
     if !report.detected_capabilities.is_empty() {
         eprintln!();
         eprintln!("Supported features:");
@@ -1074,6 +993,18 @@ fn resolve_library_path(name: &str) -> SnipResult<PathBuf> {
             libraries_dir.display()
         )),
     ))
+}
+
+/// Get the list of existing library names for destination conflict detection.
+fn get_existing_library_names() -> Vec<String> {
+    match LibraryManager::new() {
+        Ok(mgr) => mgr
+            .list_libraries()
+            .iter()
+            .map(|l| l.filename.clone())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Validate shell init output by piping through the shell's syntax checker.
@@ -1238,6 +1169,8 @@ pub fn run(
         ));
     }
 
+    let existing_libs = get_existing_library_names();
+
     let mut report = if let Some(ref path) = pet_file {
         let content = read_source_file(path)?;
 
@@ -1248,7 +1181,7 @@ pub fn run(
             ));
         }
 
-        build_pet_report(path, &content, strict)?
+        build_pet_report(path, &content, strict, &existing_libs)?
     } else if let Some(ref lib_name) = library {
         let path = resolve_library_path(lib_name)?;
         let content = read_source_file(&path)?;
@@ -1260,7 +1193,7 @@ pub fn run(
             ));
         }
 
-        build_pet_report(&path, &content, strict)?
+        build_pet_report(&path, &content, strict, &existing_libs)?
     } else if compatibility {
         build_compatibility_report(strict)?
     } else {
@@ -1296,4 +1229,92 @@ pub fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::Snippet;
+
+    #[test]
+    fn test_sanitize_library_name() {
+        assert_eq!(sanitize_library_name("my-snippets"), "my-snippets");
+        assert_eq!(sanitize_library_name("Pet Export"), "pet-export");
+        assert_eq!(sanitize_library_name("MY_SNIPPETS"), "my-snippets");
+        assert_eq!(sanitize_library_name("my@snippets!"), "my-snippets");
+        assert_eq!(sanitize_library_name("---leading"), "leading");
+        assert_eq!(sanitize_library_name("trailing---"), "trailing");
+    }
+
+    #[test]
+    fn test_sanitize_library_name_fallback() {
+        assert_eq!(sanitize_library_name(".toml"), "toml");
+        assert_eq!(sanitize_library_name(""), "imported");
+    }
+
+    #[test]
+    fn test_malformed_variable_unmatched_open() {
+        let pet = Snippet {
+            description: "test".to_string(),
+            command: "echo <name".to_string(),
+            ..Default::default()
+        };
+        let mut report = DoctorReport::new(false);
+        let snippets = Snippets {
+            snippets: vec![pet],
+            folders: Vec::new(),
+        };
+        detect_unsupported_concepts(&snippets, &mut report);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "W-MALFORMED-VAR"),
+            "Should detect malformed variable"
+        );
+    }
+
+    #[test]
+    fn test_malformed_variable_unmatched_close() {
+        let pet = Snippet {
+            description: "test".to_string(),
+            command: "echo name>".to_string(),
+            ..Default::default()
+        };
+        let mut report = DoctorReport::new(false);
+        let snippets = Snippets {
+            snippets: vec![pet],
+            folders: Vec::new(),
+        };
+        detect_unsupported_concepts(&snippets, &mut report);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "W-MALFORMED-VAR"),
+            "Should detect malformed variable"
+        );
+    }
+
+    #[test]
+    fn test_malformed_variable_escaped() {
+        let pet = Snippet {
+            description: "test".to_string(),
+            command: "echo \\<name\\>".to_string(),
+            ..Default::default()
+        };
+        let mut report = DoctorReport::new(false);
+        let snippets = Snippets {
+            snippets: vec![pet],
+            folders: Vec::new(),
+        };
+        detect_unsupported_concepts(&snippets, &mut report);
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "W-MALFORMED-VAR"),
+            "Escaped angle brackets should not trigger warning"
+        );
+    }
 }

@@ -1,15 +1,14 @@
+use crate::commands::pet_analysis::{
+    analyze_entry, detect_unknown_fields, is_exact_duplicate, parse_pet_toml, read_source_file,
+    same_command_different_description, same_description_different_command,
+};
 use crate::diagnostics::{
     CompatibilityDiagnostic, DiagnosticSeverity, ImportDuplicate, NormalizationRecord,
     PetImportReport,
 };
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippet, Snippets};
-use crate::utils::toml_helpers::fix_invalid_toml_escapes;
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-
-const MAX_IMPORT_FILE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Import mode determines how the importer handles destination state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Default)]
@@ -43,285 +42,6 @@ pub struct PetImportOptions {
     pub dry_run: bool,
     pub report_format: ReportFormat,
     pub report_file: Option<PathBuf>,
-}
-
-/// Read and validate a pet TOML source file.
-///
-/// Returns the raw file content. The source is never modified.
-fn read_source_file(path: &Path) -> SnipResult<String> {
-    let metadata = fs::metadata(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            SnipError::runtime_error(
-                "Source file not found",
-                Some(&format!("'{}' does not exist", path.display())),
-            )
-        } else {
-            SnipError::io_error("read source file metadata", path, e)
-        }
-    })?;
-
-    if metadata.is_dir() {
-        return Err(SnipError::runtime_error(
-            "Path is a directory",
-            Some(&format!("'{}' is a directory, not a file", path.display())),
-        ));
-    }
-
-    if !metadata.is_file() {
-        return Err(SnipError::runtime_error(
-            "Unsupported file type",
-            Some(&format!("'{}' is not a regular file", path.display())),
-        ));
-    }
-
-    let mut bytes = Vec::new();
-    let file =
-        fs::File::open(path).map_err(|e| SnipError::io_error("open source file", path, e))?;
-    std::io::BufReader::new(file)
-        .take((MAX_IMPORT_FILE_BYTES as u64) + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| SnipError::io_error("read source file", path, e))?;
-
-    if bytes.len() > MAX_IMPORT_FILE_BYTES {
-        return Err(SnipError::runtime_error(
-            "Source file too large",
-            Some(&format!(
-                "Pet import files are limited to {} MiB",
-                MAX_IMPORT_FILE_BYTES / (1024 * 1024)
-            )),
-        ));
-    }
-
-    let content = String::from_utf8(bytes).map_err(|_| {
-        SnipError::runtime_error(
-            "Invalid source file",
-            Some("Pet source file must be valid UTF-8"),
-        )
-    })?;
-
-    if content.contains('\0') {
-        return Err(SnipError::runtime_error(
-            "Invalid source file",
-            Some("Pet source file cannot contain NUL bytes"),
-        ));
-    }
-
-    Ok(content)
-}
-
-/// Parse raw TOML content into a `Snippets` collection.
-fn parse_pet_toml(content: &str) -> SnipResult<Snippets> {
-    let fixed = fix_invalid_toml_escapes(content);
-    toml::from_str(&fixed).map_err(|e| SnipError::toml_error("parse pet TOML", e))
-}
-
-/// Known field names for pet snippet entries (canonical + aliases).
-/// Used to detect unknown fields in the source TOML.
-const KNOWN_SNIPPET_FIELDS: &[&str] = &[
-    // Canonical snip-it fields
-    "id",
-    "description",
-    "command",
-    "output",
-    "tag",
-    "tags",
-    "folders",
-    "favorite",
-    "created_at",
-    "updated_at",
-    "device_id",
-    "deleted",
-    // Pet aliases
-    "name",
-    "cmd",
-    "Tag",
-    "Tags",
-    "Description",
-    "Command",
-    "Output",
-    "Id",
-    "ID",
-];
-
-/// Detect unknown fields, missing required keys, and structural issues in
-/// the raw TOML snippet entries. Returns diagnostics for the report.
-fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
-    let mut diagnostics = Vec::new();
-
-    let value: toml::Value = match toml::from_str(raw_toml) {
-        Ok(v) => v,
-        Err(_) => return diagnostics, // Parse errors are caught earlier by parse_pet_toml
-    };
-
-    let entries = match value.get("snippets").and_then(|v| v.as_array()) {
-        Some(arr) => arr,
-        None => return diagnostics,
-    };
-
-    for (i, entry) in entries.iter().enumerate() {
-        let table = match entry.as_table() {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Check for unknown fields
-        for key in table.keys() {
-            if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
-                diagnostics.push(CompatibilityDiagnostic {
-                    entry_index: Some(i),
-                    field: Some(key.clone()),
-                    severity: DiagnosticSeverity::Info,
-                    message: format!("Unknown field '{}' will be ignored", key),
-                    code: "I-FIELD-UNKNOWN".to_string(),
-                    suggestion: None,
-                    span: None,
-                });
-            }
-        }
-
-        // Check for missing required fields
-        if !table.contains_key("description")
-            && !table.contains_key("Description")
-            && !table.contains_key("name")
-        {
-            diagnostics.push(CompatibilityDiagnostic {
-                entry_index: Some(i),
-                field: Some("description".to_string()),
-                severity: DiagnosticSeverity::Warning,
-                message: "Entry missing 'description' field (will be empty)".to_string(),
-                code: "W-DESC-MISSING".to_string(),
-                suggestion: None,
-                span: None,
-            });
-        }
-
-        if !table.contains_key("command")
-            && !table.contains_key("Command")
-            && !table.contains_key("cmd")
-        {
-            diagnostics.push(CompatibilityDiagnostic {
-                entry_index: Some(i),
-                field: Some("command".to_string()),
-                severity: DiagnosticSeverity::Warning,
-                message: "Entry missing 'command' field (will be empty)".to_string(),
-                code: "W-CMD-MISSING".to_string(),
-                suggestion: None,
-                span: None,
-            });
-        }
-    }
-
-    diagnostics
-}
-
-/// Convert a pet snippet into a native snip-it `Snippet`.
-///
-/// Preserves command text semantically. Generates snip-it-native fields
-/// (IDs, timestamps, sync metadata defaults). Records diagnostics for
-/// any normalization performed.
-fn convert_entry(
-    index: usize,
-    pet: &Snippet,
-) -> (
-    Snippet,
-    Vec<CompatibilityDiagnostic>,
-    Vec<NormalizationRecord>,
-) {
-    let mut diagnostics = Vec::new();
-    let normalizations = Vec::new();
-    let mut snippet = pet.clone();
-
-    // Generate a fresh UUID for the imported snippet
-    snippet.id = uuid::Uuid::new_v4().to_string();
-
-    // Ensure timestamps are set
-    let now = chrono::Utc::now().timestamp();
-    if snippet.created_at == 0 {
-        snippet.created_at = now;
-    }
-    if snippet.updated_at == 0 {
-        snippet.updated_at = now;
-    }
-
-    // Clear sync-only fields
-    snippet.device_id = String::new();
-    snippet.deleted = false;
-
-    // Diagnostic: empty description
-    if snippet.description.trim().is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            entry_index: Some(index),
-            field: Some("description".to_string()),
-            severity: DiagnosticSeverity::Warning,
-            message: "Entry has empty description".to_string(),
-            code: "W-DESC-EMPTY".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    // Diagnostic: empty command (would have been rejected by Snippet::new)
-    if snippet.command.trim().is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            entry_index: Some(index),
-            field: Some("command".to_string()),
-            severity: DiagnosticSeverity::Error,
-            message: "Entry has empty command".to_string(),
-            code: "E-CMD-EMPTY".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    // Normalization: single tag string to array (pet sometimes uses a bare string)
-    // This is already handled by serde aliases — tags is always Vec<String> after deserialization.
-
-    // Diagnostic: output field present
-    if !snippet.output.is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            entry_index: Some(index),
-            field: Some("output".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry has output field (preserved)".to_string(),
-            code: "I-OUTPUT-PRESENT".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    // Diagnostic: empty tags array
-    if snippet.tags.is_empty() {
-        diagnostics.push(CompatibilityDiagnostic {
-            entry_index: Some(index),
-            field: Some("tag".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry has no tags".to_string(),
-            code: "I-TAGS-EMPTY".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    // Diagnostic: choice variables detected
-    let vars = crate::utils::variables::parse_variables(&snippet.command);
-    if vars.iter().any(|v| {
-        matches!(
-            v.kind,
-            crate::utils::variables::VariableKind::Choices { .. }
-        )
-    }) {
-        diagnostics.push(CompatibilityDiagnostic {
-            entry_index: Some(index),
-            field: Some("command".to_string()),
-            severity: DiagnosticSeverity::Info,
-            message: "Entry contains choice variables".to_string(),
-            code: "I-VAR-CHOICES".to_string(),
-            suggestion: None,
-            span: None,
-        });
-    }
-
-    (snippet, diagnostics, normalizations)
 }
 
 /// Derive a library name from the source file path.
@@ -368,19 +88,79 @@ fn derive_library_name(source: &Path) -> String {
     }
 }
 
-/// Check if two snippets are exact duplicates (same command and description).
-fn is_exact_duplicate(a: &Snippet, b: &Snippet) -> bool {
-    a.command == b.command && a.description == b.description
-}
+/// Convert a pet snippet into a native snip-it `Snippet`.
+///
+/// Preserves command text semantically. Generates snip-it-native fields
+/// (IDs, timestamps, sync metadata defaults). Records diagnostics for
+/// any normalization performed.
+fn convert_entry(
+    index: usize,
+    pet: &Snippet,
+) -> (
+    Snippet,
+    Vec<CompatibilityDiagnostic>,
+    Vec<NormalizationRecord>,
+) {
+    let mut normalizations = Vec::new();
+    let mut snippet = pet.clone();
 
-/// Check if two snippets have the same command but different descriptions.
-fn same_command_different_description(a: &Snippet, b: &Snippet) -> bool {
-    a.command == b.command && a.description != b.description
-}
+    // Record normalizations before mutation
+    if snippet.created_at == 0 || snippet.updated_at == 0 {
+        normalizations.push(NormalizationRecord {
+            entry_index: index,
+            field: "timestamps".to_string(),
+            original: format!(
+                "created_at={}, updated_at={}",
+                snippet.created_at, snippet.updated_at
+            ),
+            normalized: "set to current time".to_string(),
+        });
+    }
+    if !snippet.device_id.is_empty() || snippet.deleted {
+        normalizations.push(NormalizationRecord {
+            entry_index: index,
+            field: "sync_fields".to_string(),
+            original: format!(
+                "device_id={}, deleted={}",
+                if snippet.device_id.is_empty() {
+                    "(empty)"
+                } else {
+                    &snippet.device_id
+                },
+                snippet.deleted
+            ),
+            normalized: "device_id cleared, deleted=false".to_string(),
+        });
+    }
+    if !snippet.id.is_empty() {
+        normalizations.push(NormalizationRecord {
+            entry_index: index,
+            field: "id".to_string(),
+            original: snippet.id.clone(),
+            normalized: "(regenerated)".to_string(),
+        });
+    }
 
-/// Check if two snippets have the same description but different commands.
-fn same_description_different_command(a: &Snippet, b: &Snippet) -> bool {
-    a.description == b.description && a.command != b.command
+    // Generate a fresh UUID for the imported snippet
+    snippet.id = uuid::Uuid::new_v4().to_string();
+
+    // Ensure timestamps are set
+    let now = chrono::Utc::now().timestamp();
+    if snippet.created_at == 0 {
+        snippet.created_at = now;
+    }
+    if snippet.updated_at == 0 {
+        snippet.updated_at = now;
+    }
+
+    // Clear sync-only fields
+    snippet.device_id = String::new();
+    snippet.deleted = false;
+
+    // Use shared analysis for diagnostics
+    let diagnostics = analyze_entry(index, &snippet);
+
+    (snippet, diagnostics, normalizations)
 }
 
 /// Execute the pet import operation.
@@ -427,6 +207,44 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
         options.strict,
     );
     report.total_entries = pet_snippets.snippets.len();
+
+    // Populate detected capabilities
+    report.detected_capabilities.push("toml_format".to_string());
+    report
+        .detected_capabilities
+        .push(format!("snippet_count={}", pet_snippets.snippets.len()));
+    let has_vars = pet_snippets
+        .snippets
+        .iter()
+        .any(|s| !crate::utils::variables::parse_variables(&s.command).is_empty());
+    if has_vars {
+        report.detected_capabilities.push("variables".to_string());
+    }
+    let has_choices = pet_snippets.snippets.iter().any(|s| {
+        crate::utils::variables::parse_variables(&s.command)
+            .iter()
+            .any(|v| {
+                matches!(
+                    v.kind,
+                    crate::utils::variables::VariableKind::Choices { .. }
+                )
+            })
+    });
+    if has_choices {
+        report
+            .detected_capabilities
+            .push("choice_variables".to_string());
+    }
+    let has_output = pet_snippets.snippets.iter().any(|s| !s.output.is_empty());
+    if has_output {
+        report
+            .detected_capabilities
+            .push("output_fields".to_string());
+    }
+    let has_tags = pet_snippets.snippets.iter().any(|s| !s.tags.is_empty());
+    if has_tags {
+        report.detected_capabilities.push("tags".to_string());
+    }
 
     // Add unknown-field and missing-key diagnostics from raw TOML analysis
     report.diagnostics.extend(unknown_field_diagnostics);
@@ -523,7 +341,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                     "Same command as existing '{}' but different description",
                                     existing_snippet.description
                                 ),
-                                code: "W-CMD-DUPLICATE".to_string(),
+                                code: "W-DUP-CMD".to_string(),
                                 suggestion: None,
                                 span: None,
                             });
@@ -535,7 +353,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                 severity: DiagnosticSeverity::Warning,
                                 message: "Same description as existing entry but different command"
                                     .to_string(),
-                                code: "W-DESC-DUPLICATE".to_string(),
+                                code: "W-DUP-DESC".to_string(),
                                 suggestion: None,
                                 span: None,
                             });
@@ -734,97 +552,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_exact_duplicate() {
-        let a = Snippet {
-            command: "echo hi".to_string(),
-            description: "greeting".to_string(),
-            ..Default::default()
-        };
-        let b = Snippet {
-            command: "echo hi".to_string(),
-            description: "greeting".to_string(),
-            ..Default::default()
-        };
-        let c = Snippet {
-            command: "echo hi".to_string(),
-            description: "different".to_string(),
-            ..Default::default()
-        };
-        assert!(is_exact_duplicate(&a, &b));
-        assert!(!is_exact_duplicate(&a, &c));
-    }
-
-    #[test]
-    fn test_same_command_different_description() {
-        let a = Snippet {
-            command: "echo hi".to_string(),
-            description: "greeting".to_string(),
-            ..Default::default()
-        };
-        let b = Snippet {
-            command: "echo hi".to_string(),
-            description: "other".to_string(),
-            ..Default::default()
-        };
-        assert!(same_command_different_description(&a, &b));
-        assert!(!same_command_different_description(&a, &a));
-    }
-
-    #[test]
-    fn test_same_description_different_command() {
-        let a = Snippet {
-            command: "echo hi".to_string(),
-            description: "greeting".to_string(),
-            ..Default::default()
-        };
-        let b = Snippet {
-            command: "echo bye".to_string(),
-            description: "greeting".to_string(),
-            ..Default::default()
-        };
-        assert!(same_description_different_command(&a, &b));
-        assert!(!same_description_different_command(&a, &a));
-    }
-
-    #[test]
-    fn test_read_source_file_missing() {
-        let result = read_source_file(Path::new("/nonexistent/file.toml"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_read_source_file_directory() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let result = read_source_file(tmp.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_pet_toml_valid() {
-        let toml = r#"
-[[snippets]]
-description = "test"
-command = "echo hello"
-tag = ["test"]
-"#;
-        let result = parse_pet_toml(toml).unwrap();
-        assert_eq!(result.snippets.len(), 1);
-        assert_eq!(result.snippets[0].command, "echo hello");
-    }
-
-    #[test]
-    fn test_parse_pet_toml_invalid() {
-        let result = parse_pet_toml("invalid = [toml");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_pet_toml_empty() {
-        let result = parse_pet_toml("").unwrap();
-        assert!(result.snippets.is_empty());
-    }
-
-    #[test]
     fn test_convert_entry_sets_id_and_timestamps() {
         let pet = Snippet {
             description: "test".to_string(),
@@ -900,90 +627,21 @@ tag = ["test"]
     }
 
     #[test]
-    fn test_detect_unknown_fields() {
-        let toml = r#"
-[[snippets]]
-description = "test"
-command = "echo hi"
-custom_field = "unknown"
-another_unknown = 42
-"#;
-        let diagnostics = detect_unknown_fields(toml);
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("custom_field")),
-            "Should detect custom_field as unknown"
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("another_unknown")),
-            "Should detect another_unknown as unknown"
-        );
-        // Known fields should not be flagged
-        assert!(
-            !diagnostics
-                .iter()
-                .any(|d| d.message.contains("description")),
-            "description should not be flagged as unknown"
-        );
-        assert!(
-            !diagnostics.iter().any(|d| d.message.contains("command")),
-            "command should not be flagged as unknown"
-        );
-    }
-
-    #[test]
-    fn test_detect_missing_description() {
-        let toml = r#"
-[[snippets]]
-command = "echo hi"
-"#;
-        let diagnostics = detect_unknown_fields(toml);
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("missing 'description'")),
-            "Should detect missing description"
-        );
-    }
-
-    #[test]
-    fn test_detect_missing_command() {
-        let toml = r#"
-[[snippets]]
-description = "test"
-"#;
-        let diagnostics = detect_unknown_fields(toml);
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("missing 'command'")),
-            "Should detect missing command"
-        );
-    }
-
-    #[test]
-    fn test_detect_known_pet_aliases() {
-        let toml = r#"
-[[snippets]]
-Description = "legacy"
-Command = "echo legacy"
-Tag = ["legacy"]
-Output = "out"
-"#;
-        let diagnostics = detect_unknown_fields(toml);
-        // These are known aliases, should not be flagged as unknown
-        assert!(
-            !diagnostics
-                .iter()
-                .any(|d| d.message.contains("Description")),
-            "Description alias should not be flagged"
-        );
-        assert!(
-            !diagnostics.iter().any(|d| d.message.contains("Command")),
-            "Command alias should not be flagged"
-        );
+    fn test_convert_entry_records_normalizations() {
+        let pet = Snippet {
+            description: "test".to_string(),
+            command: "echo hi".to_string(),
+            id: "old-id".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            device_id: "device-1".to_string(),
+            deleted: true,
+            ..Default::default()
+        };
+        let (_, _, normalizations) = convert_entry(0, &pet);
+        assert!(!normalizations.is_empty());
+        assert!(normalizations.iter().any(|n| n.field == "timestamps"));
+        assert!(normalizations.iter().any(|n| n.field == "sync_fields"));
+        assert!(normalizations.iter().any(|n| n.field == "id"));
     }
 }
