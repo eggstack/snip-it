@@ -172,3 +172,134 @@ pub enum MutationKind {
 5. Auto-sync never changes sync direction, credentials, server selection, library mapping, or conflict policy implicitly.
 6. Machine-facing stdout remains free of background sync diagnostics.
 7. Command bodies, output metadata, credentials, API keys, and encryption material are never included in auto-sync logs or errors.
+
+## Auto-Sync Coordinator (Release 5B)
+
+**Module**: `src/auto_sync.rs`
+
+The coordinator extends the policy model with a stateful debounce engine, durable
+pending markers, and PID-file based cross-process locking. It provides infrastructure
+only — no mutation command is wired until Release 5C.
+
+### Architecture
+
+```text
+Mutation ──► AutoSyncCoordinator::request()
+                 │
+                 ├─ suppress if origin == SyncMerge
+                 ├─ suppress if policy.disabled
+                 ├─ update DebounceState
+                 ├─ persist PendingState (durable marker)
+                 └─ return AutoSyncStatus
+
+Timer / caller ──► AutoSyncCoordinator::tick()
+                      │
+                      ├─ DebounceState::Pending expired?
+                      │     └─► Acquire CoordinatorLock
+                      │         ├─ lock held → Running
+                      │         └─ lock denied → Pending (retry)
+                      └─ DebounceState::Running complete?
+                            ├─ follow_up → Pending (short deadline)
+                            └─ no follow_up → Idle, clear pending
+```
+
+### AutoSyncRequest
+
+```rust
+pub struct AutoSyncRequest {
+    pub library_id: Option<String>,
+    pub mutation_kind: MutationKind,
+    pub requested_at: i64,
+}
+```
+
+Contains no snippet content, credentials, or encryption material.
+
+### MutationOrigin
+
+```rust
+pub enum MutationOrigin {
+    User,       // User-initiated mutation
+    Import,     // Import operation
+    SyncMerge,  // Sync merge (NEVER triggers auto-sync — prevents loops)
+    Recovery,   // Recovery operation
+}
+```
+
+### AutoSyncStatus
+
+```rust
+pub enum AutoSyncStatus {
+    Disabled,
+    Pending,
+    Running,
+    Succeeded { completed_at: i64 },
+    Failed { completed_at: i64, class: FailureClass },
+}
+```
+
+### FailureClass
+
+```rust
+pub enum FailureClass {
+    Network,  // Timeout, DNS, connection refused
+    Auth,     // Invalid API key, expired token
+    Conflict, // Merge failure
+    Unknown,  // Unclassified
+}
+```
+
+Classified from `SnipError` via `FailureClass::from_error()`.
+
+### Debounce State Machine
+
+```text
+Idle ──────────────────────────────────────────────────────► Pending
+  ◄──────────────────────────────────────────────────────── Running
+Pending + mutation ──► Pending (updated deadline, bounded)
+Pending + expired ───► Running
+Running + mutation ──► Running (follow_up = true)
+Running complete ────► Pending (short deadline) if follow_up
+Running complete ────► Idle
+```
+
+- First mutation starts a debounce window (configurable, default 2s)
+- Later mutations extend the deadline but never exceed the 300s maximum
+- One sync runs after the quiet period
+- Mutations during running schedule at most one follow-up
+- Follow-up uses a 1-second short deadline
+
+### Durable Pending State
+
+Persisted to `~/.config/snp/auto-sync-pending.toml` with CRC32 integrity:
+
+```toml
+# integrity: <crc32>
+version = 1
+pending = true
+requested_at = 1234567890
+last_attempt_at = 0
+last_result = ""
+```
+
+- Survives process crash/restart
+- Stale pending (> 5 minutes) is cleared on recovery
+- No secrets, commands, or snippet content in the file
+
+### Cross-Process Locking
+
+PID-file based lock at `~/.config/snp/auto-sync.lock`:
+- Atomic creation via `create_new(true)`
+- Stale detection via `kill -0` (Unix) — dead PID → lock removed
+- Restrictive permissions (0o600)
+- Advisory only — cannot block manual `snp sync`
+
+### Safety Invariants
+
+1. Coordinator never mutates snippet libraries directly
+2. Secrets and snippet content never enter coordinator state or logs
+3. SyncMerge origin never triggers auto-sync (prevents loops)
+4. Lock prevents concurrent sync executions
+5. Pending marker survives crash for recovery
+6. Manual and scheduled sync remain independent
+7. No new CLI surface added (infrastructure only)

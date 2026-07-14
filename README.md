@@ -346,6 +346,11 @@ snp sync config --failure warn                 # ignore, warn, or error
 Local mutations always succeed before any remote work begins. A failed
 auto-sync never rolls back or corrupts a successful local save.
 
+The coordinator debounces rapid mutations (e.g., multiple edits in quick
+succession) into a single sync attempt. A durable pending marker survives
+process crashes, and PID-file based locking prevents concurrent sync
+executions across multiple `snp` processes.
+
 ## CLI overview
 
 ```text
