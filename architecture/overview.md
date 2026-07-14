@@ -97,9 +97,20 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 **ui/state.rs** — State types
 
 - `SelectState` — selection index, list state, scroll state
-- `FilterState` — sort mode and tag filter text
-- `SortMode` — None, Newest, Oldest, AlphaAsc, AlphaDesc
+- `FilterState` — TUI sort mode and tag filter text
+- `SortMode` (TUI-internal) — None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed
 - `is_ctrl_key()` helper
+
+**sort.rs** — CLI-facing sort and ranking (see [sort.md](sort.md))
+
+- `SnippetSort` — Relevance, Recent, LastUsed, MostUsed, Description, Command
+- `rank_snippets()` — deterministic 5-level tie-break chain
+- `--sort` and `--favorites-first` CLI flags
+
+**usage.rs** — Local usage metadata (see [usage.md](usage.md))
+
+- `UsageIndex` — persistent per-snippet use count and last-used timestamp
+- Stored in `~/.config/snp/usage.toml`, never synced
 
 **ui/theme.rs** — Theming
 
@@ -232,5 +243,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 |------|---------|
 | [commands/mod.md](commands/mod.md) | Shared command helpers and path resolution |
 | [library.md](library.md) | Data structures, persistence, library management |
+| [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
+| [usage.md](usage.md) | Local usage metadata, update policy, storage |
 | [sync.md](sync.md) | Sync protocol, merge logic, conflict resolution |
 | [tui.md](tui.md) | TUI architecture, keybindings, state machine |
