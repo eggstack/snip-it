@@ -1220,3 +1220,311 @@ fn test_select_no_sort_preserves_original_order() {
         "without --sort, first item should be alpha deploy (insertion order)"
     );
 }
+
+// ── Divergent-metadata PTY identity tests ──────────────────────────────
+//
+// These tests use a fixture where updated_at, use_count, and last_used_at
+// deliberately disagree, proving the TUI selects the correct snippet for
+// each sort mode.
+
+/// Create a library with deliberately divergent updated_at, use_count, and
+/// last_used_at values.
+///
+/// | Snippet | updated_at | use_count | last_used_at |
+/// | A       | 300        | 1         | 100          |
+/// | B       | 100        | 9         | 200          |
+/// | C       | 200        | 2         | 900          |
+///
+/// Expected orderings:
+/// - recent (by updated_at desc): A, C, B
+/// - most-used (by use_count desc): B, C, A
+/// - last-used (by last_used_at desc): C, B, A
+fn setup_divergent_metadata_pty_env() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    let library_content = r#"[[snippets]]
+id = "div-a"
+description = "snippet A"
+command = "echo alpha"
+tag = ["divergent"]
+output = ""
+created_at = 100
+updated_at = 300
+
+[[snippets]]
+id = "div-b"
+description = "snippet B"
+command = "echo bravo"
+tag = ["divergent"]
+output = ""
+created_at = 50
+updated_at = 100
+
+[[snippets]]
+id = "div-c"
+description = "snippet C"
+command = "echo charlie"
+tag = ["divergent"]
+output = ""
+created_at = 150
+updated_at = 200
+"#;
+    fs::write(config_dir.join("snippets.toml"), library_content).unwrap();
+
+    let usage_content = r#"[[entries]]
+id = "div-a"
+use_count = 1
+last_used_at = 100
+
+[[entries]]
+id = "div-b"
+use_count = 9
+last_used_at = 200
+
+[[entries]]
+id = "div-c"
+use_count = 2
+last_used_at = 900
+"#;
+    fs::write(config_dir.join("usage.toml"), usage_content).unwrap();
+
+    (tmp, config_dir)
+}
+
+#[test]
+fn test_pty_select_sort_last_used_selects_c_first() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+    let output_path = _tmp.path().join("div_last_used.txt");
+
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "last-used",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select --sort last-used should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "echo charlie",
+        "last-used sort should select C first (last_used_at=900)"
+    );
+}
+
+#[test]
+fn test_pty_select_sort_most_used_selects_b_first() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+    let output_path = _tmp.path().join("div_most_used.txt");
+
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "most-used",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select --sort most-used should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "echo bravo",
+        "most-used sort should select B first (use_count=9)"
+    );
+}
+
+#[test]
+fn test_pty_select_sort_recent_selects_a_first() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+    let output_path = _tmp.path().join("div_recent.txt");
+
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "recent",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select --sort recent should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "echo alpha",
+        "recent sort should select A first (updated_at=300)"
+    );
+}
+
+#[test]
+fn test_pty_run_sort_most_used_records_usage_for_b() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+
+    let (code, output) = run_snp_pty(&["run", "--sort", "most-used"], &config_dir, b"\r");
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp run --sort most-used should exit 0");
+
+    let usage_path = config_dir.join("usage.toml");
+    assert!(usage_path.exists(), "usage.toml should exist after run");
+
+    let content = fs::read_to_string(&usage_path).unwrap();
+    let idx: snip_it::usage::UsageIndex = toml::from_str(&content).unwrap();
+    let b_entry = idx.entries().iter().find(|e| e.id == "div-b");
+    assert!(b_entry.is_some(), "usage should have an entry for div-b");
+    assert_eq!(
+        b_entry.unwrap().use_count,
+        10,
+        "div-b use_count should be 10 (9 + 1 from this run)"
+    );
+}
+
+#[test]
+fn test_pty_clip_sort_last_used_records_usage_for_c() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+
+    let (code, output) = run_snp_pty(&["clip", "--sort", "last-used"], &config_dir, b"\r");
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp clip --sort last-used should exit 0");
+
+    let usage_path = config_dir.join("usage.toml");
+    assert!(usage_path.exists(), "usage.toml should exist after clip");
+
+    let content = fs::read_to_string(&usage_path).unwrap();
+    let idx: snip_it::usage::UsageIndex = toml::from_str(&content).unwrap();
+    let c_entry = idx.entries().iter().find(|e| e.id == "div-c");
+    assert!(c_entry.is_some(), "usage should have an entry for div-c");
+    assert_eq!(
+        c_entry.unwrap().use_count,
+        3,
+        "div-c use_count should be 3 (2 + 1 from this clip)"
+    );
+}
+
+#[test]
+fn test_pty_select_interactive_cycle_changes_order() {
+    let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
+    let output_path = _tmp.path().join("div_cycle.txt");
+
+    // Initial sort is None (insertion order): A, B, C → first item is "echo alpha"
+    // Press 'n' to cycle to Newest sort: A (updated_at=300), C (200), B (100)
+    // Then Enter to select: should pick "echo alpha" (A)
+    let (code, output) = run_snp_pty(
+        &["select", "--output-file", output_path.to_str().unwrap()],
+        &config_dir,
+        b"n\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select with interactive cycle should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "echo alpha",
+        "after cycling to Newest, first item should be A (updated_at=300)"
+    );
+}
+
+#[test]
+fn test_pty_select_favorites_first_with_most_used() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    let library_content = r#"[[snippets]]
+id = "fav-a"
+description = "fav alpha"
+command = "echo-fav-alpha"
+tag = ["fav-test"]
+output = ""
+favorite = true
+created_at = 100
+updated_at = 300
+
+[[snippets]]
+id = "fav-b"
+description = "fav bravo"
+command = "echo-fav-bravo"
+tag = ["fav-test"]
+output = ""
+favorite = false
+created_at = 50
+updated_at = 100
+
+[[snippets]]
+id = "fav-c"
+description = "fav charlie"
+command = "echo-fav-charlie"
+tag = ["fav-test"]
+output = ""
+favorite = true
+created_at = 150
+updated_at = 200
+"#;
+    fs::write(config_dir.join("snippets.toml"), library_content).unwrap();
+
+    let usage_content = r#"[[entries]]
+id = "fav-a"
+use_count = 3
+last_used_at = 100
+
+[[entries]]
+id = "fav-b"
+use_count = 10
+last_used_at = 200
+
+[[entries]]
+id = "fav-c"
+use_count = 7
+last_used_at = 900
+"#;
+    fs::write(config_dir.join("usage.toml"), usage_content).unwrap();
+
+    let output_path = tmp.path().join("fav_most_used.txt");
+
+    // favorites-first + most-used:
+    // Favorites: fav-c (7), fav-a (3) — most-used desc within favorites
+    // Non-favorites: fav-b (10) — only non-favorite
+    // First item: fav-c → echo-fav-charlie
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "most-used",
+            "--favorites-first",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(
+        code, 0,
+        "snp select --sort most-used --favorites-first should exit 0"
+    );
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "echo-fav-charlie",
+        "favorites-first + most-used should select fav-c first (favorite with highest use_count)"
+    );
+}

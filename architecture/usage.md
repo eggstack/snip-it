@@ -50,6 +50,12 @@ Tracks local-only per-snippet usage statistics: how often and when each snippet 
 - The usage file uses private permissions (0600).
 - Corrupt files fail open to an empty index (no crash, no data loss).
 
+### Concurrency
+
+`record_use()` performs a read-modify-write cycle (`load → modify → save`) using atomic file writes. The atomic rename guarantees the file is never corrupted or half-written, but does **not** prevent lost increments under concurrent access.
+
+If two `snp` processes record usage simultaneously, the last writer wins: one increment is lost. This is acceptable for a personal tool where simultaneous invocations are rare and a lost use-count increment has negligible impact. No file locking or database transactions are used.
+
 ### Identity Stability
 
 Usage entries are keyed by snippet UUID (`id` field). When snippets are imported, renamed, or reordered, the UUID remains stable. Entries for deleted snippets are lazily pruned by `prune()`.

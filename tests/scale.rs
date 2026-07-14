@@ -445,3 +445,169 @@ updated_at = {i}
         serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
     assert_eq!(items_b.len(), 500);
 }
+
+// ── Scale: sort ordering with populated usage data ──────────────────────
+
+/// Create a usage.toml with entries for all snippets in the library.
+/// Usage count and last_used_at are deliberately divergent from updated_at.
+fn write_scale_usage(config_dir: &std::path::Path, count: usize) {
+    let mut usage_toml = String::new();
+    for i in 0..count {
+        // Use count: reverse of index (so snippet-00999 has use_count=999)
+        let use_count = (count - 1 - i) as u64;
+        // last_used_at: divergent from updated_at (which is 100+i)
+        // Make it so snippet-00000 has the highest last_used_at
+        let last_used_at = 1700000000 + (count as i64 - 1 - i as i64);
+        usage_toml.push_str(&format!(
+            r#"[[entries]]
+id = "scale-{i:05}"
+use_count = {use_count}
+last_used_at = {last_used_at}
+
+"#,
+        ));
+    }
+    std::fs::write(config_dir.join("usage.toml"), &usage_toml).unwrap();
+}
+
+#[test]
+fn test_scale_sort_most_used_with_usage_data() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_scale_library(&config_dir, "scale-mu", 1000);
+    write_scale_usage(&config_dir, 1000);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 1000);
+
+    // snippet-00000 has use_count=999 (highest)
+    assert_eq!(
+        items[0]["description"], "snippet-00000",
+        "most-used should rank snippet-00000 first (use_count=999)"
+    );
+    // snippet-00001 has use_count=998
+    assert_eq!(
+        items[1]["description"], "snippet-00001",
+        "most-used should rank snippet-00001 second (use_count=998)"
+    );
+    // snippet-00999 has use_count=0 (lowest)
+    assert_eq!(
+        items[999]["description"], "snippet-00999",
+        "most-used should rank snippet-00999 last (use_count=0)"
+    );
+}
+
+#[test]
+fn test_scale_sort_last_used_with_usage_data() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_scale_library(&config_dir, "scale-lu", 1000);
+    write_scale_usage(&config_dir, 1000);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "last-used", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 1000);
+
+    // snippet-00000 has last_used_at=1700000999 (highest)
+    assert_eq!(
+        items[0]["description"], "snippet-00000",
+        "last-used should rank snippet-00000 first (last_used_at highest)"
+    );
+    // snippet-00001 has last_used_at=1700000998
+    assert_eq!(
+        items[1]["description"], "snippet-00001",
+        "last-used should rank snippet-00001 second"
+    );
+    // snippet-00999 has last_used_at=1700000000 (lowest)
+    assert_eq!(
+        items[999]["description"], "snippet-00999",
+        "last-used should rank snippet-00999 last (last_used_at lowest)"
+    );
+}
+
+#[test]
+fn test_scale_sort_most_used_vs_recent_divergence() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_scale_library(&config_dir, "scale-div", 1000);
+    write_scale_usage(&config_dir, 1000);
+
+    // most-used order: snippet-00000 (use_count=999), snippet-00001 (998), ...
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--json"]);
+    let output = cmd.output().unwrap();
+    let most_used: Vec<serde_json::Value> =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+
+    // recent order: snippet-00999 (updated_at=1099), snippet-00998 (1098), ...
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "recent", "--json"]);
+    let output = cmd.output().unwrap();
+    let recent: Vec<serde_json::Value> =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+
+    // The two orderings must differ when metadata diverges
+    assert_ne!(
+        most_used[0]["description"], recent[0]["description"],
+        "most-used and recent should produce different first items with divergent metadata"
+    );
+    assert_eq!(most_used[0]["description"], "snippet-00000");
+    assert_eq!(recent[0]["description"], "snippet-00999");
+}
+
+#[test]
+fn test_scale_sort_favorites_first_with_usage_data() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_scale_library(&config_dir, "scale-fav", 1000);
+    write_scale_usage(&config_dir, 1000);
+
+    // Favorites-first + most-used: favorites are indices 0, 100, 200, ..., 900
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--sort", "most-used", "--favorites-first", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(items.len(), 1000);
+
+    // First 10 items should be favorites (indices 0,100,...,900)
+    // Within favorites, most-used desc: scale-00000 (use_count=999),
+    // scale-00100 (899), scale-00200 (799), ...
+    assert_eq!(
+        items[0]["description"], "snippet-00000",
+        "first favorite by most-used should be snippet-00000 (use_count=999)"
+    );
+    assert_eq!(
+        items[1]["description"], "snippet-00100",
+        "second favorite by most-used should be snippet-00100 (use_count=899)"
+    );
+}
+
+#[test]
+fn test_scale_sort_deterministic_with_usage_data() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_scale_library(&config_dir, "scale-det", 1000);
+    write_scale_usage(&config_dir, 1000);
+
+    // Run the same sort twice and verify identical output
+    let mut cmd1 = snp_in(&config_dir);
+    cmd1.args(["list", "--sort", "most-used", "--json"]);
+    let out1 = cmd1.output().unwrap();
+    let stdout1 = String::from_utf8_lossy(&out1.stdout);
+
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args(["list", "--sort", "most-used", "--json"]);
+    let out2 = cmd2.output().unwrap();
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+
+    assert_eq!(
+        stdout1, stdout2,
+        "most-used sort with usage data must be deterministic across runs"
+    );
+}

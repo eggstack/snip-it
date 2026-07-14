@@ -1209,6 +1209,72 @@ mod tests {
     // ── CLI/TUI mode mapping exhaustiveness ────────────────────────
 
     #[test]
+    fn explicit_sort_breaks_fuzzy_score_ties() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "Alpha", "echo a", false, 300, 100),
+            snippet_with_timestamps("b", "Alpha", "echo b", false, 100, 300),
+            snippet_with_timestamps("c", "Alpha", "echo c", false, 200, 200),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(3, Some(300)),
+            usage(2, Some(200)),
+        ];
+        let mut scores = HashMap::new();
+        scores.insert(0, 100);
+        scores.insert(1, 100);
+        scores.insert(2, 100);
+
+        let opts = SortOptions {
+            mode: SnippetSort::LastUsed,
+            favorites_first: false,
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            Some(&scores),
+            Some(&usage_data),
+            &opts,
+        );
+        assert_eq!(
+            result,
+            vec![1, 2, 0],
+            "equal fuzzy scores should defer to LastUsed (b has last_used_at 300, c has 200, a has 100)"
+        );
+    }
+
+    #[test]
+    fn explicit_sort_with_none_fuzzy_scores_uses_explicit_sort() {
+        let snippets: Vec<Snippet> = vec![
+            snippet_with_timestamps("a", "Alpha", "echo a", false, 300, 100),
+            snippet_with_timestamps("b", "Alpha", "echo b", false, 100, 300),
+            snippet_with_timestamps("c", "Alpha", "echo c", false, 200, 200),
+        ];
+        let usage_data = vec![
+            usage(1, Some(100)),
+            usage(3, Some(300)),
+            usage(2, Some(200)),
+        ];
+
+        let opts = SortOptions {
+            mode: SnippetSort::LastUsed,
+            favorites_first: false,
+        };
+        let result = rank_snippets(
+            &default_indices(3),
+            &snippets,
+            None,
+            Some(&usage_data),
+            &opts,
+        );
+        assert_eq!(
+            result,
+            vec![1, 2, 0],
+            "None fuzzy scores + LastUsed should sort by last_used_at descending"
+        );
+    }
+
+    #[test]
     fn all_sort_variants_produce_deterministic_output() {
         let snippets: Vec<Snippet> = vec![
             snippet_with_timestamps("a", "Zebra", "echo z", false, 300, 100),

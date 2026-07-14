@@ -576,7 +576,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             crate::sort::SnippetSort::LastUsed => state::SortMode::LastUsed,
             crate::sort::SnippetSort::MostUsed => state::SortMode::MostUsed,
             crate::sort::SnippetSort::Description => state::SortMode::AlphaAsc,
-            crate::sort::SnippetSort::Command => state::SortMode::AlphaDesc,
+            crate::sort::SnippetSort::Command => state::SortMode::AlphaAsc,
         };
         FilterState {
             sort_mode: mode,
@@ -619,7 +619,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
     const THEME_DEBOUNCE_MS: u64 = 100;
 
     // Debounce filter updates to avoid fuzzy matching on every keystroke
-    let mut filter_dirty = !filter.is_empty();
+    let mut filter_dirty = !filter.is_empty()
+        || sort_opts.is_some_and(|o| o.mode != crate::sort::SnippetSort::Relevance);
     let mut last_filter_update: Option<std::time::Instant> = None;
     const FILTER_DEBOUNCE_MS: u64 = 35;
     const HIGHLIGHT_WARM_BUDGET: Duration = Duration::from_millis(2);

@@ -55,6 +55,15 @@ Returns sorted indices. The input `indices` need not be contiguous — the funct
 - **Usage data**: `UsageData` is loaded from `usage.toml` once per selection session, passed to the TUI via `SnippetListParams.usage`, and used by `sort_filtered_indices()` for `LastUsed`/`MostUsed` modes.
 - **Shared ranking policy**: Both the `list` command (`rank_snippets()`) and the TUI (`sort_filtered_indices()`) use the same sorting semantics for all modes. The TUI does not use proxy values.
 
+## Filtered Relevance Rule
+
+When a fuzzy query is active, ranking behavior differs between the TUI and list surfaces:
+
+- **TUI** (`sort_filtered_indices`): Fuzzy relevance score is the **primary** ranking key. The explicit sort mode (e.g., `LastUsed`, `MostUsed`) breaks ties among candidates with equal fuzzy scores. This is natural for an interactive selector where the best text match should appear first.
+- **List** (`rank_snippets` via `list_cmd`): Fuzzy scores are passed as `None`, so the **explicit sort mode** is the sole ranking key. This is appropriate for non-interactive output where the user's chosen sort order should be strictly respected.
+
+In both cases, when no fuzzy query is active, the explicit sort mode fully determines ordering.
+
 ## Invariants
 
 - Default sort is always `Relevance` (unchanged from pre-Release-4 behavior).
