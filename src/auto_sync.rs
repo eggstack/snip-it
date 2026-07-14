@@ -63,6 +63,16 @@
 //! For now, `library_id` is preserved in the request model and durable
 //! state for forward compatibility, but `run_auto_sync` ignores it.
 //!
+//! ## Platform Limitations
+//!
+//! Cross-process lock stale-detection uses `kill -0` (Unix only). On
+//! non-Unix platforms (Windows), the `kill` command fails and the lock
+//! is treated as stale — the coordinator **fails open** and proceeds.
+//! This is safe (no deadlock) but lossy (two processes may briefly
+//! overlap). The lock file itself is cross-platform; only the liveness
+//! check is Unix-specific. If a non-Unix platform gains reliable PID
+//! liveness primitives, `is_lock_stale()` should be extended.
+//!
 //! ## Delivery Guarantees
 //!
 //! Auto-sync is **best-effort convenience**, not durable delivery:

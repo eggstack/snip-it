@@ -293,6 +293,10 @@ PID-file based lock at `~/.config/snp/auto-sync.lock`:
 - Stale detection via `kill -0` (Unix) — dead PID → lock removed
 - Restrictive permissions (0o600)
 - Advisory only — cannot block manual `snp sync`
+- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms
+  the lock check fails open (all locks treated as stale). This is safe
+  but lossy — two processes may briefly overlap. The lock file itself
+  is cross-platform; only the liveness check is Unix-specific.
 
 ### Retry and Backoff
 
