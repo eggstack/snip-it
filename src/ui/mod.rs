@@ -222,8 +222,8 @@ fn sort_filtered_indices(
                         .zip(snippets.get(a.0))
                         .map(|(b_snip, a_snip)| {
                             b_snip
-                                .created_at
-                                .cmp(&a_snip.created_at)
+                                .updated_at
+                                .cmp(&a_snip.updated_at)
                                 .then_with(|| b.0.cmp(&a.0))
                         })
                 }
@@ -233,8 +233,8 @@ fn sort_filtered_indices(
                         .zip(snippets.get(b.0))
                         .map(|(a_snip, b_snip)| {
                             a_snip
-                                .created_at
-                                .cmp(&b_snip.created_at)
+                                .updated_at
+                                .cmp(&b_snip.updated_at)
                                 .then_with(|| a.0.cmp(&b.0))
                         })
                 }

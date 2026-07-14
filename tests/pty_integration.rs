@@ -925,3 +925,298 @@ fn test_tui_output_preview_shows_output_content() {
         "PTY output should contain the output content. Got: {output}"
     );
 }
+
+// ── Ranking and identity correctness ──────────────────────────────────
+
+/// Helper: create a multi-library PTY test environment.
+fn setup_multi_library_pty_env() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    // Create two libraries via snp library create
+    let mut cmd = Command::new(snp_bin());
+    cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
+    cmd.args(["library", "create", "multi-a"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    fs::write(
+        libraries_dir.join("multi-a.toml"),
+        r#"[[snippets]]
+id = "multi-a-1"
+description = "alpha from A"
+command = "alpha-a.sh"
+tag = ["test"]
+output = ""
+
+[[snippets]]
+id = "multi-a-2"
+description = "bravo from A"
+command = "bravo-a.sh"
+tag = ["test"]
+output = ""
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::new(snp_bin());
+    cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
+    cmd.args(["library", "create", "multi-b"]);
+    cmd.output().unwrap();
+
+    fs::write(
+        libraries_dir.join("multi-b.toml"),
+        r#"[[snippets]]
+id = "multi-b-1"
+description = "alpha from B"
+command = "alpha-b.sh"
+tag = ["test"]
+output = ""
+
+[[snippets]]
+id = "multi-b-2"
+description = "charlie from B"
+command = "charlie-b.sh"
+tag = ["test"]
+output = ""
+"#,
+    )
+    .unwrap();
+
+    // Set multi-a as primary
+    let mut cmd = Command::new(snp_bin());
+    cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
+    cmd.args(["library", "set-primary", "multi-a"]);
+    cmd.output().unwrap();
+
+    (tmp, config_dir)
+}
+
+#[test]
+fn test_select_sort_last_used_accepts_flag() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("last_used_output.txt");
+
+    // --sort last-used should be accepted and produce output
+    // Note: TUI uses updated_at as proxy since UsageIndex isn't loaded in TUI
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "last-used",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "snp select --sort last-used should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        !selected.trim().is_empty(),
+        "selected command should not be empty"
+    );
+}
+
+#[test]
+fn test_select_with_multi_library_sort() {
+    let (_tmp, config_dir) = setup_multi_library_pty_env();
+    let output_path = _tmp.path().join("multi_sort_output.txt");
+
+    // Sort by description across multi-a library: alpha < bravo
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "description",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "multi-library sort should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "alpha-a.sh",
+        "first item by description sort should be alpha from A"
+    );
+}
+
+#[test]
+fn test_select_unicode_sort_order() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".config").join("snp");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    let library_content = r#"[[snippets]]
+id = "uni-alpha"
+description = "alpha deploy"
+command = "deploy.sh"
+tag = ["test"]
+output = ""
+
+[[snippets]]
+id = "uni-mid"
+description = "Über test"
+command = "uber.sh"
+tag = ["test"]
+output = ""
+
+[[snippets]]
+id = "uni-cjk"
+description = "日本語テスト"
+command = "jp.sh"
+tag = ["test"]
+output = ""
+"#;
+    fs::write(config_dir.join("snippets.toml"), library_content).unwrap();
+
+    let output_path = tmp.path().join("uni_output.txt");
+
+    // Sort by description - should be Unicode-aware case-insensitive
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "description",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0, "unicode sort should exit 0");
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    // alpha < Über < 日本語 (case-insensitive Unicode-aware sort)
+    assert_eq!(
+        selected.trim(),
+        "deploy.sh",
+        "first by Unicode description sort should be alpha deploy"
+    );
+}
+
+#[test]
+fn test_select_identity_sorted_row_matches_preview() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("identity_output.txt");
+
+    // Sort by description, then check that the PTY preview shows the first
+    // alphabetical item's content (alpha deploy / deploy-alpha.sh)
+    let keys = vec![b'\r']; // Enter to select first
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "description",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        &keys,
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0);
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "selected command should match the first item in sorted order"
+    );
+
+    // The PTY output should have shown "alpha deploy" in the selection
+    assert!(
+        output.contains("alpha deploy"),
+        "PTY should have displayed 'alpha deploy' as the first sorted item"
+    );
+}
+
+#[test]
+fn test_select_favorites_first_in_pty() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("fav_pty_output.txt");
+
+    // With favorites-first, "alpha deploy" (favorite=true) should be first
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "description",
+            "--favorites-first",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0);
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "favorites-first should put favorite item first"
+    );
+}
+
+#[test]
+fn test_select_sort_by_command_pty() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("cmd_sort_pty.txt");
+
+    // Sort by command: deploy-alpha.sh < status-gamma.sh < test-beta.sh
+    let (code, output) = run_snp_pty(
+        &[
+            "select",
+            "--sort",
+            "command",
+            "--output-file",
+            output_path.to_str().unwrap(),
+        ],
+        &config_dir,
+        b"\r",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0);
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "first by command sort should be deploy-alpha.sh"
+    );
+}
+
+#[test]
+fn test_select_no_sort_preserves_original_order() {
+    let (_tmp, config_dir) = setup_sort_pty_env();
+    let output_path = _tmp.path().join("no_sort_output.txt");
+
+    // Without --sort, should preserve original order (alpha, beta, gamma)
+    let (code, output) = run_snp_pty(
+        &["select", "--output-file", output_path.to_str().unwrap()],
+        &config_dir,
+        b"\r", // Enter to select first item
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 0);
+
+    let selected = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        selected.trim(),
+        "deploy-alpha.sh",
+        "without --sort, first item should be alpha deploy (insertion order)"
+    );
+}
