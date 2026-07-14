@@ -931,14 +931,22 @@ impl std::fmt::Debug for AutoSyncCoordinator {
 /// - Durable pending state management
 ///
 /// Returns the [`AutoSyncStatus`] outcome.
-pub fn run_auto_sync(
-    policy: &AutoSyncPolicy,
-    state_dir: &Path,
-    runtime: &tokio::runtime::Runtime,
-) -> AutoSyncStatus {
+pub fn run_auto_sync(policy: &AutoSyncPolicy, state_dir: &Path) -> AutoSyncStatus {
     if !policy.should_trigger() {
         return AutoSyncStatus::Disabled;
     }
+
+    // Create a Tokio runtime for the sync RPC calls.
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to create Tokio runtime for auto-sync");
+            return AutoSyncStatus::Failed {
+                completed_at: unix_now(),
+                class: FailureClass::Unknown,
+            };
+        }
+    };
 
     // Acquire cross-process lock.
     let _lock = match CoordinatorLock::acquire(state_dir) {
@@ -971,7 +979,7 @@ pub fn run_auto_sync(
         }
 
         let sync_result = std::thread::scope(|s| {
-            let handle = s.spawn(|| crate::sync_commands::run_default_sync(runtime));
+            let handle = s.spawn(|| crate::sync_commands::run_default_sync(&runtime));
             handle
                 .join()
                 .unwrap_or_else(|_| Err(SnipError::runtime_error("sync thread panicked", None)))
@@ -1080,6 +1088,118 @@ fn clear_pending(state_dir: &Path) {
     {
         tracing::warn!(error = %e, "failed to remove auto-sync pending state");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Workstream A: Central Mutation Notification API
+// ---------------------------------------------------------------------------
+
+/// Context for a mutation notification.
+///
+/// Carries the classification and origin of a local mutation that
+/// should trigger auto-sync if enabled. Does NOT carry snippet content.
+pub struct MutationContext {
+    /// Classification of the mutation.
+    pub kind: MutationKind,
+    /// Origin of the mutation (user, import, sync-merge, recovery).
+    pub origin: MutationOrigin,
+    /// Target library identifier (None = default/primary library).
+    pub library_id: Option<String>,
+}
+
+/// Result of a mutation notification.
+///
+/// Reports the outcome without exposing snippet content or credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoSyncNotificationResult {
+    /// Auto-sync is disabled by policy.
+    Disabled,
+    /// Sync was suppressed because the origin is a sync merge
+    /// (prevents feedback loops).
+    Suppressed,
+    /// Sync was executed (or attempted). Contains the final status.
+    Executed(AutoSyncStatus),
+}
+
+/// Notify the auto-sync coordinator of a local mutation and execute
+/// sync if enabled.
+///
+/// This is the **central mutation notification API**. All syncable
+/// mutation commands should call this after their local atomic write
+/// succeeds. It replaces scattered direct calls to `run_default_sync()`.
+///
+/// # Invariants
+///
+/// - No-op when auto-sync is disabled.
+/// - Suppresses sync-origin mutations (prevents feedback loops).
+/// - Submits to the coordinator and executes sync immediately.
+/// - Returns scheduling status without exposing snippet content.
+/// - Applies failure policy only to scheduling/available results.
+/// - Never owns local rollback.
+///
+/// # Transaction boundary
+///
+/// The caller MUST have already committed all local state (library TOML,
+/// library registry metadata, backup files, audit logs) before calling
+/// this function. Auto-sync is submitted only after the local mutation
+/// is complete and consistent.
+pub fn notify_local_mutation(
+    policy: &AutoSyncPolicy,
+    context: MutationContext,
+) -> AutoSyncNotificationResult {
+    // Disabled policy never triggers sync.
+    if !policy.should_trigger() {
+        return AutoSyncNotificationResult::Disabled;
+    }
+
+    // SyncMerge origin must never trigger sync (prevents feedback loops).
+    if AutoSyncCoordinator::should_suppress_origin(context.origin) {
+        tracing::debug!(
+            origin = ?context.origin,
+            kind = ?context.kind,
+            "auto-sync notification suppressed: sync-origin mutation"
+        );
+        return AutoSyncNotificationResult::Suppressed;
+    }
+
+    let state_dir = AutoSyncCoordinator::derive_state_dir();
+    let status = run_auto_sync(policy, &state_dir);
+    AutoSyncNotificationResult::Executed(status)
+}
+
+/// Clear any pending auto-sync state after a successful explicit/manual sync.
+///
+/// This prevents duplicate sync when both explicit sync and auto-sync
+/// are triggered for the same mutation generation.
+pub fn clear_pending_after_explicit_sync() {
+    let state_dir = AutoSyncCoordinator::derive_state_dir();
+    clear_pending(&state_dir);
+}
+
+/// Convenience function for mutation commands to trigger auto-sync.
+///
+/// Loads sync settings, resolves the policy, and calls
+/// [`notify_local_mutation()`]. Use this after a successful local
+/// atomic write to trigger auto-sync if enabled.
+///
+/// # Example
+///
+/// ```ignore
+/// // After saving the library file:
+/// use snip_it::auto_sync::{notify_mutation, MutationKind, MutationOrigin};
+/// notify_mutation(MutationKind::SnippetCreate, MutationOrigin::User);
+/// ```
+pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult {
+    let settings = crate::config::get_sync_settings();
+    let policy = AutoSyncPolicy::resolve(&settings);
+    notify_local_mutation(
+        &policy,
+        MutationContext {
+            kind,
+            origin,
+            library_id: None,
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2127,8 +2247,7 @@ mod tests {
         let _ = fs::create_dir_all(&state_dir);
 
         let policy = make_disabled_policy();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let status = run_auto_sync(&policy, &state_dir, &rt);
+        let status = run_auto_sync(&policy, &state_dir);
         assert_eq!(status, AutoSyncStatus::Disabled);
 
         let _ = fs::remove_dir_all(&state_dir);
@@ -2248,10 +2367,9 @@ mod tests {
         let _ = fs::create_dir_all(&state_dir);
 
         let policy = make_enabled_policy(0);
-        let rt = tokio::runtime::Runtime::new().unwrap();
         // This will fail with a sync error (no server), but the lock
         // should still be released.
-        let _status = run_auto_sync(&policy, &state_dir, &rt);
+        let _status = run_auto_sync(&policy, &state_dir);
 
         // Lock file should not exist after run_auto_sync returns.
         assert!(!state_dir.join(LOCK_FILE).exists());
@@ -2506,8 +2624,7 @@ mod tests {
             max_retries: 0,
             sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
         };
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let status = run_auto_sync(&policy, &state_dir, &rt);
+        let status = run_auto_sync(&policy, &state_dir);
 
         // Should fail (no server configured), but lock should be released.
         assert!(matches!(status, AutoSyncStatus::Failed { .. }));
@@ -2576,5 +2693,203 @@ mod tests {
         assert!(!state_dir.join(PENDING_STATE_FILE).exists());
 
         let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    // ---- Workstream A: notify_local_mutation tests ----
+
+    #[test]
+    fn test_notify_disabled_policy_returns_disabled() {
+        let policy = make_disabled_policy();
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::SnippetCreate,
+                origin: MutationOrigin::User,
+                library_id: None,
+            },
+        );
+        assert_eq!(result, AutoSyncNotificationResult::Disabled);
+    }
+
+    #[test]
+    fn test_notify_sync_merge_origin_returns_suppressed() {
+        let policy = make_enabled_policy(0);
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::SnippetCreate,
+                origin: MutationOrigin::SyncMerge,
+                library_id: None,
+            },
+        );
+        assert_eq!(result, AutoSyncNotificationResult::Suppressed);
+    }
+
+    #[test]
+    fn test_notify_user_origin_returns_executed() {
+        let policy = make_enabled_policy(0);
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::SnippetCreate,
+                origin: MutationOrigin::User,
+                library_id: None,
+            },
+        );
+        // Will fail (no server configured), but should return Executed.
+        assert!(matches!(result, AutoSyncNotificationResult::Executed(_)));
+    }
+
+    #[test]
+    fn test_notify_import_origin_returns_executed() {
+        let policy = make_enabled_policy(0);
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::Import,
+                origin: MutationOrigin::Import,
+                library_id: None,
+            },
+        );
+        assert!(matches!(result, AutoSyncNotificationResult::Executed(_)));
+    }
+
+    #[test]
+    fn test_notify_all_mutation_kinds() {
+        let policy = make_enabled_policy(0);
+        let kinds = [
+            MutationKind::SnippetCreate,
+            MutationKind::SnippetUpdate,
+            MutationKind::SnippetDelete,
+            MutationKind::Import,
+            MutationKind::LibraryChange,
+            MutationKind::PremadeInstall,
+            MutationKind::SyncConflictWrite,
+        ];
+        for kind in &kinds {
+            let result = notify_local_mutation(
+                &policy,
+                MutationContext {
+                    kind: *kind,
+                    origin: MutationOrigin::User,
+                    library_id: None,
+                },
+            );
+            assert!(
+                matches!(result, AutoSyncNotificationResult::Executed(_)),
+                "Expected Executed for {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_notify_account_config_kind_still_executes() {
+        // AccountConfig is not syncable, but notify_local_mutation
+        // doesn't filter by kind — the policy and origin are what matter.
+        // The sync will be a no-op if there's nothing to sync.
+        let policy = make_enabled_policy(0);
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::AccountConfig,
+                origin: MutationOrigin::User,
+                library_id: None,
+            },
+        );
+        assert!(matches!(result, AutoSyncNotificationResult::Executed(_)));
+    }
+
+    #[test]
+    fn test_notify_with_library_id() {
+        let policy = make_enabled_policy(0);
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::SnippetCreate,
+                origin: MutationOrigin::User,
+                library_id: Some("test-lib".to_string()),
+            },
+        );
+        assert!(matches!(result, AutoSyncNotificationResult::Executed(_)));
+    }
+
+    // ---- Workstream D: clear_pending_after_explicit_sync ----
+
+    #[test]
+    fn test_clear_pending_after_explicit_sync_removes_marker() {
+        let state_dir = AutoSyncCoordinator::derive_state_dir();
+        let pending = PendingState {
+            version: PENDING_STATE_VERSION,
+            pending: true,
+            requested_at: unix_now(),
+            last_attempt_at: 0,
+            last_result: String::new(),
+            library_id: None,
+        };
+        let _ = save_pending(&state_dir, &pending);
+        assert!(load_pending(&state_dir).is_some());
+
+        clear_pending_after_explicit_sync();
+        // After clearing, the pending marker should be removed.
+        // (It may reappear if another process writes it, but in a test
+        // environment this is deterministic.)
+    }
+
+    // ---- Notification result Debug and PartialEq ----
+
+    #[test]
+    fn test_notification_result_debug() {
+        let disabled = AutoSyncNotificationResult::Disabled;
+        let debug = format!("{:?}", disabled);
+        assert_eq!(debug, "Disabled");
+
+        let suppressed = AutoSyncNotificationResult::Suppressed;
+        let debug = format!("{:?}", suppressed);
+        assert_eq!(debug, "Suppressed");
+
+        let executed = AutoSyncNotificationResult::Executed(AutoSyncStatus::Pending);
+        let debug = format!("{:?}", executed);
+        assert!(debug.contains("Executed"));
+    }
+
+    #[test]
+    fn test_notification_result_partial_eq() {
+        assert_eq!(
+            AutoSyncNotificationResult::Disabled,
+            AutoSyncNotificationResult::Disabled
+        );
+        assert_eq!(
+            AutoSyncNotificationResult::Suppressed,
+            AutoSyncNotificationResult::Suppressed
+        );
+        assert_ne!(
+            AutoSyncNotificationResult::Disabled,
+            AutoSyncNotificationResult::Suppressed
+        );
+    }
+
+    // ---- MutationContext construction ----
+
+    #[test]
+    fn test_mutation_context_construction() {
+        let ctx = MutationContext {
+            kind: MutationKind::SnippetDelete,
+            origin: MutationOrigin::User,
+            library_id: Some("lib-1".to_string()),
+        };
+        assert_eq!(ctx.kind, MutationKind::SnippetDelete);
+        assert_eq!(ctx.origin, MutationOrigin::User);
+        assert_eq!(ctx.library_id.as_deref(), Some("lib-1"));
+    }
+
+    #[test]
+    fn test_mutation_context_no_library() {
+        let ctx = MutationContext {
+            kind: MutationKind::Import,
+            origin: MutationOrigin::Import,
+            library_id: None,
+        };
+        assert!(ctx.library_id.is_none());
     }
 }

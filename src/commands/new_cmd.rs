@@ -569,6 +569,13 @@ pub fn run(
     } else {
         save_snippets(&snippets, &fallback_path)?;
     }
+
+    // Auto-sync trigger: notify after successful local commit (Workstream B1).
+    crate::auto_sync::notify_mutation(
+        crate::auto_sync::MutationKind::SnippetCreate,
+        crate::auto_sync::MutationOrigin::User,
+    );
+
     println!("Snippet added");
     Ok(())
 }

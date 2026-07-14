@@ -310,8 +310,19 @@ where
                     if let Err(e) = crate::logging::audit_log("delete", &deleted_snippet, None) {
                         tracing::debug!("Audit log write failed: {}", e);
                     }
-                    if do_sync && let Err(e) = crate::sync_commands::run_default_sync(runtime) {
-                        tracing::warn!(error = %e, "Background sync after delete failed");
+                    if do_sync {
+                        // Explicit sync: run immediately and clear pending auto-sync
+                        // to prevent duplicate delayed sync (Workstream D).
+                        if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
+                            tracing::warn!(error = %e, "Background sync after delete failed");
+                        }
+                        crate::auto_sync::clear_pending_after_explicit_sync();
+                    } else {
+                        // Auto-sync trigger: notify after successful delete commit (Workstream B3).
+                        crate::auto_sync::notify_mutation(
+                            crate::auto_sync::MutationKind::SnippetDelete,
+                            crate::auto_sync::MutationOrigin::User,
+                        );
                     }
                     continue;
                 }
@@ -340,6 +351,11 @@ where
         && let Err(e) = crate::sync_commands::run_default_sync(runtime)
     {
         tracing::warn!(error = %e, "Background sync failed");
+    }
+    if do_sync && selected_and_processed {
+        // Explicit sync completed: clear pending auto-sync to prevent
+        // duplicate delayed sync (Workstream D).
+        crate::auto_sync::clear_pending_after_explicit_sync();
     }
     if cancelled {
         Ok(crate::SelectionOutcome::Cancelled)

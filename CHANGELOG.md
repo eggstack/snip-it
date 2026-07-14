@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Human-readable report to stderr; JSON report to stdout (same stream convention as `snp import`).
   - Doctor never mutates source, destination, config, or library state.
   - 29 integration tests and 18 unit tests covering file analysis, JSON output, compatibility audit, strict mode, non-mutation, command execution prevention, variable expansion prevention, API key leakage prevention, config preservation, and import/doctor consistency.
+- **Auto-sync mutation trigger integration (Release 5C)**
+  - Central mutation notification API: `notify_mutation(kind, origin)` and `notify_local_mutation(policy, context)`.
+  - All syncable mutation commands now trigger auto-sync after successful local commit: `snp new` (all sources), `snp edit` (editor), TUI delete, `snp import pet` (once per import), `snp library create/delete`.
+  - Output-only edits (`snp edit --output/--clear-output`) do NOT trigger sync (output is local-only).
+  - Explicit sync (`--sync` flag, `snp sync`) clears pending auto-sync state to prevent duplicate delayed sync.
+  - Sync-origin writes (`MutationOrigin::SyncMerge`) never trigger auto-sync (prevents feedback loops).
+  - `run_auto_sync()` creates its own Tokio runtime internally — callers don't need to pass one.
+  - 10 new unit tests covering notification API: disabled policy, sync-merge suppression, user/import origins, all mutation kinds, AccountConfig, library ID, clear-after-explicit-sync, result Debug/PartialEq, MutationContext construction.
 - **Pet multiple-choice variable compatibility (Release 3A)**
   - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).

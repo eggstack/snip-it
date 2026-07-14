@@ -362,3 +362,116 @@ recovery path for missed syncs.
 5. Pending marker survives crash for recovery
 6. Manual and scheduled sync remain independent
 7. No new CLI surface added (infrastructure only)
+
+## Auto-Sync Mutation Trigger Integration (Release 5C)
+
+**Module**: `src/auto_sync.rs`
+
+Release 5C wires all syncable local mutations into the auto-sync coordinator
+via the central mutation notification API. Auto-sync is now operational —
+it triggers automatically after successful local mutations when enabled.
+
+### Central Mutation Notification API
+
+```rust
+pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult
+```
+
+Convenience function for mutation commands. Loads sync settings, resolves
+the policy, and calls `notify_local_mutation()`. Use this after a successful
+local atomic write.
+
+```rust
+pub fn notify_local_mutation(
+    policy: &AutoSyncPolicy,
+    context: MutationContext,
+) -> AutoSyncNotificationResult
+```
+
+Low-level function that takes a pre-resolved policy. Used for testing.
+
+```rust
+pub struct MutationContext {
+    pub kind: MutationKind,
+    pub origin: MutationOrigin,
+    pub library_id: Option<String>,
+}
+
+pub enum AutoSyncNotificationResult {
+    Disabled,
+    Suppressed,
+    Executed(AutoSyncStatus),
+}
+```
+
+### Mutation Flow
+
+```text
+user command
+  -> validate
+  -> local atomic write
+  -> audit/local success
+  -> notify_mutation(kind, origin)
+  -> AutoSyncPolicy::resolve() + origin check
+  -> run_auto_sync() (lock, retry, sync)
+  -> return AutoSyncNotificationResult
+```
+
+### Command Trigger Matrix
+
+| Command | Mutation | Origin | Triggers? | Notes |
+|---------|----------|--------|-----------|-------|
+| `snp new` (all sources) | SnippetCreate | User | Yes | After atomic save |
+| `snp edit` (editor) | SnippetUpdate | User | Yes | After editor closes |
+| `snp edit --output/--clear-output` | SnippetUpdate | User | **No** | Output is local-only |
+| TUI delete | SnippetDelete | User | Yes | After tombstone save |
+| `snp import pet` (create) | Import | Import | Yes | After library + config saved |
+| `snp import pet` (merge, changed) | Import | Import | Yes | Only if imported > 0 |
+| `snp import pet` (replace) | Import | Import | Yes | After replacement saved |
+| `snp import pet` (dry-run) | — | — | **No** | Read-only |
+| `snp import pet` (no-op merge) | — | — | **No** | Nothing changed |
+| `snp library create` | LibraryChange | User | Yes | After library created |
+| `snp library delete` | LibraryChange | User | Yes | After library deleted |
+| `snp library set-primary` | — | — | **No** | Local-only metadata |
+| `snp premade get` | — | — | **No** | Local copy of remote data |
+| `snp sync` (manual) | — | — | Clears pending | Explicit sync clears auto-sync state |
+| Sync merge writes | SyncConflictWrite | SyncMerge | **No** | Prevents feedback loops |
+
+### Explicit Sync Precedence
+
+When `--sync` flag is used (on `run`, `clip`, `search`, or TUI delete):
+
+1. Explicit sync runs immediately via `run_default_sync()`
+2. Pending auto-sync state is cleared via `clear_pending_after_explicit_sync()`
+3. No duplicate delayed sync for the same mutation generation
+
+### Transaction Boundaries
+
+Each command defines its authoritative commit point:
+
+- **`snp new`**: After `save_library()` or `save_snippets()` succeeds
+- **`snp edit` (editor)**: After editor process exits successfully
+- **`snp edit --output`**: After `save_library()` succeeds (but no sync trigger)
+- **TUI delete**: After `save_library()` succeeds
+- **`snp import pet`**: After library file saved AND library registered in config
+- **`snp library create/delete`**: After library manager operation succeeds
+
+Auto-sync is submitted only after all local state required for a consistent
+view has committed. Backup failure does not trigger sync.
+
+### Local-Only Fields
+
+The `output` field is local-only — not in `ProtoSnippet`, never uploaded
+or downloaded. Edits that change only the `output` field do NOT trigger
+auto-sync because there is nothing to sync remotely.
+
+### Product Invariants (Release 5C additions)
+
+8. All syncable user mutation paths use one notification API.
+9. Triggers occur strictly after commit.
+10. Dry-run, cancel, failure, and no-op paths emit no request.
+11. Local-only mutations follow explicit protocol scope.
+12. Explicit/manual sync does not cause duplicate delayed sync.
+13. Sync-origin writes cannot recurse.
+14. Local state survives every remote/scheduling failure.
+15. Tests prove exactly-once logical notification and clean stdout.

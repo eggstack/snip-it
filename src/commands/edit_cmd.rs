@@ -39,6 +39,14 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
         .map_err(|e| {
             SnipError::command_error(&resolved_editor, vec![path.display().to_string()], e)
         })?;
+
+    // Auto-sync trigger: notify after editor closes (Workstream B2).
+    // Output-only edits (run_edit_output) are local-only and do not trigger sync.
+    crate::auto_sync::notify_mutation(
+        crate::auto_sync::MutationKind::SnippetUpdate,
+        crate::auto_sync::MutationOrigin::User,
+    );
+
     Ok(())
 }
 

@@ -24,6 +24,13 @@ pub fn run_list() -> SnipResult<()> {
 pub fn run_create(name: String) -> SnipResult<()> {
     let mut mgr = LibraryManager::new()?;
     let path = mgr.create_library(&name)?;
+
+    // Auto-sync trigger: notify after successful library creation (Workstream B5).
+    crate::auto_sync::notify_mutation(
+        crate::auto_sync::MutationKind::LibraryChange,
+        crate::auto_sync::MutationOrigin::User,
+    );
+
     println!("Created library '{}' at {}", name, path.display());
     Ok(())
 }
@@ -52,6 +59,13 @@ pub fn run_delete(name: String, force: bool) -> SnipResult<()> {
     }
 
     mgr.delete_library(&name)?;
+
+    // Auto-sync trigger: notify after successful library deletion (Workstream B5).
+    crate::auto_sync::notify_mutation(
+        crate::auto_sync::MutationKind::LibraryChange,
+        crate::auto_sync::MutationOrigin::User,
+    );
+
     println!("Deleted library '{name}'");
     Ok(())
 }

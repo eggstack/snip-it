@@ -256,6 +256,11 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 effective_pull,
                 runtime,
             )?;
+
+            // Explicit sync succeeded: clear pending auto-sync to prevent
+            // duplicate delayed sync (Workstream D).
+            crate::auto_sync::clear_pending_after_explicit_sync();
+
             Ok(())
         }
         Err(e) => {
