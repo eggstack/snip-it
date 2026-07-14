@@ -330,6 +330,22 @@ Sync uses last-write-wins timestamps for shared fields. Keep the SQLite
 database on persistent storage and back it up along with the rest of the server
 data.
 
+### Auto-sync policy
+
+Auto-sync is disabled by default. When enabled, mutation commands (new, edit,
+import) can trigger background synchronization after the local change is
+committed. Configure it via:
+
+```bash
+snp sync config --show                         # inspect current settings
+snp sync config --auto-sync on                 # enable auto-sync
+snp sync config --debounce 5                   # 5-second debounce (0-300)
+snp sync config --failure warn                 # ignore, warn, or error
+```
+
+Local mutations always succeed before any remote work begins. A failed
+auto-sync never rolls back or corrupts a successful local save.
+
 ## CLI overview
 
 ```text
@@ -346,6 +362,7 @@ snp import       Import snippets from external formats (e.g., pet)
 snp doctor       Diagnose pet file, library, environment, or shell init syntax
 snp register     Register with a snip-sync server
 snp sync         Push, pull, or bidirectionally sync libraries
+snp sync config  View or update auto-sync policy
 snp cron         Print a periodic sync schedule
 snp keybindings  Show TUI keybindings
 snp update       Check for and install an update

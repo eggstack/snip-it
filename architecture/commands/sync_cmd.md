@@ -46,11 +46,34 @@ Key points:
 - **Server deleted: true** → local copy marked deleted
 - **Local-only preserved** — `output`, `folders`, `favorite` kept when server wins
 
-## Flags
+## Subcommands
+
+### `snp sync` (default)
+Run a sync operation. Supports bidirectional, push-only, pull-only, and dry-run modes.
+
+### `snp sync config`
+View or update auto-sync policy settings.
+
+Flags:
+- `--show` — Display current auto-sync configuration
+- `--auto-sync <on|off>` — Enable or disable auto-sync after mutations
+- `--debounce <secs>` — Debounce delay in seconds (0-300)
+- `--failure <ignore|warn|error>` — Failure behavior
+
+Examples:
+```bash
+snp sync config --show
+snp sync config --auto-sync on
+snp sync config --debounce 5 --failure warn
+```
+
+## Legacy Flags (on `snp sync`)
 
 - `--servers` — List server libraries only
-- `--local` — Local-only sync mode
-- `--interval <seconds>` — Set periodic sync interval
+- `--push-only` — Upload local changes only
+- `--pull-only` — Download remote changes only
+- `--dry-run` — Show what would be synced
+- `--library` — Sync a specific library
 
 ## Settings
 
@@ -59,6 +82,13 @@ Sync settings loaded from `~/.config/snp/sync.toml`:
 - `api_key` — System keychain via `keyring`
 - `direction` — `push`, `pull`, or `bidirectional`
 - `interval` — Periodic sync interval
+
+### Auto-Sync Policy
+
+Configured via `snp sync config`:
+- `auto_sync` — Enable/disable auto-sync (default: off)
+- `auto_sync_debounce_seconds` — Delay before sync fires (default: 2, range: 0-300)
+- `auto_sync_failure` — Failure mode: ignore, warn (default), or error
 
 ## Related
 

@@ -248,18 +248,8 @@ enum Commands {
     /// Sync snippets with server
     #[command(alias = "y")]
     Sync {
-        #[arg(short, long, help = "Sync a specific library")]
-        library: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue, help = "List connected servers")]
-        servers: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue, help = "Upload local changes only")]
-        #[arg(conflicts_with = "pull_only")]
-        push_only: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue, help = "Download remote changes only")]
-        #[arg(conflicts_with = "push_only")]
-        pull_only: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue, help = "Show what would be synced")]
-        dry_run: bool,
+        #[command(subcommand)]
+        command: Option<SyncCommands>,
     },
     /// Setup automatic sync with cron
     #[command(alias = "cr")]
@@ -385,6 +375,42 @@ enum ShellCommands {
         /// Shell to generate integration for
         #[arg(value_enum)]
         shell: ShellIntegration,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SyncCommands {
+    /// Run a sync operation (default when no subcommand given)
+    #[command(alias = "s")]
+    Run {
+        #[arg(short, long, help = "Sync a specific library")]
+        library: Option<String>,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "List connected servers")]
+        servers: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Upload local changes only")]
+        #[arg(conflicts_with = "pull_only")]
+        push_only: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Download remote changes only")]
+        #[arg(conflicts_with = "push_only")]
+        pull_only: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Show what would be synced")]
+        dry_run: bool,
+    },
+    /// View or update auto-sync policy settings
+    #[command(alias = "c")]
+    Config {
+        /// Show the current effective auto-sync configuration
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        show: bool,
+        /// Enable or disable auto-sync after mutations
+        #[arg(long)]
+        auto_sync: Option<String>,
+        /// Debounce delay in seconds before auto-sync fires (0-300)
+        #[arg(long)]
+        debounce: Option<u64>,
+        /// Failure mode: ignore, warn, or error
+        #[arg(long)]
+        failure: Option<String>,
     },
 }
 
@@ -600,22 +626,36 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Keybindings) => {
             commands::keybindings_cmd::run()?;
         }
-        Some(Commands::Sync {
-            library,
-            servers,
-            push_only,
-            pull_only,
-            dry_run,
-        }) => {
-            let options = commands::sync_cmd::SyncOptions {
-                library,
-                servers,
-                push_only,
-                pull_only,
-                dry_run,
-            };
-            commands::sync_cmd::run(options, &RUNTIME)?;
-        }
+        Some(Commands::Sync { command }) => match command {
+            None | Some(SyncCommands::Run { .. }) => {
+                let (library, servers, push_only, pull_only, dry_run) = match command {
+                    Some(SyncCommands::Run {
+                        library,
+                        servers,
+                        push_only,
+                        pull_only,
+                        dry_run,
+                    }) => (library, servers, push_only, pull_only, dry_run),
+                    _ => (None, false, false, false, false),
+                };
+                let options = commands::sync_cmd::SyncOptions {
+                    library,
+                    servers,
+                    push_only,
+                    pull_only,
+                    dry_run,
+                };
+                commands::sync_cmd::run(options, &RUNTIME)?;
+            }
+            Some(SyncCommands::Config {
+                show,
+                auto_sync,
+                debounce,
+                failure,
+            }) => {
+                commands::sync_cmd::run_config(show, auto_sync, debounce, failure)?;
+            }
+        },
         Some(Commands::Cron { interval }) => {
             commands::cron_cmd::run(interval)?;
         }

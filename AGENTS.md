@@ -257,6 +257,20 @@ snip-it/
 - Local-only fields (`output`, `folders`, `favorite`) are preserved when server wins
 - Snippets are sorted by `updated_at` descending after merge
 
+### Auto-Sync Policy (Release 5A)
+
+- `AutoSyncPolicy` struct in `src/auto_sync.rs` — effective policy resolved once per command invocation
+- `AutoSyncFailureMode` enum in `src/config.rs` — Ignore, Warn (default), Error
+- `MutationKind` enum in `src/auto_sync.rs` — classifies mutations for sync triggers
+- Configuration in `sync.toml`: `auto_sync`, `auto_sync_debounce_seconds`, `auto_sync_failure`
+- CLI: `snp sync config --show| --auto-sync on|off | --debounce <secs> | --failure ignore|warn|error`
+- Auto-sync is disabled by default; local mutations always commit before remote work begins
+- Remote failure never rolls back local state
+- Existing manual `snp sync`, `snp cron`, and daemon workflows are unchanged
+- `MutationKind::AccountConfig` never triggers sync; all other kinds are syncable when enabled
+- Debounce range: 0-300 seconds (clamped); default: 2 seconds
+- `error` failure mode sets nonzero exit code but local mutation remains committed
+
 ### snip-sync CLI
 - Binary defaults to `serve` when no subcommand given (backward compatible)
 - `CONFIG_PATH` env var overrides platform config dir

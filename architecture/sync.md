@@ -118,3 +118,57 @@ service SnippetSync {
 - `SnipError::Runtime` for sync-specific errors (sync failures, validation errors)
 - `CryptoError` for encryption/decryption errors (converted to `SnipError::Runtime` via `From`)
 - Network failures trigger retry with exponential backoff via `retry_grpc!` macro
+
+## Auto-Sync Policy
+
+**Module**: `src/auto_sync.rs`
+
+Auto-sync is disabled by default. When enabled via `snp sync config --auto-sync on`,
+mutation commands trigger a debounced background sync after the local change is
+committed. The effective policy is resolved once per command invocation via
+`AutoSyncPolicy::resolve()`.
+
+### AutoSyncPolicy
+
+```rust
+pub struct AutoSyncPolicy {
+    pub enabled: bool,
+    pub debounce: Duration,
+    pub failure_mode: AutoSyncFailureMode,
+}
+```
+
+### AutoSyncFailureMode
+
+```rust
+pub enum AutoSyncFailureMode {
+    Ignore,  // Suppress user-facing failure
+    Warn,    // Emit warning to stderr (default)
+    Error,   // Nonzero exit code; local mutation still committed
+}
+```
+
+### MutationKind
+
+```rust
+pub enum MutationKind {
+    SnippetCreate,
+    SnippetUpdate,
+    SnippetDelete,
+    Import,
+    LibraryChange,
+    PremadeInstall,
+    SyncConflictWrite,
+    AccountConfig,  // Never triggers sync
+}
+```
+
+### Product Invariants
+
+1. Auto-sync is disabled by default.
+2. Local mutation commits before any remote work begins.
+3. Remote failure never rolls back or corrupts a successful local mutation.
+4. Existing `snp sync`, `snp cron`, daemon/service workflows remain unchanged.
+5. Auto-sync never changes sync direction, credentials, server selection, library mapping, or conflict policy implicitly.
+6. Machine-facing stdout remains free of background sync diagnostics.
+7. Command bodies, output metadata, credentials, API keys, and encryption material are never included in auto-sync logs or errors.

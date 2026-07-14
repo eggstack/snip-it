@@ -19,6 +19,53 @@ const KEYCHAIN_DEFAULT_USER: &str = "api-key";
 
 pub const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
 
+/// Minimum accepted value for `auto_sync_debounce_seconds`.
+pub const AUTO_SYNC_DEBOUNCE_MIN: u64 = 0;
+/// Maximum accepted value for `auto_sync_debounce_seconds`.
+pub const AUTO_SYNC_DEBOUNCE_MAX: u64 = 300;
+
+/// Failure behavior for post-mutation auto-sync.
+///
+/// Controls whether a failed auto-sync emits a warning or a hard error.
+/// The `error` policy never implies rollback — the local mutation always
+/// remains committed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoSyncFailureMode {
+    /// Retain local success, suppress user-facing failure.
+    Ignore,
+    /// Retain local success, emit a concise warning to stderr.
+    #[default]
+    Warn,
+    /// Local mutation remains committed, but the command returns a
+    /// distinct post-commit sync failure outcome (nonzero exit code).
+    Error,
+}
+
+impl std::fmt::Display for AutoSyncFailureMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ignore => write!(f, "ignore"),
+            Self::Warn => write!(f, "warn"),
+            Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+impl std::str::FromStr for AutoSyncFailureMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ignore" => Ok(Self::Ignore),
+            "warn" => Ok(Self::Warn),
+            "error" => Ok(Self::Error),
+            _ => Err(format!(
+                "invalid auto_sync_failure mode '{s}': expected ignore, warn, or error"
+            )),
+        }
+    }
+}
+
 struct CachedToml {
     mtime: SystemTime,
     len: u64,
@@ -147,6 +194,14 @@ pub struct SyncSettings {
     pub sync_interval_minutes: u32,
     #[serde(default)]
     pub auto_sync: bool,
+    /// Debounce delay in seconds before auto-sync fires after a mutation.
+    /// Clamped to [`AUTO_SYNC_DEBOUNCE_MIN`]..[`AUTO_SYNC_DEBOUNCE_MAX`].
+    #[serde(default = "default_auto_sync_debounce_seconds")]
+    pub auto_sync_debounce_seconds: u64,
+    /// Failure behavior when auto-sync cannot complete.
+    /// Does not affect local mutation guarantees.
+    #[serde(default)]
+    pub auto_sync_failure: AutoSyncFailureMode,
     #[serde(default)]
     pub sync_direction: SyncDirection,
     #[serde(default)]
@@ -164,6 +219,11 @@ impl std::fmt::Debug for SyncSettings {
             .field("device_id", &self.device_id)
             .field("sync_interval_minutes", &self.sync_interval_minutes)
             .field("auto_sync", &self.auto_sync)
+            .field(
+                "auto_sync_debounce_seconds",
+                &self.auto_sync_debounce_seconds,
+            )
+            .field("auto_sync_failure", &self.auto_sync_failure)
             .field("sync_direction", &self.sync_direction)
             .field(
                 "clipboard_auto_clear_seconds",
@@ -190,6 +250,8 @@ impl Clone for SyncSettings {
             device_id: self.device_id.clone(),
             sync_interval_minutes: self.sync_interval_minutes,
             auto_sync: self.auto_sync,
+            auto_sync_debounce_seconds: self.auto_sync_debounce_seconds,
+            auto_sync_failure: self.auto_sync_failure.clone(),
             sync_direction: self.sync_direction.clone(),
             clipboard_auto_clear_seconds: self.clipboard_auto_clear_seconds,
             sync_limit: self.sync_limit,
@@ -201,6 +263,15 @@ impl SyncSettings {
     /// Returns the sync limit value, defaulting to 1000 if not set.
     pub fn sync_limit_value(&self) -> i32 {
         self.sync_limit.filter(|&v| v > 0).unwrap_or(1000)
+    }
+
+    /// Returns the effective auto-sync debounce duration, clamped to
+    /// [`AUTO_SYNC_DEBOUNCE_MIN`]..[`AUTO_SYNC_DEBOUNCE_MAX`].
+    pub fn auto_sync_debounce(&self) -> std::time::Duration {
+        let clamped = self
+            .auto_sync_debounce_seconds
+            .clamp(AUTO_SYNC_DEBOUNCE_MIN, AUTO_SYNC_DEBOUNCE_MAX);
+        std::time::Duration::from_secs(clamped)
     }
 }
 
@@ -316,6 +387,8 @@ impl Default for SyncSettings {
             device_id: String::new(),
             sync_interval_minutes: default_sync_interval(),
             auto_sync: false,
+            auto_sync_debounce_seconds: 2,
+            auto_sync_failure: AutoSyncFailureMode::default(),
             sync_direction: SyncDirection::default(),
             clipboard_auto_clear_seconds: None,
             sync_limit: None,
@@ -342,6 +415,10 @@ fn default_sync_url() -> String {
 
 fn default_sync_interval() -> u32 {
     30
+}
+
+fn default_auto_sync_debounce_seconds() -> u64 {
+    2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -446,6 +523,8 @@ mod tests {
         assert!(settings.device_id.is_empty());
         assert_eq!(settings.sync_interval_minutes, 30);
         assert!(!settings.auto_sync);
+        assert_eq!(settings.auto_sync_debounce_seconds, 2);
+        assert_eq!(settings.auto_sync_failure, AutoSyncFailureMode::Warn);
         assert_eq!(settings.sync_direction, SyncDirection::Push);
         assert_eq!(settings.sync_limit, None);
     }
@@ -473,6 +552,8 @@ mod tests {
             device_id: "device-456".to_string(),
             sync_interval_minutes: 60,
             auto_sync: true,
+            auto_sync_debounce_seconds: 5,
+            auto_sync_failure: AutoSyncFailureMode::Error,
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(2000),
@@ -489,6 +570,8 @@ mod tests {
         assert!(toml_str.contains("device_id = \"device-456\""));
         assert!(toml_str.contains("sync_interval_minutes = 60"));
         assert!(toml_str.contains("auto_sync = true"));
+        assert!(toml_str.contains("auto_sync_debounce_seconds = 5"));
+        assert!(toml_str.contains("auto_sync_failure = \"error\""));
         assert!(toml_str.contains("sync_direction = \"Bidirectional\""));
     }
 
@@ -558,5 +641,130 @@ mod tests {
         );
 
         assert_eq!(settings.api_key, "test-key-123");
+    }
+
+    #[test]
+    fn test_auto_sync_debounce_clamped() {
+        let mut settings = SyncSettings::default();
+        assert_eq!(
+            settings.auto_sync_debounce(),
+            std::time::Duration::from_secs(2)
+        );
+
+        settings.auto_sync_debounce_seconds = 0;
+        assert_eq!(
+            settings.auto_sync_debounce(),
+            std::time::Duration::from_secs(0)
+        );
+
+        settings.auto_sync_debounce_seconds = 300;
+        assert_eq!(
+            settings.auto_sync_debounce(),
+            std::time::Duration::from_secs(300)
+        );
+
+        // Overflow clamped to max
+        settings.auto_sync_debounce_seconds = u64::MAX;
+        assert_eq!(
+            settings.auto_sync_debounce(),
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn test_auto_sync_failure_mode_default() {
+        let settings = SyncSettings::default();
+        assert_eq!(settings.auto_sync_failure, AutoSyncFailureMode::Warn);
+    }
+
+    #[test]
+    fn test_auto_sync_failure_mode_display_roundtrip() {
+        let modes = vec![
+            AutoSyncFailureMode::Ignore,
+            AutoSyncFailureMode::Warn,
+            AutoSyncFailureMode::Error,
+        ];
+        for mode in &modes {
+            let s = mode.to_string();
+            let parsed: AutoSyncFailureMode = s.parse().unwrap();
+            assert_eq!(*mode, parsed);
+        }
+    }
+
+    #[test]
+    fn test_auto_sync_failure_mode_invalid() {
+        let result = "bogus".parse::<AutoSyncFailureMode>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_old_config_without_auto_sync_fields_loads_defaults() {
+        let content = r#"
+[settings.sync]
+enabled = true
+server_url = "https://sync.example.com"
+api_key = "test-key"
+sync_interval_minutes = 15
+auto_sync = true
+sync_direction = "Bidirectional"
+"#;
+        // Old configs without auto_sync_debounce_seconds/auto_sync_failure should load defaults
+        let config: SyncConfigFile = toml::from_str(content).unwrap();
+        let settings = config.settings.sync;
+        assert!(settings.auto_sync);
+        assert_eq!(settings.auto_sync_debounce_seconds, 2); // default
+        assert_eq!(settings.auto_sync_failure, AutoSyncFailureMode::Warn); // default
+    }
+
+    #[test]
+    fn test_full_config_roundtrip() {
+        let settings = SyncSettings {
+            enabled: true,
+            server_url: "https://sync.example.com".to_string(),
+            api_key: "test-key".to_string(),
+            device_id: "device-1".to_string(),
+            sync_interval_minutes: 15,
+            auto_sync: true,
+            auto_sync_debounce_seconds: 5,
+            auto_sync_failure: AutoSyncFailureMode::Error,
+            sync_direction: SyncDirection::Bidirectional,
+            clipboard_auto_clear_seconds: Some(30),
+            sync_limit: Some(500),
+        };
+        let toml_str = toml::to_string_pretty(&settings).unwrap();
+        // Use from_str directly to avoid keychain lookup
+        let roundtripped: SyncSettings = toml::from_str(&toml_str).unwrap_or_else(|_| {
+            // If keychain lookup fails, parse with a plaintext fallback
+            let fallback = toml_str.replace("api_key = \"@keychain\"", "api_key = \"test-key\"");
+            toml::from_str(&fallback).unwrap()
+        });
+        assert!(roundtripped.auto_sync);
+        assert_eq!(roundtripped.auto_sync_debounce_seconds, 5);
+        assert_eq!(roundtripped.auto_sync_failure, AutoSyncFailureMode::Error);
+        assert_eq!(roundtripped.sync_direction, SyncDirection::Bidirectional);
+    }
+
+    #[test]
+    fn test_unrelated_settings_preserved() {
+        let settings = SyncSettings {
+            enabled: true,
+            server_url: "https://sync.example.com".to_string(),
+            api_key: "test-key".to_string(),
+            device_id: "device-1".to_string(),
+            sync_interval_minutes: 15,
+            auto_sync: true,
+            auto_sync_debounce_seconds: 10,
+            auto_sync_failure: AutoSyncFailureMode::Ignore,
+            sync_direction: SyncDirection::Push,
+            clipboard_auto_clear_seconds: Some(60),
+            sync_limit: Some(500),
+        };
+        let toml_str = toml::to_string_pretty(&settings).unwrap();
+        // Verify unrelated fields are present
+        assert!(toml_str.contains("enabled = true"));
+        assert!(toml_str.contains("sync_interval_minutes = 15"));
+        assert!(toml_str.contains("clipboard_auto_clear_seconds = 60"));
+        assert!(toml_str.contains("sync_limit = 500"));
+        assert!(toml_str.contains("sync_direction = \"Push\""));
     }
 }

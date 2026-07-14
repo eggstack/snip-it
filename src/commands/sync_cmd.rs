@@ -1,5 +1,5 @@
 use crate::commands::init_library_manager;
-use crate::config::{SyncDirection, load_sync_settings};
+use crate::config::{AutoSyncFailureMode, SyncDirection, load_sync_settings, save_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use crate::proto::Library;
@@ -266,6 +266,107 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             ))
         }
     }
+}
+
+/// Runs the `snp sync config` command to inspect or update auto-sync policy.
+pub fn run_config(
+    show: bool,
+    auto_sync: Option<String>,
+    debounce: Option<u64>,
+    failure: Option<String>,
+) -> SnipResult<()> {
+    let mut settings = load_sync_settings().map_err(|e| {
+        eprintln!("Failed to load sync settings: {e}");
+        e
+    })?;
+
+    let has_changes = auto_sync.is_some() || debounce.is_some() || failure.is_some();
+
+    if !show && !has_changes {
+        eprintln!(
+            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --failure ignore|warn|error"
+        );
+        return Ok(());
+    }
+
+    if show {
+        println!("Auto-sync configuration:");
+        println!(
+            "  auto_sync:                {}",
+            if settings.auto_sync { "on" } else { "off" }
+        );
+        println!(
+            "  auto_sync_debounce_seconds: {}",
+            settings.auto_sync_debounce_seconds
+        );
+        println!("  auto_sync_failure:        {}", settings.auto_sync_failure);
+        println!(
+            "  sync_enabled:             {}",
+            if settings.enabled { "on" } else { "off" }
+        );
+        if settings.auto_sync && !settings.enabled {
+            println!("  warning: auto_sync is on but sync is not enabled");
+        }
+        if settings.auto_sync && settings.api_key.is_empty() {
+            println!("  warning: auto_sync is on but no API key is configured");
+        }
+    }
+
+    if let Some(ref value) = auto_sync {
+        match value.to_lowercase().as_str() {
+            "on" | "true" | "1" | "yes" => {
+                settings.auto_sync = true;
+                eprintln!("Auto-sync enabled");
+            }
+            "off" | "false" | "0" | "no" => {
+                settings.auto_sync = false;
+                eprintln!("Auto-sync disabled");
+            }
+            other => {
+                eprintln!("Invalid value '{other}': expected on/off");
+                return Err(SnipError::runtime_error(
+                    "invalid auto_sync value",
+                    Some("expected on, off, true, false, 1, 0, yes, or no"),
+                ));
+            }
+        }
+    }
+
+    if let Some(secs) = debounce {
+        if secs > crate::config::AUTO_SYNC_DEBOUNCE_MAX {
+            eprintln!(
+                "Debounce value {} exceeds maximum {}; clamping to {}",
+                secs,
+                crate::config::AUTO_SYNC_DEBOUNCE_MAX,
+                crate::config::AUTO_SYNC_DEBOUNCE_MAX
+            );
+        }
+        settings.auto_sync_debounce_seconds = secs.clamp(
+            crate::config::AUTO_SYNC_DEBOUNCE_MIN,
+            crate::config::AUTO_SYNC_DEBOUNCE_MAX,
+        );
+        eprintln!(
+            "Debounce set to {} seconds",
+            settings.auto_sync_debounce_seconds
+        );
+    }
+
+    if let Some(ref mode_str) = failure {
+        let mode: AutoSyncFailureMode = mode_str.parse().map_err(|e: String| {
+            SnipError::runtime_error("invalid auto_sync_failure value", Some(&e))
+        })?;
+        settings.auto_sync_failure = mode.clone();
+        eprintln!("Failure mode set to {mode}");
+    }
+
+    if has_changes {
+        save_sync_settings(&settings).map_err(|e| {
+            eprintln!("Failed to save sync settings: {e}");
+            e
+        })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

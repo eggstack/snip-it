@@ -2710,6 +2710,8 @@ fn test_golden_corpus_sync_round_trip_preserves_command() {
             device_id: device_id.clone(),
             sync_interval_minutes: 30,
             auto_sync: false,
+            auto_sync_debounce_seconds: 2,
+            auto_sync_failure: snip_it::config::AutoSyncFailureMode::Warn,
             sync_direction: snip_it::config::SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: None,
             sync_limit: None,

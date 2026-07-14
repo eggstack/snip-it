@@ -54,6 +54,8 @@ pub struct SyncSettings {
     pub device_id: String,                // From registration
     pub sync_interval_minutes: u32,       // Default: 30
     pub auto_sync: bool,                  // Default: false
+    pub auto_sync_debounce_seconds: u64,  // Default: 2 (clamped 0..300)
+    pub auto_sync_failure: AutoSyncFailureMode,  // Default: Warn
     pub sync_direction: SyncDirection,    // Default: Push
     pub clipboard_auto_clear_seconds: Option<u32>,
 }
@@ -69,18 +71,31 @@ pub enum SyncDirection {
 }
 ```
 
+### `AutoSyncFailureMode` enum
+
+```rust
+/// Failure behavior for auto-sync.
+pub enum AutoSyncFailureMode {
+    Ignore,  // Suppress user-facing failure
+    Warn,    // Emit warning to stderr
+    Error,   // Nonzero exit code, local mutation still committed
+}
+```
+
 ### TOML Format
 
 Stored in `~/.config/snp/sync.toml`:
 
 ```toml
-[sync]
+[settings.sync]
 enabled = true
 server_url = "https://sync.example.com"
 api_key = "your-api-key"
 device_id = "device-uuid"
 sync_interval_minutes = 30
 auto_sync = false
+auto_sync_debounce_seconds = 2
+auto_sync_failure = "warn"
 sync_direction = "Bidirectional"
 clipboard_auto_clear_seconds = 30
 ```

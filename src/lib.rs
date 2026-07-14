@@ -16,6 +16,7 @@
 // truly internal modules (`clipboard`, `library`, `sync_commands`,
 // `utils`) are accessed only via `crate::` from sibling modules, so
 // they can be hidden from external consumers.
+pub mod auto_sync;
 pub mod commands;
 pub mod config;
 pub mod encryption;
