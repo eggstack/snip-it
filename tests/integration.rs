@@ -5575,3 +5575,550 @@ fn test_rank_snippets_deterministic_across_runs() {
 
     assert_eq!(stdout1, stdout2, "list output should be deterministic");
 }
+
+// =====================================================================
+// Release 4B: Output / Notes Presentation Tests
+// =====================================================================
+
+fn create_output_test_library(config_dir: &Path) {
+    // Use the snp binary to create the library properly
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", "output-test"]);
+    cmd.output().unwrap();
+
+    let lib_dir = config_dir.join("libraries");
+    fs::create_dir_all(&lib_dir).unwrap();
+    fs::write(
+        lib_dir.join("output-test.toml"),
+        r#"[[snippets]]
+description = "empty output"
+command = "echo empty"
+output = ""
+
+[[snippets]]
+description = "single line output"
+command = "echo hello"
+output = "This is a sample output"
+
+[[snippets]]
+description = "multiline output"
+command = "echo multiline"
+output = "line1\nline2\nline3"
+
+[[snippets]]
+description = "output with tabs"
+command = "echo tabs"
+output = "col1\tcol2\tcol3"
+
+[[snippets]]
+description = "output with special chars"
+command = "echo special"
+output = "backslash \\ and \"quotes\" and 'single'"
+
+[[snippets]]
+description = "output with unicode"
+command = "echo unicode"
+output = "日本語テスト 🎉"
+
+[[snippets]]
+description = "output with shell-like content"
+command = "echo shell"
+output = "curl -s https://api.example.com | jq '.data'"
+
+[[snippets]]
+description = "long output snippet"
+command = "echo long"
+output = "This is a longer output that should be truncated in summary display but shown in full in JSON output"
+
+[[snippets]]
+description = "ansi in output"
+command = "echo ansi"
+output = "\x1b[31mred text\x1b[0m normal"
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_output_field_preserved_in_json() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--json"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "snp list failed. stderr: {stderr}\nstdout: {stdout}"
+    );
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        items.len() >= 8,
+        "Expected >= 8 items, got {}. stdout: {stdout}",
+        items.len()
+    );
+
+    // Check empty output
+    let empty = items
+        .iter()
+        .find(|i| i["description"] == "empty output")
+        .unwrap();
+    assert_eq!(empty["output"], "");
+
+    // Check single line output
+    let single = items
+        .iter()
+        .find(|i| i["description"] == "single line output")
+        .unwrap();
+    assert_eq!(single["output"], "This is a sample output");
+
+    // Check multiline output
+    let multi = items
+        .iter()
+        .find(|i| i["description"] == "multiline output")
+        .unwrap();
+    assert_eq!(multi["output"], "line1\nline2\nline3");
+
+    // Check unicode
+    let unicode = items
+        .iter()
+        .find(|i| i["description"] == "output with unicode")
+        .unwrap();
+    assert_eq!(unicode["output"], "日本語テスト 🎉");
+}
+
+#[test]
+fn test_output_field_preserved_in_csv() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--csv"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Header should include output column
+    assert!(stdout.lines().next().unwrap().contains("output"));
+    // Should contain the output values
+    assert!(stdout.contains("This is a sample output"));
+    assert!(stdout.contains("line1"));
+}
+
+#[test]
+fn test_list_default_output_not_shown_when_empty() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Empty output snippet should NOT show "Output:" line
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Find the line after "empty output" description
+    let empty_idx = lines
+        .iter()
+        .position(|l| l.contains("empty output"))
+        .unwrap();
+    // The next non-empty line after description should be "Tags:", not "Output:"
+    let next_line = lines[empty_idx + 1..]
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .unwrap();
+    assert!(
+        next_line.contains("Tags"),
+        "Expected Tags line after empty output, got: {next_line}"
+    );
+}
+
+#[test]
+fn test_list_default_output_shown_when_nonempty() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Non-empty output should show Output: line with truncated summary
+    // The output text may have ANSI codes, so check for the plain text
+    assert!(
+        stdout.contains("This is a sample output") || stdout.contains("sample output"),
+        "Expected output content in list output. Got: {stdout}"
+    );
+}
+
+#[test]
+fn test_edit_output_set() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "New notes for this snippet",
+        "--filter",
+        "empty output",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Updated output"));
+
+    // Verify the output was set via JSON
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args(["list", "--library", "output-test", "--json"]);
+    let output2 = cmd2.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output2.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let snippet = items
+        .iter()
+        .find(|i| i["description"] == "empty output")
+        .unwrap();
+    assert_eq!(snippet["output"], "New notes for this snippet");
+}
+
+#[test]
+fn test_edit_output_clear() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // First set output
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "temporary content",
+        "--filter",
+        "empty output",
+    ]);
+    cmd.output().unwrap();
+
+    // Then clear it
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--clear-output",
+        "--filter",
+        "empty output",
+    ]);
+    let output = cmd2.output().unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Cleared output"));
+
+    // Verify cleared via JSON
+    let mut cmd3 = snp_in(&config_dir);
+    cmd3.args(["list", "--library", "output-test", "--json"]);
+    let output3 = cmd3.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output3.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let snippet = items
+        .iter()
+        .find(|i| i["description"] == "empty output")
+        .unwrap();
+    assert_eq!(snippet["output"], "");
+}
+
+#[test]
+fn test_edit_output_stdin() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output-stdin",
+        "--filter",
+        "empty output",
+    ]);
+    let output = output_with_stdin(cmd, b"Content from stdin");
+    assert!(output.status.success());
+
+    // Verify via JSON
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args(["list", "--library", "output-test", "--json"]);
+    let output2 = cmd2.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output2.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let snippet = items
+        .iter()
+        .find(|i| i["description"] == "empty output")
+        .unwrap();
+    assert_eq!(snippet["output"], "Content from stdin");
+}
+
+#[test]
+fn test_edit_output_no_filter_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["edit", "--library", "output-test", "--output", "test"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_edit_output_no_match_fails() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "test",
+        "--filter",
+        "nonexistent snippet",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_output_multiline_roundtrip() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // Set multiline output
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "line1\nline2\nline3",
+        "--filter",
+        "empty output",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    // Read back via JSON and verify exact content
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args(["list", "--library", "output-test", "--json"]);
+    let output2 = cmd2.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output2.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let snippet = items
+        .iter()
+        .find(|i| i["description"] == "empty output")
+        .unwrap();
+    assert_eq!(snippet["output"], "line1\nline2\nline3");
+}
+
+#[test]
+fn test_output_with_tabs_and_special_chars_roundtrip() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // The library already has tabs output; verify exact preservation in JSON
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let tabs_snippet = items
+        .iter()
+        .find(|i| i["description"] == "output with tabs")
+        .unwrap();
+    assert_eq!(tabs_snippet["output"], "col1\tcol2\tcol3");
+
+    let special_snippet = items
+        .iter()
+        .find(|i| i["description"] == "output with special chars")
+        .unwrap();
+    assert_eq!(
+        special_snippet["output"],
+        "backslash \\ and \"quotes\" and 'single'"
+    );
+}
+
+#[test]
+fn test_search_output_flag_includes_output_in_fuzzy_match() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // Without --search-output: searching for "sample" should NOT match "single line output"
+    // because "sample" is only in the output field, not description or command
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "list",
+        "--library",
+        "output-test",
+        "--filter",
+        "sample",
+        "--json",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        items.len(),
+        0,
+        "Without --search-output, 'sample' should not match output field"
+    );
+
+    // With --search-output: searching for "sample" SHOULD match at least the single line output
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args([
+        "list",
+        "--library",
+        "output-test",
+        "--filter",
+        "sample",
+        "--search-output",
+        "--json",
+    ]);
+    let output2 = cmd2.output().unwrap();
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    let items2: Vec<serde_json::Value> = serde_json::from_str(&stdout2).unwrap();
+    assert!(
+        !items2.is_empty(),
+        "With --search-output, 'sample' should match output field"
+    );
+    assert!(
+        items2
+            .iter()
+            .any(|i| i["description"] == "single line output"),
+        "Should include 'single line output' which has 'sample' in its output"
+    );
+}
+
+#[test]
+fn test_search_output_flag_with_multiline_content() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // "line2" only appears in output, not in description or command
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "list",
+        "--library",
+        "output-test",
+        "--filter",
+        "line2",
+        "--search-output",
+        "--json",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["description"], "multiline output");
+}
+
+#[test]
+fn test_output_no_eval_no_execution() {
+    // Verify that output content with shell-like syntax is never executed
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // The "shell-like content" snippet has curl|jq in output
+    // Listing it should not execute anything
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--json"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let shell_snippet = items
+        .iter()
+        .find(|i| i["description"] == "output with shell-like content")
+        .unwrap();
+    // Output should be preserved as-is, not executed
+    assert!(shell_snippet["output"].as_str().unwrap().contains("curl"));
+}
+
+#[test]
+fn test_edit_output_conflicts() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    // --output and --clear-output should conflict
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "test",
+        "--clear-output",
+        "--filter",
+        "empty output",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+
+    // --output and --output-stdin should conflict
+    let mut cmd2 = snp_in(&config_dir);
+    cmd2.args([
+        "edit",
+        "--library",
+        "output-test",
+        "--output",
+        "test",
+        "--output-stdin",
+        "--filter",
+        "empty output",
+    ]);
+    let output2 = cmd2.output().unwrap();
+    assert!(!output2.status.success());
+}
+
+#[test]
+fn test_output_ansi_sequences_in_json_preserved() {
+    // JSON should preserve the raw value including ANSI sequences
+    let (_tmp, config_dir) = setup_test_env();
+    create_output_test_library(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["list", "--library", "output-test", "--json"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let ansi_snippet = items
+        .iter()
+        .find(|i| i["description"] == "ansi in output")
+        .unwrap();
+    let output_val = ansi_snippet["output"].as_str().unwrap();
+    // ANSI escape sequences should be preserved in JSON
+    assert!(output_val.contains("\x1b[31m"));
+    assert!(output_val.contains("\x1b[0m"));
+}
+
+#[test]
+fn test_search_output_help_text() {
+    let output = snp_cmd().args(["list", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--search-output"));
+}
+
+#[test]
+fn test_edit_output_help_text() {
+    let output = snp_cmd().args(["edit", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--output"));
+    assert!(stdout.contains("--output-stdin"));
+    assert!(stdout.contains("--clear-output"));
+}

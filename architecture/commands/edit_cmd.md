@@ -44,3 +44,34 @@ Does not use TUI; launches external editor process. Terminal state is preserved 
 
 - [mod.md](mod.md) — Path resolution and library loading
 - [library.md](../library.md) — Library and snippet data structures
+
+## Output/Notes Editing (Release 4B)
+
+When `--output`, `--output-stdin`, or `--clear-output` flags are provided, the edit command
+operates in structured output-editing mode instead of opening `$EDITOR`.
+
+### CLI Flags
+
+- `--output <text>` — Set the output/notes field to the given text.
+- `--output-stdin` — Read the output/notes field from stdin (byte-for-byte).
+- `--clear-output` — Clear the output/notes field to empty.
+- `--filter <query>` — Required; selects the snippet by description or command substring match.
+
+### Conflicts
+
+- `--output`, `--output-stdin`, and `--clear-output` are mutually exclusive.
+- `--filter` is required when any output flag is present.
+
+### Behavior
+
+1. Loads the library file.
+2. Finds the first non-deleted snippet matching the filter (case-insensitive substring).
+3. Updates the `output` field and bumps `updated_at`.
+4. Saves atomically with backup.
+5. Reports the operation to stderr.
+
+### Safety
+
+- Cancellation is implicit: if no matching snippet is found, returns an error.
+- No command execution or variable expansion occurs on the output value.
+- The edit is atomic (backup + temp file + rename).

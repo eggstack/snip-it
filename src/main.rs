@@ -142,6 +142,9 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         #[arg(conflicts_with = "json")]
         csv: bool,
+        /// Include output/notes field in fuzzy search matching
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        search_output: bool,
         /// Sort mode for snippet ordering
         #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
         sort: snip_it::sort::SnippetSort,
@@ -226,6 +229,18 @@ enum Commands {
     Edit {
         #[arg(short, long)]
         library: Option<String>,
+        /// Set the output/notes field on a snippet (requires --filter)
+        #[arg(long, conflicts_with_all = ["output_stdin", "clear_output"])]
+        output: Option<String>,
+        /// Read output/notes field from stdin (requires --filter)
+        #[arg(long, conflicts_with_all = ["output", "clear_output"])]
+        output_stdin: bool,
+        /// Clear the output/notes field (requires --filter)
+        #[arg(long, conflicts_with_all = ["output", "output_stdin"])]
+        clear_output: bool,
+        /// Filter to select which snippet to edit output on (required with output flags)
+        #[arg(short, long)]
+        filter: Option<String>,
     },
     /// Show keybindings
     #[command(alias = "k")]
@@ -457,6 +472,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             library,
             json,
             csv,
+            search_output,
             sort,
             favorites_first,
         }) => {
@@ -471,7 +487,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 mode: sort,
                 favorites_first,
             };
-            commands::list_cmd::run(filter, config, library, format, Some(sort_opts))?;
+            commands::list_cmd::run(
+                filter,
+                config,
+                library,
+                format,
+                Some(sort_opts),
+                search_output,
+            )?;
         }
         Some(Commands::Run {
             filter,
@@ -537,8 +560,42 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 &RUNTIME,
             );
         }
-        Some(Commands::Edit { library }) => {
-            commands::edit_cmd::run(library, None)?;
+        Some(Commands::Edit {
+            library,
+            output,
+            output_stdin,
+            clear_output,
+            filter,
+        }) => {
+            let has_output_flags = output.is_some() || output_stdin || clear_output;
+            if has_output_flags {
+                let output_value = if clear_output {
+                    Some(String::new())
+                } else if output_stdin {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).map_err(
+                        |e| {
+                            snip_it::error::SnipError::io_error(
+                                "read stdin",
+                                std::path::PathBuf::new(),
+                                e,
+                            )
+                        },
+                    )?;
+                    Some(buf)
+                } else {
+                    output
+                };
+                let filter_str = filter.ok_or_else(|| {
+                    snip_it::error::SnipError::runtime_error(
+                        "--filter is required when using --output, --output-stdin, or --clear-output",
+                        None,
+                    )
+                })?;
+                commands::edit_cmd::run_edit_output(library, filter_str, output_value)?;
+            } else {
+                commands::edit_cmd::run(library, None)?;
+            }
         }
         Some(Commands::Keybindings) => {
             commands::keybindings_cmd::run()?;

@@ -42,6 +42,72 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
     Ok(())
 }
 
+/// Edits the output/notes field of a single snippet matched by filter.
+///
+/// When `new_output` is `Some(value)`, the output field is set to that value.
+/// When `new_output` is `None` (shouldn't happen, but defensive), the field is cleared.
+pub fn run_edit_output(
+    library: Option<String>,
+    filter: String,
+    new_output: Option<String>,
+) -> SnipResult<()> {
+    use crate::commands::get_library_path;
+    use crate::library::{load_library, save_library};
+
+    let lib_path = match get_library_path(library.clone())? {
+        Some(p) => p,
+        None => {
+            eprintln!("No library found. Create one with 'snp library create <name>'");
+            return Err(crate::error::SnipError::runtime_error(
+                "Library not found",
+                Some("No library available"),
+            ));
+        }
+    };
+
+    let mut snippets = load_library(&lib_path)?;
+
+    // Find the snippet matching the filter
+    let filter_lower = filter.to_lowercase();
+    let matching_idx = snippets
+        .snippets
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.deleted)
+        .find(|(_, s)| {
+            s.description.to_lowercase().contains(&filter_lower)
+                || s.command.to_lowercase().contains(&filter_lower)
+        })
+        .map(|(i, _)| i);
+
+    let idx = match matching_idx {
+        Some(i) => i,
+        None => {
+            return Err(crate::error::SnipError::runtime_error(
+                "No matching snippet",
+                Some(&format!("No snippet matching '{filter}' found in library")),
+            ));
+        }
+    };
+
+    let snippet = &mut snippets.snippets[idx];
+    snippet.output = new_output.unwrap_or_default();
+    let now = chrono::Utc::now().timestamp();
+    snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
+    let desc = snippet.description.clone();
+    let is_empty = snippet.output.is_empty();
+
+    save_library(&lib_path, &snippets)?;
+
+    if is_empty {
+        eprintln!("Cleared output for snippet: {desc}");
+    } else {
+        eprintln!("Updated output for snippet: {desc}");
+    }
+
+    Ok(())
+}
+
 fn has_directory_component(editor: &str) -> bool {
     editor.contains('/') || (cfg!(windows) && editor.contains('\\')) || editor.starts_with('.')
 }

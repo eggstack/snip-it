@@ -106,6 +106,7 @@ snip-it/
 │   │   ├── variables.rs # Variable prompting UI
 │   │   └── _generated_bundled_themes.rs # LZMA-compressed bundled themes (build-time)
 │   ├── sort.rs         # Shared sort/rank model (SnippetSort enum, rank_snippets)
+│   ├── output.rs       # Output/notes presentation model, sanitization, preview helpers
 │   ├── usage.rs        # Local-only usage metadata (UsageIndex, usage.toml)
 │   ├── commands/       # One module per CLI subcommand
 │   │   ├── mod.rs      # Shared helpers: expand_snippet_command, get_library_path
@@ -215,6 +216,20 @@ snip-it/
 - Usage recorded on successful `run` and `clip` operations
 - Usage data is local-only, not synchronized
 - Missing/corrupt usage data fails open to zero usage
+
+### Output / Notes Presentation (Release 4B)
+- `OutputPresentation` in `src/output.rs` provides safe rendering of the `output` field
+- `sanitize_for_terminal()` strips ANSI/OSC sequences without mutating stored values
+- `summary(max_chars)` returns a single-line truncated preview; `display()` returns full sanitized content
+- `display_bounded(max_lines)` truncates multiline output with a line-count note
+- `for_scoring()` returns a bounded substring for fuzzy search (512 char budget)
+- Default `list` output hides empty output fields; `--search-output` includes output in fuzzy matching
+- TUI preview shows output below command with `--- Output / Notes ---` separator
+- `snp edit --output`, `--output-stdin`, `--clear-output` for structured output editing
+- `--filter` is required when using output edit flags; matches by description or command substring
+- JSON and CSV output always include the `output` field exactly as stored
+- `select`, `run`, and `clip` emit/command act on `command` only, never `output`
+- Output is stored descriptive metadata, not automatically captured execution output
 
 ### Selection Outcome Architecture
 - **Three-layer outcome model:**
@@ -351,3 +366,5 @@ snip-it/
 - Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, empty file, normalization preview, malformed variable detection, canonical Pet TOML loading check, and library state non-mutation
 - Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: library name sanitization, and malformed variable detection
 - Diagnostics unit tests (`src/diagnostics.rs`) cover: counts, report constructors, version, severity serialization, diagnostic serialization, source span, span skip-none, diagnostic ordering, severity ranking, stable code convention, strict-mode classification, bounded messages, recommendation generation, empty counts, and full PetImportReport roundtrip
+- Output presentation unit tests (`src/output.rs`) cover: empty, single-line, multiline, summary truncation, ANSI sanitization, OSC hyperlinks, control character stripping, scoring budget
+- Output integration tests (`tests/integration.rs`) cover: JSON preservation, CSV preservation, default display, edit set/clear/stdin, search-output flag, multiline roundtrip, tab/special char roundtrip, no-eval security, conflict flags, ANSI preservation, help text

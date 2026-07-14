@@ -28,6 +28,9 @@ machines.
 - Fuzzy search, tags, syntax highlighting, clipboard support, and a TUI.
 - Keyboard-first navigation with Vim bindings for quickly moving through large
   snippet libraries.
+- Output/notes field for storing descriptive metadata alongside commands
+  (visible in TUI preview, editable via `snp edit --output`, included in
+  JSON/CSV export, opt-in fuzzy search via `--search-output`).
 - Runtime variables such as `<host>` and `<branch=main>`.
 - Pet-compatible multiple-choice variables such as
   `<color=|_red_||_green_||_blue_||>` for selecting from a predefined list.
@@ -331,12 +334,12 @@ data.
 
 ```text
 snp new          Create a snippet (--command-stdin, --from-file, --editor, --multiline)
-snp list         List snippets (--sort, --favorites-first, --json, --csv)
+snp list         List snippets (--sort, --favorites-first, --json, --csv, --search-output)
 snp run          Run a snippet from the TUI (--sort, --favorites-first)
 snp clip         Copy a snippet from the TUI (--sort, --favorites-first)
 snp select       Select a snippet and print its command (no execution)
 snp search       Search and inspect snippets (--sort, --favorites-first)
-snp edit         Edit a snippet library in $EDITOR
+snp edit         Edit a snippet library in $EDITOR (--output, --output-stdin, --clear-output)
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)

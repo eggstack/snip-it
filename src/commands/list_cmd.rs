@@ -17,12 +17,16 @@ pub enum ListFormat {
 }
 
 /// Lists snippets from the library, optionally filtered and in a given format.
+///
+/// When `search_output` is true, the fuzzy filter also matches against
+/// the snippet output/notes field (bounded to 512 chars for scoring).
 pub fn run(
     filter: Option<String>,
     config: Option<PathBuf>,
     library: Option<String>,
     format: ListFormat,
     sort_opts: Option<crate::sort::SortOptions>,
+    search_output: bool,
 ) -> SnipResult<()> {
     let snippets = if config.is_some() {
         load_snippets(&config)?
@@ -46,7 +50,17 @@ pub fn run(
             .enumerate()
             .filter(|(_, s)| !s.deleted)
             .filter(|(_, s)| {
-                let display = format!("{} {}", s.description, s.command);
+                let display = if search_output {
+                    let output_summary =
+                        crate::output::OutputPresentation::new(&s.output).for_scoring();
+                    if output_summary.is_empty() {
+                        format!("{} {}", s.description, s.command)
+                    } else {
+                        format!("{} {} {}", s.description, s.command, output_summary)
+                    }
+                } else {
+                    format!("{} {}", s.description, s.command)
+                };
                 matcher.fuzzy_match(&display, filter_str).is_some()
             })
             .collect()
@@ -127,11 +141,15 @@ pub fn run(
                     style(&s.description).with(Color::Green),
                     style(&s.command).with(Color::White)
                 );
-                println!(
-                    "{}: {}",
-                    style("Output").with(Color::Yellow),
-                    style(&s.output).with(Color::White)
-                );
+                if !s.output.is_empty() {
+                    let presentation = crate::output::OutputPresentation::new(&s.output);
+                    let summary = presentation.summary(80);
+                    println!(
+                        "{}: {}",
+                        style("Output").with(Color::Yellow),
+                        style(&summary).with(Color::White)
+                    );
+                }
                 println!(
                     "{}: {}",
                     style("Tags").with(Color::Cyan),

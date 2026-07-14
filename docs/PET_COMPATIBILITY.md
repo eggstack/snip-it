@@ -293,6 +293,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | Backup & recovery | Automatic timestamped backups before saves (max 10 per library). | Current |
 | Audit log | `~/.config/snp/audit.log` — tracks snippet operations (create, execute, copy, delete). | Current |
 | Structured output | `snp list --json` / `snp list --csv` for scripting and spreadsheet import. | Current |
+| Output / notes presentation | `OutputPresentation` model with TUI preview, `snp edit --output/--output-stdin/--clear-output`, `--search-output` for fuzzy matching. | R4B |
 | Shell completions | Via clap_complete for bash, zsh, fish, powershell, elvish. | Current |
 | Self-update | `snp update` — check for and install updates using current installation method. | Current |
 | Keybinding reference | `snp keybindings` — display TUI keybindings. | Current |

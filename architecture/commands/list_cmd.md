@@ -64,3 +64,19 @@ hello,echo "Hello, World!",demo,scripts
 - [mod.md](mod.md) — Shared helpers
 - [search_cmd.md](search_cmd.md) — TUI interactive search
 - [tui.md](../tui.md) — TUI architecture
+
+## Output-Aware Search (Release 4B)
+
+The `--search-output` flag includes the output/notes field in fuzzy search matching.
+
+### Behavior
+
+- Default (flag absent): fuzzy filter matches only `description` and `command`.
+- With `--search-output`: fuzzy filter also matches against `output` (bounded to 512 chars for scoring).
+- Output content is sanitized for terminal display via `OutputPresentation::for_scoring()`.
+
+### Default Display
+
+- Empty output fields are hidden in the default (human) display format.
+- Non-empty output shows a single-line summary (truncated to 80 chars).
+- JSON and CSV output always include the raw `output` field.

@@ -31,6 +31,7 @@ pub(crate) mod sync_commands;
 pub(crate) mod utils;
 
 pub mod diagnostics;
+pub mod output;
 pub mod sort;
 pub mod usage;
 
@@ -43,6 +44,7 @@ pub use error::{SnipError, SnipResult};
 pub struct SnippetData {
     pub descriptions: Vec<String>,
     pub commands: Vec<String>,
+    pub outputs: Vec<String>,
     pub tags: Vec<Vec<String>>,
     pub folders: Vec<Vec<String>>,
     pub favorites: Vec<bool>,

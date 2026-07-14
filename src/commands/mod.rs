@@ -198,6 +198,7 @@ pub fn get_snippet_data(snippets: &crate::library::Snippets) -> (crate::SnippetD
         .map(|(_, s)| s.description.clone())
         .collect();
     let commands: Vec<String> = filtered.iter().map(|(_, s)| s.command.clone()).collect();
+    let outputs: Vec<String> = filtered.iter().map(|(_, s)| s.output.clone()).collect();
     let tags: Vec<Vec<String>> = filtered.iter().map(|(_, s)| s.tags.clone()).collect();
     let folders: Vec<Vec<String>> = filtered.iter().map(|(_, s)| s.folders.clone()).collect();
     let favorites: Vec<bool> = filtered.iter().map(|(_, s)| s.favorite).collect();
@@ -205,6 +206,7 @@ pub fn get_snippet_data(snippets: &crate::library::Snippets) -> (crate::SnippetD
         crate::SnippetData {
             descriptions,
             commands,
+            outputs,
             tags,
             folders,
             favorites,

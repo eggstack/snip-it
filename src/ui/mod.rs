@@ -374,10 +374,11 @@ fn extract_variables(command: &str) -> Vec<String> {
 #[derive(Clone, Debug)]
 struct SnippetPreview {
     content: String,
+    output: String,
 }
 
 impl SnippetPreview {
-    fn from_command(command: &str) -> Self {
+    fn from_command_and_output(command: &str, output: &str) -> Self {
         let vars = extract_variables(command);
         let has_unmatched = has_unmatched_angle_bracket(command);
         let content = if !vars.is_empty() || has_unmatched {
@@ -394,7 +395,16 @@ impl SnippetPreview {
             strip_escape_sequences(command)
         };
 
-        Self { content }
+        let output_clean = if output.is_empty() {
+            String::new()
+        } else {
+            crate::output::OutputPresentation::new(output).display()
+        };
+
+        Self {
+            content,
+            output: output_clean,
+        }
     }
 }
 
@@ -1098,19 +1108,31 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                         .title_style(style_fg(theme.secondary))
                         .style(TuiStyle::default().bg(theme.background));
 
-                    let preview = snippet_previews
-                        .get_mut(idx)
-                        .and_then(|slot| {
-                            if slot.is_none() {
-                                *slot = Some(SnippetPreview::from_command(snippet_cmd));
+                    let preview_text = {
+                        let preview = snippet_previews
+                            .get_mut(idx)
+                            .and_then(|slot| {
+                                if slot.is_none() {
+                                    let snippet_output = snippets
+                                        .get(idx)
+                                        .map(|s| s.output.as_str())
+                                        .unwrap_or("");
+                                    *slot = Some(SnippetPreview::from_command_and_output(snippet_cmd, snippet_output));
+                                }
+                                slot.as_ref()
+                            });
+                        if let Some(p) = preview {
+                            if p.output.is_empty() {
+                                p.content.clone()
+                            } else {
+                                format!("{}\n\n--- Output / Notes ---\n{}", p.content, p.output)
                             }
-                            slot.as_ref()
-                        });
-                    let preview_content = preview
-                        .map(|preview| preview.content.as_str())
-                        .unwrap_or(snippet_cmd.as_str());
+                        } else {
+                            snippet_cmd.clone()
+                        }
+                    };
 
-                    let preview_widget = Paragraph::new(preview_content)
+                    let preview_widget = Paragraph::new(preview_text)
                         .block(preview_block)
                         .style(style_fg_bg(theme.text, theme.background));
                     f.render_widget(preview_widget, chunks[2]);

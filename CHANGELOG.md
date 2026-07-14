@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared sort model in `src/sort.rs` with deterministic tie-break chain
 - TUI sort indicators for all modes including `[used]` and `[freq]`
 - Integration tests for sort flags, favorites-first, and CSV/JSON sort output
+- **Output / notes presentation (Release 4B)**
+  - Shared output presentation model (`src/output.rs`) with `OutputPresentation` type: safe terminal rendering, summary truncation, multiline bounding, ANSI/OSC sanitization, and fuzzy-search scoring budget.
+  - TUI preview panel shows output below command with `--- Output / Notes ---` separator when present.
+  - `snp edit --output <text>`, `--output-stdin`, `--clear-output` for structured output editing (requires `--filter`).
+  - `snp list --search-output` includes the output field in fuzzy search matching.
+  - Default `list` output hides empty output fields to reduce noise.
+  - JSON and CSV output always include the raw `output` field exactly as stored.
+  - `select`, `run`, and `clip` continue to act on `command` only; output is never emitted or executed.
+  - Output content is treated as untrusted text: no eval, no shell execution, no ANSI interpretation during display.
+  - 36 new tests covering JSON/CSV preservation, edit set/clear/stdin, search-output flag, multiline roundtrip, tab/special char roundtrip, ANSI preservation, conflict flags, no-eval security, and help text.
 - **Explicit pet import command (Release 3B)**
   - `snp import pet <path>` creates a native named library from a pet TOML file. Source files are never modified.
   - Options: `--library <name>`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file <path>`.
