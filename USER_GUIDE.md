@@ -127,9 +127,8 @@ snp import pet /path/to/pet-snippets.toml --report json
   syntax checker (`bash -n`, `zsh -n`, or `fish --no-execute`).
 
 All modes support `--report human|json` for output format and `--strict` to
-treat warnings as errors. Use `--report-file <path>` to save a JSON report for
-later review. Diagnostics include `SourceSpan` byte-offset locations for precise
-positioning within the source file.
+treat warnings as errors. Diagnostics include `SourceSpan` byte-offset
+locations for precise positioning within the source file.
 
 ```bash
 snp doctor --pet-file ~/.config/pet/snippets.toml

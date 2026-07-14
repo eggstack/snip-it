@@ -19,6 +19,33 @@ pub enum DiagnosticReportFormat {
     Json,
 }
 
+/// Designated warnings that `--strict` elevates to errors in pet-file analysis.
+const STRICT_WARNING_CODES: &[&str] = &[
+    "W-MALFORMED-VAR",
+    "W-DUP-CMD",
+    "W-DUP-DESC",
+    "W-DEST-CONFLICT",
+    "W-DESC-MISSING",
+    "W-CMD-MISSING",
+    "W-DESC-EMPTY",
+    "W-TYPE-MISMATCH",
+    "W-TAG-EMPTY",
+];
+
+/// Elevate designated warning diagnostics to errors when `--strict` is active.
+fn apply_strict_elevation(report: &mut DoctorReport) {
+    if !report.strict_mode {
+        return;
+    }
+    for diag in &mut report.diagnostics {
+        if diag.severity == DiagnosticSeverity::Warning
+            && STRICT_WARNING_CODES.contains(&diag.code.as_str())
+        {
+            diag.severity = DiagnosticSeverity::Error;
+        }
+    }
+}
+
 /// Build a DoctorReport from a pet file analysis.
 fn build_pet_report(
     source_path: &Path,
@@ -187,6 +214,7 @@ fn build_pet_report(
 
     let _ = (warn_count, info_count);
 
+    apply_strict_elevation(&mut report);
     Ok(report)
 }
 
@@ -858,6 +886,7 @@ command = "echo ok"
     }
 
     report.total_entries = 0;
+    apply_strict_elevation(&mut report);
     Ok(report)
 }
 

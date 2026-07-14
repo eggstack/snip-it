@@ -104,8 +104,8 @@ pub fn parse_pet_toml(content: &str) -> SnipResult<Snippets> {
     toml::from_str(&fixed).map_err(|e| SnipError::toml_error("parse pet TOML", e))
 }
 
-/// Detect unknown fields, missing required keys, and structural issues in
-/// the raw TOML snippet entries. Returns diagnostics for the report.
+/// Detect unknown fields, type mismatches, missing required keys, and
+/// structural issues in the raw TOML snippet entries.
 pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -126,7 +126,43 @@ pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
         };
 
         for key in table.keys() {
-            if !KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
+            let val = &table[key];
+            if KNOWN_SNIPPET_FIELDS.contains(&key.as_str()) {
+                // Check expected types for known fields
+                let expected = match key.as_str() {
+                    "tag" | "tags" | "Tag" | "Tags" | "folders" => Some("array"),
+                    "favorite" | "deleted" => Some("boolean"),
+                    "created_at" | "updated_at" => Some("integer"),
+                    "id" | "description" | "command" | "Command" | "cmd" | "output" | "Output"
+                    | "device_id" | "name" | "Description" => Some("string"),
+                    _ => None,
+                };
+                if let Some(expected_type) = expected {
+                    let actual_type = match val {
+                        toml::Value::String(_) => "string",
+                        toml::Value::Integer(_) => "integer",
+                        toml::Value::Float(_) => "float",
+                        toml::Value::Boolean(_) => "boolean",
+                        toml::Value::Array(_) => "array",
+                        toml::Value::Table(_) => "table",
+                        toml::Value::Datetime(_) => "datetime",
+                    };
+                    if actual_type != expected_type {
+                        diagnostics.push(CompatibilityDiagnostic {
+                            code: "W-TYPE-MISMATCH".to_string(),
+                            entry_index: Some(i),
+                            field: Some(key.clone()),
+                            severity: DiagnosticSeverity::Warning,
+                            message: format!(
+                                "Field '{}' expected {} but got {}",
+                                key, expected_type, actual_type
+                            ),
+                            suggestion: Some(format!("Use the correct type for field '{}'", key)),
+                            span: None,
+                        });
+                    }
+                }
+            } else {
                 diagnostics.push(CompatibilityDiagnostic {
                     code: "I-FIELD-UNKNOWN".to_string(),
                     entry_index: Some(i),
@@ -223,6 +259,20 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
             suggestion: None,
             span: None,
         });
+    } else {
+        for (j, tag) in pet.tags.iter().enumerate() {
+            if tag.trim().is_empty() {
+                diagnostics.push(CompatibilityDiagnostic {
+                    code: "W-TAG-EMPTY".to_string(),
+                    entry_index: Some(index),
+                    field: Some("tag".to_string()),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("Tag at index {} is empty or whitespace-only", j),
+                    suggestion: Some("Remove empty tags or provide a valid tag name".to_string()),
+                    span: None,
+                });
+            }
+        }
     }
 
     let vars = crate::utils::variables::parse_variables(&pet.command);

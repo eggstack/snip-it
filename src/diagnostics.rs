@@ -339,6 +339,8 @@ mod tests {
             "W-DESC-EMPTY",
             "W-DESC-MISSING",
             "W-CMD-MISSING",
+            "W-TYPE-MISMATCH",
+            "W-TAG-EMPTY",
             "I-FIELD-UNKNOWN",
             "I-OUTPUT-PRESENT",
             "I-TAGS-EMPTY",
@@ -482,5 +484,35 @@ mod tests {
         assert_eq!(roundtripped.normalizations.len(), 1);
         assert!(!roundtripped.mutation_flag);
         assert!(roundtripped.dry_run);
+    }
+
+    #[test]
+    fn test_doctor_report_no_secrets_in_json() {
+        let mut report = DoctorReport::new(false);
+        report.source = Some("/tmp/pet.toml".to_string());
+        report.diagnostics.push(CompatibilityDiagnostic {
+            code: "compat.sync.enabled".to_string(),
+            entry_index: None,
+            field: Some("sync".to_string()),
+            severity: DiagnosticSeverity::Info,
+            message: "Sync enabled (server: https://sync.example.com)".to_string(),
+            suggestion: None,
+            span: None,
+        });
+
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        // API keys and tokens must never appear in report JSON
+        assert!(
+            !json.contains("api_key"),
+            "Report JSON should not contain api_key field"
+        );
+        assert!(
+            !json.contains("token"),
+            "Report JSON should not contain token field"
+        );
+        assert!(
+            !json.contains("secret"),
+            "Report JSON should not contain secret field"
+        );
     }
 }
