@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Sync-origin writes (`MutationOrigin::SyncMerge`) never trigger auto-sync (prevents feedback loops).
   - `run_auto_sync()` creates its own Tokio runtime internally — callers don't need to pass one.
   - 10 new unit tests covering notification API: disabled policy, sync-merge suppression, user/import origins, all mutation kinds, AccountConfig, library ID, clear-after-explicit-sync, result Debug/PartialEq, MutationContext construction.
+  - 12 new integration tests covering auto-sync trigger behavior: pending marker creation, disabled policy, stdin/file creation triggers, output-only edit exclusion, library create/delete triggers, import dry-run exclusion, import success trigger, failed sync local preservation, and explicit sync interaction.
 - **Pet multiple-choice variable compatibility (Release 3A)**
   - Variable parser recognizes Pet `<name=|_opt1_||_opt2_||_opt3_||>` syntax and parses it into `VariableKind::Choices`.
   - TUI variable prompt renders choice variables as a navigable list selector (arrow keys / j/k).

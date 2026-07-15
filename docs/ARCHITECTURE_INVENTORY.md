@@ -143,6 +143,24 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Local-only fields (`output`, `folders`, `favorite`) preserved when server wins
 - `sync_commands.rs` — orchestration layer, `run_default_sync()`
 
+### Auto-Sync (`src/auto_sync.rs`)
+
+Optional post-mutation background synchronization (Release 5A–5C). Disabled by default; opt-in via `snp sync config --auto-sync on`.
+
+- **`AutoSyncPolicy`** — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `max_retries`, `sync_timeout`.
+- **`AutoSyncCoordinator`** — stateful debounce engine (Idle → Pending → Running). Uses PID-file cross-process locking (`CoordinatorLock`) and durable pending markers (`auto-sync-pending.toml` with CRC32 integrity). Not `Sync` — single-threaded per invocation.
+- **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite`, `AccountConfig` (never triggers).
+- **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
+- **`MutationContext`** — carries `kind`, `origin`, `library_id` without snippet content.
+- **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Executed(AutoSyncStatus)`.
+- **Central API**: `notify_mutation(kind, origin)` — convenience function for commands. `notify_local_mutation(policy, context)` — full control.
+- **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
+- **`run_auto_sync(policy, state_dir)`** — wraps `sync_commands::run_default_sync` with lock acquisition, retry/backoff, bounded timeout, and failure policy rendering. Creates its own Tokio runtime internally.
+- **Trigger matrix**: all syncable mutation commands call `notify_mutation()` after their local atomic commit. Output-only edits (`snp edit --output`) are excluded (output is local-only).
+- **Debounce**: configurable 0–300 seconds (default 2). Rapid mutations coalesce. Maximum deadline bound prevents indefinite postponement. Follow-up debounce (1 second) after sync completes with pending work.
+- **Failure modes**: `Ignore` (silent), `Warn` (stderr message), `Error` (nonzero exit code). Local mutation always committed regardless.
+- **Sync target**: Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries.
+
 ### Encryption (`src/encryption.rs`)
 - AES-256-GCM + Argon2id key derivation (OWASP: 16 MiB, 3 iterations, 4 threads)
 - `encrypt()` / `decrypt()` — per-snippet encryption for sync
@@ -227,6 +245,35 @@ main.rs::dispatch_command()
     → If --sync: sync_commands::run_default_sync()
   → Exit with status code
 ```
+
+## Data Flow: Auto-Sync Mutation Trigger
+
+```
+mutation command (new/edit/delete/import/library)
+  → validate input
+  → atomic local commit (save_library / save_snippets)
+  → audit log
+  → auto_sync::notify_mutation(kind, origin)
+    → load SyncSettings → resolve AutoSyncPolicy
+    → if disabled → return Disabled (no-op)
+    → if origin == SyncMerge → return Suppressed (no feedback loop)
+    → run_auto_sync(policy, state_dir)
+      → acquire CoordinatorLock (PID-file)
+      → spawn sync thread with bounded timeout
+      → sync_commands::run_default_sync()
+        → encrypted gRPC exchange with snip-sync server
+      → on success: clear pending marker
+      → on failure: classify (Network/Auth/Conflict/Unknown),
+        apply failure mode (Ignore/Warn/Error)
+      → release lock
+    → return AutoSyncNotificationResult::Executed(status)
+```
+
+Key invariants:
+- Local mutation is always committed before auto-sync begins.
+- Remote failure never rolls back local state.
+- Sync-merge writes never trigger auto-sync (prevents feedback loops).
+- Explicit manual sync clears pending auto-sync state (prevents duplicates).
 
 ## Exit Codes
 

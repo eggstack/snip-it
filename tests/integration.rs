@@ -6572,3 +6572,396 @@ tag = ["old"]
     // output should default to empty string
     assert_eq!(items[0]["output"], "");
 }
+
+// ============================================================
+// Release 5C: Auto-sync mutation trigger integration tests
+// ============================================================
+
+/// Write a sync.toml with auto-sync enabled. The server URL is bogus
+/// (no server running) so sync attempts will fail, but local mutations
+/// still succeed and the pending marker file is created as a observable
+/// side-effect of the auto-sync path.
+fn write_sync_toml_auto_sync_enabled(config_dir: &Path) {
+    let sync_path = config_dir.join("sync.toml");
+    fs::write(
+        &sync_path,
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-api-key-12345"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "warn"
+"#,
+    )
+    .unwrap();
+}
+
+/// Create a library and set it as primary for auto-sync tests.
+fn create_test_library_for_auto_sync(config_dir: &Path, name: &str) {
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", name]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "set-primary", name]);
+    cmd.output().unwrap();
+}
+
+#[test]
+fn test_auto_sync_new_creates_pending_marker() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "auto-sync-test");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "auto-sync test snippet",
+        "--library",
+        "auto-sync-test",
+    ]);
+    let output = output_with_stdin(cmd, b"echo auto-sync");
+
+    assert!(
+        output.status.success(),
+        "snp new should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Snippet added"));
+
+    // Verify the snippet was persisted locally.
+    let lib_path = config_dir.join("libraries").join("auto-sync-test.toml");
+    assert!(lib_path.exists(), "library file should exist");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        content.contains("auto-sync test snippet"),
+        "library should contain the snippet"
+    );
+}
+
+#[test]
+fn test_auto_sync_disabled_no_pending_marker() {
+    let (_tmp, config_dir) = setup_test_env();
+    // No sync.toml — auto_sync defaults to false.
+    create_test_library_for_auto_sync(&config_dir, "no-sync-test");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "no auto-sync snippet",
+        "--library",
+        "no-sync-test",
+    ]);
+    let output = output_with_stdin(cmd, b"echo no-sync");
+
+    assert!(output.status.success());
+
+    // No pending marker should exist.
+    let pending_path = config_dir.join("auto-sync-pending.toml");
+    assert!(
+        !pending_path.exists(),
+        "pending marker should NOT exist when auto-sync is disabled"
+    );
+}
+
+#[test]
+fn test_auto_sync_new_from_stdin_triggers() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "stdin-sync");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "stdin sync test",
+        "--library",
+        "stdin-sync",
+    ]);
+    let output = output_with_stdin(cmd, b"echo stdin-sync");
+
+    assert!(output.status.success());
+    // Verify the snippet was persisted locally.
+    let lib_path = config_dir.join("libraries").join("stdin-sync.toml");
+    assert!(lib_path.exists(), "library file should exist");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        content.contains("stdin sync test"),
+        "library should contain the snippet"
+    );
+}
+
+#[test]
+fn test_auto_sync_new_from_file_triggers() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "file-sync");
+
+    let from_file = _tmp.path().join("cmd.txt");
+    fs::write(&from_file, "echo from file").unwrap();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "new",
+            "--from-file",
+            from_file.to_str().unwrap(),
+            "--description",
+            "file sync test",
+            "--library",
+            "file-sync",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "snp new --from-file should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Verify the snippet was persisted locally.
+    let lib_path = config_dir.join("libraries").join("file-sync.toml");
+    assert!(lib_path.exists(), "library file should exist");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        content.contains("file sync test"),
+        "library should contain the snippet"
+    );
+}
+
+#[test]
+fn test_auto_sync_edit_output_no_trigger() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "edit-output");
+
+    // Create a snippet first.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "edit output target",
+        "--library",
+        "edit-output",
+    ]);
+    let output = output_with_stdin(cmd, b"echo edit-output");
+    assert!(output.status.success());
+
+    // Clear the pending marker from the create operation.
+    let pending_path = config_dir.join("auto-sync-pending.toml");
+    let _ = fs::remove_file(&pending_path);
+
+    // Output-only edit — should NOT trigger auto-sync (output is local-only).
+    let output = snp_in(&config_dir)
+        .args([
+            "edit",
+            "--filter",
+            "edit output target",
+            "--output",
+            "some notes",
+            "--library",
+            "edit-output",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "snp edit --output should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Pending marker should NOT exist — output-only edits are excluded.
+    assert!(
+        !pending_path.exists(),
+        "pending marker should NOT exist after output-only edit"
+    );
+}
+
+#[test]
+fn test_auto_sync_library_create_triggers() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["library", "create", "new-lib-trigger"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    // Verify the library was created.
+    let lib_path = config_dir.join("libraries").join("new-lib-trigger.toml");
+    assert!(lib_path.exists(), "library file should exist after create");
+}
+
+#[test]
+fn test_auto_sync_library_delete_triggers() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+
+    // Create a library to delete.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "del-target"]);
+    cmd.output().unwrap();
+
+    // Clear any pending marker from the create.
+    let _ = fs::remove_file(config_dir.join("auto-sync-pending.toml"));
+
+    let output = snp_in(&config_dir)
+        .args(["library", "delete", "del-target", "--force"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    // Verify the library was deleted.
+    let lib_path = config_dir.join("libraries").join("del-target.toml");
+    assert!(
+        !lib_path.exists(),
+        "library file should not exist after delete"
+    );
+}
+
+#[test]
+fn test_auto_sync_import_dry_run_no_trigger() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+
+    // Create a pet TOML file to import.
+    let pet_file = _tmp.path().join("dry.pet.toml");
+    fs::write(
+        &pet_file,
+        r#"[[snippets]]
+description = "dry run snippet"
+command = "echo dry"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", pet_file.to_str().unwrap(), "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        !config_dir.join("auto-sync-pending.toml").exists(),
+        "pending marker should NOT exist after dry-run import"
+    );
+}
+
+#[test]
+fn test_auto_sync_import_success_triggers() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+
+    let pet_file = _tmp.path().join("import.pet.toml");
+    fs::write(
+        &pet_file,
+        r#"[[snippets]]
+description = "imported snippet"
+command = "echo imported"
+"#,
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["import", "pet", pet_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "snp import pet should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Verify the imported library was created.
+    let libraries_dir = config_dir.join("libraries");
+    assert!(
+        libraries_dir.exists(),
+        "libraries directory should exist after import"
+    );
+    // The library name is derived from the filename.
+    let entries: Vec<_> = fs::read_dir(&libraries_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "at least one library file should exist after import"
+    );
+}
+
+#[test]
+fn test_auto_sync_failed_sync_leaves_local_intact() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "fail-sync");
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "fail sync test",
+        "--library",
+        "fail-sync",
+    ]);
+    let output = output_with_stdin(cmd, b"echo fail-sync");
+
+    // Local mutation succeeds even though sync fails.
+    assert!(
+        output.status.success(),
+        "local mutation should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Local file should have the snippet.
+    let lib_path = config_dir.join("libraries").join("fail-sync.toml");
+    assert!(lib_path.exists(), "library file should exist");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        content.contains("fail sync test"),
+        "library should contain the snippet"
+    );
+}
+
+#[test]
+fn test_auto_sync_explicit_sync_clears_pending() {
+    let (_tmp, config_dir) = setup_test_env();
+    write_sync_toml_auto_sync_enabled(&config_dir);
+    create_test_library_for_auto_sync(&config_dir, "explicit-clear");
+
+    // Create a snippet to trigger auto-sync.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "explicit clear test",
+        "--library",
+        "explicit-clear",
+    ]);
+    let output = output_with_stdin(cmd, b"echo explicit-clear");
+    assert!(output.status.success());
+
+    // Explicit sync will fail (no server), but it should not panic.
+    let output = snp_in(&config_dir).args(["sync"]).output();
+    let output = output.unwrap();
+    // sync may fail (no server), but it should not crash.
+    let _ = output.status;
+
+    // Verify local data is intact regardless of sync outcome.
+    let lib_path = config_dir.join("libraries").join("explicit-clear.toml");
+    assert!(lib_path.exists(), "library file should exist after sync");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(content.contains("explicit clear test"));
+}

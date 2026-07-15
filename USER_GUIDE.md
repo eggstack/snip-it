@@ -458,6 +458,65 @@ OS keychain. When provisioning a headless environment, use its secret manager
 or set `SNP_ALLOW_PLAINTEXT_API_KEY=true` only when you deliberately accept a
 protected plaintext `sync.toml`. Do not commit this file.
 
+## Auto-sync
+
+Auto-sync is disabled by default. When enabled, mutation commands trigger
+background synchronization after the local change is committed. The coordinator
+debounces rapid mutations into a single sync attempt.
+
+### Configuration
+
+```bash
+snp sync config --show                         # inspect current settings
+snp sync config --auto-sync on                 # enable auto-sync
+snp sync config --auto-sync off                # disable auto-sync
+snp sync config --debounce 5                   # 5-second debounce (0-300 seconds)
+snp sync config --failure warn                 # ignore, warn, or error
+```
+
+Or edit `~/.config/snp/sync.toml` directly:
+
+```toml
+[settings.sync]
+enabled = true
+auto_sync = true
+auto_sync_debounce_seconds = 2
+auto_sync_failure = "warn"
+```
+
+### Trigger matrix
+
+| Command | Trigger? | Notes |
+|---------|----------|-------|
+| `snp new` (all sources) | Yes | Positional, stdin, file, editor, interactive |
+| `snp edit` (command/description) | Yes | After editor saves |
+| `snp edit --output` | No | Output is local-only, not in sync protocol |
+| TUI delete | Yes | After tombstone persisted |
+| `snp import pet` (create/merge/replace) | Yes | Once per import, not per snippet |
+| `snp import pet --dry-run` | No | Read-only |
+| `snp library create` | Yes | |
+| `snp library delete` | Yes | |
+| `snp library list/show/set-primary` | No | Read-only |
+| `snp sync` (explicit) | Clears pending | Prevents duplicate delayed sync |
+
+### Behavior
+
+- Local mutations always succeed before any remote work begins.
+- A failed auto-sync never rolls back or corrupts a successful local save.
+- Rapid mutations (e.g., multiple edits) are debounced into a single sync.
+- A durable pending marker survives process crashes.
+- PID-file locking prevents concurrent sync across multiple `snp` processes.
+- Sync-merge writes never recursively trigger auto-sync.
+- `run_auto_sync()` creates its own Tokio runtime — no external runtime needed.
+
+### Failure modes
+
+| Mode | Behavior |
+|------|----------|
+| `ignore` | Silent — no user-facing output on failure |
+| `warn` (default) | Stderr warning: `auto-sync failed: <reason>` |
+| `error` | Nonzero exit code, but local mutation remains committed |
+
 ## Premade libraries
 
 Premade libraries are read-only source files served by `snip-sync` and copied
