@@ -121,12 +121,13 @@ service SnippetSync {
 
 ## Auto-Sync Policy
 
-**Module**: `src/auto_sync.rs`
+**Module**: `src/auto_sync/policy.rs`
 
 Auto-sync is disabled by default. When enabled via `snp sync config --auto-sync on`,
-mutation commands trigger a debounced background sync after the local change is
-committed. The effective policy is resolved once per command invocation via
-`AutoSyncPolicy::resolve()`.
+mutation commands spawn a detached one-shot worker (`snp auto-sync-worker`) that
+performs the remote sync after the local change is committed. The parent returns
+immediately — no in-process latency. The effective policy is resolved once per
+command invocation via `AutoSyncPolicy::resolve()`.
 
 ### AutoSyncPolicy
 
@@ -135,6 +136,8 @@ pub struct AutoSyncPolicy {
     pub enabled: bool,
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
+    pub max_retries: u32,
+    pub sync_timeout: Duration,
 }
 ```
 
@@ -163,58 +166,6 @@ pub enum MutationKind {
 }
 ```
 
-### Product Invariants
-
-1. Auto-sync is disabled by default.
-2. Local mutation commits before any remote work begins.
-3. Remote failure never rolls back or corrupts a successful local mutation.
-4. Existing `snp sync`, `snp cron`, daemon/service workflows remain unchanged.
-5. Auto-sync never changes sync direction, credentials, server selection, library mapping, or conflict policy implicitly.
-6. Machine-facing stdout remains free of background sync diagnostics.
-7. Command bodies, output metadata, credentials, API keys, and encryption material are never included in auto-sync logs or errors.
-
-## Auto-Sync Coordinator (Release 5B)
-
-**Module**: `src/auto_sync.rs`
-
-The coordinator extends the policy model with a stateful debounce engine, durable
-pending markers, and PID-file based cross-process locking. It provides infrastructure
-only — no mutation command is wired until Release 5C.
-
-### Architecture
-
-```text
-Mutation ──► AutoSyncCoordinator::request()
-                 │
-                 ├─ suppress if origin == SyncMerge
-                 ├─ suppress if policy.disabled
-                 ├─ update DebounceState
-                 ├─ persist PendingState (durable marker)
-                 └─ return AutoSyncStatus
-
-Timer / caller ──► AutoSyncCoordinator::tick()
-                      │
-                      ├─ DebounceState::Pending expired?
-                      │     └─► Acquire CoordinatorLock
-                      │         ├─ lock held → Running
-                      │         └─ lock denied → Pending (retry)
-                      └─ DebounceState::Running complete?
-                            ├─ follow_up → Pending (short deadline)
-                            └─ no follow_up → Idle, clear pending
-```
-
-### AutoSyncRequest
-
-```rust
-pub struct AutoSyncRequest {
-    pub library_id: Option<String>,
-    pub mutation_kind: MutationKind,
-    pub requested_at: i64,
-}
-```
-
-Contains no snippet content, credentials, or encryption material.
-
 ### MutationOrigin
 
 ```rust
@@ -226,15 +177,72 @@ pub enum MutationOrigin {
 }
 ```
 
-### AutoSyncStatus
+### Product Invariants
+
+1. Auto-sync is disabled by default.
+2. Local mutation commits before any remote work begins.
+3. Remote failure never rolls back or corrupts a successful local mutation.
+4. Existing `snp sync`, `snp cron`, daemon/service workflows remain unchanged.
+5. Auto-sync never changes sync direction, credentials, server selection, library mapping, or conflict policy implicitly.
+6. Machine-facing stdout remains free of background sync diagnostics.
+7. Command bodies, output metadata, credentials, API keys, and encryption material are never included in auto-sync logs, errors, or worker artifacts.
+
+## Auto-Sync Detached Worker (Release 5D corrective)
+
+**Module**: `src/auto_sync/`
+
+The detached one-shot worker replaces the earlier in-process coordinator. After
+the parent mutation command commits the local change, it records a durable
+pending marker, acquires a worker lock, and re-execs the current binary as
+`snp auto-sync-worker` with platform-detached flags. The worker runs in its own
+session and exits independently.
+
+### Architecture
+
+```text
+Mutation command (parent)
+  -> atomic local commit
+  -> notify_mutation(kind, origin)
+  -> AutoSyncPolicy::resolve()
+  -> mark_pending(state_dir) -> PendingState{generation}
+  -> try_acquire(state_dir) -> WorkerLock
+  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir, nonce)
+     -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
+     -> stdin/stdout/stderr -> null
+     -> child process detached
+  -> mem::forget(WorkerLock) so lock file outlives parent
+  -> return AutoSyncNotificationResult::Scheduled{generation}
+
+snp auto-sync-worker (child, detached)
+  -> AutoSyncPolicy::resolve(get_sync_settings())
+  -> try_acquire(state_dir) -> WorkerLock (or AlreadyHeld -> NothingToDo)
+  -> nonce_already_used? -> NothingToDo
+  -> read_state_from_dir(state_dir) -> PendingState
+  -> execute_sync(state_dir, &pending, &policy)
+     -> run_with_timeout(run_default_sync, sync_timeout)
+        -> on Ok: clear_if_generation_matches(state_dir, generation)
+        -> on Err: record_failure(state_dir, generation, classification)
+  -> exit(0)
+```
+
+### AutoSyncNotificationResult
 
 ```rust
-pub enum AutoSyncStatus {
+pub enum AutoSyncNotificationResult {
     Disabled,
-    Pending,
-    Running,
-    Succeeded { completed_at: i64 },
-    Failed { completed_at: i64, class: FailureClass },
+    Suppressed,
+    Scheduled { generation: u64 },
+    SchedulingFailed { generation: Option<u64> },
+}
+```
+
+### WorkerOutcome
+
+```rust
+pub enum WorkerOutcome {
+    Success,
+    Failed,
+    NothingToDo,
 }
 ```
 
@@ -249,123 +257,137 @@ pub enum FailureClass {
 }
 ```
 
-Classified from `SnipError` via `FailureClass::from_error()`.
+Classified from `SnipError` via `FailureClass::from_error()`, or from a
+`String` error message via `FailureClass::from_code()` (used by the worker
+to label pending failures).
 
-### Debounce State Machine
-
-```text
-Idle ──────────────────────────────────────────────────────► Pending
-  ◄──────────────────────────────────────────────────────── Running
-Pending + mutation ──► Pending (updated deadline, bounded)
-Pending + expired ───► Running
-Running + mutation ──► Running (follow_up = true)
-Running complete ────► Pending (short deadline) if follow_up
-Running complete ────► Idle
-```
-
-- First mutation starts a debounce window (configurable, default 2s)
-- Later mutations extend the deadline but never exceed the 300s maximum
-- One sync runs after the quiet period
-- Mutations during running schedule at most one follow-up
-- Follow-up uses a 1-second short deadline
-
-### Durable Pending State
+### Durable Pending State (Schema v2)
 
 Persisted to `~/.config/snp/auto-sync-pending.toml` with CRC32 integrity:
 
 ```toml
-# integrity: <crc32>
-version = 1
-pending = true
-requested_at = 1234567890
-last_attempt_at = 0
-last_result = ""
+schema = 2
+generation = 1
+created_at_unix_ms = 1700000000000
+
+[snapshot.Mutation]
+kind = "snippet_create"
+
+integrity = "crc32:441c462e"
 ```
 
-- Survives process crash/restart
-- Stale pending (> 5 minutes) is cleared on recovery
-- No secrets, commands, or snippet content in the file
+- Monotonic `generation` increments per `mark_pending`. Conditional clear keyed
+  on observed generation prevents stale workers from clobbering fresh state.
+- Schema v1 markers (`kind = "..."`, `created_at_unix_ms = ...`) migrate
+  transparently to v2 on load.
+- `created_at_unix_ms` is used by `startup_recover_pending` to clear stale
+  markers older than 5 minutes.
+- `integrity` is `crc32:<hex>` over the serialized snapshot.
+- Atomic write via `tempfile + rename + fsync`.
+- 0o600 permissions on Unix. No secrets, commands, or snippet content.
 
-### Cross-Process Locking
+### Cross-Process Worker Lock
 
-PID-file based lock at `~/.config/snp/auto-sync.lock`:
-- Atomic creation via `create_new(true)`
-- Stale detection via `kill -0` (Unix) — dead PID → lock removed
-- Restrictive permissions (0o600)
-- Advisory only — cannot block manual `snp sync`
-- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms
-  the lock check fails open (all locks treated as stale). This is safe
-  but lossy — two processes may briefly overlap. The lock file itself
-  is cross-platform; only the liveness check is Unix-specific.
+TOML lock at `~/.config/snp/auto-sync-worker.lock`:
 
-### Retry and Backoff
+```toml
+pid = 12345
+started_at_unix_ms = 1700000000000
+nonce = "abc-12345-def"
+```
 
-`run_auto_sync` supports configurable retry with exponential backoff:
-- `max_retries`: default 1 (one retry after initial failure)
-- Exponential backoff: 1s initial, doubling each retry, capped at 30s
-- `sync_timeout`: per-attempt timeout (default 30s, configurable)
-- Failed attempts record in the durable pending state for diagnostics
+- Atomic acquisition via `OpenOptions::create_new(true)` — only one parent wins.
+- Stale detection: `kill -0 pid` on Unix (dead process → stale) plus
+  `>5 minute` age threshold.
+- Stale locks are reclaimed transparently by `try_acquire`.
+- RAII `Drop` removes the file when the worker exits.
+- The parent `mem::forget`s the lock after successful spawn so the lock file
+  outlives the parent and the worker can detect it via `inspect`.
+- Restrictive permissions (0o600 on Unix).
+- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms the lock
+  check is conservative (treats non-existent processes as alive), and the
+  5-minute age threshold still applies.
+
+### Process Detachment
+
+- Unix: `libc::setsid()` puts the worker in a new session, ensuring it does
+  not die when the parent exits and has no controlling terminal.
+- Windows: `DETACHED_PROCESS | CREATE_NO_WINDOW` flags on `CreateProcess`.
+- `stdin`/`stdout`/`stderr` are routed to `null` so the worker cannot interfere
+  with the parent's TTY.
 
 ### Failure Policy Rendering
 
-When all retry attempts are exhausted:
+When the parent fails to spawn the worker:
 - `Ignore`: debug-level log only, no user-facing output
-- `Warn`: `eprintln!` warning to stderr + tracing log
-- `Error`: `eprintln!` error to stderr + tracing error log
+- `Warn`: `eprintln!` warning to stderr
+- `Error`: `eprintln!` error to stderr + nonzero exit code
 
-The `Warn`/`Error` modes produce user-visible messages because auto-sync
-runs synchronously within the calling command — the user is present to
-see stderr output.
+Worker-side failures are logged to `~/.config/snp/logs/` and surface via
+`snp doctor --compatibility` diagnostics. The user is no longer present when
+the worker runs, so stderr is not the appropriate channel.
 
 ### Design Decisions
 
-**Architecture: Option A (in-process coordinator)**
+**Architecture: detached one-shot worker (corrective)**
 
 Three options were evaluated:
-1. **Option A (in-process):** Chosen. The mutation command owns debounce
-   and sync execution. Simplest correct design. The process must remain
-   alive for debounce + sync, which is acceptable since mutation commands
-   can wait.
-2. **Option B (detached helper process):** Rejected. Adds significant
-   complexity (IPC, process supervision, cross-platform detachment) for
-   marginal benefit over in-process sync.
-3. **Option C (persistent daemon):** Rejected. snp is a CLI tool with no
-   existing long-running process; a daemon is disproportionate.
+1. **Option A (in-process coordinator):** Initial design. The mutation command
+   owns debounce and sync execution. Adds visible latency to mutation commands
+   and holds the parent process hostage during network round-trips.
+2. **Option B (persistent daemon):** Rejected. snp is a CLI tool with no
+   existing long-running process; a daemon would require lifecycle, IPC, and
+   uninstall handling disproportionate to the use case.
+3. **Option C (detached one-shot worker):** Chosen (Release 5D corrective).
+   The parent re-execs itself as a hidden `auto-sync-worker` subcommand with
+   detached process flags. Zero IPC, portable across Unix and Windows, reuses
+   the same `snp` binary's sync code path. The user never waits on network
+   round-trips.
 
 **Sync target: Global (not per-library)**
 
-`run_default_sync` syncs all configured libraries. The `library_id` field
-in `AutoSyncRequest` is vestigial — preserved for forward compatibility
-but currently unused. Per-library targeting deferred until the sync
-protocol supports it.
+`run_default_sync` syncs all configured libraries. The `MutationContext::library_id`
+field is retained for forward compatibility but currently unused. Per-library
+targeting deferred until the sync protocol supports it.
 
 **Delivery guarantees: Best-effort**
 
-Auto-sync is convenience, not durable delivery. The durable pending
-marker survives crash/restart, and `recover_stale_pending()` clears
-stale state (>5 minutes). Manual `snp sync` and cron remain the
-recovery path for missed syncs.
+Auto-sync is convenience, not durable delivery. The durable pending marker
+survives crash/restart, and `startup_recover_pending` clears stale state
+(>5 minutes). Manual `snp sync` and cron remain the recovery path for missed
+syncs.
 
 ### Doctor Integration
 
-`snp doctor --compatibility` inspects auto-sync state:
-- Pending marker existence and staleness
-- Lock file existence and owner liveness
-- Auto-sync config settings (enabled/disabled, debounce, failure mode)
+`snp doctor --compatibility` inspects auto-sync state using `auto_sync::paths`:
+- `paths::state_dir()` — directory containing all auto-sync artifacts.
+- `paths::pending_marker()` — full path to the pending TOML.
+- `paths::worker_lock()` — full path to the worker lock TOML.
+- Liveness probe uses `lock::process_alive(pid)` (`kill -0` on Unix).
+
+Diagnostics emitted:
+- `compat.auto_sync.enabled` / `compat.auto_sync.disabled` — policy state.
+- `compat.auto_sync.pending_active` / `compat.auto_sync.pending_stale` /
+  `compat.auto_sync.pending_unreadable` — pending marker status.
+- `compat.auto_sync.lock_held` / `compat.auto_sync.lock_stale` /
+  `compat.auto_sync.lock_unreadable` — worker lock status.
 
 ### Safety Invariants
 
-1. Coordinator never mutates snippet libraries directly
-2. Secrets and snippet content never enter coordinator state or logs
-3. SyncMerge origin never triggers auto-sync (prevents loops)
-4. Lock prevents concurrent sync executions
-5. Pending marker survives crash for recovery
-6. Manual and scheduled sync remain independent
-7. No new CLI surface added (infrastructure only)
+1. Worker never mutates snippet libraries directly (only calls `run_default_sync`).
+2. Secrets and snippet content never enter pending markers, lock files, worker argv, or worker env.
+3. SyncMerge origin never triggers auto-sync (prevents loops).
+4. PID+nonce worker lock prevents concurrent worker executions across processes.
+5. Pending marker survives crash; stale markers (>5 min) cleared on startup recovery.
+6. Manual and scheduled sync remain independent; explicit sync clears pending.
+7. No new visible CLI surface added — `auto-sync-worker` is hidden.
+8. Pending marker schema is versioned (v2) with CRC32 integrity.
+9. Conditional clear keyed on observed generation prevents stale workers from
+   clobbering fresh state.
 
 ## Auto-Sync Mutation Trigger Integration (Release 5C)
 
-**Module**: `src/auto_sync.rs`
+**Module**: `src/auto_sync/notification.rs`
 
 Release 5C wires all syncable local mutations into the auto-sync coordinator
 via the central mutation notification API. Auto-sync is now operational —
@@ -396,12 +418,6 @@ pub struct MutationContext {
     pub origin: MutationOrigin,
     pub library_id: Option<String>,
 }
-
-pub enum AutoSyncNotificationResult {
-    Disabled,
-    Suppressed,
-    Executed(AutoSyncStatus),
-}
 ```
 
 ### Mutation Flow
@@ -413,8 +429,9 @@ user command
   -> audit/local success
   -> notify_mutation(kind, origin)
   -> AutoSyncPolicy::resolve() + origin check
-  -> run_auto_sync() (lock, retry, sync)
-  -> return AutoSyncNotificationResult
+  -> mark_pending(state_dir) -> PendingState{generation}
+  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir, nonce)
+  -> return AutoSyncNotificationResult::Scheduled{generation}
 ```
 
 ### Command Trigger Matrix

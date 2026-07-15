@@ -143,19 +143,23 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Local-only fields (`output`, `folders`, `favorite`) preserved when server wins
 - `sync_commands.rs` — orchestration layer, `run_default_sync()`
 
-### Auto-Sync (`src/auto_sync.rs`)
+### Auto-Sync (`src/auto_sync/`)
 
-Optional post-mutation background synchronization (Release 5A–5C). Disabled by default; opt-in via `snp sync config --auto-sync on`.
+Optional post-mutation background synchronization (Release 5A–5D corrective). Disabled by default; opt-in via `snp sync config --auto-sync on`.
 
-- **`AutoSyncPolicy`** — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `max_retries`, `sync_timeout`.
-- **`AutoSyncCoordinator`** — stateful debounce engine (Idle → Pending → Running). Uses PID-file cross-process locking (`CoordinatorLock`) and durable pending markers (`auto-sync-pending.toml` with CRC32 integrity). Not `Sync` — single-threaded per invocation.
+- **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `max_retries`, `sync_timeout`.
+- **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity`. v1 markers migrate transparently. Conditional clear keyed on observed generation prevents stale workers from clobbering fresh state.
+- **`WorkerLock`** (`lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` plus 5-minute age threshold. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.
+- **`spawn_worker`** (`spawn.rs`) — re-execs `std::env::current_exe()` as `snp auto-sync-worker` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
+- **`WorkerOutcome`** (`worker.rs`) — `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0; outcome is logged, not propagated.
 - **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite`, `AccountConfig` (never triggers).
 - **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
 - **`MutationContext`** — carries `kind`, `origin`, `library_id` without snippet content.
-- **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Executed(AutoSyncStatus)`.
+- **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Scheduled { generation }`, `SchedulingFailed { generation }`.
 - **Central API**: `notify_mutation(kind, origin)` — convenience function for commands. `notify_local_mutation(policy, context)` — full control.
 - **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
-- **`run_auto_sync(policy, state_dir)`** — wraps `sync_commands::run_default_sync` with lock acquisition, retry/backoff, bounded timeout, and failure policy rendering. Creates its own Tokio runtime internally.
+- **`startup_recover_pending()`** — runs at startup for non-worker subcommands; clears stale pending markers (>5 min) or re-spawns a worker if recent pending state exists.
+- **`auto-sync-worker`** — hidden subcommand (clap `hide = true`) that runs one sync attempt bounded by `sync_timeout`, then exits. Creates its own Tokio runtime internally.
 - **Trigger matrix**: all syncable mutation commands call `notify_mutation()` after their local atomic commit. Output-only edits (`snp edit --output`) are excluded (output is local-only).
 - **Debounce**: configurable 0–300 seconds (default 2). Rapid mutations coalesce. Maximum deadline bound prevents indefinite postponement. Follow-up debounce (1 second) after sync completes with pending work.
 - **Failure modes**: `Ignore` (silent), `Warn` (stderr message), `Error` (nonzero exit code). Local mutation always committed regardless.

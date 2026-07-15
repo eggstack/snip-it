@@ -324,6 +324,16 @@ enum Commands {
         #[command(subcommand)]
         command: ShellCommands,
     },
+    /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
+    #[command(name = "auto-sync-worker", hide = true)]
+    AutoSyncWorker {
+        /// State directory containing pending markers and worker locks
+        #[arg(long)]
+        state_dir: std::path::PathBuf,
+        /// Worker nonce (used for duplicate-detection sentinels)
+        #[arg(long)]
+        nonce: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -751,6 +761,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::import_cmd::run_import_pet(options)?;
             }
         },
+        Some(Commands::AutoSyncWorker { state_dir, nonce }) => {
+            let outcome = snip_it::auto_sync::worker::run(&state_dir, &nonce);
+            match outcome {
+                snip_it::auto_sync::WorkerOutcome::Success
+                | snip_it::auto_sync::WorkerOutcome::NothingToDo => {}
+                snip_it::auto_sync::WorkerOutcome::Failed => {}
+            }
+        }
     }
     Ok(CommandOutcome::Success)
 }
@@ -762,6 +780,11 @@ fn main() {
     log_startup_info();
 
     let cli = Cli::parse();
+
+    if !matches!(cli.command, Some(Commands::AutoSyncWorker { .. })) {
+        snip_it::auto_sync::startup_recover_pending();
+    }
+
     match dispatch_command(cli.command) {
         Ok(CommandOutcome::Success) => {}
         Ok(CommandOutcome::Cancelled) => {

@@ -284,19 +284,24 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
 
 ### Auto-Sync Error Exit Code
 
-When auto-sync is configured with `auto_sync_failure = "error"` and all
-retry attempts are exhausted after a local mutation, the command returns
-a nonzero exit code (1, via `SnipError::Runtime`). The local mutation
-has already succeeded — the exit code reflects the post-commit sync
-failure, not a local failure.
+When auto-sync is configured with `auto_sync_failure = "error"` and the
+parent mutation command fails to spawn the detached one-shot worker
+(`snp auto-sync-worker`), the command returns a nonzero exit code
+(1, via `SnipError::Runtime`). The local mutation has already succeeded —
+the exit code reflects the post-commit scheduling failure, not a local
+failure. Worker-side sync failures are logged to `~/.config/snp/logs/`
+and surfaced via `snp doctor --compatibility`; they do not propagate to
+the parent because the parent has already returned to the user.
 
 This is a **post-commit** exit code: scripts can distinguish local
-mutation failure (which never reaches the sync stage) from a successful
-local mutation followed by a failed background sync. The local state
-is always readable regardless of the sync failure.
+mutation failure (which never reaches the auto-sync stage) from a
+successful local mutation followed by a failed auto-sync spawn. The
+local state is always readable regardless of the auto-sync failure.
 
-Auto-sync failure messages (`auto-sync failed: <reason>`) go to stderr
-via `eprintln!` — stdout is never contaminated.
+Auto-sync scheduling failure messages
+(`error: auto-sync scheduling failed; pending work preserved for recovery`)
+go to stderr via `eprintln!` — stdout is never contaminated. Worker-side
+diagnostics appear in the log files and via `snp doctor` only.
 
 ## Proposed Contract (Release 1B+)
 

@@ -1,0 +1,271 @@
+//! RAII worker lock with PID-file stale detection.
+
+use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+pub const WORKER_LOCK_NAME: &str = "auto-sync-worker.lock";
+pub const STALE_LOCK_THRESHOLD_SECS: u64 = 5 * 60;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerLockContents {
+    pub pid: u32,
+    pub started_at_unix_ms: u64,
+    pub nonce: String,
+}
+
+#[derive(Debug)]
+pub enum LockError {
+    Io(std::io::Error),
+    AlreadyHeld { pid: u32, nonce: String },
+}
+
+impl std::fmt::Display for LockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::AlreadyHeld { pid, nonce } => {
+                write!(
+                    f,
+                    "auto-sync worker lock already held (pid={pid}, nonce={nonce})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LockError {}
+
+pub struct WorkerLock {
+    path: PathBuf,
+    nonce: String,
+}
+
+impl WorkerLock {
+    pub fn nonce(&self) -> &str {
+        &self.nonce
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for WorkerLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+pub fn lock_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(WORKER_LOCK_NAME)
+}
+
+pub fn try_acquire(state_dir: &Path) -> Result<WorkerLock, LockError> {
+    let path = lock_path(state_dir);
+
+    if let Some(contents) = inspect(&path) {
+        if !is_stale(&contents) {
+            return Err(LockError::AlreadyHeld {
+                pid: contents.pid,
+                nonce: contents.nonce,
+            });
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    let nonce = generate_nonce();
+    let contents = WorkerLockContents {
+        pid: std::process::id(),
+        started_at_unix_ms: unix_now_ms(),
+        nonce: nonce.clone(),
+    };
+
+    let serialized =
+        toml::to_string_pretty(&contents).map_err(|e| LockError::Io(std::io::Error::other(e)))?;
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(LockError::Io)?;
+    f.write_all(serialized.as_bytes()).map_err(LockError::Io)?;
+    f.sync_all().map_err(LockError::Io)?;
+    restrict_permissions(&path);
+
+    Ok(WorkerLock { path, nonce })
+}
+
+pub fn inspect(path: &Path) -> Option<WorkerLockContents> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&contents).ok()
+}
+
+pub fn is_stale(contents: &WorkerLockContents) -> bool {
+    if !process_alive(contents.pid) {
+        return true;
+    }
+    let now_ms = unix_now_ms();
+    now_ms.saturating_sub(contents.started_at_unix_ms) > STALE_LOCK_THRESHOLD_SECS * 1000
+}
+
+#[cfg(unix)]
+pub fn process_alive(pid: u32) -> bool {
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    const SIGNAL_NOOP: i32 = 0;
+    unsafe { kill(pid as i32, SIGNAL_NOOP) == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn process_alive(pid: u32) -> bool {
+    let _ = pid;
+    true
+}
+
+fn generate_nonce() -> String {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", std::process::id(), nanos)
+}
+
+fn restrict_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_lock_acquire_release() {
+        let dir = TempDir::new().unwrap();
+        let lock = try_acquire(dir.path()).unwrap();
+        assert!(lock_path(dir.path()).exists());
+        drop(lock);
+        assert!(!lock_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn test_double_acquire_fails() {
+        let dir = TempDir::new().unwrap();
+        let _first = try_acquire(dir.path()).unwrap();
+        let result = try_acquire(dir.path());
+        assert!(matches!(result, Err(LockError::AlreadyHeld { .. })));
+    }
+
+    #[test]
+    fn test_stale_lock_replaced() {
+        let dir = TempDir::new().unwrap();
+        let contents = WorkerLockContents {
+            pid: 1,
+            started_at_unix_ms: unix_now_ms() - (STALE_LOCK_THRESHOLD_SECS * 1000) - 1000,
+            nonce: "stale".to_string(),
+        };
+        let serialized = toml::to_string_pretty(&contents).unwrap();
+        std::fs::write(lock_path(dir.path()), serialized).unwrap();
+
+        let lock = try_acquire(dir.path()).unwrap();
+        assert_eq!(lock.nonce, lock.nonce);
+    }
+
+    #[test]
+    fn test_inspect_returns_contents() {
+        let dir = TempDir::new().unwrap();
+        let lock = try_acquire(dir.path()).unwrap();
+        let contents = inspect(&lock.path).unwrap();
+        assert_eq!(contents.pid, std::process::id());
+        assert_eq!(contents.nonce, lock.nonce);
+    }
+
+    #[test]
+    fn test_lock_permissions() {
+        let dir = TempDir::new().unwrap();
+        let _lock = try_acquire(dir.path()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(lock_path(dir.path())).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn test_no_secrets_in_lock_file() {
+        let dir = TempDir::new().unwrap();
+        let _lock = try_acquire(dir.path()).unwrap();
+        let raw = std::fs::read_to_string(lock_path(dir.path())).unwrap();
+        for forbidden in [
+            "command",
+            "description",
+            "password",
+            "secret",
+            "api_key",
+            "apikey",
+            "token",
+            "credential",
+        ] {
+            assert!(
+                !raw.to_lowercase().contains(forbidden),
+                "lock file must not contain {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lock_path_is_in_state_dir() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(lock_path(dir.path()), dir.path().join(WORKER_LOCK_NAME));
+    }
+
+    #[test]
+    fn test_nonce_uniqueness() {
+        let a = generate_nonce();
+        let b = generate_nonce();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_lock_error_display() {
+        let err = LockError::AlreadyHeld {
+            pid: 12345,
+            nonce: "abc".to_string(),
+        };
+        assert!(err.to_string().contains("12345"));
+        assert!(err.to_string().contains("abc"));
+    }
+
+    #[test]
+    fn test_lock_contents_roundtrip() {
+        let contents = WorkerLockContents {
+            pid: 999,
+            started_at_unix_ms: 1000,
+            nonce: "test-nonce".to_string(),
+        };
+        let serialized = toml::to_string_pretty(&contents).unwrap();
+        let deserialized: WorkerLockContents = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.pid, 999);
+        assert_eq!(deserialized.started_at_unix_ms, 1000);
+        assert_eq!(deserialized.nonce, "test-nonce");
+    }
+}

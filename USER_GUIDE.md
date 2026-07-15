@@ -460,9 +460,11 @@ protected plaintext `sync.toml`. Do not commit this file.
 
 ## Auto-sync
 
-Auto-sync is disabled by default. When enabled, mutation commands trigger
-background synchronization after the local change is committed. The coordinator
-debounces rapid mutations into a single sync attempt.
+Auto-sync is disabled by default. When enabled, mutation commands spawn a
+**detached one-shot worker** (`snp auto-sync-worker`) that performs the remote
+sync after the local change is committed. The worker is fully detached from
+the parent process — it runs in its own session (`setsid` on Unix) with no
+controlling terminal, and the parent returns immediately to the user.
 
 ### Configuration
 
@@ -503,19 +505,20 @@ auto_sync_failure = "warn"
 
 - Local mutations always succeed before any remote work begins.
 - A failed auto-sync never rolls back or corrupts a successful local save.
-- Rapid mutations (e.g., multiple edits) are debounced into a single sync.
-- A durable pending marker survives process crashes.
-- PID-file locking prevents concurrent sync across multiple `snp` processes.
+- The parent spawns the worker and returns immediately — no in-process debounce delay.
+- Each `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
+- A durable pending marker (`auto-sync-pending.toml`) records the latest mutation generation with CRC32 integrity; only the worker that observes its own generation may clear it.
+- PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness detection prevents concurrent worker executions across processes.
 - Sync-merge writes never recursively trigger auto-sync.
-- `run_auto_sync()` creates its own Tokio runtime — no external runtime needed.
+- Worker creates its own Tokio runtime internally — the parent does not pass one.
 
 ### Failure modes
 
 | Mode | Behavior |
 |------|----------|
-| `ignore` | Silent — no user-facing output on failure |
-| `warn` (default) | Stderr warning: `auto-sync failed: <reason>` |
-| `error` | Nonzero exit code, but local mutation remains committed |
+| `ignore` | Silent — no user-facing output on scheduling failure |
+| `warn` (default) | Stderr warning when the parent fails to spawn the worker; worker-side failures are logged to `~/.config/snp/logs/` and visible via `snp doctor` |
+| `error` | Stderr error and nonzero exit code on parent scheduling failure, but local mutation remains committed |
 
 ## Premade libraries
 

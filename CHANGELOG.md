@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Detached one-shot auto-sync worker (Release 5D corrective)**
+  - Replaced in-process debounce coordinator with a hidden `auto-sync-worker` subcommand re-execed by the parent. The worker is fully detached via `setsid` on Unix and `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows, with `stdin`/`stdout`/`stderr` routed to `null`. The parent returns immediately after spawning — no in-process latency for the user.
+  - Restructured `src/auto_sync.rs` into a directory module under `src/auto_sync/` with focused submodules: `policy.rs`, `pending.rs`, `lock.rs`, `spawn.rs`, `worker.rs`, `notification.rs`, `mod.rs`.
+  - New pending marker schema (v2) with monotonic `generation`, CRC32 integrity, conditional clear keyed on observed generation. v1 markers migrate transparently on load.
+  - New worker lock format (`auto-sync-worker.lock`) with `pid`, `started_at_unix_ms`, `nonce` fields. Stale detection via `kill -0 pid` plus 5-minute age threshold.
+  - Hidden `Commands::AutoSyncWorker { state_dir, nonce }` registered with `hide = true`. Exits with internal exit code 0; outcome is logged, not propagated.
+  - Added `libc = "0.2"` (Unix-only) for `setsid`.
+  - `startup_recover_pending()` runs at startup for non-worker subcommands, re-spawning the worker if recent pending state is found or clearing markers older than 5 minutes.
+  - `snp doctor --compatibility` rewritten to use the new `paths::{state_dir, pending_marker, worker_lock}` helpers and to surface lock liveness via `lock::process_alive`.
+  - Security guarantees: no command payloads, credentials, or encryption material ever appear in worker argv, env, pending markers, lock files, or `auto-sync-worker.<nonce>.done` sentinels. All artifacts written with `0o600` permissions on Unix.
+  - Architecture deep-dive updated (`architecture/auto_sync.md`): new trigger matrix, detached-worker data flow, schema v2 format, worker lifecycle, design rationale for replacing the in-process coordinator.
 - **Auto-sync integration hardening and closure (Release 5D)**
   - Created `architecture/auto_sync.md` deep-dive documenting the canonical data flow, trigger matrix, debounce state machine, durable pending state, cross-process locking, retry/backoff, failure policy, and safety invariants.
   - Updated `architecture/overview.md` to include auto-sync in the sync infrastructure section and deep-dives table.

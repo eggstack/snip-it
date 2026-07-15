@@ -885,29 +885,21 @@ command = "echo ok"
         }
     }
 
-    // Auto-sync state inspection (Release 5B)
-    let state_dir = crate::auto_sync::AutoSyncCoordinator::derive_state_dir();
-    let pending_path = state_dir.join("auto-sync-pending.toml");
-    let lock_path = state_dir.join("auto-sync.lock");
+    // Auto-sync state inspection (Release 5D corrective: detached one-shot worker)
+    let state_dir = crate::auto_sync::paths::state_dir();
+    let pending_path = crate::auto_sync::paths::pending_marker(&state_dir);
+    let lock_path = crate::auto_sync::paths::worker_lock(&state_dir);
 
     // Check auto-sync pending state
     if pending_path.exists() {
-        match fs::read_to_string(&pending_path) {
-            Ok(content) => {
-                // Try to parse the pending state to check staleness.
-                let is_stale = content
-                    .lines()
-                    .find(|l| l.starts_with("requested_at"))
-                    .and_then(|l| l.split('=').nth(1))
-                    .and_then(|v| v.trim().parse::<i64>().ok())
-                    .map(|ts| {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        now - ts > 300
-                    })
-                    .unwrap_or(false);
+        match crate::auto_sync::pending::read_state_from_dir(&state_dir) {
+            Ok(state) => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let age_ms = now_ms.saturating_sub(state.created_at_unix_ms);
+                let is_stale = age_ms > crate::auto_sync::pending::STALE_PENDING_THRESHOLD_MS;
 
                 if is_stale {
                     report.diagnostics.push(CompatibilityDiagnostic {
@@ -915,9 +907,12 @@ command = "echo ok"
                         entry_index: None,
                         field: Some("auto_sync".to_string()),
                         severity: DiagnosticSeverity::Warning,
-                        message: "Stale auto-sync pending state detected (>5 min old)".to_string(),
+                        message: format!(
+                            "Stale auto-sync pending state detected (generation {}, >5 min old)",
+                            state.generation
+                        ),
                         suggestion: Some(
-                            "This will be cleared automatically on next mutation or startup"
+                            "Run `snp sync` to recover, or it will be recovered on next mutation"
                                 .to_string(),
                         ),
                         span: None,
@@ -928,7 +923,10 @@ command = "echo ok"
                         entry_index: None,
                         field: Some("auto_sync".to_string()),
                         severity: DiagnosticSeverity::Info,
-                        message: "Auto-sync pending state is active".to_string(),
+                        message: format!(
+                            "Auto-sync pending state is active (generation {})",
+                            state.generation
+                        ),
                         suggestion: None,
                         span: None,
                     });
@@ -948,44 +946,54 @@ command = "echo ok"
         }
     }
 
-    // Check auto-sync lock file
+    // Check auto-sync worker lock file
     if lock_path.exists() {
-        let lock_content = fs::read_to_string(&lock_path).unwrap_or_default();
-        let pid = lock_content.trim().parse::<i32>().ok();
-        let is_alive = pid
-            .map(|p| {
-                std::process::Command::new("kill")
-                    .args(["-0", &p.to_string()])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+        match crate::auto_sync::lock::inspect(&lock_path) {
+            Some(lock) => {
+                let alive = crate::auto_sync::lock::process_alive(lock.pid);
 
-        if is_alive {
-            report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.auto_sync.lock_held".to_string(),
-                entry_index: None,
-                field: Some("auto_sync".to_string()),
-                severity: DiagnosticSeverity::Info,
-                message: format!("Auto-sync lock held by process {}", pid.unwrap_or(0)),
-                suggestion: None,
-                span: None,
-            });
-        } else {
-            report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.auto_sync.lock_stale".to_string(),
-                entry_index: None,
-                field: Some("auto_sync".to_string()),
-                severity: DiagnosticSeverity::Warning,
-                message: "Auto-sync lock file exists but owner process is dead (stale)".to_string(),
-                suggestion: Some(
-                    "Stale lock will be recovered on next auto-sync attempt".to_string(),
-                ),
-                span: None,
-            });
+                if alive {
+                    report.diagnostics.push(CompatibilityDiagnostic {
+                        code: "compat.auto_sync.lock_held".to_string(),
+                        entry_index: None,
+                        field: Some("auto_sync".to_string()),
+                        severity: DiagnosticSeverity::Info,
+                        message: format!(
+                            "Auto-sync worker lock held by process {} (nonce {})",
+                            lock.pid, lock.nonce
+                        ),
+                        suggestion: None,
+                        span: None,
+                    });
+                } else {
+                    report.diagnostics.push(CompatibilityDiagnostic {
+                        code: "compat.auto_sync.lock_stale".to_string(),
+                        entry_index: None,
+                        field: Some("auto_sync".to_string()),
+                        severity: DiagnosticSeverity::Warning,
+                        message: format!(
+                            "Auto-sync worker lock exists but process {} is dead (stale)",
+                            lock.pid
+                        ),
+                        suggestion: Some(
+                            "Stale lock will be recovered on next worker spawn or `snp sync`"
+                                .to_string(),
+                        ),
+                        span: None,
+                    });
+                }
+            }
+            None => {
+                report.diagnostics.push(CompatibilityDiagnostic {
+                    code: "compat.auto_sync.lock_unreadable".to_string(),
+                    entry_index: None,
+                    field: Some("auto_sync".to_string()),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "Auto-sync worker lock file exists but is unreadable".to_string(),
+                    suggestion: None,
+                    span: None,
+                });
+            }
         }
     }
 

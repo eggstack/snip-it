@@ -309,12 +309,16 @@ auto_sync_failure = "ignore"
     if pending_path.exists() {
         let content = fs::read_to_string(&pending_path).unwrap();
         assert!(
-            content.contains("version = 1"),
+            content.contains("schema = 2"),
             "Pending file should have valid version"
         );
         assert!(
-            content.contains("pending ="),
-            "Pending file should have pending field"
+            content.contains("generation ="),
+            "Pending file should have generation field"
+        );
+        assert!(
+            content.contains("integrity ="),
+            "Pending file should have integrity field"
         );
     }
 }
@@ -470,7 +474,7 @@ auto_sync_failure = "ignore"
         let content = fs::read_to_string(&pending_path).unwrap();
         // Verify it's well-formed TOML
         assert!(
-            content.contains("version = 1"),
+            content.contains("schema = 2"),
             "Pending state should have version field"
         );
     }
@@ -518,7 +522,7 @@ auto_sync_failure = "ignore"
     if pending_path.exists() {
         let content = fs::read_to_string(&pending_path).unwrap();
         assert!(
-            content.starts_with("# integrity:"),
+            content.contains("integrity = \"crc32:"),
             "Pending marker should have CRC32 integrity header. Got: {}",
             &content[..content.len().min(100)]
         );

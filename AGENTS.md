@@ -90,7 +90,14 @@ snip-it/
 │   ├── lib.rs          # Library re-exports for integration tests
 │   ├── proto.rs        # Proto wrapper (re-exports snip_proto types)
 │   ├── clipboard.rs    # Cross-platform clipboard (arboard / clipboard-win)
-│   ├── auto_sync.rs    # Auto-sync coordinator, debounce, durable pending, PID-file locking
+│   ├── auto_sync/       # Detached one-shot worker model (Release 5D corrective)
+│   │   ├── mod.rs        # Pub re-exports + paths::{state_dir, pending_marker, worker_lock}
+│   │   ├── policy.rs     # AutoSyncPolicy, MutationKind, MutationOrigin, FailureClass
+│   │   ├── pending.rs    # PendingState (schema v2), CRC32 integrity, v1→v2 migration
+│   │   ├── lock.rs       # WorkerLock RAII, WorkerLockContents, process_alive (kill -0)
+│   │   ├── spawn.rs      # spawn_worker (setsid / DETACHED_PROCESS | CREATE_NO_WINDOW)
+│   │   ├── worker.rs     # run, try_schedule, execute_sync, WorkerOutcome, SpawnResult
+│   │   └── notification.rs # notify_mutation, notify_local_mutation, startup_recover_pending
 │   ├── config.rs       # Sync settings (SyncSettings, SyncDirection)
 │   ├── encryption.rs   # AES-256-GCM + Argon2id key derivation
 │   ├── error.rs        # SnipError enum, SnipResult type alias
@@ -260,9 +267,9 @@ snip-it/
 
 ### Auto-Sync Policy (Release 5A)
 
-- `AutoSyncPolicy` struct in `src/auto_sync.rs` — effective policy resolved once per command invocation
+- `AutoSyncPolicy` struct in `src/auto_sync/policy.rs` — effective policy resolved once per command invocation
 - `AutoSyncFailureMode` enum in `src/config.rs` — Ignore, Warn (default), Error
-- `MutationKind` enum in `src/auto_sync.rs` — classifies mutations for sync triggers
+- `MutationKind` enum in `src/auto_sync/policy.rs` — classifies mutations for sync triggers
 - Configuration in `sync.toml`: `auto_sync`, `auto_sync_debounce_seconds`, `auto_sync_failure`
 - CLI: `snp sync config --show| --auto-sync on|off | --debounce <secs> | --failure ignore|warn|error`
 - Auto-sync is disabled by default; local mutations always commit before remote work begins
@@ -272,41 +279,23 @@ snip-it/
 - Debounce range: 0-300 seconds (clamped); default: 2 seconds
 - `error` failure mode sets nonzero exit code but local mutation remains committed
 
-### Auto-Sync Coordinator (Release 5B)
+### Auto-Sync Detached Worker (Release 5D corrective)
 
-- `AutoSyncCoordinator` struct in `src/auto_sync.rs` — debounce engine, durable pending markers, PID-file locking
-- `AutoSyncRequest` — contains `library_id`, `mutation_kind`, `requested_at`; no snippet content or secrets
-- `MutationOrigin` enum — `User`, `Import`, `SyncMerge`, `Recovery`; `SyncMerge` never triggers auto-sync
-- `AutoSyncStatus` enum — `Disabled`, `Pending`, `Running`, `Succeeded`, `Failed`
-- `FailureClass` enum — `Network`, `Auth`, `Conflict`, `Unknown`; classified from `SnipError`
-- Debounce state machine: Idle → Pending → Running with follow-up support
-- Maximum debounce: 300 seconds (bounded deadline prevents indefinite postponement)
-- Follow-up debounce: 1 second after sync completes with pending work
-- Durable pending marker at `~/.config/snp/auto-sync-pending.toml` with CRC32 integrity
-- PID-file lock at `~/.config/snp/auto-sync.lock` with stale detection via `kill -0`
-- Lock permissions: 0o600 (restrictive)
-- `run_auto_sync()` wraps `sync_commands::run_default_sync` with lock acquisition, retry/backoff, and failure handling
-- `recover_stale_pending()` clears pending state older than 5 minutes on startup
-- Retry: configurable `max_retries` (default 1), exponential backoff with caps (1s initial, 30s max)
-- Failure policy rendering: `Warn`/`Error` modes emit user-facing stderr messages via `eprintln!`
-- **Architecture:** In-process coordinator (Option A) — the mutation command owns debounce and sync execution. Option B (detached helper process) was evaluated and rejected due to added complexity (IPC, process supervision, cross-platform detachment) for marginal benefit.
-- **Sync target:** Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries. Per-library targeting deferred until the sync protocol supports it.
-- `snp doctor --compatibility` inspects auto-sync state: pending markers, lock files, stale locks, config settings
-- **Release 5C:** All syncable mutation commands are wired via the central notification API
-
-### Auto-Sync Mutation Trigger Integration (Release 5C)
-
-- Central mutation notification API: `notify_mutation(kind, origin)` and `notify_local_mutation(policy, context)`
-- `MutationContext` struct: `{ kind, origin, library_id }` — carries classification without snippet content
-- `AutoSyncNotificationResult` enum: `Disabled`, `Suppressed`, `Executed(AutoSyncStatus)`
-- `clear_pending_after_explicit_sync()` — clears pending state after successful manual sync
-- Commands wire trigger after their authoritative commit point (local atomic write succeeds)
-- Trigger matrix: `new` (SnippetCreate), `edit` editor (SnippetUpdate), TUI delete (SnippetDelete), `import pet` (Import, once per import), `library create/delete` (LibraryChange)
-- Local-only fields (`output`) do NOT trigger sync — output-only edits are excluded
-- Explicit sync (`--sync` flag, `snp sync`) clears pending auto-sync state to prevent duplicate delayed sync
-- Sync-origin writes (`MutationOrigin::SyncMerge`) never trigger auto-sync (prevents feedback loops)
-- `run_auto_sync()` creates its own Tokio runtime internally — callers don't need to pass one
-- Dry-run, cancel, failure, and no-op paths emit no notification
+- Replaces the in-process `AutoSyncCoordinator` with a hidden `snp auto-sync-worker` subcommand re-execed by the parent. The worker is fully detached via `setsid` on Unix and `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows, with `stdin`/`stdout`/`stderr` routed to `null`. The parent returns immediately after spawning — no in-process latency for the user.
+- Module layout under `src/auto_sync/`: `policy.rs`, `pending.rs`, `lock.rs`, `spawn.rs`, `worker.rs`, `notification.rs`, `mod.rs`.
+- `WorkerLock` RAII (`src/auto_sync/lock.rs`): atomic acquisition via `OpenOptions::create_new(true)`; `WorkerLockContents { pid, started_at_unix_ms, nonce }`; stale detection via `kill -0 pid` + 5-minute age threshold; 0o600 permissions on Unix.
+- `PendingState` schema v2 (`src/auto_sync/pending.rs`): monotonic `generation`, `created_at_unix_ms`, `snapshot` (Mutation/Nil), CRC32 `integrity` field. Conditional `clear_if_generation_matches` prevents stale workers from clobbering fresh state. v1 markers migrate transparently on load.
+- `spawn_worker` (`src/auto_sync/spawn.rs`): re-execs `std::env::current_exe()` with `--state-dir`, `--nonce`, detached flags, null stdio. Returns child pid.
+- `WorkerOutcome` (`src/auto_sync/worker.rs`): `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0 — outcomes are logged, not propagated.
+- `notify_mutation(kind, origin)` → `notify_local_mutation(policy, context)` → `mark_pending(state_dir, snapshot)` → `try_schedule(state_dir, snapshot)` → `try_acquire(state_dir)` → `spawn::spawn_worker(...)`. Parent `mem::forget`s the lock so the worker can detect it via `inspect`.
+- `startup_recover_pending()` runs at startup for non-worker subcommands. Clears pending markers older than 5 minutes; re-schedules a worker if recent pending state is found.
+- `clear_pending_after_explicit_sync()` runs after `snp sync` or `--sync` flag, removing pending state to prevent duplicate delayed syncs.
+- `paths::{state_dir, pending_marker, worker_lock}` helpers expose stable paths to `snp doctor --compatibility`.
+- `snp doctor --compatibility` inspects auto-sync state using `lock::process_alive` (kill -0 on Unix) for liveness probes.
+- Security: no command payloads, credentials, or encryption material in worker argv, env, pending markers, lock files, or `auto-sync-worker.<nonce>.done` sentinels. All artifacts written with 0o600 on Unix.
+- Worker creates its own Tokio runtime internally — the parent does not pass one.
+- **Sync target:** Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries.
+- **Architecture:** Detached one-shot worker (corrective replacement). The earlier in-process coordinator was evaluated and removed: it added visible latency to mutation commands and held the parent process hostage during network round-trips. Detached re-exec is portable, zero-cost IPC, and reuses the same `snp` binary's sync code path.
 
 ### Auto-Sync Integration Hardening and Closure (Release 5D)
 
@@ -314,13 +303,12 @@ snip-it/
 - All mutation commands route through central `notify_mutation()` — no ad-hoc auto-sync logic exists outside the coordinator
 - Trigger matrix reconciled across implementation, tests, and documentation (12 command types)
 - Local-first durability: local commits always succeed before remote work; failed sync never rolls back local state
-- Debounce coalescing: rapid mutations produce one sync attempt with bounded maximum delay (300s)
-- Cross-process safety: PID-file lock with stale detection; no permanent deadlock; no unbounded sync storm
+- Cross-process safety: PID+nonce worker lock with stale detection; no permanent deadlock; no unbounded sync storm
 - Security: no command payloads, credentials, or encryption material in lock files, pending markers, or status files
-- Pending marker bounded, versioned, CRC32 integrity-checked, symlink-resistant creation
+- Pending marker bounded, versioned (schema v2), CRC32 integrity-checked, symlink-resistant atomic creation
 - Manual/scheduled sync behavior unchanged; explicit sync clears pending to prevent duplicate delayed sync
 - Documentation reconciled: README, USER_GUIDE, AGENTS.md, CHANGELOG, PET_COMPATIBILITY, architecture docs
-- `architecture/auto_sync.md` deep-dive created; `architecture/overview.md` updated with auto-sync section
+- `architecture/auto_sync.md` deep-dive updated for detached worker model; `architecture/overview.md` updated with auto-sync section
 - `docs/PET_COMPATIBILITY.md` updated: R5 marked as Implemented (was Planned)
 - `docs/CLI_EXITCODE_STREAM_POLICY.md` updated: auto-sync error exit code documented
 
@@ -437,7 +425,8 @@ snip-it/
 - Pet analysis unit tests (`src/commands/pet_analysis.rs`) cover: source file validation, TOML parsing, field detection, entry analysis, duplicate detection, malformed variable detection, and library name sanitization
 - Doctor integration tests (`tests/integration.rs`) cover: valid file analysis, JSON output, nonexistent file, choice variables, compatibility audit, no-mode error, strict mode with errors, help text, source non-mutation, malformed TOML, warnings-only exit code, JSON stdout-only, human no-mutation, library mode, check-shell, compatibility completeness, malformed choices, unknown metadata fields, import dry-run consistency, no command execution, no variable expansion, no API key leakage, config non-mutation, required/default variables, duplicates with output, multiline commands, mixed field aliases, edge cases, empty file, normalization preview, malformed variable detection, canonical Pet TOML loading check, and library state non-mutation
 - Doctor unit tests (`src/commands/doctor_cmd.rs`) cover: library name sanitization, and malformed variable detection
-- Auto-sync coordinator tests (`src/auto_sync.rs`) cover: policy resolution, debounce state transitions, rapid mutation coalescing, maximum delay bound, mutation during running, disabled policy, sync-origin suppression, pending state round-trip, lock acquire/release, stale lock detection, lock permissions, failure classification, failure policy mapping, zero debounce, multiple cycles, stale pending recovery, no secrets in serialization, request creation, status equality, Debug impl, derive_state_dir, run_auto_sync disabled/lock behavior, retry/backoff computation, retry policy fields, timeout clamping, shutdown/signal lifecycle, stale lock recovery, crash recovery, no secrets in debug output, bounded pending state size, lock file no command bodies, retry zero config, integration cycles/disabled/no-recursive-trigger, and Release 5C notification API tests (disabled policy, sync-merge suppression, user/import/AccountConfig origins, all mutation kinds, library ID, clear-after-explicit-sync, result Debug/PartialEq, MutationContext construction)
+- Auto-sync tests (`src/auto_sync/`): unit tests in each submodule cover policy resolution (`policy.rs`), PendingState schema v2 roundtrip, generation monotonicity, conditional clear, CRC32 integrity, v1→v2 migration, atomic write, 0o600 permissions, no-secrets guarantee (`pending.rs`), WorkerLock RAII, atomic acquire, stale detection (kill -0 / 5-min age), nonce uniqueness, lock file permissions (`lock.rs`), `spawn_worker` plumbing and detach flags (`spawn.rs`), `WorkerOutcome` mapping, `SpawnResult` matrix, `execute_sync`, `startup_recover`, `nonce_already_used`, `run_with_timeout` (`worker.rs`), and `notify_local_mutation` for disabled policy, sync-merge suppression, and result variants (`notification.rs`).
+- Auto-sync integration tests (`tests/auto_sync_coordinator.rs`, `tests/auto_sync_concurrency.rs`, `tests/auto_sync_mutations.rs`, `tests/auto_sync_regression.rs`, `tests/auto_sync_security.rs`, `tests/auto_sync_config.rs`, `tests/integration.rs`) cover: pending marker creation, disabled policy, stdin/file creation triggers, output-only edit exclusion, library create/delete triggers, import dry-run exclusion, import success trigger, failed sync local preservation, explicit sync interaction, sequential mutation handling, schema v2 format (`schema = 2`, `generation`, `integrity = "crc32:..."`), pending marker with library ID, integrity header presence, cross-process safety, concurrency hardening, mutation trigger matrix, and no-secrets security guarantees.
 - Auto-sync integration tests (`tests/integration.rs`) cover: pending marker creation, disabled policy, stdin/file creation triggers, output-only edit exclusion, library create/delete triggers, import dry-run exclusion, import success trigger, failed sync local preservation, and explicit sync interaction
 - Diagnostics unit tests (`src/diagnostics.rs`) cover: counts, report constructors, version, severity serialization, diagnostic serialization, source span, span skip-none, diagnostic ordering, severity ranking, stable code convention, strict-mode classification, bounded messages, recommendation generation, empty counts, and full PetImportReport roundtrip
 - Output presentation unit tests (`src/output.rs`) cover: empty, single-line, multiline, summary truncation, ANSI sanitization, OSC hyperlinks, control character stripping, scoring budget

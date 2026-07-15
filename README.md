@@ -333,8 +333,12 @@ data.
 ### Auto-sync policy
 
 Auto-sync is disabled by default. When enabled, mutation commands (new, edit,
-import) can trigger background synchronization after the local change is
-committed. Configure it via:
+import) trigger a **detached one-shot worker** (`snp auto-sync-worker`) after
+the local change is committed. The worker is fully detached from the parent
+process via `setsid` on Unix (or `DETACHED_PROCESS | CREATE_NO_WINDOW` on
+Windows), so the user never waits on network round-trips.
+
+Configure it via:
 
 ```bash
 snp sync config --show                         # inspect current settings
@@ -346,10 +350,11 @@ snp sync config --failure warn                 # ignore, warn, or error
 Local mutations always succeed before any remote work begins. A failed
 auto-sync never rolls back or corrupts a successful local save.
 
-The coordinator debounces rapid mutations (e.g., multiple edits in quick
-succession) into a single sync attempt. A durable pending marker survives
-process crashes, and PID-file based locking prevents concurrent sync
-executions across multiple `snp` processes.
+A durable pending marker (`auto-sync-pending.toml`) records the latest
+mutation generation; the worker only clears state matching its observed
+generation, preventing stale workers from clobbering fresh mutations. A
+PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness
+detection prevents concurrent worker executions across processes.
 
 ## CLI overview
 
