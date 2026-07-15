@@ -44,7 +44,31 @@ pub fn pending_path(state_dir: &Path) -> PathBuf {
     state_dir.join(PENDING_FILE_NAME)
 }
 
+/// Records a logical mutation in the durable pending marker.
+///
+/// This is the **only** public API that increments the pending generation.
+/// It is called by the parent after a successful local commit. Subsequent
+/// scheduling (see `crate::auto_sync::worker::schedule_existing_pending`)
+/// must not mutate pending state, change the generation, or replace the
+/// snapshot.
+pub fn record_pending_mutation(
+    state_dir: &Path,
+    snapshot: PendingSnapshot,
+) -> Result<PendingState, PendingError> {
+    mark_pending_internal(state_dir, snapshot)
+}
+
+/// Internal helper that bumps the generation and writes the marker.
+/// Re-exported as `mark_pending` for legacy callers and tests that need
+/// direct control; production flow goes through `record_pending_mutation`.
 pub fn mark_pending(
+    state_dir: &Path,
+    snapshot: PendingSnapshot,
+) -> Result<PendingState, PendingError> {
+    mark_pending_internal(state_dir, snapshot)
+}
+
+fn mark_pending_internal(
     state_dir: &Path,
     snapshot: PendingSnapshot,
 ) -> Result<PendingState, PendingError> {

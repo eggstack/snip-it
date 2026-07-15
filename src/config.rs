@@ -435,7 +435,6 @@ struct SyncConfigSettings {
 
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     let path = get_sync_config_path();
-
     let config = SyncConfigFile {
         settings: SyncConfigSettings {
             sync: settings.clone(),

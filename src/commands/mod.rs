@@ -313,10 +313,18 @@ where
                     if do_sync {
                         // Explicit sync: run immediately and clear pending auto-sync
                         // to prevent duplicate delayed sync (Workstream D).
-                        if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
-                            tracing::warn!(error = %e, "Background sync after delete failed");
-                        }
-                        crate::auto_sync::clear_pending_after_explicit_sync();
+                        let observed = crate::auto_sync::observe_pending_generation();
+                        let sync_succeeded =
+                            if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
+                                tracing::warn!(error = %e, "Background sync after delete failed");
+                                false
+                            } else {
+                                true
+                            };
+                        crate::auto_sync::clear_pending_after_explicit_sync(
+                            observed,
+                            sync_succeeded,
+                        );
                     } else {
                         // Auto-sync trigger: notify after successful delete commit (Workstream B3).
                         crate::auto_sync::notify_mutation(
@@ -346,16 +354,29 @@ where
             break;
         }
     }
-    if do_sync
-        && selected_and_processed
-        && let Err(e) = crate::sync_commands::run_default_sync(runtime)
-    {
-        tracing::warn!(error = %e, "Background sync failed");
-    }
+    let explicit_observed = if do_sync && selected_and_processed {
+        crate::auto_sync::observe_pending_generation()
+    } else {
+        None
+    };
+    let explicit_sync_succeeded = if do_sync && selected_and_processed {
+        match crate::sync_commands::run_default_sync(runtime) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "Background sync failed");
+                false
+            }
+        }
+    } else {
+        false
+    };
     if do_sync && selected_and_processed {
         // Explicit sync completed: clear pending auto-sync to prevent
         // duplicate delayed sync (Workstream D).
-        crate::auto_sync::clear_pending_after_explicit_sync();
+        crate::auto_sync::clear_pending_after_explicit_sync(
+            explicit_observed,
+            explicit_sync_succeeded,
+        );
     }
     if cancelled {
         Ok(crate::SelectionOutcome::Cancelled)

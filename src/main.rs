@@ -330,9 +330,6 @@ enum Commands {
         /// State directory containing pending markers and worker locks
         #[arg(long)]
         state_dir: std::path::PathBuf,
-        /// Worker nonce (used for duplicate-detection sentinels)
-        #[arg(long)]
-        nonce: String,
     },
 }
 
@@ -761,8 +758,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::import_cmd::run_import_pet(options)?;
             }
         },
-        Some(Commands::AutoSyncWorker { state_dir, nonce }) => {
-            let outcome = snip_it::auto_sync::worker::run(&state_dir, &nonce);
+        Some(Commands::AutoSyncWorker { state_dir }) => {
+            let outcome = snip_it::auto_sync::worker::run(&state_dir);
             match outcome {
                 snip_it::auto_sync::WorkerOutcome::Success
                 | snip_it::auto_sync::WorkerOutcome::NothingToDo => {}

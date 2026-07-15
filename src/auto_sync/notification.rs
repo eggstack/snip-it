@@ -1,6 +1,15 @@
 //! Parent-side mutation notification API.
+//!
+//! Production flow:
+//!
+//! 1. Local mutation is committed (atomic).
+//! 2. `notify_local_mutation` calls `pending::record_pending_mutation` —
+//!    the only API that increments the pending generation.
+//! 3. `worker::schedule_existing_pending` spawns a detached worker.
+//!    This never mutates the pending marker.
+//! 4. Parent returns immediately.
 
-use crate::auto_sync::pending::{self, PendingSnapshot};
+use crate::auto_sync::pending::{self, PendingSnapshot, PendingState};
 use crate::auto_sync::policy::{AutoSyncPolicy, MutationKind, MutationOrigin};
 use crate::auto_sync::worker::{self, SpawnResult};
 use crate::config::{AutoSyncFailureMode, get_sync_settings};
@@ -32,6 +41,12 @@ pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNo
     )
 }
 
+/// Notify the auto-sync subsystem of a successful local mutation.
+///
+/// Performs one generation increment (via
+/// `pending::record_pending_mutation`) and one worker spawn (via
+/// `worker::schedule_existing_pending`). On spawn failure the pending
+/// generation is preserved for recovery.
 pub fn notify_local_mutation(
     policy: &AutoSyncPolicy,
     context: MutationContext,
@@ -52,8 +67,8 @@ pub fn notify_local_mutation(
     let state_dir = derive_state_dir();
     let snapshot = PendingSnapshot::Mutation { kind: context.kind };
 
-    match pending::mark_pending(&state_dir, snapshot) {
-        Ok(marked) => match spawn_dispatch(&state_dir) {
+    match pending::record_pending_mutation(&state_dir, snapshot) {
+        Ok(marked) => match schedule_after_record(&state_dir, &marked) {
             SpawnResult::Spawned => AutoSyncNotificationResult::Scheduled {
                 generation: marked.generation,
             },
@@ -70,9 +85,31 @@ pub fn notify_local_mutation(
     }
 }
 
-pub fn clear_pending_after_explicit_sync() {
+fn schedule_after_record(state_dir: &std::path::Path, _marked: &PendingState) -> SpawnResult {
+    worker::schedule_existing_pending(state_dir)
+}
+
+/// Clear pending intent after a successful explicit sync.
+///
+/// Generation-safe: callers must capture the observed generation **before**
+/// running explicit sync via `observe_pending_generation`, then pass it
+/// here. A mutation arriving during the sync is preserved.
+pub fn clear_pending_after_explicit_sync(observed_generation: Option<u64>, sync_succeeded: bool) {
     let state_dir = derive_state_dir();
-    let _ = worker::clear_after_explicit_sync(&state_dir);
+    let Some(generation) = observed_generation else {
+        return;
+    };
+    let _ = worker::clear_after_explicit_sync(&state_dir, generation, sync_succeeded);
+}
+
+/// Reads the current pending generation, if any. Callers should capture
+/// this **before** running an explicit sync, then pass the result to
+/// `clear_pending_after_explicit_sync` along with whether sync succeeded.
+pub fn observe_pending_generation() -> Option<u64> {
+    let state_dir = derive_state_dir();
+    worker::observed_pending_generation(&state_dir)
+        .ok()
+        .flatten()
 }
 
 pub fn startup_recover_pending() {
@@ -85,10 +122,6 @@ pub fn derive_state_dir() -> std::path::PathBuf {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf()
-}
-
-fn spawn_dispatch(state_dir: &std::path::Path) -> SpawnResult {
-    worker::try_schedule(state_dir, PendingSnapshot::default())
 }
 
 fn apply_scheduling_failure_policy(policy: &AutoSyncPolicy) {

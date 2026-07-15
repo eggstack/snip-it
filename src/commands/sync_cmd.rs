@@ -249,17 +249,25 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 || (!options.pull_only && sync_settings.sync_direction == SyncDirection::Push);
             let effective_pull = options.pull_only
                 || (!options.push_only && sync_settings.sync_direction == SyncDirection::Pull);
-            crate::sync_commands::run_sync(
+            // Capture the observed pending generation BEFORE running sync so
+            // a mutation arriving during sync is preserved (Workstream D5).
+            let observed_generation = crate::auto_sync::observe_pending_generation();
+            let sync_result = crate::sync_commands::run_sync(
                 &sync_settings,
                 options.library.as_deref(),
                 effective_push,
                 effective_pull,
                 runtime,
-            )?;
+            );
+            let sync_succeeded = sync_result.is_ok();
+            sync_result?;
 
             // Explicit sync succeeded: clear pending auto-sync to prevent
             // duplicate delayed sync (Workstream D).
-            crate::auto_sync::clear_pending_after_explicit_sync();
+            crate::auto_sync::clear_pending_after_explicit_sync(
+                observed_generation,
+                sync_succeeded,
+            );
 
             Ok(())
         }

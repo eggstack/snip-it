@@ -856,6 +856,35 @@ pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     run_sync(&settings, None, false, false, runtime)
 }
 
+/// Async entry point for default sync.
+///
+/// Used by the detached worker (so a future can be cancelled by
+/// `tokio::time::timeout` without leaving a thread running). The work
+/// itself runs on a dedicated blocking thread inside a worker-owned
+/// runtime, so cancelling the outer future actually stops the underlying
+/// network operations at the next await point.
+pub async fn run_default_sync_async() -> SnipResult<()> {
+    let join = tokio::task::spawn_blocking(|| {
+        let settings = crate::config::load_sync_settings().unwrap_or_default();
+        run_sync_blocking(&settings, None, false, false)
+    });
+    join.await
+        .map_err(|e| SnipError::runtime_error("sync task join error", Some(&e.to_string())))?
+}
+
+fn run_sync_blocking(
+    settings: &SyncSettings,
+    library_name: Option<&str>,
+    push_only: bool,
+    pull_only: bool,
+) -> SnipResult<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| SnipError::runtime_error("sync runtime build failed", Some(&e.to_string())))?;
+    run_sync(settings, library_name, push_only, pull_only, &runtime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,4 +1,10 @@
 //! Platform-detached process spawning for the one-shot worker.
+//!
+//! The worker is invoked with `--state-dir` only; the worker arbitrates
+//! its own execution lock and reads pending state from the state
+//! directory. No nonce is required because lock ownership is
+//! worker-only — the worker cannot accidentally re-acquire a lock the
+//! parent holds (the parent never holds it).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -22,7 +28,7 @@ impl std::fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
-pub fn spawn_worker(state_dir: &Path, nonce: &str) -> Result<u32, SpawnError> {
+pub fn spawn_worker(state_dir: &Path) -> Result<u32, SpawnError> {
     let exe = std::env::current_exe().map_err(SpawnError::Spawn)?;
     let exe_path = exe.to_string_lossy().to_string();
 
@@ -30,12 +36,23 @@ pub fn spawn_worker(state_dir: &Path, nonce: &str) -> Result<u32, SpawnError> {
     cmd.arg(WORKER_SUBCOMMAND);
     cmd.arg("--state-dir");
     cmd.arg(state_dir.as_os_str());
-    cmd.arg("--nonce");
-    cmd.arg(nonce);
 
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    // SNP_AUTO_SYNC_WORKER_LOG is an opt-in debug aid: when set, the
+    // worker's stderr is appended to this file (in addition to being
+    // returned to the parent via the kernel's normal pipes). It is
+    // not enabled by default and adds no production cost.
+    let stderr = match std::env::var("SNP_AUTO_SYNC_WORKER_LOG") {
+        Ok(log) => std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null()),
+        Err(_) => Stdio::null(),
+    };
+    cmd.stderr(stderr);
 
     apply_platform_detach(&mut cmd);
 

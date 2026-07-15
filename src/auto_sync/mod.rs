@@ -9,7 +9,7 @@ pub mod worker;
 
 pub use notification::{
     AutoSyncNotificationResult, MutationContext, clear_pending_after_explicit_sync,
-    notify_local_mutation, notify_mutation, startup_recover_pending,
+    notify_local_mutation, notify_mutation, observe_pending_generation, startup_recover_pending,
 };
 pub use pending::{PendingSnapshot, PendingState};
 pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin};

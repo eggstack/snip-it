@@ -18,29 +18,31 @@ mutation command
   -> notify_mutation(kind, origin)
   -> AutoSyncPolicy::resolve()
   -> origin check (SyncMerge -> suppress)
-  -> mark_pending(state_dir, snapshot) -> PendingState{generation, ...}
-  -> spawn_dispatch(state_dir)
-     -> try_acquire(state_dir) -> WorkerLock
-     -> spawn::spawn_worker(current_exe, "auto-sync-worker", state-dir, nonce)
+  -> pending::record_pending_mutation(state_dir, snapshot) -> PendingState{generation, ...}
+     (the ONLY writer/incrementer of the pending generation)
+  -> worker::schedule_existing_pending(state_dir)
+     -> spawn::spawn_worker(current_exe, "auto-sync-worker", --state-dir)
         -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
         -> stdin/stdout/stderr -> null
         -> parent process exits immediately, orphan detaches
   -> return AutoSyncNotificationResult::Scheduled{generation}
 
-detached worker process (snp auto-sync-worker --state-dir ... --nonce ...)
+detached worker process (snp auto-sync-worker --state-dir ...)
   -> policy = AutoSyncPolicy::resolve(...)
-  -> try_acquire(state_dir) -> WorkerLock (RAII)
-  -> nonce_already_used? -> exit NothingToDo
+  -> try_acquire(state_dir) -> WorkerLock (RAII) [parent never acquired it]
   -> read_state_from_dir(state_dir) -> PendingState
-  -> execute_sync(state_dir, pending, policy)
+  -> debounce loop:
+       -> reload marker; if newer generation appeared -> restart debounce
+       -> sleep until observed_timestamp + debounce, clamped by max_lifetime
+  -> execute_sync(state_dir, observed_generation, observed_snapshot, policy)
      -> run_default_sync() inside OnceLock<tokio::runtime>
-        bounded by sync_timeout (default 30s)
-     -> on success: clear_if_generation_matches(state_dir, generation)
-     -> on failure: record_failure(state_dir, generation, classification)
+        bounded by sync_timeout via tokio::time::timeout (default 30s)
+     -> on success: pending::clear_if_generation_matches(state_dir, observed_generation)
+     -> on failure: leave pending intact (recovery will retry)
   -> exit WorkerOutcome
 ```
 
-**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state.
+**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the worker lock — every spawned worker races for the lock and exactly one wins.
 
 ## Module Layout
 
@@ -149,20 +151,23 @@ pub enum WorkerOutcome {
 
 Auto-sync no longer uses an in-process debounce coordinator. Instead, the parent mutation command:
 
-1. Records a monotonic pending generation.
-2. Acquires an advisory worker lock (`auto-sync-worker.lock`).
-3. Re-execs the current binary as `snp auto-sync-worker --state-dir <dir> --nonce <nonce>` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
-4. Returns to the user immediately.
+1. Records a monotonic pending generation (via `pending::record_pending_mutation`).
+2. Schedules a worker (via `worker::schedule_existing_pending`).
+3. **Release 5 corrective:** the parent does **not** acquire the worker lock — the lock is the worker's responsibility.
+4. Re-execs the current binary as `snp auto-sync-worker --state-dir <dir>` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
+5. Returns to the user immediately.
 
 The detached worker:
 
-- Acquires the same lock (or exits with `NothingToDo` if another worker holds it).
-- Detects duplicate nonces via `auto-sync-worker.<nonce>.done` sentinel files.
-- Runs a single sync attempt bounded by `sync_timeout` (default 30s).
-- Clears pending on success (conditional on observed generation), preserves on failure for recovery.
+- Acquires the worker lock itself (or exits with `NothingToDo` if another worker holds it).
+- Reads pending state, then runs a **debounce loop**: it reloads the marker every ≤250ms, restarts the deadline if a newer generation has appeared, and waits up to `policy.debounce + max_lifetime` (default 5 minutes).
+- Runs a single sync attempt bounded by `sync_timeout` (default 30s), wrapped in `tokio::time::timeout` to drop abandoned work cleanly.
+- Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Release 5 corrective:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state.
+- On failure or `NothingToDo`, the marker is preserved for `startup_recover_pending`.
+- A newer generation that appears during sync is detected on the next loop iteration and triggers a follow-up cycle.
 - Exits with `WorkerOutcome::{Success, Failed, NothingToDo}` mapped to internal exit codes (0/0/0).
 
-The parent never waits for the worker. There is no IPC, no in-process debounce state, no shared Tokio runtime across the fork boundary.
+The parent never waits for the worker. There is no IPC, no in-process debounce state, no shared Tokio runtime across the fork boundary. The worker creates its own Tokio runtime internally.
 
 ## Durable Pending State
 
@@ -180,8 +185,9 @@ integrity = "crc32:441c462e"
 ```
 
 - Schema `2` — v1 markers migrate transparently on load.
-- Monotonic `generation` increments per `mark_pending`; conditional clear keyed on observed generation prevents stale workers from clobbering newer state.
-- `created_at_unix_ms` records when the marker was written; >5 minute age → cleared by `startup_recover_pending`.
+- Monotonic `generation` increments per `record_pending_mutation` (the only writer). **Release 5 corrective:** `mark_pending` is a legacy alias preserved for the `doctor --compatibility` interface, but every production call site has been migrated to `record_pending_mutation` so generation ownership is unambiguous.
+- `clear_if_generation_matches(observed_generation)` is the only clear path; stale workers cannot clobber newer state.
+- `created_at_unix_ms` records when the marker was written; >5 minute age → cleared by `startup_recover_pending` only after re-checking the lock state.
 - `integrity` is `crc32:<hex>` over the serialized snapshot — rejects tampered files.
 - Written atomically via `tempfile + rename + fsync`.
 - No secrets, commands, or snippet content in the file.
@@ -197,49 +203,60 @@ started_at_unix_ms = 1700000000000
 nonce = "abc-12345-def"
 ```
 
-- Atomic acquisition via `OpenOptions::create_new(true)` — only one parent wins.
+- Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
+- **Release 5 corrective:** the parent never acquires the lock. The lock exists for the worker; the parent only inspects it (via `lock::process_alive`) to detect liveness.
 - Stale detection: `kill -0 pid` on Unix (process dead → stale), plus >5 minute age.
 - Stale locks are reclaimed transparently by `try_acquire`.
 - Restrictive permissions (0o600 on Unix).
 - Worker lock is **released** at worker exit (RAII `Drop` removes the file).
-- Parent lock after successful spawn is `mem::forget`-ed (the file outlives the parent) so the worker can detect it via `inspect`.
+- Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the lock and exactly one wins.
 
 ## Worker Lifecycle
 
 ```text
 Parent (snp new)
   |
-  |-- mark_pending(state_dir) -> generation=N
-  |-- try_acquire(state_dir)  -> WorkerLock (held)
-  |-- spawn_worker(current_exe, "auto-sync-worker", state_dir, nonce)
-  |     |-- setsid() / DETACHED_PROCESS | CREATE_NO_WINDOW
-  |     |-- stdin/stdout/stderr -> null
-  |     |-- fork+exec child
-  |-- mem::forget(WorkerLock) so lock file outlives parent
+  |-- record_pending_mutation(state_dir, snapshot) -> PendingState{generation=N, ...}
+  |     (only writer/incrementer; conditional write)
+  |-- schedule_existing_pending(state_dir)
+  |     -> spawn::spawn_worker(current_exe, "auto-sync-worker", --state-dir)
+  |           |-- setsid() / DETACHED_PROCESS | CREATE_NO_WINDOW
+  |           |-- stdin/stdout/stderr -> null
+  |           |-- fork+exec child
+  |           (parent does NOT acquire the worker lock)
   |-- return Scheduled{generation=N} to mutation command
 
-Child (snp auto-sync-worker --state-dir ... --nonce ...)
+Child (snp auto-sync-worker --state-dir ...)
   |
   |-- AutoSyncPolicy::resolve(get_sync_settings())
   |-- try_acquire(state_dir)
   |     |-- AlreadyHeld -> NothingToDo (another worker owns it)
-  |-- nonce_already_used? -> NothingToDo
-  |-- read_state_from_dir(state_dir) -> PendingState
-  |-- execute_sync(state_dir, &pending, &policy)
-  |     |-- if !policy.enabled -> clear_if_generation_matches, NothingToDo
-  |     |-- run_with_timeout(run_default_sync, sync_timeout)
-  |     |-- on Ok -> Success, record_success
-  |     |-- on Err -> Failed, record_failure (preserves pending)
+  |-- read_state_from_dir(state_dir) -> PendingState{generation, timestamp, snapshot}
+  |-- DEBOUNCE LOOP (bounded by max_lifetime, default 5 minutes):
+  |     |-- compute_deadline(observed_timestamp, policy.debounce, start, max_lifetime)
+  |     |-- wait_for_quiet(state_dir, observed_generation, deadline, ...)
+  |           (reloads marker every ≤250ms; if a newer generation appears,
+  |            this iteration observes the change via reload and may restart
+  |            the loop with the new generation)
+  |     |-- execute_sync(state_dir, observed_generation, observed_snapshot, policy)
+  |           |-- if !policy.enabled -> WorkerOutcome::NothingToDo
+  |           |-- run_async_with_timeout(policy.sync_timeout)
+  |                 -> run_default_sync on a worker-owned Tokio runtime,
+  |                    cancelled via tokio::time::timeout on expiry
+  |     |-- if Success && newer_generation_observed -> continue loop (follow-up)
+  |     |-- if Success && no newer generation -> clear_if_generation_matches, exit
+  |     |-- if Failed -> preserve pending, exit
   |-- exit(0)  (WorkerOutcome mapping is internal; parent never sees it)
 ```
 
 ## Retry and Backoff
 
-There is no in-process retry loop. The detached worker attempts one sync, bounded by `sync_timeout`. If that attempt fails:
+There is no in-process retry loop. The detached worker attempts one sync per generation, bounded by `sync_timeout`. The debounce loop may cycle multiple times in one worker invocation:
 
-- The pending marker is preserved (generation unchanged).
-- The next `mark_pending` from a future mutation will increment the generation, signaling that any later worker should re-attempt.
-- `startup_recover_pending` clears stale pending state (>5 min) on next parent startup.
+- If sync succeeds but a newer generation is now on disk, the worker loops again to service the newer work.
+- If sync fails, the worker exits; the pending marker is preserved (generation unchanged).
+- The next `record_pending_mutation` from a future mutation will increment the generation, signaling that the next worker should service the new work.
+- `startup_recover_pending` clears stale pending state (>5 min) on next parent startup, then re-spawns a worker to retry.
 
 For users who want stronger delivery guarantees, manual `snp sync` and `snp cron` remain the canonical recovery paths.
 
@@ -263,9 +280,9 @@ The `favorite` and `folders` fields are also local-only — preserved when serve
 
 When `--sync` flag is used (on `run`, `clip`, `search`, or TUI delete):
 
-1. Explicit sync runs immediately via `run_default_sync()`
-2. Pending auto-sync state is cleared via `clear_pending_after_explicit_sync()`
-3. No duplicate delayed sync for the same mutation generation
+1. Capture the observed pending generation via `observe_pending_generation()` before sync.
+2. Run explicit sync immediately via `run_default_sync()`.
+3. Clear the pending marker via `clear_pending_after_explicit_sync(observed_generation, sync_succeeded)` — **Release 5 corrective:** clearing is conditional on the observed generation, so a mutation that arrived during the sync is preserved for the next worker.
 
 ## Design Decisions
 
