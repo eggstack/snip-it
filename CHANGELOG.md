@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Auto-sync integration hardening and closure (Release 5D)**
+  - Created `architecture/auto_sync.md` deep-dive documenting the canonical data flow, trigger matrix, debounce state machine, durable pending state, cross-process locking, retry/backoff, failure policy, and safety invariants.
+  - Updated `architecture/overview.md` to include auto-sync in the sync infrastructure section and deep-dives table.
+  - Updated `docs/PET_COMPATIBILITY.md`: Release 5 auto-sync status changed from "Planned" to "Implemented".
+  - Updated `docs/CLI_EXITCODE_STREAM_POLICY.md`: documented auto-sync error exit code (post-commit nonzero exit when `auto_sync_failure = "error"`).
+  - Reconciled trigger matrix across implementation, tests, and documentation (12 command types).
+  - Architecture reconciliation: all mutation commands route through central `notify_mutation()` — no ad-hoc auto-sync logic outside the coordinator.
+  - Security audit: no command payloads, credentials, or encryption material in lock files, pending markers, or status files.
+  - Documentation reconciled: README, USER_GUIDE, AGENTS.md, CHANGELOG, PET_COMPATIBILITY, architecture docs all aligned with shipped behavior.
+
 ### Changed
 - **Release 2 final serialization corrective — exact TOML round-trips for tabs, trailing spaces, and CRLF**
   - Removed `quote_strings_containing_backslashes` from the save pipeline (`save_library`, `save_snippets`, `save_config`, `save_sync_settings`). The helper silently corrupted tabs, trailing whitespace, and CRLF: its regex could not distinguish triple-quoted multi-line strings from ordinary double-quoted strings, and its single-quoted output preserved TOML escape sequences like `\t` as literal two-character pairs. The `toml::to_string_pretty` serializer already picks the correct quoting and escapes for every character.

@@ -79,6 +79,14 @@ See [library.md](library.md) for detailed data model and persistence behavior.
 - Server `deleted: true` snippets mark local copies as deleted (data preserved)
 - Sync sorts results by `updated_at` descending
 
+**auto_sync.rs** — Optional post-mutation background synchronization
+
+- `AutoSyncPolicy::resolve()` — effective policy from `SyncSettings` (disabled by default)
+- `AutoSyncCoordinator` — stateful debounce engine with durable pending markers and PID-file locking
+- `notify_mutation()` — central API for mutation commands (trigger after local commit)
+- `run_auto_sync()` — wraps `sync_commands::run_default_sync` with lock, retry, backoff
+- See [auto_sync.md](auto_sync.md) for the full deep-dive
+
 See [sync.md](sync.md) for merge strategy details.
 
 ---
@@ -246,4 +254,5 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 | [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
 | [usage.md](usage.md) | Local usage metadata, update policy, storage |
 | [sync.md](sync.md) | Sync protocol, merge logic, conflict resolution |
+| [auto_sync.md](auto_sync.md) | Auto-sync policy, coordinator, debounce, triggers |
 | [tui.md](tui.md) | TUI architecture, keybindings, state machine |

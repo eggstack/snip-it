@@ -282,6 +282,22 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
 8. **`new` prompts** go to stdout, not stderr. Piping `snp new` would see the
    "Command> " prompt on stdout mixed with any piped content.
 
+### Auto-Sync Error Exit Code
+
+When auto-sync is configured with `auto_sync_failure = "error"` and all
+retry attempts are exhausted after a local mutation, the command returns
+a nonzero exit code (1, via `SnipError::Runtime`). The local mutation
+has already succeeded — the exit code reflects the post-commit sync
+failure, not a local failure.
+
+This is a **post-commit** exit code: scripts can distinguish local
+mutation failure (which never reaches the sync stage) from a successful
+local mutation followed by a failed background sync. The local state
+is always readable regardless of the sync failure.
+
+Auto-sync failure messages (`auto-sync failed: <reason>`) go to stderr
+via `eprintln!` — stdout is never contaminated.
+
 ## Proposed Contract (Release 1B+)
 
 ### Exit Codes

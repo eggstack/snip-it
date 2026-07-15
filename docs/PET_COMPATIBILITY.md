@@ -173,7 +173,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Conflict resolution | Last-write-wins on Gist | Last-write-wins based on `updated_at` timestamp. Tombstone propagation for deletions. | Intentional difference | — | Different trust and conflict models. |
 | Modes | Push/pull via Git | `--push-only`, `--pull-only`, `--dry-run`, `--servers`. Bidirectional by default. | New | — | snp-only. |
 | Encryption | Plaintext on GitHub/GitLab | AES-256-GCM + Argon2id key derivation. API keys hashed with Argon2id. | New | — | snp-only. |
-| Auto-sync | `pet` config: `auto_sync = true` | Not yet implemented. Manual/scheduled via `snp cron`. | Planned | R5 | Will add `auto_sync` with debounce. |
+| Auto-sync | `pet` config: `auto_sync = true` | Opt-in via `snp sync config --auto-sync on`. Debounced background sync after local mutations. Local-first semantics. | Implemented | R5 | Disabled by default. Debounce, PID-file locking, durable pending marker. |
 | Cron scheduling | Not built-in (user configures externally) | `snp cron --interval <minutes>` sets up automatic sync. | New | — | snp-only. |
 
 ### 3.8 import / export
@@ -274,7 +274,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Sync backend | GitHub Gist / GitHub Enterprise Gist / GitLab Snippets | Self-hosted gRPC server (`snip-sync`). Encrypted with AES-256-GCM + Argon2id. | Intentional difference | — | Different trust model. snp does not use hosted plaintext sync. |
 | Multi-device | Via Git push/pull | Via gRPC. Device ID tracking. Last-write-wins conflict resolution. | Intentional difference | — | Equivalent goal, different mechanism. |
 | Encryption | Plaintext (GitHub/GitLab handle transport encryption) | End-to-end encryption. API keys hashed with Argon2id. | New | — | snp-only security feature. |
-| Auto-sync | `auto_sync = true` in pet config | Not yet. `snp cron` provides scheduled sync. Manual sync via `snp sync`. | Planned | R5 | Will add auto-sync with debounce and failure handling. |
+| Auto-sync | `auto_sync = true` in pet config | Opt-in via `snp sync config --auto-sync on`. Debounced background sync after local mutations. Failure modes: ignore, warn, error. | Implemented | R5 | Disabled by default. Local-first semantics, durable pending, PID-file locking. |
 | Server management | N/A | `snp register` creates account. `snp sync --servers` lists connected servers. | New | — | snp-only. |
 | Premade libraries | Not supported | `snp premade list/get/sync/search/update` — browse and download community snippet collections from server. | New | — | snp-only feature. |
 
@@ -316,7 +316,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | R4A | Optional sorting | `--sort relevance/recent/last-used/most-used/description/command` |
 | R4B | Output & notes presentation | Expose `output` field in preview, editing, export |
 | R4C | External libraries (deferred) | Deferred — zero demand, sufficient import workflow, high implementation cost | Deferred |
-| R5 | Auto-sync | `auto_sync = true` with debounce and failure handling |
+| R5 | Auto-sync (implemented) | `snp sync config --auto-sync on` with debounce (0–300s), failure handling (ignore/warn/error), PID-file locking, durable pending markers |
 
 ---
 

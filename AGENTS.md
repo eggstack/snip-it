@@ -308,6 +308,22 @@ snip-it/
 - `run_auto_sync()` creates its own Tokio runtime internally — callers don't need to pass one
 - Dry-run, cancel, failure, and no-op paths emit no notification
 
+### Auto-Sync Integration Hardening and Closure (Release 5D)
+
+- Architecture reconciliation: canonical data flow documented in `architecture/auto_sync.md`
+- All mutation commands route through central `notify_mutation()` — no ad-hoc auto-sync logic exists outside the coordinator
+- Trigger matrix reconciled across implementation, tests, and documentation (12 command types)
+- Local-first durability: local commits always succeed before remote work; failed sync never rolls back local state
+- Debounce coalescing: rapid mutations produce one sync attempt with bounded maximum delay (300s)
+- Cross-process safety: PID-file lock with stale detection; no permanent deadlock; no unbounded sync storm
+- Security: no command payloads, credentials, or encryption material in lock files, pending markers, or status files
+- Pending marker bounded, versioned, CRC32 integrity-checked, symlink-resistant creation
+- Manual/scheduled sync behavior unchanged; explicit sync clears pending to prevent duplicate delayed sync
+- Documentation reconciled: README, USER_GUIDE, AGENTS.md, CHANGELOG, PET_COMPATIBILITY, architecture docs
+- `architecture/auto_sync.md` deep-dive created; `architecture/overview.md` updated with auto-sync section
+- `docs/PET_COMPATIBILITY.md` updated: R5 marked as Implemented (was Planned)
+- `docs/CLI_EXITCODE_STREAM_POLICY.md` updated: auto-sync error exit code documented
+
 ### snip-sync CLI
 - Binary defaults to `serve` when no subcommand given (backward compatible)
 - `CONFIG_PATH` env var overrides platform config dir
