@@ -330,7 +330,7 @@ Diagnostics emitted:
 4. SyncMerge origin never triggers auto-sync (prevents loops).
 5. All syncable mutations use one notification API.
 6. Triggers occur strictly after commit.
-7. No command payload, credentials, or encryption material in coordinator artifacts (pending marker, lock file, worker argv, worker env).
+7. No command payload, credentials, or encryption material in worker artifacts (pending marker, lock file, worker argv, worker env).
 8. Manual and scheduled sync remain independent.
 9. Local state survives every remote/scheduling failure.
 10. No auto-sync fields enter snippet TOML, ProtoSnippet, or import/export schema.

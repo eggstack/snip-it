@@ -746,3 +746,82 @@ auto_sync_failure = "ignore"
         "marker must carry CRC32 integrity"
     );
 }
+
+/// Scenario 16: parent stdout and stderr contain no auto-sync debug output.
+///
+/// The worker is detached and writes to null (or an opt-in log file).
+/// The parent's stdout and stderr must remain free of auto-sync
+/// internals — only user-facing output (success messages, errors) should
+/// appear.
+#[test]
+fn test_parent_stdout_stderr_contain_no_sync_debug() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:1"
+api_key = "k"
+device_id = "d"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "detached"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "detached"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "contamination check",
+        "--library",
+        "detached",
+    ]);
+    let output = output_with_stdin(cmd, b"echo contamination");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // These patterns must never appear in the parent's terminal output.
+    let forbidden = [
+        "auto-sync worker",
+        "auto_sync",
+        "try_acquire",
+        "WorkerLock",
+        "pending::",
+        "record_pending_mutation",
+        "schedule_existing_pending",
+        "run_locked",
+        "execute_sync",
+        "clear_if_generation_matches",
+        "wait_for_quiet",
+        "compute_deadline",
+    ];
+    for pattern in &forbidden {
+        assert!(
+            !stdout.contains(pattern),
+            "parent stdout contains auto-sync debug '{pattern}': {stdout}"
+        );
+        assert!(
+            !stderr.contains(pattern),
+            "parent stderr contains auto-sync debug '{pattern}': {stderr}"
+        );
+    }
+
+    // But the user-facing output should still be present.
+    assert!(
+        output.status.success(),
+        "new command should succeed, got stderr: {stderr}"
+    );
+}

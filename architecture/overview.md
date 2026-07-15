@@ -84,7 +84,7 @@ See [library.md](library.md) for detailed data model and persistence behavior.
 - `AutoSyncPolicy::resolve()` — effective policy from `SyncSettings` (disabled by default)
 - `notify_mutation()` — central API for mutation commands (trigger after local commit)
 - `mark_pending()` — durable pending marker with monotonic generation and CRC32 integrity
-- `try_schedule()` — acquires worker lock and re-execs `snp auto-sync-worker` detached
+- `schedule_existing_pending()` — re-execs `snp auto-sync-worker` detached (parent never holds the lock)
 - `auto-sync-worker` (hidden subcommand) — runs one sync attempt, bounded by `sync_timeout`
 - See [auto_sync.md](auto_sync.md) for the full deep-dive
 

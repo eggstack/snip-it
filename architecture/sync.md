@@ -193,9 +193,9 @@ pub enum MutationOrigin {
 
 The detached one-shot worker replaces the earlier in-process coordinator. After
 the parent mutation command commits the local change, it records a durable
-pending marker, acquires a worker lock, and re-execs the current binary as
-`snp auto-sync-worker` with platform-detached flags. The worker runs in its own
-session and exits independently.
+pending marker and re-execs the current binary as `snp auto-sync-worker` with
+platform-detached flags. The worker races for the lock, performs debounce and
+sync, and exits independently. The parent never acquires the worker lock.
 
 ### Architecture
 
@@ -204,25 +204,28 @@ Mutation command (parent)
   -> atomic local commit
   -> notify_mutation(kind, origin)
   -> AutoSyncPolicy::resolve()
-  -> mark_pending(state_dir) -> PendingState{generation}
-  -> try_acquire(state_dir) -> WorkerLock
-  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir, nonce)
-     -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
-     -> stdin/stdout/stderr -> null
-     -> child process detached
-  -> mem::forget(WorkerLock) so lock file outlives parent
+  -> pending::record_pending_mutation(state_dir, snapshot) -> PendingState{generation}
+  -> worker::schedule_existing_pending(state_dir)  [NEVER mutates pending state]
+     -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir)
+        -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
+        -> stdin/stdout/stderr -> null
+        -> child process detached
   -> return AutoSyncNotificationResult::Scheduled{generation}
 
 snp auto-sync-worker (child, detached)
   -> AutoSyncPolicy::resolve(get_sync_settings())
-  -> try_acquire(state_dir) -> WorkerLock (or AlreadyHeld -> NothingToDo)
-  -> nonce_already_used? -> NothingToDo
+  -> lock::try_acquire(state_dir) -> WorkerLock (or AlreadyHeld -> NothingToDo)
   -> read_state_from_dir(state_dir) -> PendingState
-  -> execute_sync(state_dir, &pending, &policy)
-     -> run_with_timeout(run_default_sync, sync_timeout)
-        -> on Ok: clear_if_generation_matches(state_dir, generation)
-        -> on Err: record_failure(state_dir, generation, classification)
-  -> exit(0)
+  -> debounce loop:
+     -> compute deadline from observed timestamp + policy.debounce
+     -> sleep in ≤250ms increments, reloading marker each time
+     -> restart deadline if newer generation detected
+  -> execute_sync(state_dir, generation, snapshot, policy)
+     -> run_async_with_timeout(run_default_sync_async, sync_timeout)
+        -> on success: clear_if_generation_matches(state_dir, generation)
+        -> on failure: record_failure(state_dir, generation, classification)
+  -> reload marker; if newer generation exists, run another cycle
+  -> release lock, exit(0)
 ```
 
 ### AutoSyncNotificationResult
@@ -296,13 +299,12 @@ started_at_unix_ms = 1700000000000
 nonce = "abc-12345-def"
 ```
 
-- Atomic acquisition via `OpenOptions::create_new(true)` — only one parent wins.
+- Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
+- The parent never acquires the lock — every spawned worker races for it.
 - Stale detection: `kill -0 pid` on Unix (dead process → stale) plus
   `>5 minute` age threshold.
 - Stale locks are reclaimed transparently by `try_acquire`.
 - RAII `Drop` removes the file when the worker exits.
-- The parent `mem::forget`s the lock after successful spawn so the lock file
-  outlives the parent and the worker can detect it via `inspect`.
 - Restrictive permissions (0o600 on Unix).
 - **Platform note:** `kill -0` is Unix-only. On non-Unix platforms the lock
   check is conservative (treats non-existent processes as alive), and the

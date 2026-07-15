@@ -261,16 +261,22 @@ mutation command (new/edit/delete/import/library)
     → load SyncSettings → resolve AutoSyncPolicy
     → if disabled → return Disabled (no-op)
     → if origin == SyncMerge → return Suppressed (no feedback loop)
-    → run_auto_sync(policy, state_dir)
-      → acquire CoordinatorLock (PID-file)
-      → spawn sync thread with bounded timeout
-      → sync_commands::run_default_sync()
-        → encrypted gRPC exchange with snip-sync server
-      → on success: clear pending marker
-      → on failure: classify (Network/Auth/Conflict/Unknown),
-        apply failure mode (Ignore/Warn/Error)
-      → release lock
-    → return AutoSyncNotificationResult::Executed(status)
+    → pending::record_pending_mutation(state_dir, snapshot)
+      → PendingState{generation: N+1, ...}
+    → worker::schedule_existing_pending(state_dir)  [never mutates pending]
+      → spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir)
+    → return AutoSyncNotificationResult::Scheduled{generation}
+
+snp auto-sync-worker (detached child process)
+  → lock::try_acquire(state_dir) → WorkerLock (or AlreadyHeld → exit NothingToDo)
+  → read pending state (observed generation/timestamp)
+  → debounce loop: sleep in ≤250ms increments, reload marker, restart on newer generation
+  → execute_sync(state_dir, generation, snapshot, policy)
+    → run_async_with_timeout(run_default_sync_async, sync_timeout)
+    → on success: pending::clear_if_generation_matches(state_dir, generation)
+    → on failure: pending::record_failure(state_dir, generation, classification)
+  → reload marker; if newer generation exists, run another cycle
+  → release lock, exit(0)
 ```
 
 Key invariants:
@@ -278,6 +284,8 @@ Key invariants:
 - Remote failure never rolls back local state.
 - Sync-merge writes never trigger auto-sync (prevents feedback loops).
 - Explicit manual sync clears pending auto-sync state (prevents duplicates).
+- Parent never acquires the worker execution lock — only the detached worker does.
+- Scheduling never mutates the pending marker; only `record_pending_mutation` increments generation.
 
 ## Exit Codes
 
