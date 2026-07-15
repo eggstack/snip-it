@@ -88,6 +88,55 @@ updated_at = 200
     }
 
     #[allow(dead_code)]
+    pub fn write_sync_toml_auto_sync_enabled(config_dir: &Path) {
+        let sync_path = config_dir.join("sync.toml");
+        fs::write(
+            &sync_path,
+            r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-api-key-12345"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "warn"
+"#,
+        )
+        .unwrap();
+    }
+
+    /// Write sync.toml with auto_sync enabled and ignore failure mode (faster tests).
+    #[allow(dead_code)]
+    pub fn write_sync_toml_auto_sync_ignore(config_dir: &Path) {
+        let sync_path = config_dir.join("sync.toml");
+        fs::write(
+            &sync_path,
+            r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-api-key-12345"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+        )
+        .unwrap();
+    }
+
+    #[allow(dead_code)]
+    pub fn create_test_library_for_auto_sync(config_dir: &Path, name: &str) {
+        let mut cmd = snp_in(config_dir);
+        cmd.args(["library", "create", name]);
+        cmd.output().unwrap();
+        let mut cmd = snp_in(config_dir);
+        cmd.args(["library", "set-primary", name]);
+        cmd.output().unwrap();
+    }
+
+    #[allow(dead_code)]
     pub fn golden_corpus() -> Vec<(&'static str, &'static str)> {
         vec![
             ("ascii_simple", "echo hello world"),
