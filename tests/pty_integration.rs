@@ -9,6 +9,19 @@
 //! Uses `portable-pty` to create a pseudo-terminal pair. Keys are written
 //! directly to the master fd (bypassing `UnixMasterWriter::drop` which
 //! sends VEOF and interferes with crossterm's event loop).
+//!
+//! Unix-only: writes raw bytes to master fds and calls `libc::write`,
+//! which is not available on Windows. The `portable_pty::MasterPty`
+//! trait's `as_raw_fd` method is itself `#[cfg(unix)]`. Excluding
+//! this file on Windows via `--skip pty_integration::*` at the CI
+//! boundary would not help because the file must still compile.
+//! So we gate the whole module here. The non-PTY exit-code
+//! assertions in `tests/integration.rs` and the smoke checks in
+//! `tests/release4_regression.rs::test_select_exit_code_contract_unchanged`
+//! continue to provide OS-agnostic coverage of the select cancel
+//! contract on Windows.
+
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Read;
