@@ -29,14 +29,8 @@ pub enum AutoSyncNotificationResult {
 }
 
 pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult {
-    eprintln!("NOTIFY-MUTATION-DIAG: entered kind={kind:?} origin={origin:?}");
     let settings = get_sync_settings();
     let policy = AutoSyncPolicy::resolve(&settings);
-    eprintln!(
-        "NOTIFY-MUTATION-DIAG: policy.enabled={} should_trigger={}",
-        policy.enabled,
-        policy.should_trigger()
-    );
     notify_local_mutation(
         &policy,
         MutationContext {

@@ -95,11 +95,6 @@ fn mark_pending_internal(
     atomic_write(&path, serialized.as_bytes())?;
     restrict_permissions(&path);
 
-    eprintln!(
-        "PARENT-DIAG: wrote pending marker gen={new_generation} path={}",
-        path.display()
-    );
-
     Ok(PendingState {
         generation: new_generation,
         snapshot: on_disk.snapshot,

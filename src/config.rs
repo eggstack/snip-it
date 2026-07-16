@@ -315,6 +315,13 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
 ) -> Result<String, D::Error> {
     let raw: String = Deserialize::deserialize(deserializer)?;
     if raw == KEYCHAIN_MARKER {
+        if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
+            tracing::warn!(
+                "sync.toml stores API key as `@keychain` marker but plaintext mode is enabled; \
+                 keeping marker in-memory. Subsequent sync operations may fail."
+            );
+            return Ok(raw);
+        }
         match keychain_retrieve(KEYCHAIN_DEFAULT_USER) {
             Ok(key) => Ok(key),
             Err(e) => {
@@ -457,22 +464,12 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
 pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let path = get_sync_config_path();
-    eprintln!(
-        "LOAD-SYNC-DIAG: path={} exists={}",
-        path.display(),
-        path.exists()
-    );
 
     if !path.exists() {
         return Ok(SyncSettings::default());
     }
 
     let content = cached_read_toml(&path)?;
-    eprintln!(
-        "LOAD-SYNC-DIAG: content_len={} first_60={:?}",
-        content.len(),
-        content.chars().take(60).collect::<String>()
-    );
 
     if !verify_integrity(&content) {
         tracing::warn!("sync.toml integrity check failed — file may be corrupted. Using defaults.");
