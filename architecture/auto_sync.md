@@ -49,12 +49,13 @@ detached worker process (snp auto-sync-worker --state-dir ...)
 The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 
 - `policy.rs` — `AutoSyncPolicy`, `MutationKind`, `MutationOrigin`, `FailureClass`, debounce/timeout constants
-- `pending.rs` — durable `PendingState` (schema v2, CRC32 integrity), v1 → v2 migration
-- `lock.rs` — `WorkerLock` RAII, `WorkerLockContents` (`pid`/`started_at_unix_ms`/`nonce`), `process_alive`
+- `pending.rs` — durable `PendingState` (schema v2, CRC32 integrity), v1 → v2 migration, `ConditionalClearResult`
+- `pending_lock.rs` — `PendingTxnGuard` RAII, short-lived transaction lock for pending-marker operations, unique temp paths, atomic writes, directory fsync
+- `lock.rs` — `WorkerLock` RAII, `WorkerLockContents` (`pid`/`started_at_unix_ms`/`nonce`), `process_alive`, ownership-checked drop
 - `spawn.rs` — `spawn_worker`, `apply_platform_detach` (libc `setsid` on Unix, `DETACHED_PROCESS|CREATE_NO_WINDOW` on Windows)
 - `worker.rs` — `run`, `try_schedule`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`
 - `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`
-- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, worker_lock}` helpers used by `snp doctor`
+- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock}` helpers used by `snp doctor`
 
 ## Key Types
 
@@ -116,6 +117,16 @@ pub struct PendingState {
     pub generation: u64,
     pub snapshot: PendingSnapshot,
     pub created_at_unix_ms: u64,
+}
+```
+
+### ConditionalClearResult
+
+```rust
+pub enum ConditionalClearResult {
+    Cleared,
+    Missing,
+    GenerationChanged { current: u64 },
 }
 ```
 
@@ -185,17 +196,39 @@ integrity = "crc32:441c462e"
 ```
 
 - Schema `2` — v1 markers migrate transparently on load.
-- Monotonic `generation` increments per `record_pending_mutation` (the only writer). **Release 5 corrective:** `mark_pending` is a legacy alias preserved for the `doctor --compatibility` interface, but every production call site has been migrated to `record_pending_mutation` so generation ownership is unambiguous.
-- `clear_if_generation_matches(observed_generation)` is the only clear path; stale workers cannot clobber newer state.
+- Monotonic `generation` increments per `record_pending_mutation` (the only writer). **Release 5E corrective:** `mark_pending` is module-private; all generation writes go through `record_pending_mutation` under `PendingTxnGuard`.
+- `clear_if_generation_matches(observed_generation)` returns typed `ConditionalClearResult` (Cleared/Missing/GenerationChanged); stale workers cannot clobber newer state. **Release 5E corrective:** the read-compare-delete is atomic under `PendingTxnGuard`.
 - `created_at_unix_ms` records when the marker was written; >5 minute age → cleared by `startup_recover_pending` only after re-checking the lock state.
-- `integrity` is `crc32:<hex>` over the serialized snapshot — rejects tampered files.
-- Written atomically via `tempfile + rename + fsync`.
+- `integrity` is `crc32:<hex>` over all behavior-driving fields (schema, generation, created_at_unix_ms, snapshot) — rejects tampered or corrupted files.
+- Written atomically via unique temp file per transaction (`pending_lock::unique_temp_path`) + rename + fsync + directory fsync.
 - No secrets, commands, or snippet content in the file.
 - 0o600 permissions on Unix.
 
 ## Cross-Process Locking
 
+### Pending Transaction Lock
+
+**File:** `~/.config/snp/auto-sync-pending.lock`
+
+Short-lived lock protecting read-modify-write operations on the pending marker. Distinct from the worker execution lock.
+
+```toml
+pid = 12345
+nonce = "abc-12345-def"
+created_at_unix_ms = 1700000000000
+```
+
+- Atomic acquisition via `OpenOptions::create_new(true)`.
+- **Release 5E corrective:** ownership-checked drop — only removes lock if PID and nonce still match.
+- Dead-owner reclaim via `kill -0`; live owners never stolen regardless of age.
+- Bounded retry with 1-5ms jitter up to 500ms.
+- 0o600 permissions on Unix.
+
+### Worker Execution Lock
+
 **File:** `~/.config/snp/auto-sync-worker.lock`
+
+Long-lived lock protecting the sync execution lifecycle.
 
 ```toml
 pid = 12345
@@ -205,10 +238,9 @@ nonce = "abc-12345-def"
 
 - Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
 - **Release 5 corrective:** the parent never acquires the lock. The lock exists for the worker; the parent only inspects it (via `lock::process_alive`) to detect liveness.
-- Stale detection: `kill -0 pid` on Unix (process dead → stale), plus >5 minute age.
-- Stale locks are reclaimed transparently by `try_acquire`.
+- Stale detection: `kill -0 pid` on Unix (process dead → stale). **Release 5E corrective:** live PID means owned regardless of age — no age-based stale classification.
+- **Release 5E corrective:** `Drop` reads the current lock record and removes it only when PID and nonce match the guard. An old guard never removes a replacement owner's lock.
 - Restrictive permissions (0o600 on Unix).
-- Worker lock is **released** at worker exit (RAII `Drop` removes the file).
 - Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the lock and exactly one wins.
 
 ## Worker Lifecycle
@@ -314,6 +346,7 @@ Auto-sync is convenience, not durable delivery. The durable pending marker survi
 `snp doctor --compatibility` inspects auto-sync state using the new path helpers:
 - `paths::state_dir()` — directory containing all auto-sync artifacts.
 - `paths::pending_marker()` — full path to the pending TOML.
+- `paths::pending_txn_lock()` — full path to the pending transaction lock.
 - `paths::worker_lock()` — full path to the worker lock TOML.
 
 Diagnostics emitted:
@@ -337,7 +370,10 @@ Diagnostics emitted:
 11. Worker is fully detached — its lifetime is not coupled to the parent's TTY.
 12. Cross-process safety: stale locks reclaimed, dead processes detected via `kill -0`, no permanent deadlock.
 13. Pending state generation is monotonic and conditional — stale workers cannot clobber fresh state.
-14. Pending marker integrity-checked via CRC32; tampered files fail closed.
+14. Pending marker integrity-checked via CRC32 over all behavior-driving fields; tampered files fail closed.
+15. **Release 5E:** Pending marker mutations serialized via `PendingTxnGuard`; unique temp files per transaction.
+16. **Release 5E:** Worker lock ownership-checked on drop; old owners cannot remove replacement locks.
+17. **Release 5E:** Live worker locks never stolen due to age; dead-owner reclaim via `kill -0` only.
 
 ## Hidden Subcommand
 

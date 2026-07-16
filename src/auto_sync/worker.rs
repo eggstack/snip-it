@@ -350,6 +350,7 @@ pub fn clear_after_explicit_sync(
         return Ok(false);
     }
     pending::clear_if_generation_matches(state_dir, observed_generation)
+        .map(|result| matches!(result, pending::ConditionalClearResult::Cleared))
 }
 
 /// Reads the current pending generation, if any. Used by callers of

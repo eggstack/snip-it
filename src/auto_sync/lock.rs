@@ -54,7 +54,12 @@ impl WorkerLock {
 
 impl Drop for WorkerLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(contents) = inspect(&self.path)
+            && contents.pid == std::process::id()
+            && contents.nonce == self.nonce
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -102,11 +107,7 @@ pub fn inspect(path: &Path) -> Option<WorkerLockContents> {
 }
 
 pub fn is_stale(contents: &WorkerLockContents) -> bool {
-    if !process_alive(contents.pid) {
-        return true;
-    }
-    let now_ms = unix_now_ms();
-    now_ms.saturating_sub(contents.started_at_unix_ms) > STALE_LOCK_THRESHOLD_SECS * 1000
+    !process_alive(contents.pid)
 }
 
 #[cfg(unix)]
@@ -175,18 +176,49 @@ mod tests {
     }
 
     #[test]
-    fn test_stale_lock_replaced() {
+    fn test_dead_pid_lock_replaced() {
         let dir = TempDir::new().unwrap();
         let contents = WorkerLockContents {
             pid: 1,
-            started_at_unix_ms: unix_now_ms() - (STALE_LOCK_THRESHOLD_SECS * 1000) - 1000,
-            nonce: "stale".to_string(),
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "dead-pid".to_string(),
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(lock_path(dir.path()), serialized).unwrap();
 
         let lock = try_acquire(dir.path()).unwrap();
-        assert_eq!(lock.nonce, lock.nonce);
+        assert_ne!(lock.nonce(), "dead-pid");
+    }
+
+    #[test]
+    fn test_live_owner_not_stolen_by_age() {
+        let dir = TempDir::new().unwrap();
+        let lock1 = try_acquire(dir.path()).unwrap();
+        let nonce1 = lock1.nonce().to_string();
+
+        let result = try_acquire(dir.path());
+        assert!(matches!(result, Err(LockError::AlreadyHeld { .. })));
+
+        drop(lock1);
+        let lock2 = try_acquire(dir.path()).unwrap();
+        assert_ne!(lock2.nonce(), nonce1);
+    }
+
+    #[test]
+    fn test_old_guard_does_not_remove_replacement_lock() {
+        let dir = TempDir::new().unwrap();
+        let lock1_path = lock_path(dir.path());
+
+        let lock1 = try_acquire(dir.path()).unwrap();
+        let nonce1 = lock1.nonce().to_string();
+
+        drop(lock1);
+
+        let lock2 = try_acquire(dir.path()).unwrap();
+        let nonce2 = lock2.nonce().to_string();
+        assert_ne!(nonce1, nonce2);
+
+        assert!(lock1_path.exists());
     }
 
     #[test]
