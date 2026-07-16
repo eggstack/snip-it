@@ -39,7 +39,7 @@ fn new_snippet(config_dir: &Path, desc: &str) {
         "detached",
     ]);
     let out = output_with_stdin(cmd, format!("echo {desc}").as_bytes());
-    if !out.status.success() {
+    if !out.status.success() && std::env::var_os("SNP_TEST_VERBOSE").is_some() {
         eprintln!(
             "NEW-SNIPPET-FAILED: desc={desc} status={:?} stderr={}",
             out.status,
@@ -118,38 +118,43 @@ auto_sync_failure = "ignore"
     .unwrap();
 
     let gen_before = read_generation(&config_dir);
-    if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
-        eprintln!("DIAG-BEFORE: sync.toml len={} raw=\n{raw}", raw.len());
-    } else {
-        eprintln!("DIAG-BEFORE: sync.toml unreadable");
+    let verbose = std::env::var_os("SNP_TEST_VERBOSE").is_some();
+    if verbose {
+        if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
+            eprintln!("DIAG-BEFORE: sync.toml len={} raw=\n{raw}", raw.len());
+        } else {
+            eprintln!("DIAG-BEFORE: sync.toml unreadable");
+        }
     }
     new_snippet(&config_dir, "single mutation");
     let pending_path = pending_path(&config_dir);
     let lock_path = lock_path(&config_dir);
-    eprintln!(
-        "DIAG: config_dir={} pending_exists={} lock_exists={} sync_toml_exists={}",
-        config_dir.display(),
-        pending_path.exists(),
-        lock_path.exists(),
-        config_dir.join("sync.toml").exists()
-    );
-    if let Ok(raw) = fs::read_to_string(&pending_path) {
-        eprintln!("DIAG: pending raw=\n{raw}");
-    } else {
-        eprintln!("DIAG: pending file missing or unreadable");
-    }
-    if let Ok(raw) = fs::read_to_string(&lock_path) {
-        eprintln!("DIAG: lock raw=\n{raw}");
-    }
-    if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
-        eprintln!("DIAG: sync.toml raw=\n{raw}");
-    }
-    let lib_dir = config_dir.join("libraries");
-    if lib_dir.exists() {
-        eprintln!("DIAG: libraries dir contents:");
-        if let Ok(entries) = fs::read_dir(&lib_dir) {
-            for entry in entries.flatten() {
-                eprintln!("DIAG:   {}", entry.path().display());
+    if verbose {
+        eprintln!(
+            "DIAG: config_dir={} pending_exists={} lock_exists={} sync_toml_exists={}",
+            config_dir.display(),
+            pending_path.exists(),
+            lock_path.exists(),
+            config_dir.join("sync.toml").exists()
+        );
+        if let Ok(raw) = fs::read_to_string(&pending_path) {
+            eprintln!("DIAG: pending raw=\n{raw}");
+        } else {
+            eprintln!("DIAG: pending file missing or unreadable");
+        }
+        if let Ok(raw) = fs::read_to_string(&lock_path) {
+            eprintln!("DIAG: lock raw=\n{raw}");
+        }
+        if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
+            eprintln!("DIAG: sync.toml raw=\n{raw}");
+        }
+        let lib_dir = config_dir.join("libraries");
+        if lib_dir.exists() {
+            eprintln!("DIAG: libraries dir contents:");
+            if let Ok(entries) = fs::read_dir(&lib_dir) {
+                for entry in entries.flatten() {
+                    eprintln!("DIAG:   {}", entry.path().display());
+                }
             }
         }
     }
