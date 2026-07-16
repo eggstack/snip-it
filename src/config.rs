@@ -457,7 +457,11 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
 pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let path = get_sync_config_path();
-    eprintln!("LOAD-SYNC-DIAG: path={} exists={}", path.display(), path.exists());
+    eprintln!(
+        "LOAD-SYNC-DIAG: path={} exists={}",
+        path.display(),
+        path.exists()
+    );
 
     if !path.exists() {
         return Ok(SyncSettings::default());

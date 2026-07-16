@@ -29,6 +29,7 @@ fn new_snippet(config_dir: &Path, desc: &str) {
     let mut cmd = snp_in(config_dir);
     cmd.env("SNP_AUTO_SYNC_WORKER_LOG", config_dir.join("worker.log"));
     cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+    cmd.env("RUST_BACKTRACE", "1");
     cmd.args([
         "new",
         "--command-stdin",
@@ -37,7 +38,14 @@ fn new_snippet(config_dir: &Path, desc: &str) {
         "--library",
         "detached",
     ]);
-    let _ = output_with_stdin(cmd, format!("echo {desc}").as_bytes());
+    let out = output_with_stdin(cmd, format!("echo {desc}").as_bytes());
+    if !out.status.success() {
+        eprintln!(
+            "NEW-SNIPPET-FAILED: desc={desc} status={:?} stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 fn pending_path(config_dir: &Path) -> std::path::PathBuf {
