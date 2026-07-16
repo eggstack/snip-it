@@ -141,9 +141,7 @@ fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> Wo
         }
 
         let outcome = execute_sync(state_dir, observed_generation, &observed_snapshot, policy);
-        eprintln!(
-            "WORKER-DIAG: cycle outcome={outcome:?} generation={observed_generation}"
-        );
+        eprintln!("WORKER-DIAG: cycle outcome={outcome:?} generation={observed_generation}");
 
         match outcome {
             WorkerOutcome::Success => {
