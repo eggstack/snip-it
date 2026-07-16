@@ -10,6 +10,7 @@ This document provides a bird's-eye view of the snip-it codebase. Each section l
 - [TUI & User Interface](#tui--user-interface)
 - [Utilities](#utilities)
 - [Server (snip-sync)](#server-snip-sync)
+- [Deep Dives](#deep-dives)
 
 ---
 
@@ -253,10 +254,39 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 
 | File | Subject |
 |------|---------|
+| **CLI & Commands** | |
+| [cli.md](cli.md) | CLI entry point, argument parsing, dispatch |
 | [commands/mod.md](commands/mod.md) | Shared command helpers and path resolution |
+| [commands/new_cmd.md](commands/new_cmd.md) | Snippet creation (arg/stdin/file/editor/multiline) |
+| [commands/run_cmd.md](commands/run_cmd.md) | TUI selection + shell execution |
+| [commands/clip_cmd.md](commands/clip_cmd.md) | Copy snippet to clipboard |
+| [commands/search_cmd.md](commands/search_cmd.md) | Fuzzy search with detail display |
+| [commands/list_cmd.md](commands/list_cmd.md) | Text-based snippet listing |
+| [commands/edit_cmd.md](commands/edit_cmd.md) | Open snippet in `$EDITOR` |
+| [commands/sync_cmd.md](commands/sync_cmd.md) | Sync and config subcommands |
+| [commands/cron_cmd.md](commands/cron_cmd.md) | Crontab generation for periodic sync |
+| [commands/register_cmd.md](commands/register_cmd.md) | Device registration |
+| [commands/library_cmd.md](commands/library_cmd.md) | Library management subcommands |
+| [commands/premade_cmd.md](commands/premade_cmd.md) | Premade library access |
+| [commands/keybindings_cmd.md](commands/keybindings_cmd.md) | TUI keybindings reference |
+| **Core Data** | |
+| [core.md](core.md) | Core types, error handling, key abstractions |
 | [library.md](library.md) | Data structures, persistence, library management |
-| [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
-| [usage.md](usage.md) | Local usage metadata, update policy, storage |
+| [config.md](config.md) | Sync settings, path resolution, keychain API key |
+| [encryption.md](encryption.md) | AES-256-GCM end-to-end encryption |
+| **Sync** | |
 | [sync.md](sync.md) | Sync protocol, merge logic, conflict resolution |
 | [auto_sync.md](auto_sync.md) | Auto-sync policy, coordinator, debounce, triggers |
+| **UI** | |
 | [tui.md](tui.md) | TUI architecture, keybindings, state machine |
+| [ui.md](ui.md) | UI components, rendering, theme system |
+| **Server** | |
+| [server.md](server.md) | snip-sync server architecture, gRPC/HTTP, database |
+| [proto.md](proto.md) | Protobuf definitions, gRPC service spec |
+| **Utilities** | |
+| [utils.md](utils.md) | Config paths, TOML helpers, variable expansion |
+| [clipboard.md](clipboard.md) | Cross-platform clipboard access |
+| [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
+| [usage.md](usage.md) | Local usage metadata, update policy, storage |
+| [output.md](output.md) | Snippet output field rendering |
+| [logging.md](logging.md) | Structured logging, audit trail, panic handler |
