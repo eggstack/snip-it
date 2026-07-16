@@ -285,8 +285,10 @@ integrity = "crc32:441c462e"
   transparently to v2 on load.
 - `created_at_unix_ms` is used by `startup_recover_pending` to clear stale
   markers older than 5 minutes.
-- `integrity` is `crc32:<hex>` over the serialized snapshot.
-- Atomic write via `tempfile + rename + fsync`.
+- `integrity` is `crc32:<hex>` over all behavior-driving fields: schema,
+  generation, created_at_unix_ms, and serialized snapshot.
+- Atomic write via unique temp file (PID + nanosecond timestamp) + rename +
+  directory fsync. Unique temp files prevent concurrent writer corruption.
 - 0o600 permissions on Unix. No secrets, commands, or snippet content.
 
 ### Cross-Process Worker Lock
@@ -301,14 +303,41 @@ nonce = "abc-12345-def"
 
 - Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
 - The parent never acquires the lock — every spawned worker races for it.
-- Stale detection: `kill -0 pid` on Unix (dead process → stale) plus
-  `>5 minute` age threshold.
-- Stale locks are reclaimed transparently by `try_acquire`.
-- RAII `Drop` removes the file when the worker exits.
+- Stale detection: `kill -0 pid` on Unix only (dead process → stale). Live
+  PIDs are never reclaimed regardless of age — this prevents displacing a
+  long-running worker that is still actively syncing.
+- Ownership-checked `Drop`: removes the lock only if PID and nonce still
+  match the current file, preventing an old owner from deleting a
+  replacement owner's lock.
 - Restrictive permissions (0o600 on Unix).
-- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms the lock
-  check is conservative (treats non-existent processes as alive), and the
-  5-minute age threshold still applies.
+- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms all PIDs
+  are treated as alive (conservative non-stealing), with a documented manual
+  recovery command as the fallback.
+
+### Pending Transaction Lock (Release 5E)
+
+**Module**: `src/auto_sync/pending_lock.rs`
+
+Short-lived transaction lock serializing concurrent CLI processes on the
+pending marker. Distinct from the long-lived worker execution lock — parent
+mutation commands hold this guard only for the minimum read/modify/write
+critical section.
+
+```toml
+# ~/.config/snp/auto-sync-pending.lock
+pid = 12345
+nonce = "abc-12345-def"
+created_at_unix_ms = 1700000000000
+```
+
+Key properties:
+- Atomic acquisition via `OpenOptions::create_new(true)`.
+- Bounded retry with 1-5ms random jitter (500ms default timeout).
+- Dead-owner reclaim via `kill -0` on Unix; live owners never stolen.
+- Ownership-checked `Drop`: removes the lock only if PID and nonce match.
+- Unique temp files per transaction via `pending_lock::unique_temp_path()`.
+- Atomic rename + directory fsync for durable writes.
+- 0o600 permissions on Unix. No secrets, commands, or snippet content.
 
 ### Process Detachment
 
@@ -364,6 +393,7 @@ syncs.
 `snp doctor --compatibility` inspects auto-sync state using `auto_sync::paths`:
 - `paths::state_dir()` — directory containing all auto-sync artifacts.
 - `paths::pending_marker()` — full path to the pending TOML.
+- `paths::pending_txn_lock()` — full path to the pending transaction lock.
 - `paths::worker_lock()` — full path to the worker lock TOML.
 - Liveness probe uses `lock::process_alive(pid)` (`kill -0` on Unix).
 

@@ -78,6 +78,9 @@ pub fn try_acquire(state_dir: &Path) -> Result<WorkerLock, LockError> {
             });
         }
         let _ = std::fs::remove_file(&path);
+    } else if path.exists() {
+        // Malformed or empty lock file — remove it to allow acquisition.
+        let _ = std::fs::remove_file(&path);
     }
 
     let nonce = generate_nonce();
@@ -299,5 +302,90 @@ mod tests {
         assert_eq!(deserialized.pid, 999);
         assert_eq!(deserialized.started_at_unix_ms, 1000);
         assert_eq!(deserialized.nonce, "test-nonce");
+    }
+
+    #[test]
+    fn test_malformed_lock_file_treated_as_stale() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        std::fs::write(&path, "this is not valid toml {{{").unwrap();
+        let result = try_acquire(dir.path());
+        assert!(
+            result.is_ok(),
+            "malformed lock should be treated as stale and allow acquisition"
+        );
+    }
+
+    #[test]
+    fn test_malformed_lock_with_missing_fields_treated_as_stale() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        std::fs::write(&path, "pid = 999\n").unwrap();
+        let result = try_acquire(dir.path());
+        assert!(
+            result.is_ok(),
+            "lock with missing fields should be treated as stale"
+        );
+    }
+
+    #[test]
+    fn test_empty_lock_file_treated_as_stale() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        std::fs::write(&path, "").unwrap();
+        let result = try_acquire(dir.path());
+        assert!(result.is_ok(), "empty lock file should be treated as stale");
+    }
+
+    #[test]
+    fn test_inspect_returns_none_for_malformed() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        std::fs::write(&path, "garbage").unwrap();
+        assert!(inspect(&path).is_none());
+    }
+
+    #[test]
+    fn test_inspect_returns_none_for_missing() {
+        let path = PathBuf::from("/nonexistent/path/lock");
+        assert!(inspect(&path).is_none());
+    }
+
+    #[test]
+    fn test_inspect_returns_none_for_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        std::fs::write(&path, "").unwrap();
+        assert!(inspect(&path).is_none());
+    }
+
+    #[test]
+    fn test_is_stale_with_dead_pid() {
+        let contents = WorkerLockContents {
+            pid: 1,
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "test".to_string(),
+        };
+        assert!(is_stale(&contents));
+    }
+
+    #[test]
+    fn test_is_stale_with_live_pid() {
+        let contents = WorkerLockContents {
+            pid: std::process::id(),
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "test".to_string(),
+        };
+        #[cfg(unix)]
+        assert!(!is_stale(&contents));
+    }
+
+    #[test]
+    fn test_lock_error_is_error() {
+        let err: Box<dyn std::error::Error> = Box::new(LockError::AlreadyHeld {
+            pid: 1,
+            nonce: "test".to_string(),
+        });
+        assert!(!err.to_string().is_empty());
     }
 }

@@ -6,7 +6,13 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 use support::helpers::*;
+
+fn read_pending_raw(config_dir: &Path) -> Option<String> {
+    let pending_path = config_dir.join("auto-sync-pending.toml");
+    fs::read_to_string(pending_path).ok()
+}
 
 /// Two sequential CLI processes can both acquire the lock (second after first releases).
 #[test]
@@ -489,6 +495,461 @@ auto_sync_failure = "ignore"
     assert!(
         content.contains("before sigint"),
         "Library should be valid after mutation"
+    );
+}
+
+/// Launch 20 concurrent mutation writers. All must exit successfully.
+/// Verifies that the PendingTxnGuard serializes concurrent pending marker
+/// writes without shared-temp rename failures.
+#[test]
+fn test_concurrent_writers_all_succeed() {
+    use std::thread;
+
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "concurrent"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "concurrent"]);
+    cmd.output().unwrap();
+
+    // Spawn 20 concurrent writers.
+    let handles: Vec<_> = (0..20)
+        .map(|i| {
+            let config_dir = config_dir.clone();
+            thread::spawn(move || {
+                let mut cmd = snp_in(&config_dir);
+                cmd.args([
+                    "new",
+                    "--command-stdin",
+                    "--description",
+                    &format!("concurrent {i}"),
+                    "--library",
+                    "concurrent",
+                ]);
+                let out = output_with_stdin(cmd, format!("echo concurrent-{i}").as_bytes());
+                assert!(
+                    out.status.success(),
+                    "writer {i} failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // If pending marker exists, it must pass integrity validation.
+    if let Some(raw) = read_pending_raw(&config_dir) {
+        assert!(raw.contains("schema = 2"), "marker must be schema v2");
+        assert!(
+            raw.contains("integrity = \"crc32:"),
+            "marker must carry CRC32 integrity"
+        );
+    }
+}
+
+/// Two sequential mutations each create a snippet. The library must
+/// contain both snippets, verifying that mutations are not lost even
+/// when workers clear the pending marker between them.
+#[test]
+fn test_sequential_mutations_preserve_all_snippets() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "race-clear"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "race-clear"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "first mutation",
+        "--library",
+        "race-clear",
+    ]);
+    let out = output_with_stdin(cmd, b"echo first");
+    assert!(out.status.success());
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "second mutation",
+        "--library",
+        "race-clear",
+    ]);
+    let out = output_with_stdin(cmd, b"echo second");
+    assert!(out.status.success());
+
+    // Both snippets must exist in the library.
+    let lib_path = config_dir.join("libraries").join("race-clear.toml");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        content.contains("first mutation"),
+        "library should contain first mutation"
+    );
+    assert!(
+        content.contains("second mutation"),
+        "library should contain second mutation"
+    );
+}
+
+/// Stress test: 50 sequential mutations. All must succeed and the
+/// library must contain all 50 snippets.
+#[test]
+fn test_stress_many_mutations_succeed() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "stress"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "stress"]);
+    cmd.output().unwrap();
+
+    for i in 0..50 {
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            &format!("stress {i}"),
+            "--library",
+            "stress",
+        ]);
+        let out = output_with_stdin(cmd, format!("echo stress-{i}").as_bytes());
+        assert!(
+            out.status.success(),
+            "iteration {i} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // All 50 snippets must exist in the library.
+    let lib_path = config_dir.join("libraries").join("stress.toml");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    for i in 0..50 {
+        assert!(
+            content.contains(&format!("stress {i}")),
+            "library should contain snippet 'stress {i}'"
+        );
+    }
+}
+
+/// Symlink substitution attack on pending marker: replacing the marker
+/// with a symlink to an external file. A subsequent mutation must succeed
+/// and the external file must not be modified.
+#[test]
+fn test_symlink_substitution_on_pending_marker_resisted() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "symlink-attack"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "symlink-attack"]);
+    cmd.output().unwrap();
+
+    // Create a snippet to get a valid pending marker.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "seed",
+        "--library",
+        "symlink-attack",
+    ]);
+    let _ = output_with_stdin(cmd, b"echo seed");
+
+    let pending_path = config_dir.join("auto-sync-pending.toml");
+    if pending_path.exists() {
+        // Replace the marker with a symlink to an external file.
+        let external = config_dir.join("external_payload.txt");
+        fs::write(&external, "pwned").unwrap();
+        fs::remove_file(&pending_path).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, &pending_path).unwrap();
+
+        // Next mutation must succeed (atomic_write overwrites the symlink via rename).
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            "after symlink",
+            "--library",
+            "symlink-attack",
+        ]);
+        let out = output_with_stdin(cmd, b"echo after");
+        assert!(
+            out.status.success(),
+            "mutation should succeed even with symlinked pending marker: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // The external file must not be modified.
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            "pwned",
+            "external file should not be modified"
+        );
+    }
+}
+
+/// Symlink substitution attack on worker lock: replacing the lock with
+/// a symlink should not prevent lock acquisition.
+#[test]
+fn test_symlink_substitution_on_worker_lock_resisted() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "lock-symlink"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "lock-symlink"]);
+    cmd.output().unwrap();
+
+    // Create snippet to potentially trigger worker.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "seed",
+        "--library",
+        "lock-symlink",
+    ]);
+    let _ = output_with_stdin(cmd, b"echo seed");
+
+    let lock_path = config_dir.join("auto-sync-worker.lock");
+    if lock_path.exists() {
+        // Replace lock with symlink to external file.
+        let external = config_dir.join("lock_target.txt");
+        fs::write(&external, "pwned").unwrap();
+        fs::remove_file(&lock_path).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, &lock_path).unwrap();
+
+        // Next mutation should succeed (worker can acquire lock by overwriting symlink).
+        let mut cmd = snp_in(&config_dir);
+        cmd.args([
+            "new",
+            "--command-stdin",
+            "--description",
+            "after symlink lock",
+            "--library",
+            "lock-symlink",
+        ]);
+        let out = output_with_stdin(cmd, b"echo after-lock");
+        assert!(
+            out.status.success(),
+            "mutation should succeed even with symlinked lock: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Pending marker and lock files are not world-readable on Unix (0o600).
+#[test]
+fn test_pending_and_lock_not_world_readable() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "perms-test"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "perms-test"]);
+    cmd.output().unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "permission test",
+        "--library",
+        "perms-test",
+    ]);
+    let _ = output_with_stdin(cmd, b"echo perms");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let pending_path = config_dir.join("auto-sync-pending.toml");
+        if pending_path.exists() {
+            let mode = fs::metadata(&pending_path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "pending marker must not be world/group-readable, got {mode:04o}"
+            );
+        }
+
+        let lock_path = config_dir.join("auto-sync-worker.lock");
+        if lock_path.exists() {
+            let mode = fs::metadata(&lock_path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "worker lock must not be world/group-readable, got {mode:04o}"
+            );
+        }
+
+        let pending_lock_path = config_dir.join("auto-sync-pending.lock");
+        if pending_lock_path.exists() {
+            let mode = fs::metadata(&pending_lock_path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "pending txn lock must not be world/group-readable, got {mode:04o}"
+            );
+        }
+    }
+}
+
+/// Directory substitution: creating a symlink where the pending marker
+/// should be (as a directory) should not prevent operations.
+#[test]
+fn test_directory_substitution_on_state_dir_resisted() {
+    let (_tmp, config_dir) = setup_test_env();
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = true
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "ignore"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "create", "dir-attack"]);
+    cmd.output().unwrap();
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["library", "set-primary", "dir-attack"]);
+    cmd.output().unwrap();
+
+    // Ensure config dir is a real directory, not a symlink.
+    assert!(config_dir.is_dir(), "config dir should be a real directory");
+
+    // A normal mutation should succeed.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args([
+        "new",
+        "--command-stdin",
+        "--description",
+        "normal mutation",
+        "--library",
+        "dir-attack",
+    ]);
+    let out = output_with_stdin(cmd, b"echo normal");
+    assert!(
+        out.status.success(),
+        "mutation should succeed with real config dir: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

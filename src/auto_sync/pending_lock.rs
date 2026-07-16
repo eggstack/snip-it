@@ -348,4 +348,118 @@ mod tests {
         assert_eq!(deserialized.pid, 999);
         assert_eq!(deserialized.nonce, "test-nonce");
     }
+
+    #[test]
+    fn test_malformed_lock_file_triggers_corrupted_error() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "this is not valid toml {{{").unwrap();
+        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
+        assert!(
+            matches!(result, Err(PendingTxnLockError::Corrupted(_))),
+            "malformed lock file should produce Corrupted error"
+        );
+    }
+
+    #[test]
+    fn test_malformed_lock_file_with_missing_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "pid = 999\n").unwrap();
+        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
+        assert!(
+            matches!(result, Err(PendingTxnLockError::Corrupted(_))),
+            "lock file with missing fields should produce Corrupted error"
+        );
+    }
+
+    #[test]
+    fn test_empty_lock_file_triggers_corrupted_error() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "").unwrap();
+        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
+        assert!(
+            matches!(result, Err(PendingTxnLockError::Corrupted(_))),
+            "empty lock file should produce Corrupted error"
+        );
+    }
+
+    #[test]
+    fn test_malformed_lock_returns_corrupted_error() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "garbage").unwrap();
+        let result = acquire_pending_txn(dir.path(), Duration::from_millis(100));
+        assert!(matches!(result, Err(PendingTxnLockError::Corrupted(_))));
+    }
+
+    #[test]
+    fn test_read_lock_contents_returns_none_for_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        let result = read_lock_contents(&path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_lock_contents_returns_error_for_corrupted() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "not toml").unwrap();
+        let result = read_lock_contents(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fsync_parent_dir_does_not_panic() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.toml");
+        std::fs::write(&path, "content").unwrap();
+        fsync_parent_dir(&path);
+    }
+
+    #[test]
+    fn test_fsync_parent_dir_no_panic_on_missing_parent() {
+        let path = PathBuf::from("/nonexistent/path/test.toml");
+        fsync_parent_dir(&path);
+    }
+
+    #[test]
+    fn test_fsync_parent_dir_no_panic_on_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("does_not_exist.toml");
+        fsync_parent_dir(&path);
+    }
+
+    #[test]
+    fn test_atomic_write_unique_same_bytes() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.toml");
+        atomic_write_unique(&path, b"hello").unwrap();
+        atomic_write_unique(&path, b"world").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "world");
+    }
+
+    #[test]
+    fn test_atomic_write_unique_overwrites_existing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.toml");
+        std::fs::write(&path, "old content").unwrap();
+        atomic_write_unique(&path, b"new content").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn test_pending_txn_lock_error_display() {
+        let err = PendingTxnLockError::Busy { timeout_ms: 500 };
+        assert!(err.to_string().contains("500"));
+    }
+
+    #[test]
+    fn test_pending_txn_lock_error_is_error() {
+        let err: Box<dyn std::error::Error> =
+            Box::new(PendingTxnLockError::Busy { timeout_ms: 100 });
+        assert!(!err.to_string().is_empty());
+    }
 }
