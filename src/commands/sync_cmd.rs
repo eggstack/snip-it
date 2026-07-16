@@ -176,6 +176,30 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
         return Ok(());
     }
 
+    // Acquire execution lock with bounded wait for foreground sync
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+    let _exec_lock = crate::auto_sync::execution_lock::wait_acquire(
+        &state_dir,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|e| match e {
+        crate::auto_sync::execution_lock::ExecutionLockError::Timeout { owner_pid, .. } => {
+            SnipError::runtime_error(
+                "sync already in progress",
+                Some(&format!(
+                    "owner pid={owner_pid}; wait for it to complete or kill the process"
+                )),
+            )
+        }
+        crate::auto_sync::execution_lock::ExecutionLockError::AlreadyHeld { pid, .. } => {
+            SnipError::runtime_error(
+                "sync already in progress",
+                Some(&format!("held by pid={pid}")),
+            )
+        }
+        other => SnipError::runtime_error("failed to acquire sync lock", Some(&other.to_string())),
+    })?;
+
     if options.servers {
         let mut client = runtime
             .block_on(crate::sync::SyncClient::create(sync_settings.clone()))

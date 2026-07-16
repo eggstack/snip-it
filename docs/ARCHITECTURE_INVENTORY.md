@@ -145,27 +145,32 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### Auto-Sync (`src/auto_sync/`)
 
-Optional post-mutation background synchronization (Release 5A–5E corrective). Disabled by default; opt-in via `snp sync config --auto-sync on`.
+Optional post-mutation background synchronization (Release 5A–5F). Disabled by default; opt-in via `snp sync config --auto-sync on`. Two-process-per-cycle model: a detached debounce worker spawns a killable executor subprocess.
 
 - **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `max_retries`, `sync_timeout`.
 - **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity` over all behavior-driving fields. v1 markers migrate transparently. `ConditionalClearResult` enum (Cleared/Missing/GenerationChanged) returned by conditional clear.
 - **`PendingTxnGuard`** (`pending_lock.rs`) — short-lived transaction lock serializing concurrent CLI processes on the pending marker. Atomic acquire via `create_new(true)`; ownership-checked drop; bounded retry with jitter; dead-owner reclaim via `kill -0`; unique temp files per transaction; atomic rename + directory fsync.
 - **`WorkerLock`** (`lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` only (live PID means owned, regardless of age). Ownership-checked drop — only removes if PID and nonce match. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.
+- **`SyncExecutionLock`** (`execution_lock.rs`) — shared execution lock for all sync operations. `try_acquire` (non-blocking, for workers) and `wait_acquire` (bounded timeout, for foreground callers). Ownership-checked drop, stale detection via `kill -0`.
+- **`ExecutorExitCode`** (`executor.rs`) — standardized exit codes: 0=success, 2=not configured, 3=auth, 4=network/timeout, 5=conflict, 6=local persistence, 7=internal. `effective_sync_direction()` resolves CLI overrides.
 - **`spawn_worker`** (`spawn.rs`) — re-execs `std::env::current_exe()` as `snp auto-sync-worker` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
+- **`spawn_executor`** (`spawn.rs`) — spawns `snp auto-sync-execute` as a child process (NOT detached) for killable sync execution.
 - **`WorkerOutcome`** (`worker.rs`) — `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0; outcome is logged, not propagated.
 - **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite`, `AccountConfig` (never triggers).
 - **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
 - **`MutationContext`** — carries `kind`, `origin`, `library_id` without snippet content.
 - **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Scheduled { generation }`, `SchedulingFailed { generation }`.
+- **`SubcommandTag`** / **`should_attempt_auto_sync_recovery()`** — classifies commands at startup; recovery suppressed for sync/cron/register/internal subprocesses.
 - **Central API**: `notify_mutation(kind, origin)` — convenience function for commands. `notify_local_mutation(policy, context)` — full control.
 - **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
 - **`startup_recover_pending()`** — runs at startup for non-worker subcommands; preserves pending markers and re-schedules a worker if recent pending state is found.
-- **`auto-sync-worker`** — hidden subcommand (clap `hide = true`) that runs one sync attempt bounded by `sync_timeout`, then exits. Creates its own Tokio runtime internally.
+- **`auto-sync-worker`** — hidden subcommand (clap `hide = true`) that runs debounce loop, spawns executor, supervises with timeout, then exits.
+- **`auto-sync-execute`** — hidden subcommand that acquires `SyncExecutionLock`, performs sync, exits with `ExecutorExitCode`.
 - **Trigger matrix**: all syncable mutation commands call `notify_mutation()` after their local atomic commit. Output-only edits (`snp edit --output`) are excluded (output is local-only).
 - **Debounce**: configurable 0–300 seconds (default 2). Rapid mutations coalesce. Maximum deadline bound prevents indefinite postponement.
 - **Failure modes**: `Ignore` (silent), `Warn` (stderr message), `Error` (nonzero exit code). Local mutation always committed regardless.
 - **Sync target**: Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries.
-- **Two lock concepts**: `PendingTxnGuard` (short-lived, for marker transactions) and `WorkerLock` (long-lived, for sync execution). Never mixed.
+- **Three lock concepts**: `PendingTxnGuard` (short-lived, for marker transactions), `WorkerLock` (long-lived, for worker lifecycle), and `SyncExecutionLock` (shared, for actual sync operations). Never mixed.
 
 ### Encryption (`src/encryption.rs`)
 - AES-256-GCM + Argon2id key derivation (OWASP: 16 MiB, 3 iterations, 4 threads)
@@ -270,15 +275,18 @@ mutation command (new/edit/delete/import/library)
     → return AutoSyncNotificationResult::Scheduled{generation}
 
 snp auto-sync-worker (detached child process)
-  → lock::try_acquire(state_dir) → WorkerLock (or AlreadyHeld → exit NothingToDo)
+  → execution_lock::try_acquire(state_dir) → SyncExecutionLock (or AlreadyHeld → exit NothingToDo)
   → read pending state (observed generation/timestamp)
   → debounce loop: sleep in ≤250ms increments, reload marker, restart on newer generation
-  → execute_sync(state_dir, generation, snapshot, policy)
-    → run_async_with_timeout(run_default_sync_async, sync_timeout)
+  → execute_sync(state_dir, policy)
+    → spawn::spawn_executor(state_dir) → child process (snp auto-sync-execute)
+    → wait_child_with_timeout(child, policy.sync_timeout)
+      → on exit: map ExecutorExitCode → WorkerOutcome
+      → on timeout: SIGTERM → 2s grace → SIGKILL → WorkerOutcome::Failed
     → on success: pending::clear_if_generation_matches(state_dir, generation)
     → on failure: pending::record_failure(state_dir, generation, classification)
   → reload marker; if newer generation exists, run another cycle
-  → release lock, exit(0)
+  → release execution lock, exit(0)
 ```
 
 Key invariants:

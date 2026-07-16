@@ -4,9 +4,9 @@ Deep-dive reference for the auto-sync subsystem. For the full sync protocol and 
 
 ## Overview
 
-Auto-sync is an optional, opt-in background synchronization mechanism (Release 5A–5D). It is **disabled by default** and must be explicitly enabled via `snp sync config --auto-sync on`.
+Auto-sync is an optional, opt-in background synchronization mechanism (Release 5A–5F). It is **disabled by default** and must be explicitly enabled via `snp sync config --auto-sync on`.
 
-When enabled, mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger a detached one-shot worker that performs the remote sync after the local change is committed. The core invariant: **local mutations always succeed before any remote work begins.**
+When enabled, mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger a detached one-shot worker that performs the remote sync after the local change is committed. The architecture uses two subprocess roles: a **debounce worker** (`auto-sync-worker`) that manages timing and a **killable sync executor** (`auto-sync-execute`) that performs the actual sync. All sync operations — worker, manual `snp sync`, explicit `--sync`, and cron — share a single `SyncExecutionLock` to prevent concurrent sync. The core invariant: **local mutations always succeed before any remote work begins.**
 
 ## Canonical Data Flow
 
@@ -29,20 +29,23 @@ mutation command
 
 detached worker process (snp auto-sync-worker --state-dir ...)
   -> policy = AutoSyncPolicy::resolve(...)
-  -> try_acquire(state_dir) -> WorkerLock (RAII) [parent never acquired it]
+  -> try_acquire(state_dir) -> SyncExecutionLock (RAII) [parent never acquired it]
   -> read_state_from_dir(state_dir) -> PendingState
   -> debounce loop:
        -> reload marker; if newer generation appeared -> restart debounce
        -> sleep until observed_timestamp + debounce, clamped by max_lifetime
   -> execute_sync(state_dir, observed_generation, observed_snapshot, policy)
-     -> run_default_sync() inside OnceLock<tokio::runtime>
-        bounded by sync_timeout via tokio::time::timeout (default 30s)
-     -> on success: pending::clear_if_generation_matches(state_dir, observed_generation)
-     -> on failure: leave pending intact (recovery will retry)
+     -> spawn executor subprocess (snp auto-sync-execute --state-dir ...)
+     -> wait_child_with_timeout(child, policy.sync_timeout)
+        -> on success: map ExecutorExitCode to WorkerOutcome
+        -> on timeout: SIGTERM -> wait 2s -> SIGKILL -> wait -> WorkerOutcome::Failed
+     -> on success with no newer generation: clear_if_generation_matches
+     -> on success with newer generation: continue loop (follow-up cycle)
+     -> release execution lock
   -> exit WorkerOutcome
 ```
 
-**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the worker lock — every spawned worker races for the lock and exactly one wins.
+**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the execution lock — every spawned worker races for the lock and exactly one wins. **Release 5F:** the worker spawns an executor subprocess for the actual sync; on timeout the executor is killed via SIGTERM/SIGKILL.
 
 ## Module Layout
 
@@ -52,10 +55,12 @@ The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 - `pending.rs` — durable `PendingState` (schema v2, CRC32 integrity), v1 → v2 migration, `ConditionalClearResult`
 - `pending_lock.rs` — `PendingTxnGuard` RAII, short-lived transaction lock for pending-marker operations, unique temp paths, atomic writes, directory fsync
 - `lock.rs` — `WorkerLock` RAII, `WorkerLockContents` (`pid`/`started_at_unix_ms`/`nonce`), `process_alive`, ownership-checked drop
-- `spawn.rs` — `spawn_worker`, `apply_platform_detach` (libc `setsid` on Unix, `DETACHED_PROCESS|CREATE_NO_WINDOW` on Windows)
+- `execution_lock.rs` — `SyncExecutionLock` RAII, shared execution lock for all sync operations, `try_acquire`, `wait_acquire`, `ExecutionLockError`
+- `executor.rs` — `ExecutorExitCode`, `effective_sync_direction`, `run_executor` entry point
+- `spawn.rs` — `spawn_worker`, `spawn_executor`, `apply_platform_detach` (libc `setsid` on Unix, `DETACHED_PROCESS|CREATE_NO_WINDOW` on Windows)
 - `worker.rs` — `run`, `try_schedule`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`
-- `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`
-- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock}` helpers used by `snp doctor`
+- `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`, `SubcommandTag`, `should_attempt_auto_sync_recovery`
+- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock, execution_lock}` helpers used by `snp doctor`
 
 ## Key Types
 
@@ -140,6 +145,50 @@ pub enum WorkerOutcome {
 }
 ```
 
+### ExecutionLockError
+
+```rust
+pub enum ExecutionLockError {
+    Io(std::io::Error),
+    AlreadyHeld { pid: u32, started_at_unix_ms: u64, nonce: String },
+    Timeout { owner_pid: u32, owner_started_at: u64 },
+}
+```
+
+Returned by `try_acquire` (non-blocking) and `wait_acquire` (blocking with timeout). `AlreadyHeld` means another process holds a live lock; `Timeout` means the lock was still held after the wait period.
+
+### ExecutorExitCode
+
+```rust
+#[repr(i32)]
+pub enum ExecutorExitCode {
+    Success = 0,
+    NotConfigured = 2,
+    AuthFailure = 3,
+    NetworkTimeout = 4,
+    ConflictPartial = 5,
+    LocalPersistence = 6,
+    InternalError = 7,
+}
+```
+
+Standardized exit codes for the executor subprocess. The worker maps these to `WorkerOutcome`. Code 1 is reserved for the general CLI error path.
+
+### SubcommandTag
+
+```rust
+pub enum SubcommandTag {
+    Mutation,
+    Sync,
+    Cron,
+    Register,
+    AutoSyncWorker,
+    AutoSyncExecute,
+}
+```
+
+Used by `should_attempt_auto_sync_recovery` to classify commands at startup. Only `Mutation` (and `None`) commands attempt auto-sync recovery; `Sync`, `Cron`, `Register`, and internal subprocess tags suppress it.
+
 ## Trigger Matrix
 
 | Operation | MutationKind | Remote-syncable | Auto-sync event | Notes |
@@ -160,19 +209,20 @@ pub enum WorkerOutcome {
 
 ## Detached Worker Model
 
-Auto-sync no longer uses an in-process debounce coordinator. Instead, the parent mutation command:
+Auto-sync uses a two-process-per-cycle model: a detached debounce worker and a killable sync executor. The parent mutation command:
 
 1. Records a monotonic pending generation (via `pending::record_pending_mutation`).
 2. Schedules a worker (via `worker::schedule_existing_pending`).
-3. **Release 5 corrective:** the parent does **not** acquire the worker lock — the lock is the worker's responsibility.
+3. **Release 5 corrective:** the parent does **not** acquire the execution lock — the lock is the worker's responsibility.
 4. Re-execs the current binary as `snp auto-sync-worker --state-dir <dir>` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
 5. Returns to the user immediately.
 
 The detached worker:
 
-- Acquires the worker lock itself (or exits with `NothingToDo` if another worker holds it).
+- Acquires the `SyncExecutionLock` itself (or exits with `NothingToDo` if another sync holds it).
 - Reads pending state, then runs a **debounce loop**: it reloads the marker every ≤250ms, restarts the deadline if a newer generation has appeared, and waits up to `policy.debounce + max_lifetime` (default 5 minutes).
-- Runs a single sync attempt bounded by `sync_timeout` (default 30s), wrapped in `tokio::time::timeout` to drop abandoned work cleanly.
+- Spawns an executor subprocess (`snp auto-sync-execute`) that acquires the execution lock and performs the actual sync.
+- Supervises the executor with `wait_child_with_timeout(policy.sync_timeout)` (default 30s). On timeout, sends SIGTERM, waits 2 seconds, then SIGKILL.
 - Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Release 5 corrective:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state.
 - On failure or `NothingToDo`, the marker is preserved for `startup_recover_pending`.
 - A newer generation that appears during sync is detected on the next loop iteration and triggers a follow-up cycle.
@@ -228,7 +278,7 @@ created_at_unix_ms = 1700000000000
 
 **File:** `~/.config/snp/auto-sync-worker.lock`
 
-Long-lived lock protecting the sync execution lifecycle.
+Long-lived lock protecting the worker lifecycle (debounce + sync execution).
 
 ```toml
 pid = 12345
@@ -243,6 +293,25 @@ nonce = "abc-12345-def"
 - Restrictive permissions (0o600 on Unix).
 - Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the lock and exactly one wins.
 
+### Sync Execution Lock (Release 5F)
+
+**File:** `~/.config/snp/auto-sync-execution.lock`
+
+Shared lock preventing concurrent sync operations across all callers. Unlike the worker lock (which guards the worker lifecycle), this lock guards the actual sync operation — whether performed by the detached worker, manual `snp sync`, explicit `--sync` flag, or cron.
+
+```toml
+pid = 12345
+started_at_unix_ms = 1700000000000
+nonce = "abc-12345-def"
+```
+
+- Atomic acquisition via `OpenOptions::create_new(true)`.
+- **Worker:** uses `try_acquire` — if the lock is busy, exits with `NothingToDo` (preserves pending for later).
+- **Foreground callers** (`snp sync`, `--sync` flag): uses `wait_acquire` with a bounded timeout (default 30s) — polls every 250ms, returns `Timeout` error if still busy.
+- Ownership-checked `Drop`: only removes the lock file if PID and nonce match.
+- Stale detection: dead PIDs (via `kill -0`) are reclaimed automatically.
+- 0o600 permissions on Unix. No secrets, commands, or snippet content.
+
 ## Worker Lifecycle
 
 ```text
@@ -255,14 +324,14 @@ Parent (snp new)
   |           |-- setsid() / DETACHED_PROCESS | CREATE_NO_WINDOW
   |           |-- stdin/stdout/stderr -> null
   |           |-- fork+exec child
-  |           (parent does NOT acquire the worker lock)
+  |           (parent does NOT acquire the execution lock)
   |-- return Scheduled{generation=N} to mutation command
 
 Child (snp auto-sync-worker --state-dir ...)
   |
   |-- AutoSyncPolicy::resolve(get_sync_settings())
-  |-- try_acquire(state_dir)
-  |     |-- AlreadyHeld -> NothingToDo (another worker owns it)
+  |-- execution_lock::try_acquire(state_dir)
+  |     |-- AlreadyHeld -> NothingToDo (another sync is in progress)
   |-- read_state_from_dir(state_dir) -> PendingState{generation, timestamp, snapshot}
   |-- DEBOUNCE LOOP (bounded by max_lifetime, default 5 minutes):
   |     |-- compute_deadline(observed_timestamp, policy.debounce, start, max_lifetime)
@@ -270,25 +339,38 @@ Child (snp auto-sync-worker --state-dir ...)
   |           (reloads marker every ≤250ms; if a newer generation appears,
   |            this iteration observes the change via reload and may restart
   |            the loop with the new generation)
-  |     |-- execute_sync(state_dir, observed_generation, observed_snapshot, policy)
+  |     |-- execute_sync(state_dir, policy)
   |           |-- if !policy.enabled -> WorkerOutcome::NothingToDo
-  |           |-- run_async_with_timeout(policy.sync_timeout)
-  |                 -> run_default_sync on a worker-owned Tokio runtime,
-  |                    cancelled via tokio::time::timeout on expiry
+  |           |-- spawn::spawn_executor(state_dir)
+  |           |     (snp auto-sync-execute --state-dir <dir>, NOT detached)
+  |           |-- wait_child_with_timeout(child, policy.sync_timeout)
+  |           |     |-- on exit: map ExecutorExitCode -> WorkerOutcome
+  |           |     |-- on timeout: SIGTERM -> 2s grace -> SIGKILL -> WorkerOutcome::Failed
   |     |-- if Success && newer_generation_observed -> continue loop (follow-up)
   |     |-- if Success && no newer generation -> clear_if_generation_matches, exit
   |     |-- if Failed -> preserve pending, exit
+  |-- release execution lock
   |-- exit(0)  (WorkerOutcome mapping is internal; parent never sees it)
 ```
 
+### Executor Subprocess (Release 5F)
+
+The worker spawns a child process (`snp auto-sync-execute`) instead of running sync in-process. This provides:
+
+1. **Killable sync work:** On timeout, the worker sends SIGTERM then SIGKILL to the child. Unlike `tokio::time::timeout` (which cannot cancel a `spawn_blocking` task), killing a child process guarantees the sync work terminates.
+2. **Shared execution lock:** The executor acquires the `SyncExecutionLock` before performing sync. All sync paths (worker, manual, explicit, cron) share this lock.
+3. **Direction correctness:** The executor resolves the effective sync direction via `effective_sync_direction()`, which applies CLI flag overrides (`--push-only`, `--pull-only`) to the config setting.
+4. **Standardized exit codes:** The executor exits with codes from `ExecutorExitCode` (0=success, 2=not configured, 3=auth, 4=network/timeout, 5=conflict, 6=local persistence, 7=internal).
+
 ## Retry and Backoff
 
-There is no in-process retry loop. The detached worker attempts one sync per generation, bounded by `sync_timeout`. The debounce loop may cycle multiple times in one worker invocation:
+There is no in-process retry loop. The detached worker attempts one sync per generation, spawning an executor subprocess and supervising it with a timeout. The debounce loop may cycle multiple times in one worker invocation:
 
 - If sync succeeds but a newer generation is now on disk, the worker loops again to service the newer work.
 - If sync fails, the worker exits; the pending marker is preserved (generation unchanged).
 - The next `record_pending_mutation` from a future mutation will increment the generation, signaling that the next worker should service the new work.
 - `startup_recover_pending` clears stale pending state (>5 min) on next parent startup, then re-spawns a worker to retry.
+- On timeout, the executor subprocess is terminated (SIGTERM then SIGKILL) before the execution lock is released.
 
 For users who want stronger delivery guarantees, manual `snp sync` and `snp cron` remain the canonical recovery paths.
 
@@ -313,19 +395,22 @@ The `favorite` and `folders` fields are also local-only — preserved when serve
 When `--sync` flag is used (on `run`, `clip`, `search`, or TUI delete):
 
 1. Capture the observed pending generation via `observe_pending_generation()` before sync.
-2. Run explicit sync immediately via `run_default_sync()`.
-3. Clear the pending marker via `clear_pending_after_explicit_sync(observed_generation, sync_succeeded)` — **Release 5 corrective:** clearing is conditional on the observed generation, so a mutation that arrived during the sync is preserved for the next worker.
+2. Acquire the `SyncExecutionLock` via `wait_acquire` with bounded timeout (30s default).
+3. Run explicit sync immediately via `run_default_sync()`.
+4. Clear the pending marker via `clear_pending_after_explicit_sync(observed_generation, sync_succeeded)` — **Release 5 corrective:** clearing is conditional on the observed generation, so a mutation that arrived during the sync is preserved for the next worker.
+5. Release the execution lock.
 
 ## Design Decisions
 
-### Architecture: Detached One-Shot Worker (Corrective)
+### Architecture: Two-Process-Per-Cycle (Release 5F)
 
-Replaces the in-process coordinator with a hidden `auto-sync-worker` subcommand re-execed by the parent. The parent never blocks waiting for the worker; the worker is fully independent once spawned.
+Replaces the in-process coordinator (Release 5D) with a two-subprocess model: a detached debounce worker and a killable sync executor. The parent never blocks waiting for the worker; the worker never runs sync in-process.
 
 Alternatives evaluated:
 - **In-process debounce** (predecessor) — added visible latency to mutation commands and held the parent process hostage during network round-trips.
 - **Persistent daemon** — disproportionate for a CLI tool with no existing long-running process; would require lifecycle, IPC, and uninstall handling.
-- **Detached helper process** (chosen) — re-exec is portable, zero-cost IPC (no IPC), and reuses the same `snp` binary's sync code path.
+- **Detached one-shot worker with in-process sync** (Release 5D) — re-exec is portable and zero-cost IPC, but `tokio::time::timeout` around `spawn_blocking` does not cancel the underlying thread. Sync work could outlive the timeout.
+- **Detached worker + killable executor subprocess** (chosen, Release 5F) — re-exec is portable; the executor is a real child process that can be SIGTERM/SIGKILLed on timeout; shared `SyncExecutionLock` prevents concurrent sync across all callers.
 
 ### Sync Target: Global
 
@@ -348,11 +433,13 @@ Auto-sync is convenience, not durable delivery. The durable pending marker survi
 - `paths::pending_marker()` — full path to the pending TOML.
 - `paths::pending_txn_lock()` — full path to the pending transaction lock.
 - `paths::worker_lock()` — full path to the worker lock TOML.
+- `paths::execution_lock()` — full path to the execution lock TOML.
 
 Diagnostics emitted:
 - `compat.auto_sync.enabled` / `compat.auto_sync.disabled` — policy state.
 - `compat.auto_sync.pending_active` / `compat.auto_sync.pending_stale` / `compat.auto_sync.pending_unreadable` — pending marker status.
 - `compat.auto_sync.lock_held` / `compat.auto_sync.lock_stale` / `compat.auto_sync.lock_unreadable` — worker lock status.
+- `compat.auto_sync.execution_lock_held` / `compat.auto_sync.execution_lock_stale` — execution lock status.
 - Liveness probe uses `lock::process_alive(pid)` which calls `kill -0` on Unix and a placeholder always-true on Windows.
 
 ## Safety Invariants
@@ -374,7 +461,14 @@ Diagnostics emitted:
 15. **Release 5E:** Pending marker mutations serialized via `PendingTxnGuard`; unique temp files per transaction.
 16. **Release 5E:** Worker lock ownership-checked on drop; old owners cannot remove replacement locks.
 17. **Release 5E:** Live worker locks never stolen due to age; dead-owner reclaim via `kill -0` only.
+18. **Release 5F:** All sync operations share one `SyncExecutionLock`; no concurrent sync is possible.
+19. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
+20. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
+21. **Release 5F:** Startup recovery suppressed for sync-related commands (`sync`, `cron`, `register`, internal subprocesses).
 
-## Hidden Subcommand
+## Hidden Subcommands
 
-`auto-sync-worker` is registered with `hide = true` in the clap CLI — it does not appear in `--help` output and is intended only for internal use by the parent process. It accepts `--state-dir <path>` and `--nonce <id>` and exits with `WorkerOutcome` mapped to internal exit codes (currently 0 for all outcomes — failures are logged, not propagated).
+`auto-sync-worker` and `auto-sync-execute` are registered with `hide = true` in the clap CLI — they do not appear in `--help` output and are intended only for internal use by the parent process.
+
+- `auto-sync-worker` accepts `--state-dir <path>` and exits with `WorkerOutcome` mapped to internal exit codes (currently 0 for all outcomes — failures are logged, not propagated).
+- `auto-sync-execute` accepts `--state-dir <path>` and performs the actual sync operation, exiting with `ExecutorExitCode` status codes.

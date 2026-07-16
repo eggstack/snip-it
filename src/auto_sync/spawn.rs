@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub const WORKER_SUBCOMMAND: &str = "auto-sync-worker";
+pub const EXECUTOR_SUBCOMMAND: &str = "auto-sync-execute";
 
 #[derive(Debug)]
 pub enum SpawnError {
@@ -58,6 +59,36 @@ pub fn spawn_worker(state_dir: &Path) -> Result<u32, SpawnError> {
 
     let child = cmd.spawn().map_err(SpawnError::Spawn)?;
     Ok(child.id())
+}
+
+/// Spawn the executor subprocess.
+///
+/// The executor is NOT detached — the worker (or caller) waits on it
+/// and can kill it if needed. stdin/stdout/stderr are routed to null
+/// (or the log file via `SNP_AUTO_SYNC_WORKER_LOG`).
+pub fn spawn_executor(state_dir: &Path) -> Result<std::process::Child, SpawnError> {
+    let exe = std::env::current_exe().map_err(SpawnError::Spawn)?;
+    let exe_path = exe.to_string_lossy().to_string();
+
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg(EXECUTOR_SUBCOMMAND);
+    cmd.arg("--state-dir");
+    cmd.arg(state_dir.as_os_str());
+
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    let stderr = match std::env::var("SNP_AUTO_SYNC_WORKER_LOG") {
+        Ok(log) => std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null()),
+        Err(_) => Stdio::null(),
+    };
+    cmd.stderr(stderr);
+
+    cmd.spawn().map_err(SpawnError::Spawn)
 }
 
 #[cfg(unix)]

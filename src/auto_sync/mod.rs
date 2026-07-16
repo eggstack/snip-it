@@ -1,5 +1,7 @@
 //! Auto-sync subsystem — detached one-shot worker model.
 
+pub mod execution_lock;
+pub mod executor;
 pub mod lock;
 pub mod notification;
 pub mod pending;
@@ -9,8 +11,9 @@ pub mod spawn;
 pub mod worker;
 
 pub use notification::{
-    AutoSyncNotificationResult, MutationContext, clear_pending_after_explicit_sync,
-    notify_local_mutation, notify_mutation, observe_pending_generation, startup_recover_pending,
+    AutoSyncNotificationResult, MutationContext, SubcommandTag, clear_pending_after_explicit_sync,
+    notify_local_mutation, notify_mutation, observe_pending_generation,
+    should_attempt_auto_sync_recovery, startup_recover_pending,
 };
 pub use pending::{ConditionalClearResult, PendingSnapshot, PendingState};
 pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin};
@@ -34,5 +37,9 @@ pub mod paths {
 
     pub fn worker_lock(state_dir: &Path) -> PathBuf {
         super::lock::lock_path(state_dir)
+    }
+
+    pub fn execution_lock(state_dir: &Path) -> PathBuf {
+        super::execution_lock::execution_lock_path(state_dir)
     }
 }

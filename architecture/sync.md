@@ -125,9 +125,11 @@ service SnippetSync {
 
 Auto-sync is disabled by default. When enabled via `snp sync config --auto-sync on`,
 mutation commands spawn a detached one-shot worker (`snp auto-sync-worker`) that
-performs the remote sync after the local change is committed. The parent returns
-immediately — no in-process latency. The effective policy is resolved once per
-command invocation via `AutoSyncPolicy::resolve()`.
+performs the remote sync after the local change is committed. The worker spawns a
+killable executor subprocess (`snp auto-sync-execute`) for the actual sync work,
+allowing proper timeout enforcement. The parent returns immediately — no in-process
+latency. The effective policy is resolved once per command invocation via
+`AutoSyncPolicy::resolve()`.
 
 ### AutoSyncPolicy
 
@@ -194,8 +196,9 @@ pub enum MutationOrigin {
 The detached one-shot worker replaces the earlier in-process coordinator. After
 the parent mutation command commits the local change, it records a durable
 pending marker and re-execs the current binary as `snp auto-sync-worker` with
-platform-detached flags. The worker races for the lock, performs debounce and
-sync, and exits independently. The parent never acquires the worker lock.
+platform-detached flags. The worker acquires the shared `SyncExecutionLock`,
+performs debounce, spawns a killable executor subprocess for the actual sync,
+and exits independently. The parent never acquires the execution lock.
 
 ### Architecture
 
@@ -214,18 +217,21 @@ Mutation command (parent)
 
 snp auto-sync-worker (child, detached)
   -> AutoSyncPolicy::resolve(get_sync_settings())
-  -> lock::try_acquire(state_dir) -> WorkerLock (or AlreadyHeld -> NothingToDo)
+  -> execution_lock::try_acquire(state_dir) -> SyncExecutionLock (or AlreadyHeld -> NothingToDo)
   -> read_state_from_dir(state_dir) -> PendingState
   -> debounce loop:
      -> compute deadline from observed timestamp + policy.debounce
      -> sleep in ≤250ms increments, reloading marker each time
      -> restart deadline if newer generation detected
-  -> execute_sync(state_dir, generation, snapshot, policy)
-     -> run_async_with_timeout(run_default_sync_async, sync_timeout)
-        -> on success: clear_if_generation_matches(state_dir, generation)
-        -> on failure: record_failure(state_dir, generation, classification)
+  -> execute_sync(state_dir, policy)
+     -> spawn::spawn_executor(state_dir) -> child process (snp auto-sync-execute)
+     -> wait_child_with_timeout(child, policy.sync_timeout)
+        -> on success: map ExecutorExitCode -> WorkerOutcome
+        -> on timeout: SIGTERM -> 2s grace -> SIGKILL -> WorkerOutcome::Failed
+     -> on success: clear_if_generation_matches(state_dir, generation)
+     -> on failure: record_failure(state_dir, generation, classification)
   -> reload marker; if newer generation exists, run another cycle
-  -> release lock, exit(0)
+  -> release execution lock, exit(0)
 ```
 
 ### AutoSyncNotificationResult
@@ -395,6 +401,7 @@ syncs.
 - `paths::pending_marker()` — full path to the pending TOML.
 - `paths::pending_txn_lock()` — full path to the pending transaction lock.
 - `paths::worker_lock()` — full path to the worker lock TOML.
+- `paths::execution_lock()` — full path to the execution lock TOML.
 - Liveness probe uses `lock::process_alive(pid)` (`kill -0` on Unix).
 
 Diagnostics emitted:
@@ -412,10 +419,14 @@ Diagnostics emitted:
 4. PID+nonce worker lock prevents concurrent worker executions across processes.
 5. Pending marker survives crash; stale markers (>5 min) cleared on startup recovery.
 6. Manual and scheduled sync remain independent; explicit sync clears pending.
-7. No new visible CLI surface added — `auto-sync-worker` is hidden.
+7. No new visible CLI surface added — `auto-sync-worker` and `auto-sync-execute` are hidden.
 8. Pending marker schema is versioned (v2) with CRC32 integrity.
 9. Conditional clear keyed on observed generation prevents stale workers from
    clobbering fresh state.
+10. **Release 5F:** All sync operations share one `SyncExecutionLock`; no concurrent sync possible.
+11. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
+12. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
+13. **Release 5F:** Startup recovery suppressed for sync-related commands.
 
 ## Auto-Sync Mutation Trigger Integration (Release 5C)
 
@@ -461,8 +472,8 @@ user command
   -> audit/local success
   -> notify_mutation(kind, origin)
   -> AutoSyncPolicy::resolve() + origin check
-  -> mark_pending(state_dir) -> PendingState{generation}
-  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir, nonce)
+  -> record_pending_mutation(state_dir) -> PendingState{generation}
+  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir)
   -> return AutoSyncNotificationResult::Scheduled{generation}
 ```
 

@@ -112,6 +112,32 @@ pub fn observe_pending_generation() -> Option<u64> {
         .flatten()
 }
 
+/// Simplified tag for the active subcommand, used for startup recovery
+/// classification. The binary crate maps its `Commands` enum to this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubcommandTag {
+    /// Default (no subcommand) or mutation-producing commands — allow recovery.
+    Mutation,
+    /// `sync` — about to sync itself.
+    Sync,
+    /// `cron` — scheduled sync path.
+    Cron,
+    /// `register` — account setup.
+    Register,
+    /// Internal worker subprocess.
+    AutoSyncWorker,
+    /// Internal executor subprocess.
+    AutoSyncExecute,
+}
+
+/// Returns true if the given command should attempt auto-sync recovery
+/// at startup. Commands that are themselves about to sync, modify sync
+/// policy, or are internal worker/executor subcommands should NOT
+/// trigger recovery.
+pub fn should_attempt_auto_sync_recovery(tag: Option<SubcommandTag>) -> bool {
+    matches!(tag, None | Some(SubcommandTag::Mutation))
+}
+
 pub fn startup_recover_pending() {
     let state_dir = derive_state_dir();
     let _ = worker::startup_recover(&state_dir);
@@ -223,5 +249,64 @@ mod tests {
         );
         assert!(debug.contains("Scheduled"));
         assert!(debug.contains("42"));
+    }
+
+    #[test]
+    fn test_recovery_allowed_for_none_command() {
+        assert!(should_attempt_auto_sync_recovery(None));
+    }
+
+    #[test]
+    fn test_recovery_allowed_for_mutation_commands() {
+        assert!(should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::Mutation
+        )));
+    }
+
+    #[test]
+    fn test_recovery_blocked_for_sync() {
+        assert!(!should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::Sync
+        )));
+    }
+
+    #[test]
+    fn test_recovery_blocked_for_cron() {
+        assert!(!should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::Cron
+        )));
+    }
+
+    #[test]
+    fn test_recovery_blocked_for_register() {
+        assert!(!should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::Register
+        )));
+    }
+
+    #[test]
+    fn test_recovery_blocked_for_auto_sync_worker() {
+        assert!(!should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::AutoSyncWorker
+        )));
+    }
+
+    #[test]
+    fn test_recovery_blocked_for_auto_sync_execute() {
+        assert!(!should_attempt_auto_sync_recovery(Some(
+            SubcommandTag::AutoSyncExecute
+        )));
+    }
+
+    #[test]
+    fn test_subcommand_tag_equality() {
+        assert_eq!(SubcommandTag::Mutation, SubcommandTag::Mutation);
+        assert_ne!(SubcommandTag::Sync, SubcommandTag::Cron);
+    }
+
+    #[test]
+    fn test_subcommand_tag_debug() {
+        let debug = format!("{:?}", SubcommandTag::AutoSyncWorker);
+        assert_eq!(debug, "AutoSyncWorker");
     }
 }

@@ -313,18 +313,30 @@ where
                     if do_sync {
                         // Explicit sync: run immediately and clear pending auto-sync
                         // to prevent duplicate delayed sync (Workstream D).
-                        let observed = crate::auto_sync::observe_pending_generation();
-                        let sync_succeeded =
-                            if let Err(e) = crate::sync_commands::run_default_sync(runtime) {
-                                tracing::warn!(error = %e, "Background sync after delete failed");
-                                false
-                            } else {
-                                true
-                            };
-                        crate::auto_sync::clear_pending_after_explicit_sync(
-                            observed,
-                            sync_succeeded,
-                        );
+                        let state_dir = crate::auto_sync::notification::derive_state_dir();
+                        match crate::auto_sync::execution_lock::wait_acquire(
+                            &state_dir,
+                            std::time::Duration::from_secs(30),
+                        ) {
+                            Ok(_exec_lock) => {
+                                let observed = crate::auto_sync::observe_pending_generation();
+                                let sync_result = crate::sync_commands::run_default_sync(runtime);
+                                let sync_succeeded = sync_result.is_ok();
+                                if sync_result.is_err() {
+                                    tracing::warn!("post-delete sync failed");
+                                }
+                                crate::auto_sync::clear_pending_after_explicit_sync(
+                                    observed,
+                                    sync_succeeded,
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "could not acquire sync lock for post-delete sync"
+                                );
+                            }
+                        }
                     } else {
                         // Auto-sync trigger: notify after successful delete commit (Workstream B3).
                         crate::auto_sync::notify_mutation(
@@ -360,10 +372,23 @@ where
         None
     };
     let explicit_sync_succeeded = if do_sync && selected_and_processed {
-        match crate::sync_commands::run_default_sync(runtime) {
-            Ok(()) => true,
+        let state_dir = crate::auto_sync::notification::derive_state_dir();
+        match crate::auto_sync::execution_lock::wait_acquire(
+            &state_dir,
+            std::time::Duration::from_secs(30),
+        ) {
+            Ok(_exec_lock) => match crate::sync_commands::run_default_sync(runtime) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Background sync failed");
+                    false
+                }
+            },
             Err(e) => {
-                tracing::warn!(error = %e, "Background sync failed");
+                tracing::warn!(
+                    error = %e,
+                    "could not acquire sync lock for post-selection sync"
+                );
                 false
             }
         }

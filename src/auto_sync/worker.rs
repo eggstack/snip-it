@@ -13,13 +13,15 @@
 //! processes. Newer generations arriving during sync are handled through a
 //! bounded follow-up cycle, not by losing work.
 
-use crate::auto_sync::lock::{self, LockError, WorkerLock};
-use crate::auto_sync::pending::{self, PendingSnapshot, PendingState};
+use crate::auto_sync::execution_lock::{self, ExecutionLockError, SyncExecutionLock};
+use crate::auto_sync::executor::ExecutorExitCode;
+use crate::auto_sync::pending::{self, PendingState};
 use crate::auto_sync::policy::AutoSyncPolicy;
 use crate::auto_sync::spawn;
 use crate::config::get_sync_settings;
 use std::path::Path;
-use std::time::Duration;
+use std::process::ExitStatus;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerOutcome {
@@ -49,14 +51,14 @@ pub fn schedule_existing_pending(state_dir: &Path) -> SpawnResult {
 
 /// Worker entry point invoked by the detached child.
 ///
-/// Acquires the worker lock; exits with `NothingToDo` if another worker
-/// holds it. On success, performs a bounded debounce/sync loop:
+/// Acquires the execution lock; exits with `NothingToDo` if another
+/// worker holds it. On success, performs a bounded debounce/sync loop:
 ///
 /// 1. Read current pending state (the *observed* generation/timestamp).
 /// 2. Sleep until the quiet-period deadline is reached (clamped to a
 ///    maximum worker lifetime).
-/// 3. Reload the marker. If generation or timestamp changed, recompute
-///    the deadline.
+/// 3. Reload the marker. If generation or timestamp changed, the
+///    deadline is recomputed.
 /// 4. Once the deadline is reached, run sync bounded by `sync_timeout`.
 /// 5. On success, conditionally clear only if the marker still matches
 ///    the observed generation.
@@ -68,14 +70,14 @@ pub fn schedule_existing_pending(state_dir: &Path) -> SpawnResult {
 pub fn run(state_dir: &Path) -> WorkerOutcome {
     let policy = AutoSyncPolicy::resolve(&get_sync_settings());
 
-    let lock = match lock::try_acquire(state_dir) {
+    let lock = match execution_lock::try_acquire(state_dir) {
         Ok(l) => l,
-        Err(LockError::AlreadyHeld { .. }) => {
-            tracing::info!("auto-sync worker exiting: lock already held");
+        Err(ExecutionLockError::AlreadyHeld { .. }) => {
+            tracing::info!("auto-sync worker exiting: execution lock already held");
             return WorkerOutcome::NothingToDo;
         }
         Err(e) => {
-            tracing::error!(error = %e, "auto-sync worker failed to acquire lock");
+            tracing::error!(error = %e, "auto-sync worker failed to acquire execution lock");
             return WorkerOutcome::Failed;
         }
     };
@@ -83,9 +85,9 @@ pub fn run(state_dir: &Path) -> WorkerOutcome {
     run_locked(state_dir, lock, &policy)
 }
 
-fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> WorkerOutcome {
+fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy) -> WorkerOutcome {
     let _lock_keepalive = lock;
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let max_lifetime = Duration::from_secs(policy::WORKER_MAX_LIFETIME_SECS);
 
     loop {
@@ -111,7 +113,6 @@ fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> Wo
 
         let observed_generation = pending.generation;
         let observed_timestamp = pending.created_at_unix_ms;
-        let observed_snapshot = pending.snapshot.clone();
 
         tracing::info!(
             generation = observed_generation,
@@ -131,7 +132,7 @@ fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> Wo
             tracing::warn!(error = %e, "auto-sync worker quiet-period wait failed");
         }
 
-        let outcome = execute_sync(state_dir, observed_generation, &observed_snapshot, policy);
+        let outcome = execute_sync(state_dir, policy);
 
         match outcome {
             WorkerOutcome::Success => {
@@ -171,10 +172,10 @@ fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> Wo
 fn compute_deadline(
     observed_timestamp_ms: u64,
     debounce: Duration,
-    start: std::time::Instant,
+    start: Instant,
     max_lifetime: Duration,
-) -> Option<std::time::Instant> {
-    let now = std::time::Instant::now();
+) -> Option<Instant> {
+    let now = Instant::now();
     if debounce.is_zero() {
         return None;
     }
@@ -193,15 +194,15 @@ fn compute_deadline(
 fn wait_for_quiet(
     state_dir: &Path,
     observed_generation: u64,
-    initial_deadline: std::time::Instant,
-    start: std::time::Instant,
+    initial_deadline: Instant,
+    start: Instant,
     max_lifetime: Duration,
 ) -> Result<(), String> {
     let mut deadline = initial_deadline;
     let max_target = start.checked_add(max_lifetime).unwrap_or(deadline);
 
     loop {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         if now >= deadline {
             return Ok(());
         }
@@ -235,73 +236,114 @@ fn wait_for_quiet(
     }
 }
 
-fn unix_ms_to_instant(target_unix_ms: u64) -> std::time::Instant {
+fn unix_ms_to_instant(target_unix_ms: u64) -> Instant {
     let now_unix_ms = unix_now_ms();
     if target_unix_ms <= now_unix_ms {
-        return std::time::Instant::now();
+        return Instant::now();
     }
     let delta = Duration::from_millis(target_unix_ms - now_unix_ms);
-    std::time::Instant::now()
+    Instant::now()
         .checked_add(delta)
-        .unwrap_or_else(std::time::Instant::now)
+        .unwrap_or_else(Instant::now)
 }
 
 /// Performs the bounded sync attempt for the observed generation.
 ///
+/// Spawns an executor subprocess and waits for it, enforcing the sync
+/// timeout. On timeout, sends SIGTERM (Unix) / terminate (Windows),
+/// waits a 2-second grace period, then SIGKILL (Unix) / kill (Windows)
+/// if still alive.
+///
 /// Refuses to clear pending on success; callers handle that
 /// generation-safely. Returns `NothingToDo` only when the policy is
 /// disabled.
-fn execute_sync(
-    _state_dir: &Path,
-    _observed_generation: u64,
-    _observed_snapshot: &PendingSnapshot,
-    policy: &AutoSyncPolicy,
-) -> WorkerOutcome {
+fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
     if !policy.enabled {
         return WorkerOutcome::NothingToDo;
     }
 
-    let timeout = policy.sync_timeout;
-
-    let result = match run_async_with_timeout(timeout) {
-        Ok(()) => Ok(()),
-        Err(e) => Err(e),
+    let mut child = match spawn::spawn_executor(state_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to spawn sync executor");
+            return WorkerOutcome::Failed;
+        }
     };
 
-    match result {
-        Ok(()) => WorkerOutcome::Success,
+    match wait_child_with_timeout(&mut child, policy.sync_timeout) {
+        Ok(Some(status)) => {
+            let code = status.code().unwrap_or(7);
+            match ExecutorExitCode::from_exit_status(status) {
+                ExecutorExitCode::Success => WorkerOutcome::Success,
+                _ => {
+                    tracing::warn!(exit_code = code, "sync executor failed");
+                    WorkerOutcome::Failed
+                }
+            }
+        }
+        Ok(None) => {
+            tracing::warn!("sync executor timed out, terminating");
+            terminate_child(&mut child);
+            std::thread::sleep(Duration::from_secs(2));
+            if let Ok(None) = child.try_wait() {
+                force_kill_child(&mut child);
+                let _ = child.wait();
+            }
+            WorkerOutcome::Failed
+        }
         Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "auto-sync failed"
-            );
+            tracing::error!(error = %e, "failed to wait for sync executor");
             WorkerOutcome::Failed
         }
     }
 }
 
-/// Runs the default sync in a worker-owned Tokio runtime, bounded by
-/// `timeout`. The future is dropped on timeout, cancelling the underlying
-/// sync task; no detached thread survives worker completion.
-fn run_async_with_timeout(timeout: Duration) -> Result<(), String> {
-    use std::sync::OnceLock;
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    let rt = RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build tokio runtime")
-    });
-
-    let _guard = rt.enter();
-    let work = crate::sync_commands::run_default_sync_async();
-    let timed = tokio::time::timeout(timeout, work);
-    let joined = rt.block_on(timed);
-    match joined {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("{e}")),
-        Err(_elapsed) => Err("sync timeout".to_string()),
+/// Wait for a child process with a timeout.
+///
+/// Polls `try_wait()` every 100ms. Returns `Ok(Some(status))` if the
+/// child exits before the deadline, `Ok(None)` on timeout, or `Err`
+/// on platform errors.
+fn wait_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<Option<ExitStatus>, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
     }
+}
+
+#[cfg(unix)]
+fn terminate_child(child: &mut std::process::Child) {
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn force_kill_child(child: &mut std::process::Child) {
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn force_kill_child(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 /// Recovery path invoked by the parent at startup.
@@ -379,6 +421,7 @@ pub mod policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auto_sync::pending::PendingSnapshot;
     use tempfile::TempDir;
 
     #[test]
@@ -514,5 +557,70 @@ mod tests {
                 kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
             }
         );
+    }
+
+    #[test]
+    fn test_wait_child_with_timeout_exits_before_deadline() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let result = wait_child_with_timeout(&mut child, Duration::from_secs(5)).unwrap();
+        assert!(result.is_some());
+        let status = result.unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn test_wait_child_with_timeout_returns_none_on_timeout() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let result = wait_child_with_timeout(&mut child, Duration::from_millis(200)).unwrap();
+        assert!(result.is_none());
+        force_kill_child(&mut child);
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_execute_sync_disabled_policy() {
+        let dir = TempDir::new().unwrap();
+        let policy = AutoSyncPolicy {
+            enabled: false,
+            ..AutoSyncPolicy::default()
+        };
+        let outcome = execute_sync(dir.path(), &policy);
+        assert_eq!(outcome, WorkerOutcome::NothingToDo);
+    }
+
+    #[test]
+    fn test_execute_sync_spawn_failure_returns_failed() {
+        let nonexistent = Path::new("/nonexistent/state/dir/xyzzy");
+        let policy = AutoSyncPolicy {
+            enabled: true,
+            ..AutoSyncPolicy::default()
+        };
+        let outcome = execute_sync(nonexistent, &policy);
+        assert_eq!(outcome, WorkerOutcome::Failed);
+    }
+
+    #[test]
+    fn test_terminate_child_reap() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        terminate_child(&mut child);
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn test_force_kill_child_reap() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        force_kill_child(&mut child);
+        let status = child.wait().unwrap();
+        assert!(!status.success());
     }
 }

@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use snip_it::CommandOutcome;
+use snip_it::auto_sync::SubcommandTag;
 use snip_it::commands;
 use snip_it::config;
 use snip_it::error::SnipResult;
@@ -328,6 +329,13 @@ enum Commands {
     #[command(name = "auto-sync-worker", hide = true)]
     AutoSyncWorker {
         /// State directory containing pending markers and worker locks
+        #[arg(long)]
+        state_dir: std::path::PathBuf,
+    },
+    /// Internal: one-shot sync executor (hidden, invoked by worker)
+    #[command(name = "auto-sync-execute", hide = true)]
+    AutoSyncExecute {
+        /// State directory
         #[arg(long)]
         state_dir: std::path::PathBuf,
     },
@@ -766,8 +774,25 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 snip_it::auto_sync::WorkerOutcome::Failed => {}
             }
         }
+        Some(Commands::AutoSyncExecute { state_dir }) => {
+            let exit_code = snip_it::auto_sync::executor::run_executor(&state_dir);
+            std::process::exit(exit_code);
+        }
     }
     Ok(CommandOutcome::Success)
+}
+
+/// Map a CLI `Commands` variant to a `SubcommandTag` for startup
+/// recovery classification.
+fn classify_command(cmd: &Commands) -> SubcommandTag {
+    match cmd {
+        Commands::Sync { .. } => SubcommandTag::Sync,
+        Commands::Cron { .. } => SubcommandTag::Cron,
+        Commands::Register { .. } => SubcommandTag::Register,
+        Commands::AutoSyncWorker { .. } => SubcommandTag::AutoSyncWorker,
+        Commands::AutoSyncExecute { .. } => SubcommandTag::AutoSyncExecute,
+        _ => SubcommandTag::Mutation,
+    }
 }
 
 fn main() {
@@ -778,7 +803,9 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if !matches!(cli.command, Some(Commands::AutoSyncWorker { .. })) {
+    if snip_it::auto_sync::should_attempt_auto_sync_recovery(
+        cli.command.as_ref().map(classify_command),
+    ) {
         snip_it::auto_sync::startup_recover_pending();
     }
 

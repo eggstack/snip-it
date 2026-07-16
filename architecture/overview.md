@@ -79,13 +79,16 @@ See [library.md](library.md) for detailed data model and persistence behavior.
 - Server `deleted: true` snippets mark local copies as deleted (data preserved)
 - Sync sorts results by `updated_at` descending
 
-**auto_sync/** — Optional post-mutation background synchronization (detached one-shot worker)
+**auto_sync/** — Optional post-mutation background synchronization (two-process-per-cycle model)
 
 - `AutoSyncPolicy::resolve()` — effective policy from `SyncSettings` (disabled by default)
 - `notify_mutation()` — central API for mutation commands (trigger after local commit)
-- `mark_pending()` — durable pending marker with monotonic generation and CRC32 integrity
-- `schedule_existing_pending()` — re-execs `snp auto-sync-worker` detached (parent never holds the lock)
-- `auto-sync-worker` (hidden subcommand) — runs one sync attempt, bounded by `sync_timeout`
+- `record_pending_mutation()` — durable pending marker with monotonic generation and CRC32 integrity
+- `schedule_existing_pending()` — re-execs `snp auto-sync-worker` detached (parent never holds the execution lock)
+- `auto-sync-worker` (hidden subcommand) — debounce loop, spawns executor subprocess, supervises with timeout
+- `auto-sync-execute` (hidden subcommand) — acquires `SyncExecutionLock`, performs sync, exits with standardized codes
+- `SyncExecutionLock` — shared lock preventing concurrent sync across worker, manual, explicit, and cron paths
+- `SubcommandTag` / `should_attempt_auto_sync_recovery()` — startup recovery classification
 - See [auto_sync.md](auto_sync.md) for the full deep-dive
 
 See [sync.md](sync.md) for merge strategy details.
