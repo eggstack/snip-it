@@ -4,7 +4,7 @@
 
 ## File
 
-**`src/encryption.rs`** (325 lines)
+**`src/encryption.rs`** (~400 lines)
 
 End-to-end encryption for snippet data in transit. The server never sees plaintext snippet content.
 

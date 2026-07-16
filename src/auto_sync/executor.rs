@@ -107,11 +107,9 @@ pub enum ExecutorCommand {
 /// Executor entry point.
 ///
 /// Loads sync settings, checks if sync is configured, determines
-/// direction, and maps the outcome to an exit code. Currently a
-/// stub that returns `Success` — full implementation in Phase 2.
-pub fn run_executor(state_dir: &Path) -> i32 {
-    let _state_dir = state_dir;
-
+/// direction, creates a Tokio runtime, runs one sync, and maps the
+/// outcome to an internal exit code.
+pub fn run_executor(_state_dir: &Path) -> i32 {
     let settings = match crate::config::load_sync_settings() {
         Ok(s) => s,
         Err(e) => {
@@ -130,11 +128,92 @@ pub fn run_executor(state_dir: &Path) -> i32 {
         return ExecutorExitCode::NotConfigured.to_exit_status();
     }
 
-    let _direction = effective_sync_direction(&settings, false, false);
+    let direction = effective_sync_direction(&settings, false, false);
+    let (push_only, pull_only) = match direction {
+        SyncDirection::Push => (true, false),
+        SyncDirection::Pull => (false, true),
+        SyncDirection::Bidirectional => (false, false),
+    };
 
-    // TODO(Phase 2): acquire execution lock, run sync, map errors to exit codes
-    tracing::info!("executor: sync completed (stub)");
-    ExecutorExitCode::Success.to_exit_status()
+    tracing::info!(
+        direction = ?direction,
+        server_url = %settings.server_url,
+        "executor: starting sync"
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("snp-sync-executor")
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("executor: failed to create tokio runtime: {e}");
+            return ExecutorExitCode::InternalError.to_exit_status();
+        }
+    };
+
+    let result = crate::sync_commands::run_sync(&settings, None, push_only, pull_only, &runtime);
+
+    match result {
+        Ok(()) => {
+            tracing::info!("executor: sync completed successfully");
+            ExecutorExitCode::Success.to_exit_status()
+        }
+        Err(e) => {
+            let code = classify_sync_error(&e);
+            tracing::error!(exit_code = ?code, error = %e, "executor: sync failed");
+            code.to_exit_status()
+        }
+    }
+}
+
+/// Map a `SnipError` from `run_sync` to an `ExecutorExitCode`.
+///
+/// Uses heuristic matching on the error message since `SnipError::Runtime`
+/// does not carry typed error categories.
+fn classify_sync_error(error: &crate::error::SnipError) -> ExecutorExitCode {
+    let msg = error.to_string();
+    let lower = msg.to_lowercase();
+
+    match error {
+        crate::error::SnipError::Io { .. } | crate::error::SnipError::Toml { .. } => {
+            ExecutorExitCode::LocalPersistence
+        }
+        crate::error::SnipError::Runtime { message, .. } => {
+            if lower.contains("not configured") || lower.contains("sync not enabled") {
+                ExecutorExitCode::NotConfigured
+            } else if lower.contains("api key") || lower.contains("auth") {
+                ExecutorExitCode::AuthFailure
+            } else if lower.contains("health check")
+                || lower.contains("server")
+                || lower.contains("network")
+                || lower.contains("connection")
+                || lower.contains("timeout")
+                || lower.contains("unreachable")
+            {
+                ExecutorExitCode::NetworkTimeout
+            } else if lower.contains("conflict")
+                || lower.contains("failed to sync")
+                || lower.contains("some libraries")
+                || lower.contains("skipped")
+            {
+                ExecutorExitCode::ConflictPartial
+            } else if lower.contains("failed to save")
+                || lower.contains("failed to read")
+                || lower.contains("failed to initialize")
+                || lower.contains("failed to create")
+                || lower.contains("i/o")
+                || lower.contains("permission")
+            {
+                ExecutorExitCode::LocalPersistence
+            } else {
+                let _ = message;
+                ExecutorExitCode::InternalError
+            }
+        }
+        _ => ExecutorExitCode::InternalError,
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +354,87 @@ mod tests {
         assert_eq!(
             crate::auto_sync::spawn::EXECUTOR_SUBCOMMAND,
             "auto-sync-execute"
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_error_not_configured() {
+        let err = crate::error::SnipError::runtime_error("Sync not configured", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NotConfigured);
+    }
+
+    #[test]
+    fn test_classify_sync_error_sync_disabled() {
+        let err = crate::error::SnipError::runtime_error("sync not enabled", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NotConfigured);
+    }
+
+    #[test]
+    fn test_classify_sync_error_api_key() {
+        let err = crate::error::SnipError::runtime_error(
+            "Sync is enabled but no API key configured",
+            None,
+        );
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::AuthFailure);
+    }
+
+    #[test]
+    fn test_classify_sync_error_health_check() {
+        let err = crate::error::SnipError::runtime_error("Server health check failed", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+    }
+
+    #[test]
+    fn test_classify_sync_error_server_unreachable() {
+        let err =
+            crate::error::SnipError::runtime_error("Server is not reachable", Some("timeout"));
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+    }
+
+    #[test]
+    fn test_classify_sync_error_network() {
+        let err = crate::error::SnipError::runtime_error("network error", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+    }
+
+    #[test]
+    fn test_classify_sync_error_partial_failure() {
+        let err = crate::error::SnipError::runtime_error("Some libraries failed to sync", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::ConflictPartial);
+    }
+
+    #[test]
+    fn test_classify_sync_error_library_manager() {
+        let err =
+            crate::error::SnipError::runtime_error("Failed to initialize library manager", None);
+        assert_eq!(
+            classify_sync_error(&err),
+            ExecutorExitCode::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_error_save() {
+        let err = crate::error::SnipError::runtime_error("Failed to save merged library", None);
+        assert_eq!(
+            classify_sync_error(&err),
+            ExecutorExitCode::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_error_unknown_runtime() {
+        let err = crate::error::SnipError::runtime_error("something went wrong", None);
+        assert_eq!(classify_sync_error(&err), ExecutorExitCode::InternalError);
+    }
+
+    #[test]
+    fn test_classify_sync_error_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let err: crate::error::SnipError = io_err.into();
+        assert_eq!(
+            classify_sync_error(&err),
+            ExecutorExitCode::LocalPersistence
         );
     }
 }

@@ -12,8 +12,8 @@ Wraps the tonic gRPC client for the `SnippetSync` service defined in `snip-proto
 
 ```rust
 pub struct SyncClient {
-    channel: Channel,
-    retry_config: RetryConfig,
+    client: SnippetSyncClient<Channel>,
+    settings: SyncSettings,
 }
 ```
 
@@ -24,7 +24,9 @@ pub struct SyncClient {
 - `push_snippets()` — Push to server
 - `register_device()` — Device registration
 - `list_libraries()` / `create_library()` / `delete_library()` — Library management
-- `list_premade()` / `get_premade()` — Premade libraries
+- `list_premade()` / `get_premade()` / `search_premade()` — Premade libraries
+- `detect_device_conflict()` — Warn on device ID mismatch
+- `sync_with_retry()` — Custom retry for `sync()` (cannot use macro due to `&mut self` borrow)
 
 ### Retry Logic
 

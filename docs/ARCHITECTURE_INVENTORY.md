@@ -1,6 +1,6 @@
 # Internal Architecture Inventory
 
-A concise map of the snp internal architecture for contributors working on pet-compatibility features.
+A concise map of the snp internal architecture for contributors working on pet-compatibility features. For deeper module documentation, see the `architecture/` directory (start with `architecture/overview.md`).
 
 ## Module Map
 
@@ -15,7 +15,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### CLI (`src/main.rs`, `src/commands/`)
 - Clap derive CLI with `Option<Commands>` — no subcommand defaults to `run` (TUI selector)
-- 15 command modules, each with a public `run()` entry function
+- 16 command modules, each with a public `run()` entry function
 - `RUNTIME: LazyLock<Runtime>` — lazy Tokio async runtime, only initialized by async commands
 - `dispatch_command()` — top-level match on `Option<Commands>`
 - Shared helpers in `src/commands/mod.rs`:
@@ -85,7 +85,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Theme system (`theme.rs`): Halloy TOML at `~/.config/snp/themes/<name>.toml`, bundled themes via LZMA
 - Variable prompting UI (`variables.rs`): `VariablePromptResult` enum
 - Syntax highlighting (`highlight.rs`): pre-computed once at startup
-- `SnippetSelection` enum — `Selected(idx, copy_flag)`, `Delete(idx)`
+- `SnippetSelection` enum — `Selected(idx, copy_flag)`, `Delete(idx)`, `Cancelled`
 - Signal handling: `TERMINATE` atomic flag, registered via `signal-hook` on Unix
 
 ### Sort and Ranking (`src/sort.rs`)
@@ -99,7 +99,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
   4. Normalized description (case-insensitive)
   5. Original index (stable)
 - CLI flags `--sort` and `--favorites-first` on: run, clip, search, select, list
-- TUI interactive sort via `n` key (cycles modes), `o` key (toggles favorites-first)
+- TUI interactive sort via `n` key (sort by newest/oldest/a-z/z-a/used/freq), `o` key (toggles favorites-first)
 - TUI sort indicators: `[new]`, `[old]`, `[a-z]`, `[z-a]`, `[used]`, `[freq]`
 
 ### Usage Tracking (`src/usage.rs`)

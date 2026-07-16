@@ -86,6 +86,7 @@ Implements `SnippetSync` trait from `snip-proto`:
 | `DeleteLibrary` | Delete library |
 | `ListPremadeLibraries` | List available premade libraries |
 | `GetPremadeLibrary` | Download premade library content |
+| `SearchPremadeLibraries` | Search premade libraries by name |
 
 ### Input Validation
 
@@ -188,11 +189,16 @@ All values can be overridden via environment variables.
 ## Key Files
 
 - `snip-sync/src/main.rs` — Server entry, gRPC/HTTP setup, config loading
-- `snip-sync/src/db.rs` — SQLite database, user/snippet/library operations
+- `snip-sync/src/lib.rs` — Config loading, `SnipSyncService` implementation, axum routes
+- `snip-sync/src/db.rs` — SQLite database, user/snippet/library operations (18 tests)
+- `snip-sync/src/bootstrap.rs` — Server initialization and service wiring
 - `snip-sync/src/rate_limiter.rs` — Per-key rate limiting
 - `snip-sync/src/metrics.rs` — Prometheus counters
 - `snip-sync/src/premade.rs` — Premade library file scanning
-- `snip-sync/Cargo.toml` — Dependencies
-- `snip-sync/config.toml` — Default config template
-- `snip-sync/Dockerfile` — Container build
-- `snip-sync/docker-compose.yml` — Local development setup
+- `snip-sync/src/paths.rs` — Default path resolution
+- `snip-sync/src/cert.rs` — TLS certificate handling
+- `snip-sync/src/cli.rs` — CLI argument parsing
+- `snip-sync/src/editor.rs` — Editor integration
+- `snip-sync/src/process.rs` — Process management
+- `snip-sync/src/test_helpers.rs` — In-process test server support
+- `snip-sync/src/update.rs` — Server self-update

@@ -1,5 +1,9 @@
 # Architecture Review Plan
 
+> **Historical Document**: This captured the review process used in 2026-05-29. The review
+> is complete. New commands added since then (`select_cmd`, `shell_cmd`, `doctor_cmd`,
+> `import_cmd`, `pet_analysis`) do not have architecture docs yet.
+
 This document outlines a systematic review process for all architecture documentation in the `architecture/` directory (excluding this file). For each module, subagents will verify claims against the actual codebase and produce improvement plans in the `plans/` directory.
 
 ## Modules to Review

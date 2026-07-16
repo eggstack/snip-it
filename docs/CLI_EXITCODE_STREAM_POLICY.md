@@ -7,7 +7,7 @@ exit codes and stdout/stderr stream usage.
 
 ### Exit Codes
 
-All errors are handled in `src/main.rs:364-368`:
+All errors are handled in `src/main.rs:812-823`:
 
 ```rust
 if let Err(e) = dispatch_command(cli.command) {
@@ -20,13 +20,13 @@ if let Err(e) = dispatch_command(cli.command) {
 |-----------|-----------|-------|
 | Success | 0 | Implicit — no `process::exit` call |
 | Any `SnipError` | 1 | All error variants map to the same code |
-| Async runtime failure | 1 | `LazyLock` panic path (`main.rs:22-25`) |
-| Signal handler registration failure | 1 | `main.rs:37-43` |
+| Async runtime failure | 1 | `LazyLock` panic path (`main.rs:23-28`) |
+| Signal handler registration failure | 1 | `main.rs:38-45` |
 
 There is **no distinction** between error types. A TOML parse error, a missing
 file, a clipboard failure, and a sync network error all produce exit code 1.
 
-`SnipError` variants (`src/error.rs:28-67`):
+`SnipError` variants (`src/error.rs`):
 
 | Variant | Typical Cause |
 |---------|---------------|
@@ -73,8 +73,7 @@ flags. Without flags, output uses the default relevance ordering.
 
 - **TUI**: Renders directly to the terminal via crossterm.
 - **stdout**: After selection, prints snippet details (`Description:`,
-  `Command:`, `Output:`, `Tags:`, `Folders:`, `Favorite:`) via `println!`
-  (`search_cmd.rs:27-32`).
+  `Command:`, `Output:`, `Tags:`, `Folders:`, `Favorite:`) via `println!`.
 - **stderr**: Error messages from the main error handler.
 - **Exit**: 0 on success (even if user presses `q` — returns `Ok(())`).
   1 on `SnipError`.
@@ -168,14 +167,12 @@ directly — they do not go through the TUI layer.
 
 #### `snp keybindings` (alias `k`)
 
-- **stdout**: All keybinding documentation via `println!`
-  (`keybindings_cmd.rs:5-79`).
+- **stdout**: All keybinding documentation via `println!`.
 - **stderr**: Nothing on success.
 
 #### `snp cron` (alias `cr`)
 
-- **stdout**: Crontab entry and instructions via `println!`
-  (`cron_cmd.rs:37-58`).
+- **stdout**: Crontab entry and instructions via `println!`.
 - **Prompts**: `print!("Copy to clipboard? [y/N]: ")` to **stdout**.
 - **Errors**: Clipboard failure to stderr via `eprintln!`.
 - **Validation**: Invalid interval (0) returns `SnipError::Runtime` → exit 1.
@@ -196,8 +193,7 @@ Status messages are split across both streams. No consistent convention.
 
 #### `snp register` (alias `reg`)
 
-- **stdout**: "Registration successful!", masked API key, device ID, saved path
-  (`register_cmd.rs:44-59`).
+- **stdout**: "Registration successful!", masked API key, device ID, saved path.
 - **stderr**: "Already registered!" message, save failure, registration failure.
 - **Exit**: 0 on success, 1 on error.
 
@@ -276,7 +272,7 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
    goes to stdout.
 
 7. **Error messages** always go to stderr via `eprintln!` in the main error
-   handler (`main.rs:365`), or via `eprintln!` in individual commands before
+   handler (`main.rs:819`), or via `eprintln!` in individual commands before
    returning `Ok(())` (graceful degradation pattern).
 
 8. **`new` prompts** go to stdout, not stderr. Piping `snp new` would see the
@@ -303,7 +299,12 @@ Auto-sync scheduling failure messages
 go to stderr via `eprintln!` — stdout is never contaminated. Worker-side
 diagnostics appear in the log files and via `snp doctor` only.
 
-## Proposed Contract (Release 1B+)
+## Proposed Contract (Release 1B+) — NOT YET IMPLEMENTED
+
+> **Status**: This section describes aspirational changes that have not been implemented.
+> Exit codes 2-6, the stream contract changes (moving human-readable output to stderr),
+> and the `--stdout` transitional flag are all deferred. The current behavior described
+> in the "Current Behavior" section above is authoritative.
 
 ### Exit Codes
 
@@ -349,7 +350,7 @@ boundary in `main.rs`. Ctrl+C in the TUI (normal mode) also maps to
    goes to stdout (e.g., `snp select` prints the command to stdout).
 
 4. **Error messages** always go to stderr, prefixed with `error:` (current
-   behavior in `main.rs:365`).
+   behavior in `main.rs:819`).
 
 ### Command-by-Command Stream Changes
 

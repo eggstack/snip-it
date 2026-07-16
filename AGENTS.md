@@ -48,6 +48,33 @@ themes/           50 Halloy TOML theme files
 scripts/          build_themes.py — LZMA-compresses themes/ into src/ui/_generated_bundled_themes.rs
 ```
 
+### Key Source Modules (`src/`)
+
+```
+src/main.rs              CLI entry point, clap dispatch
+src/lib.rs               Library crate (exports for integration tests)
+src/commands/             15 command modules (new, list, run, clip, select, search, edit,
+                          sync, register, library, premade, import, doctor, cron, shell,
+                          keybindings) + shared helpers in mod.rs
+src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification)
+src/ui/                   TUI (ratatui + crossterm), theme system, syntax highlighting, variable prompts
+src/utils/                Config paths, TOML helpers, variable parsing, shell keywords, temp files, atomic writes
+src/library.rs            Snippet/library data structures and TOML persistence
+src/sync.rs               gRPC client for snip-sync server
+src/sync_commands.rs      Sync orchestration and merge logic
+src/encryption.rs         AES-256-GCM + Argon2id end-to-end encryption
+src/config.rs             Sync settings, path resolution, keychain API key
+src/error.rs              SnipError enum and SnipResult type
+src/logging.rs            Structured logging with file rotation
+src/clipboard.rs          Cross-platform clipboard access
+src/sort.rs               Sort modes, ranking, tie-break chain
+src/usage.rs              Local usage metadata (use count, last-used)
+src/output.rs             Snippet output field rendering/presentation
+src/diagnostics.rs        Shared diagnostic model for import/doctor
+src/proto.rs              Prost-generated protobuf types
+src/update.rs             Self-update support (crates.io, Homebrew, GitHub releases)
+```
+
 ## Critical Gotchas
 
 ### Binary-only crate
@@ -83,6 +110,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 ### Error Handling
 - `SnipError` enum in `src/error.rs`, `SnipResult<T> = Result<T, SnipError>`
 - IO errors auto-convert via `From<io::Error>`
+- `CryptoError` auto-converts via `From<CryptoError>`
 
 ### Async (Tokio)
 - Global `RUNTIME: LazyLock<Runtime>` created lazily on first access
@@ -109,6 +137,9 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `~/.config/snp/sync.toml` — sync settings
 - `~/.config/snp/libraries.toml` — library metadata
 - `~/.config/snp/libraries/*.toml` — individual library files
+- `~/.config/snp/premade/*.toml` — downloaded premade libraries
+- `~/.config/snp/themes/*.toml` — Halloy-compatible theme files
+- `~/.config/snp/themes.toml` — active theme selection
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
 
 ## Testing Notes
@@ -117,3 +148,43 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Server tests use `sqlite::memory:` for isolation
 - Sync integration tests (`tests/sync_integration.rs`) are async `#[tokio::test]` with real in-process server
 - Golden command corpus: 24 edge cases verifying exact-text preservation across all acquisition sources
+
+## Architecture Documentation
+
+The `architecture/` directory contains deep-dive documents for each module. Use them as reference when working on specific subsystems:
+
+| Document | Subject |
+|----------|---------|
+| `architecture/overview.md` | Bird's-eye view, data flow, key patterns |
+| `architecture/cli.md` | CLI entry point, argument parsing, dispatch |
+| `architecture/commands/*.md` | Per-command deep dives |
+| `architecture/core.md` | Core types, error handling |
+| `architecture/library.md` | Data structures, persistence |
+| `architecture/config.md` | Sync settings, path resolution |
+| `architecture/encryption.md` | AES-256-GCM encryption |
+| `architecture/sync.md` | Sync protocol, merge logic |
+| `architecture/auto_sync.md` | Auto-sync policy, debounce, triggers |
+| `architecture/tui.md` | TUI keybindings, state machine |
+| `architecture/ui.md` | UI components, theme system |
+| `architecture/server.md` | snip-sync server architecture |
+| `architecture/proto.md` | Protobuf definitions |
+| `architecture/sort.md` | Sort modes, ranking |
+| `architecture/usage.md` | Usage metadata |
+| `architecture/output.md` | Output field rendering |
+| `architecture/logging.md` | Structured logging |
+| `architecture/clipboard.md` | Cross-platform clipboard |
+| `architecture/utils.md` | Config paths, TOML helpers |
+
+## Skills
+
+The `.skills/` directory contains specialized reference documents for agents working on specific modules. Load relevant skills when working in those areas:
+
+| Skill | When to use |
+|-------|-------------|
+| `architecture-review.md` | Reviewing architecture docs against code |
+| `encryption-module.md` | Working with encryption, Argon2, key cache |
+| `keychain-integration.md` | API key storage, keyring crate patterns |
+| `remediation-patterns.md` | Bug fix patterns, code quality |
+| `server-module.md` | Working on snip-sync server |
+| `sync-module.md` | Working on sync protocol, merge logic |
+| `ui-module.md` | Working on TUI, themes, syntax highlighting |

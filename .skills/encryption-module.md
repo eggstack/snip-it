@@ -5,7 +5,7 @@ Guide agents through working with the encryption module (`src/encryption.rs`).
 
 ## Argon2 Memory Cost
 
-**Location**: `src/encryption.rs:32`
+**Location**: `src/encryption.rs:39`
 ```rust
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
 ```
@@ -44,24 +44,25 @@ Base64(Salt[16] + Nonce[12] + Ciphertext[...])
 ## API
 
 ```rust
-pub fn encrypt(api_key: &str, plaintext: &str) -> SnipResult<String>
-pub fn decrypt(api_key: &str, encrypted: &str) -> SnipResult<String>
+// In encryption.rs
+pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String>
+pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String>
+pub fn clear_key_cache()
 
-// Internal (used by sync module)
-pub fn encrypt_snippet(api_key: &str, snippet: &Snippet) -> SnipResult<ProtoSnippet>
-pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<Snippet>
+// In sync.rs (uses encryption module internally)
+pub fn encrypt_snippet(api_key: &str, snippet: &ProtoSnippet) -> SnipResult<ProtoSnippet>
+pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoSnippet>
 ```
 
 ## Error Handling
 
-`CryptoError` enum:
-- `InvalidBase64` — corrupted payload
-- `InvalidPayload` — wrong length or format
+`CryptoError` enum (via `thiserror`):
 - `EncryptionFailed` — AES-GCM error
 - `DecryptionFailed` — authentication tag mismatch (wrong key or tampered data)
 - `KeyDerivationFailed` — Argon2 error
+- `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` is not integrated with `SnipError`. Callers use `map_err(|e| SnipError::runtime_error(...))`.
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:203-210`). The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
 
 ## Security Properties
 

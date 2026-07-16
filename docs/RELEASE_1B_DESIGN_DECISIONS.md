@@ -1,5 +1,10 @@
 # Release 1B Design Decisions: `snp select` Primitive
 
+> **Historical Document**: This captures pre-implementation design rationale for `snp select`.
+> The command is fully implemented. Line numbers and code examples may diverge from the
+> current codebase. The reasoning behind decisions (especially rejection of alternatives)
+> remains valuable context for future work.
+
 This document records the design decisions for the `snp select` command — the core
 machine-facing selection primitive for shell integration in Release 1B.
 

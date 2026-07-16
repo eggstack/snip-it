@@ -25,6 +25,10 @@ The CLI is the primary interface for users. The entry point is `src/main.rs` whi
 - [clip_cmd.md](commands/clip_cmd.md) — Copy snippet to clipboard
 - [search_cmd.md](commands/search_cmd.md) — Fuzzy search with detail display
 - [edit_cmd.md](commands/edit_cmd.md) — Open snippet config in `$EDITOR`
+- [select_cmd.md](commands/select_cmd.md) — Non-executing selection primitive for shell integration
+- [shell_cmd.md](commands/shell_cmd.md) — Shell integration code generation
+- [doctor_cmd.md](commands/doctor_cmd.md) — Compatibility diagnostics and pet file analysis
+- [import_cmd.md](commands/import_cmd.md) — Pet snippet file import
 - [keybindings_cmd.md](commands/keybindings_cmd.md) — TUI keybindings reference
 - [sync_cmd.md](commands/sync_cmd.md) — Bidirectional sync with server
 - [cron_cmd.md](commands/cron_cmd.md) — Crontab generation for periodic sync
@@ -290,3 +294,5 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 | [usage.md](usage.md) | Local usage metadata, update policy, storage |
 | [output.md](output.md) | Snippet output field rendering |
 | [logging.md](logging.md) | Structured logging, audit trail, panic handler |
+
+> **Note**: Architecture docs for `select_cmd`, `shell_cmd`, `doctor_cmd`, `import_cmd`, and `pet_analysis` are not yet written. See `docs/ARCHITECTURE_INVENTORY.md` for a comprehensive module inventory.

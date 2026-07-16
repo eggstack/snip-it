@@ -13,7 +13,7 @@ Each snippet gets a new random salt, running Argon2 key derivation for every sin
 ## Sync Flow
 
 ```
-run_sync() flow:
+run_sync() flow (sync_commands.rs:365-742):
 1. Validate config (api_key, device_id)
 2. Create SyncClient with TLS
 3. Health check
@@ -36,21 +36,22 @@ Last-write-wins based on `updated_at` timestamp:
 - Both deleted → exclude from output
 - Server newer → server wins, preserve local-only fields (`output`, `folders`, `favorite`)
 - Local newer or equal → local wins
+- Local deleted → NOT resurrected by newer server copy (local-deleted-wins)
 - Local-only snippets → preserved unchanged
 
 ## Key Functions
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `run_sync()` | `sync_commands.rs:118-366` | Main sync orchestration |
-| `merge_snippets()` | `sync_commands.rs:375-456` | Merge algorithm |
-| `encrypt_snippet()` | `sync.rs:318-345` | Encrypt snippet for server |
-| `decrypt_snippet()` | `sync.rs:347-372` | Decrypt snippet from server |
-| `sync_with_retry()` | `sync.rs:144-178` | Retry logic with exponential backoff |
+| `run_sync()` | `sync_commands.rs:365-742` | Main sync orchestration |
+| `merge_snippets()` | `sync_commands.rs:744-851` | Merge algorithm |
+| `encrypt_snippet()` | `sync.rs:518-544` | Encrypt snippet for server |
+| `decrypt_snippet()` | `sync.rs:547-571` | Decrypt snippet from server |
+| `sync_with_retry()` | `sync.rs:261-304` | Retry logic with exponential backoff |
 
 ## Test Coverage
 
-Existing tests in `sync_commands.rs:463-679`:
+Tests in `sync_commands.rs:896-1180`:
 - `test_server_wins_with_newer_timestamp`
 - `test_local_wins_with_newer_timestamp`
 - `test_new_server_snippet_added`
@@ -60,5 +61,8 @@ Existing tests in `sync_commands.rs:463-679`:
 - `test_local_deleted_snippet_not_preserved`
 - `test_merge_preserves_folders`
 - `test_merge_sorted_by_updated_at_descending`
+- `test_local_deleted_not_resurrected_by_newer_server`
+- `test_proto_snippet_excludes_usage_metadata`
+- `test_merge_preserves_local_output_when_server_wins`
 
 Missing: No tests for encryption roundtrip through sync, retry logic, or the critical encrypt-failure + timestamp-update interaction.
