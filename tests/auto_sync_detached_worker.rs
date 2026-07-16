@@ -111,6 +111,35 @@ auto_sync_failure = "ignore"
 
     let gen_before = read_generation(&config_dir);
     new_snippet(&config_dir, "single mutation");
+    let pending_path = pending_path(&config_dir);
+    let lock_path = lock_path(&config_dir);
+    eprintln!(
+        "DIAG: config_dir={} pending_exists={} lock_exists={} sync_toml_exists={}",
+        config_dir.display(),
+        pending_path.exists(),
+        lock_path.exists(),
+        config_dir.join("sync.toml").exists()
+    );
+    if let Ok(raw) = fs::read_to_string(&pending_path) {
+        eprintln!("DIAG: pending raw=\n{raw}");
+    } else {
+        eprintln!("DIAG: pending file missing or unreadable");
+    }
+    if let Ok(raw) = fs::read_to_string(&lock_path) {
+        eprintln!("DIAG: lock raw=\n{raw}");
+    }
+    if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
+        eprintln!("DIAG: sync.toml raw=\n{raw}");
+    }
+    let lib_dir = config_dir.join("libraries");
+    if lib_dir.exists() {
+        eprintln!("DIAG: libraries dir contents:");
+        if let Ok(entries) = fs::read_dir(&lib_dir) {
+            for entry in entries.flatten() {
+                eprintln!("DIAG:   {}", entry.path().display());
+            }
+        }
+    }
     let gen_after = read_generation(&config_dir).expect("pending marker exists");
 
     match gen_before {

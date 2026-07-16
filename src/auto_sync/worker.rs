@@ -66,21 +66,30 @@ pub fn schedule_existing_pending(state_dir: &Path) -> SpawnResult {
 /// The worker never owns a pending marker generation. It observes it,
 /// acts on it, and lets a newer generation decide what to do.
 pub fn run(state_dir: &Path) -> WorkerOutcome {
+    eprintln!("WORKER-DIAG: start state_dir={}", state_dir.display());
     let policy = AutoSyncPolicy::resolve(&get_sync_settings());
+    eprintln!(
+        "WORKER-DIAG: policy.enabled={} debounce={:?}",
+        policy.enabled, policy.debounce
+    );
 
     let lock = match lock::try_acquire(state_dir) {
         Ok(l) => l,
         Err(LockError::AlreadyHeld { .. }) => {
             tracing::info!("auto-sync worker exiting: lock already held");
+            eprintln!("WORKER-DIAG: exit AlreadyHeld -> NothingToDo");
             return WorkerOutcome::NothingToDo;
         }
         Err(e) => {
             tracing::error!(error = %e, "auto-sync worker failed to acquire lock");
+            eprintln!("WORKER-DIAG: exit lock_err={e} -> Failed");
             return WorkerOutcome::Failed;
         }
     };
 
-    run_locked(state_dir, lock, &policy)
+    let outcome = run_locked(state_dir, lock, &policy);
+    eprintln!("WORKER-DIAG: end outcome={outcome:?}");
+    outcome
 }
 
 fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> WorkerOutcome {
@@ -132,6 +141,9 @@ fn run_locked(state_dir: &Path, lock: WorkerLock, policy: &AutoSyncPolicy) -> Wo
         }
 
         let outcome = execute_sync(state_dir, observed_generation, &observed_snapshot, policy);
+        eprintln!(
+            "WORKER-DIAG: cycle outcome={outcome:?} generation={observed_generation}"
+        );
 
         match outcome {
             WorkerOutcome::Success => {
