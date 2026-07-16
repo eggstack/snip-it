@@ -110,6 +110,11 @@ auto_sync_failure = "ignore"
     .unwrap();
 
     let gen_before = read_generation(&config_dir);
+    if let Ok(raw) = fs::read_to_string(config_dir.join("sync.toml")) {
+        eprintln!("DIAG-BEFORE: sync.toml len={} raw=\n{raw}", raw.len());
+    } else {
+        eprintln!("DIAG-BEFORE: sync.toml unreadable");
+    }
     new_snippet(&config_dir, "single mutation");
     let pending_path = pending_path(&config_dir);
     let lock_path = lock_path(&config_dir);

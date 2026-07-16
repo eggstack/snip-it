@@ -457,12 +457,18 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
 pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let path = get_sync_config_path();
+    eprintln!("LOAD-SYNC-DIAG: path={} exists={}", path.display(), path.exists());
 
     if !path.exists() {
         return Ok(SyncSettings::default());
     }
 
     let content = cached_read_toml(&path)?;
+    eprintln!(
+        "LOAD-SYNC-DIAG: content_len={} first_60={:?}",
+        content.len(),
+        content.chars().take(60).collect::<String>()
+    );
 
     if !verify_integrity(&content) {
         tracing::warn!("sync.toml integrity check failed — file may be corrupted. Using defaults.");
