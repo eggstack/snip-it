@@ -48,6 +48,10 @@ snip-sync/snip-sync
 /snip-proto/Cargo.lock
 /snip-sync/Cargo.lock
 
+# CI scaffolding (downloaded protoc binaries)
+/.protoc/
+/.protoc
+
 # Coverage reports
 lcov.info
 coverage/

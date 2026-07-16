@@ -15,6 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  PROTOC_VERSION: 35.1
 
 jobs:
   repo-hygiene:
@@ -67,18 +68,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: |
+          brew install protobuf
+          protoc --version
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        run: choco install protoc -y
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.protoc/bin"
+          curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused --location --silent --show-error --fail \
+            --output "$GITHUB_WORKSPACE/.protoc/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-win64.zip"
+          unzip -j -o "$GITHUB_WORKSPACE/.protoc/protoc.zip" bin/protoc.exe -d "$GITHUB_WORKSPACE/.protoc/bin"
+          chmod +x "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe"
+          "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe" --version
+          echo "$GITHUB_WORKSPACE/.protoc/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: cargo test --workspace
 
   build:
-    name: Build
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -96,7 +110,15 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        run: choco install protoc -y
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.protoc/bin"
+          curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused --location --silent --show-error --fail \
+            --output "$GITHUB_WORKSPACE/.protoc/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-win64.zip"
+          unzip -j -o "$GITHUB_WORKSPACE/.protoc/protoc.zip" bin/protoc.exe -d "$GITHUB_WORKSPACE/.protoc/bin"
+          chmod +x "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe"
+          echo "$GITHUB_WORKSPACE/.protoc/bin" >> "$GITHUB_PATH"
       - name: Build
         run: cargo build --release --workspace
       - name: Upload binary (Unix)
