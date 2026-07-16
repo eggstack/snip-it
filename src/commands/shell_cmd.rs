@@ -519,11 +519,36 @@ mod tests {
     // H1: Generated syntax tests — validate with shell parsers
 
     fn shell_exists(name: &str) -> bool {
-        Command::new("which")
+        // First, locate the executable on PATH.
+        let which = Command::new("which")
             .arg(name)
             .output()
             .map(|o| o.status.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !which {
+            return false;
+        }
+
+        // On Windows, the Windows Subsystem for Linux ships a `bash.exe`
+        // shim (and similar shims for `zsh` if installed) that prints
+        // "Windows Subsystem for Linux has no installed distributions."
+        // and exits non-zero when no WSL distro is registered. That
+        // answer to `which bash` makes `Command::new("bash")` look
+        // like it succeeded, but every shell test that actually runs
+        // bash then fails with the WSL error message instead of a real
+        // bash exit code. Reject the WSL shim by trying `--version`
+        // and inspecting the version banner. A real bash responds on
+        // stdout with "GNU bash, version ..." or similar; the WSL
+        // shim writes its error to stdout and exits non-zero.
+        let probe = Command::new(name).arg("--version").output();
+        match probe {
+            Ok(out) if out.status.success() => {
+                let banner = String::from_utf8_lossy(&out.stdout);
+                !banner.contains("Windows Subsystem for Linux")
+                    && !banner.contains("has no installed distributions")
+            }
+            _ => false,
+        }
     }
 
     #[test]
