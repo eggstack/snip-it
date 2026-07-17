@@ -491,6 +491,8 @@ fn test_executor_source_does_not_reference_execution_lock() {
 #[test]
 fn test_worker_reaps_executor_before_returning() {
     let worker_src = include_str!("../src/auto_sync/worker.rs");
+    // Normalize CRLF to LF so the test works on Windows checkouts.
+    let worker_src = worker_src.replace("\r\n", "\n");
 
     // Locate the `execute_sync` function body and ensure it includes
     // a `child.wait()` after the kill path.
