@@ -254,6 +254,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_dead_owner_reclaim() {
         let dir = TempDir::new().unwrap();
         let path = pending_txn_lock_path(dir.path());

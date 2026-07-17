@@ -261,6 +261,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_dead_pid_lock_replaced() {
         let dir = TempDir::new().unwrap();
         let contents = ExecutionLockContents {
@@ -459,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_is_stale_with_dead_pid() {
         let contents = ExecutionLockContents {
             pid: 1,

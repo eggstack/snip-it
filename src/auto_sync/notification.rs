@@ -60,6 +60,14 @@ pub fn notify_local_mutation(
     policy: &AutoSyncPolicy,
     context: MutationContext,
 ) -> AutoSyncNotificationResult {
+    notify_local_mutation_with_dir(policy, context, &derive_state_dir())
+}
+
+fn notify_local_mutation_with_dir(
+    policy: &AutoSyncPolicy,
+    context: MutationContext,
+    state_dir: &std::path::Path,
+) -> AutoSyncNotificationResult {
     if !policy.sync_configured {
         return AutoSyncNotificationResult::Disabled;
     }
@@ -73,17 +81,16 @@ pub fn notify_local_mutation(
         return AutoSyncNotificationResult::Suppressed;
     }
 
-    let state_dir = derive_state_dir();
     let snapshot = PendingSnapshot::Mutation { kind: context.kind };
 
-    match pending::record_pending_mutation(&state_dir, snapshot) {
+    match pending::record_pending_mutation(state_dir, snapshot) {
         Ok(marked) => {
             if !policy.should_trigger() {
                 return AutoSyncNotificationResult::PendingRecorded {
                     generation: marked.generation,
                 };
             }
-            match schedule_after_record(&state_dir, &marked) {
+            match schedule_after_record(state_dir, &marked) {
                 SpawnResult::Spawned => AutoSyncNotificationResult::Scheduled {
                     generation: marked.generation,
                 },
@@ -329,18 +336,20 @@ mod tests {
 
     #[test]
     fn test_sync_configured_but_auto_sync_disabled_records_pending() {
+        let dir = tempfile::TempDir::new().unwrap();
         let policy = AutoSyncPolicy {
             sync_configured: true,
             enabled: false,
             ..AutoSyncPolicy::default()
         };
-        let result = notify_local_mutation(
+        let result = notify_local_mutation_with_dir(
             &policy,
             MutationContext {
                 kind: MutationKind::SnippetCreate,
                 origin: MutationOrigin::User,
                 library_id: None,
             },
+            dir.path(),
         );
         match &result {
             AutoSyncNotificationResult::PendingRecorded { generation } => {
@@ -349,13 +358,10 @@ mod tests {
             other => panic!("expected PendingRecorded, got {other:?}"),
         }
         // The pending marker must exist on disk.
-        let state_dir = derive_state_dir();
-        let pending_path = state_dir.join("auto-sync-pending.toml");
+        let pending_path = dir.path().join("auto-sync-pending.toml");
         assert!(
             pending_path.exists(),
             "pending marker must exist on disk when sync is configured but auto_sync is disabled"
         );
-        // Clean up the marker so it doesn't leak into other tests.
-        let _ = std::fs::remove_file(&pending_path);
     }
 }
