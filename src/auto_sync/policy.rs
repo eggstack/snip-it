@@ -91,40 +91,92 @@ impl MutationOrigin {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Typed failure classification for sync operations.
+///
+/// Each variant represents a distinct operational failure mode with
+/// specific retry and operator-attention semantics. The taxonomy is
+/// used by the backoff calculator, status persistence, and schedule
+/// decision function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FailureClass {
-    Network,
-    Auth,
+    /// Auto-sync is disabled in configuration.
+    DeferredDisabled,
+    /// Sync is not configured (no server URL, no API key).
+    DeferredNotConfigured,
+    /// Transient network connectivity failure (DNS, connection refused, unreachable).
+    TransientNetwork,
+    /// Transient timeout (server did not respond in time).
+    TransientTimeout,
+    /// Authentication or credential failure (bad API key, unregistered).
+    Authentication,
+    /// Configuration error that requires operator intervention.
+    Configuration,
+    /// Synchronization conflict (merge failure, partial sync).
     Conflict,
-    Unknown,
+    /// Partial sync completion (some libraries succeeded, some failed).
+    Partial,
+    /// Local persistence failure (could not write library files).
+    LocalPersistence,
+    /// Credential storage (keychain) failure.
+    CredentialStore,
+    /// Internal or genuinely unclassified error.
+    Internal,
 }
 
 impl FailureClass {
+    /// Classify a `SnipError` into a failure class.
+    ///
+    /// Uses heuristic matching on the error message since `SnipError::Runtime`
+    /// does not carry typed error categories. Mapping is based on known
+    /// error message patterns from `sync_commands.rs`.
     pub fn from_error(err: &crate::error::SnipError) -> Self {
         use crate::error::SnipError;
         match err {
             SnipError::Runtime { message, detail } => {
                 let combined = format!("{message} {}", detail.as_deref().unwrap_or(""));
                 let lower = combined.to_lowercase();
-                if lower.contains("network")
-                    || lower.contains("timeout")
+                if lower.contains("not configured") || lower.contains("sync not enabled") {
+                    FailureClass::DeferredNotConfigured
+                } else if lower.contains("api key")
+                    || lower.contains("auth")
+                    || lower.contains("unauthorized")
+                    || lower.contains("forbidden")
+                    || lower.contains("permission denied")
+                {
+                    FailureClass::Authentication
+                } else if lower.contains("health check")
+                    || lower.contains("server")
+                    || lower.contains("network")
+                    || lower.contains("connection")
                     || lower.contains("dns")
                     || lower.contains("connection refused")
                     || lower.contains("connect")
                     || lower.contains("unavailable")
+                    || lower.contains("unreachable")
                 {
-                    FailureClass::Network
-                } else if lower.contains("auth")
-                    || lower.contains("unauthorized")
-                    || lower.contains("forbidden")
-                    || lower.contains("api key")
-                    || lower.contains("permission denied")
+                    FailureClass::TransientNetwork
+                } else if lower.contains("timeout") || lower.contains("timed out") {
+                    FailureClass::TransientTimeout
+                } else if lower.contains("failed to save")
+                    || lower.contains("failed to read")
+                    || lower.contains("failed to initialize")
+                    || lower.contains("failed to create")
+                    || lower.contains("i/o")
+                    || lower.contains("permission")
                 {
-                    FailureClass::Auth
+                    FailureClass::LocalPersistence
                 } else if lower.contains("conflict") || lower.contains("merge") {
                     FailureClass::Conflict
+                } else if lower.contains("failed to sync")
+                    || lower.contains("some libraries")
+                    || lower.contains("skipped")
+                {
+                    FailureClass::Partial
+                } else if lower.contains("credential") || lower.contains("keychain") {
+                    FailureClass::CredentialStore
                 } else {
-                    FailureClass::Unknown
+                    FailureClass::Internal
                 }
             }
             SnipError::Io { operation, .. } => {
@@ -133,32 +185,147 @@ impl FailureClass {
                     || lower.contains("connect")
                     || lower.contains("network")
                 {
-                    FailureClass::Network
+                    FailureClass::TransientNetwork
                 } else {
-                    FailureClass::Unknown
+                    FailureClass::LocalPersistence
                 }
             }
-            _ => FailureClass::Unknown,
+            SnipError::Toml { .. } => FailureClass::LocalPersistence,
+            _ => FailureClass::Internal,
         }
     }
 
+    /// Serialize to a stable short code for persistence.
     pub fn as_code(&self) -> &'static str {
         match self {
-            Self::Network => "network",
-            Self::Auth => "auth",
+            Self::DeferredDisabled => "deferred_disabled",
+            Self::DeferredNotConfigured => "deferred_not_configured",
+            Self::TransientNetwork => "transient_network",
+            Self::TransientTimeout => "transient_timeout",
+            Self::Authentication => "authentication",
+            Self::Configuration => "configuration",
             Self::Conflict => "conflict",
-            Self::Unknown => "unknown",
+            Self::Partial => "partial",
+            Self::LocalPersistence => "local_persistence",
+            Self::CredentialStore => "credential_store",
+            Self::Internal => "internal",
         }
     }
 
+    /// Deserialize from a stable short code.
     pub fn from_code(code: &str) -> Self {
         match code {
-            "network" => Self::Network,
-            "auth" => Self::Auth,
+            "deferred_disabled" => Self::DeferredDisabled,
+            "deferred_not_configured" => Self::DeferredNotConfigured,
+            "transient_network" => Self::TransientNetwork,
+            "transient_timeout" => Self::TransientTimeout,
+            "authentication" => Self::Authentication,
+            "configuration" => Self::Configuration,
             "conflict" => Self::Conflict,
-            _ => Self::Unknown,
+            "partial" => Self::Partial,
+            "local_persistence" => Self::LocalPersistence,
+            "credential_store" => Self::CredentialStore,
+            "internal" => Self::Internal,
+            _ => Self::Internal,
         }
     }
+
+    /// Whether this failure class allows automatic retry.
+    pub fn allows_automatic_retry(&self) -> bool {
+        matches!(
+            self,
+            Self::TransientNetwork | Self::TransientTimeout | Self::Internal
+        )
+    }
+
+    /// Whether this failure class is deferred (waiting for config change).
+    pub fn is_deferred(&self) -> bool {
+        matches!(
+            self,
+            Self::DeferredDisabled
+                | Self::DeferredNotConfigured
+                | Self::Configuration
+                | Self::Authentication
+                | Self::CredentialStore
+        )
+    }
+}
+
+/// Retry disposition derived from a failure class.
+///
+/// Determines what the scheduling system should do after a failure:
+/// retry after a delay, wait for configuration change, require operator
+/// attention, or not retry at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryDisposition {
+    /// Retry after the given duration (exponential backoff).
+    RetryAfter(Duration),
+    /// Do not retry until a relevant configuration change is detected.
+    WaitForConfigurationChange,
+    /// Requires operator attention; do not retry automatically.
+    RequiresAttention,
+    /// Do not retry automatically; only explicit `snp sync` can retry.
+    NoAutomaticRetry,
+}
+
+impl FailureClass {
+    /// Map this failure class to a retry disposition.
+    ///
+    /// The backoff calculator uses this to determine the delay before
+    /// the next attempt. `consecutive_failures` is used for exponential
+    /// backoff calculation in the `RetryAfter` case.
+    pub fn retry_disposition(&self, consecutive_failures: u32) -> RetryDisposition {
+        match self {
+            Self::DeferredDisabled | Self::DeferredNotConfigured => {
+                RetryDisposition::WaitForConfigurationChange
+            }
+            Self::TransientNetwork | Self::TransientTimeout => {
+                RetryDisposition::RetryAfter(transient_backoff(consecutive_failures))
+            }
+            Self::Authentication | Self::Configuration | Self::CredentialStore => {
+                RetryDisposition::RequiresAttention
+            }
+            Self::Conflict | Self::Partial => RetryDisposition::RequiresAttention,
+            Self::LocalPersistence => RetryDisposition::RequiresAttention,
+            Self::Internal => {
+                if consecutive_failures < 3 {
+                    RetryDisposition::RetryAfter(transient_backoff(consecutive_failures))
+                } else {
+                    RetryDisposition::RequiresAttention
+                }
+            }
+        }
+    }
+}
+
+/// Compute exponential backoff duration for transient failures.
+///
+/// Schedule: ~5s, ~15s, ~30s, ~60s, then exponential growth capped at 15 minutes.
+/// Includes bounded jitter (0-20% of base delay) to avoid synchronized retries.
+pub fn transient_backoff(consecutive_failures: u32) -> Duration {
+    let base_secs: u64 = match consecutive_failures {
+        0 => 5,
+        1 => 15,
+        2 => 30,
+        3 => 60,
+        n => {
+            let exp = n.saturating_sub(2) as u64;
+            60u64
+                .saturating_mul(2u64.saturating_pow(exp as u32))
+                .min(900)
+        }
+    };
+
+    // Bounded jitter: 0-20% of base delay
+    let jitter_max = base_secs / 5;
+    let jitter = if jitter_max > 0 {
+        // Use a simple deterministic-ish jitter based on failure count
+        (consecutive_failures as u64 * 7 + 13) % (jitter_max + 1)
+    } else {
+        0
+    };
+
+    Duration::from_secs(base_secs.saturating_add(jitter))
 }
 
 #[cfg(test)]
@@ -167,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_policy_disabled_by_default() {
-        let settings = SyncSettings::default();
+        let settings = crate::config::SyncSettings::default();
         let policy = AutoSyncPolicy::resolve(&settings);
         assert!(!policy.sync_configured);
         assert!(!policy.enabled);
@@ -176,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_policy_enabled_requires_sync_enabled() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = false;
         settings.auto_sync = true;
         let policy = AutoSyncPolicy::resolve(&settings);
@@ -192,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_sync_configured_without_auto_sync() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = false;
         let policy = AutoSyncPolicy::resolve(&settings);
@@ -203,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_policy_debounce_clamped() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = true;
 
@@ -222,16 +389,22 @@ mod tests {
 
     #[test]
     fn test_policy_failure_mode() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = true;
-        settings.auto_sync_failure = AutoSyncFailureMode::Ignore;
+        settings.auto_sync_failure = crate::config::AutoSyncFailureMode::Ignore;
         let policy = AutoSyncPolicy::resolve(&settings);
-        assert_eq!(policy.failure_mode, AutoSyncFailureMode::Ignore);
+        assert_eq!(
+            policy.failure_mode,
+            crate::config::AutoSyncFailureMode::Ignore
+        );
 
-        settings.auto_sync_failure = AutoSyncFailureMode::Error;
+        settings.auto_sync_failure = crate::config::AutoSyncFailureMode::Error;
         let policy = AutoSyncPolicy::resolve(&settings);
-        assert_eq!(policy.failure_mode, AutoSyncFailureMode::Error);
+        assert_eq!(
+            policy.failure_mode,
+            crate::config::AutoSyncFailureMode::Error
+        );
     }
 
     #[test]
@@ -240,7 +413,10 @@ mod tests {
         assert!(!policy.sync_configured);
         assert!(!policy.enabled);
         assert_eq!(policy.debounce, Duration::from_secs(2));
-        assert_eq!(policy.failure_mode, AutoSyncFailureMode::Warn);
+        assert_eq!(
+            policy.failure_mode,
+            crate::config::AutoSyncFailureMode::Warn
+        );
     }
 
     #[test]
@@ -264,44 +440,243 @@ mod tests {
     }
 
     #[test]
-    fn test_failure_class_network() {
-        let err = crate::error::SnipError::runtime_error("connection timeout", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Network);
-    }
-
-    #[test]
-    fn test_failure_class_auth() {
-        let err = crate::error::SnipError::runtime_error("unauthorized access", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Auth);
-    }
-
-    #[test]
-    fn test_failure_class_conflict() {
-        let err = crate::error::SnipError::runtime_error("merge conflict", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Conflict);
-    }
-
-    #[test]
-    fn test_failure_class_unknown() {
-        let err = crate::error::SnipError::runtime_error("something broke", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Unknown);
-    }
-
-    #[test]
     fn test_failure_class_code_roundtrip() {
         for class in [
-            FailureClass::Network,
-            FailureClass::Auth,
+            FailureClass::DeferredDisabled,
+            FailureClass::DeferredNotConfigured,
+            FailureClass::TransientNetwork,
+            FailureClass::TransientTimeout,
+            FailureClass::Authentication,
+            FailureClass::Configuration,
             FailureClass::Conflict,
-            FailureClass::Unknown,
+            FailureClass::Partial,
+            FailureClass::LocalPersistence,
+            FailureClass::CredentialStore,
+            FailureClass::Internal,
         ] {
             assert_eq!(FailureClass::from_code(class.as_code()), class);
         }
     }
 
     #[test]
+    fn test_failure_class_allows_automatic_retry() {
+        assert!(FailureClass::TransientNetwork.allows_automatic_retry());
+        assert!(FailureClass::TransientTimeout.allows_automatic_retry());
+        assert!(FailureClass::Internal.allows_automatic_retry());
+        assert!(!FailureClass::Authentication.allows_automatic_retry());
+        assert!(!FailureClass::Conflict.allows_automatic_retry());
+        assert!(!FailureClass::LocalPersistence.allows_automatic_retry());
+        assert!(!FailureClass::DeferredDisabled.allows_automatic_retry());
+    }
+
+    #[test]
+    fn test_failure_class_is_deferred() {
+        assert!(FailureClass::DeferredDisabled.is_deferred());
+        assert!(FailureClass::DeferredNotConfigured.is_deferred());
+        assert!(FailureClass::Configuration.is_deferred());
+        assert!(FailureClass::Authentication.is_deferred());
+        assert!(FailureClass::CredentialStore.is_deferred());
+        assert!(!FailureClass::TransientNetwork.is_deferred());
+        assert!(!FailureClass::Conflict.is_deferred());
+    }
+
+    // ── Table-driven classification tests ─────────────────────────
+
+    #[test]
+    fn test_classify_not_configured() {
+        let err = crate::error::SnipError::runtime_error("Sync not configured", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::DeferredNotConfigured
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_disabled() {
+        let err = crate::error::SnipError::runtime_error("sync not enabled", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::DeferredNotConfigured
+        );
+    }
+
+    #[test]
+    fn test_classify_api_key() {
+        let err = crate::error::SnipError::runtime_error(
+            "Sync is enabled but no API key configured",
+            None,
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+    }
+
+    #[test]
+    fn test_classify_health_check() {
+        let err = crate::error::SnipError::runtime_error("Server health check failed", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_server_unreachable() {
+        let err =
+            crate::error::SnipError::runtime_error("Server is not reachable", Some("timeout"));
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_network() {
+        let err = crate::error::SnipError::runtime_error("network error", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_timeout() {
+        let err = crate::error::SnipError::runtime_error("request timed out", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientTimeout
+        );
+    }
+
+    #[test]
+    fn test_classify_partial_failure() {
+        let err = crate::error::SnipError::runtime_error("Some libraries failed to sync", None);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Partial);
+    }
+
+    #[test]
+    fn test_classify_conflict() {
+        let err = crate::error::SnipError::runtime_error("merge conflict detected", None);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Conflict);
+    }
+
+    #[test]
+    fn test_classify_library_manager() {
+        let err =
+            crate::error::SnipError::runtime_error("Failed to initialize library manager", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_save() {
+        let err = crate::error::SnipError::runtime_error("Failed to save merged library", None);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_unknown_runtime() {
+        let err = crate::error::SnipError::runtime_error("something went wrong", None);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Internal);
+    }
+
+    #[test]
+    fn test_classify_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let err: crate::error::SnipError = io_err.into();
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_toml() {
+        let toml_err = toml::from_str::<toml::Value>("invalid = [toml").unwrap_err();
+        let err = crate::error::SnipError::toml_error("parse config", toml_err);
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::LocalPersistence
+        );
+    }
+
+    // ── Retry disposition tests ────────────────────────────────────
+
+    #[test]
+    fn test_retry_disposition_deferred_disabled() {
+        let disp = FailureClass::DeferredDisabled.retry_disposition(0);
+        assert_eq!(disp, RetryDisposition::WaitForConfigurationChange);
+    }
+
+    #[test]
+    fn test_retry_disposition_deferred_not_configured() {
+        let disp = FailureClass::DeferredNotConfigured.retry_disposition(0);
+        assert_eq!(disp, RetryDisposition::WaitForConfigurationChange);
+    }
+
+    #[test]
+    fn test_retry_disposition_transient_network() {
+        let disp = FailureClass::TransientNetwork.retry_disposition(0);
+        assert!(matches!(disp, RetryDisposition::RetryAfter(_)));
+    }
+
+    #[test]
+    fn test_retry_disposition_authentication() {
+        let disp = FailureClass::Authentication.retry_disposition(0);
+        assert_eq!(disp, RetryDisposition::RequiresAttention);
+    }
+
+    #[test]
+    fn test_retry_disposition_internal_bounded_retry() {
+        // First 2 failures get RetryAfter
+        let d0 = FailureClass::Internal.retry_disposition(0);
+        assert!(matches!(d0, RetryDisposition::RetryAfter(_)));
+        let d1 = FailureClass::Internal.retry_disposition(1);
+        assert!(matches!(d1, RetryDisposition::RetryAfter(_)));
+        let d2 = FailureClass::Internal.retry_disposition(2);
+        assert!(matches!(d2, RetryDisposition::RetryAfter(_)));
+        // 3rd failure gets RequiresAttention
+        let d3 = FailureClass::Internal.retry_disposition(3);
+        assert_eq!(d3, RetryDisposition::RequiresAttention);
+    }
+
+    // ── Backoff progression tests ──────────────────────────────────
+
+    #[test]
+    fn test_transient_backoff_progression() {
+        let d0 = transient_backoff(0);
+        let d1 = transient_backoff(1);
+        let d2 = transient_backoff(2);
+        let d3 = transient_backoff(3);
+        // Each should be >= the previous (ignoring jitter)
+        assert!(d1 >= d0 - Duration::from_secs(2), "d1 should be >= d0");
+        assert!(d2 >= d1 - Duration::from_secs(2), "d2 should be >= d1");
+        assert!(d3 >= d2 - Duration::from_secs(2), "d3 should be >= d2");
+    }
+
+    #[test]
+    fn test_transient_backoff_cap() {
+        // Even with very high failure count, should not exceed 15 minutes + jitter
+        let d = transient_backoff(100);
+        assert!(d <= Duration::from_secs(900 + 180)); // 15min + 20% jitter
+    }
+
+    #[test]
+    fn test_transient_backoff_nonzero() {
+        for i in 0..10 {
+            assert!(
+                !transient_backoff(i).is_zero(),
+                "backoff at {i} must be nonzero"
+            );
+        }
+    }
+
+    #[test]
     fn test_re_enable_auto_sync_preserves_pending_intent() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = false;
         let policy = AutoSyncPolicy::resolve(&settings);
@@ -324,7 +699,7 @@ mod tests {
 
     #[test]
     fn test_manual_sync_works_while_auto_sync_disabled() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = false;
         let policy = AutoSyncPolicy::resolve(&settings);
@@ -344,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_malformed_settings_result_in_failure_not_disable() {
-        let mut settings = SyncSettings::default();
+        let mut settings = crate::config::SyncSettings::default();
         settings.enabled = true;
         settings.auto_sync = true;
         settings.auto_sync_debounce_seconds = u64::MAX;

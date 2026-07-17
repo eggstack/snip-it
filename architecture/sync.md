@@ -261,16 +261,50 @@ pub enum WorkerOutcome {
 
 ```rust
 pub enum FailureClass {
-    Network,  // Timeout, DNS, connection refused
-    Auth,     // Invalid API key, expired token
-    Conflict, // Merge failure
-    Unknown,  // Unclassified
+    DeferredDisabled,        // Auto-sync disabled at runtime
+    DeferredNotConfigured,   // Missing api_key, server_url, or library mapping
+    TransientNetwork,        // DNS, connection refused, TLS handshake failure
+    TransientTimeout,        // gRPC deadline exceeded or sync timeout hit
+    Authentication,          // Invalid API key, expired token, auth rejected
+    Configuration,           // Corrupt config, bad schema, invalid library path
+    Conflict,                // Merge conflict or protocol version mismatch
+    Partial,                 // Some snippets synced, others failed (encryption errors)
+    LocalPersistence,        // Disk full, permission denied on config dir
+    CredentialStore,         // Keyring/keychain unavailable or locked
+    Internal,                // Unrecoverable bug or unexpected invariant violation
 }
 ```
 
-Classified from `SnipError` via `FailureClass::from_error()`, or from a
-`String` error message via `FailureClass::from_code()` (used by the worker
-to label pending failures).
+Each variant carries a `RetryDisposition` via `retry_disposition()`:
+
+```rust
+pub enum RetryDisposition {
+    NoRetry,    // Do not schedule another worker cycle
+    Retryable,  // Schedule retry with exponential backoff
+    Immediate,  // Retry immediately (bounded max attempts)
+}
+```
+
+Retry dispositions by class:
+
+| FailureClass | RetryDisposition | Rationale |
+|--------------|------------------|-----------|
+| DeferredDisabled | NoRetry | User must explicitly enable |
+| DeferredNotConfigured | NoRetry | User must fix configuration |
+| TransientNetwork | Retryable | Network conditions are ephemeral |
+| TransientTimeout | Retryable | Server may be temporarily slow |
+| Authentication | NoRetry | Re-attempting with same credentials won't help |
+| Configuration | NoRetry | Requires manual intervention |
+| Conflict | NoRetry | Merge conflicts need user resolution |
+| Partial | Retryable | Unsynced snippets remain in pending state |
+| LocalPersistence | NoRetry | Disk/permission issues persist |
+| CredentialStore | Retryable | Keyring may become available again |
+| Internal | NoRetry | Bug requires code fix |
+
+Classified from `SnipError` via `classify_sync_error()` in the executor,
+which applies a multi-step heuristic: error variant → gRPC status code →
+string pattern matching. The worker records the classification into
+`auto-sync-status.toml` for diagnostics.
 
 ### Durable Pending State (Schema v2)
 

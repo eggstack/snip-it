@@ -59,7 +59,11 @@ src/lib.rs               Library crate (exports for integration tests)
 src/commands/             15 command modules (new, list, run, clip, select, search, edit,
                           sync, register, library, premade, import, doctor, cron, shell,
                           keybindings) + shared helpers in mod.rs
-src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification)
+src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification,
+                          status, schedule)
+src/auto_sync/status.rs  Durable status persistence (auto-sync-status.toml), failure/success recording, integrity checks
+src/auto_sync/schedule.rs Centralized schedule decision function, worker storm prevention, ScheduleDecision enum
+src/auto_sync/policy.rs  Expanded FailureClass (11 variants), RetryDisposition, transient_backoff()
 src/ui/                   TUI (ratatui + crossterm), theme system, syntax highlighting, variable prompts
 src/utils/                Config paths, TOML helpers, variable parsing, shell keywords, temp files, atomic writes
 src/library.rs            Snippet/library data structures and TOML persistence
@@ -115,7 +119,12 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `Clock` trait for deterministic testing of time-dependent logic
 - `max_delay` separate from `debounce` — bounded latency prevents starvation
 - Startup recovery always schedules workers for valid pending work regardless of age
-- Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification
+- Failure classification is typed (`FailureClass` enum, 11 variants), not heuristic string matching
+- Status is persisted in `auto-sync-status.toml` with CRC32 integrity checks
+- Backoff is durable (survives CLI restarts) with exponential schedule capped at 15 minutes
+- `schedule_sync()` centralizes scheduling decisions and prevents worker storms
+- Executor maps errors → `FailureClass` → `ExecutorExitCode`; worker maps back on exit
+- Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification, status, schedule
 
 ### Error Handling
 - `SnipError` enum in `src/error.rs`, `SnipResult<T> = Result<T, SnipError>`
@@ -151,6 +160,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `~/.config/snp/themes/*.toml` — Halloy-compatible theme files
 - `~/.config/snp/themes.toml` — active theme selection
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
+- `~/.config/snp/auto-sync-status.toml` — Durable sync attempt status (not synced, private)
 
 ## Testing Notes
 

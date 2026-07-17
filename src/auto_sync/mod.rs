@@ -7,7 +7,9 @@ pub mod notification;
 pub mod pending;
 pub mod pending_lock;
 pub mod policy;
+pub mod schedule;
 pub mod spawn;
+pub mod status;
 pub mod worker;
 
 pub use notification::{
@@ -16,7 +18,7 @@ pub use notification::{
     should_attempt_auto_sync_recovery, startup_recover_pending,
 };
 pub use pending::{ConditionalClearResult, PendingSnapshot, PendingState};
-pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin};
+pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin, RetryDisposition};
 pub use worker::WorkerOutcome;
 
 /// Stable path helpers exposed for doctor/diagnostics.
@@ -41,5 +43,9 @@ pub mod paths {
 
     pub fn execution_lock(state_dir: &Path) -> PathBuf {
         super::execution_lock::execution_lock_path(state_dir)
+    }
+
+    pub fn status_file(state_dir: &Path) -> PathBuf {
+        super::status::status_path(state_dir)
     }
 }

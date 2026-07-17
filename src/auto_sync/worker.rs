@@ -16,8 +16,9 @@
 use crate::auto_sync::execution_lock::{self, ExecutionLockError, SyncExecutionLock};
 use crate::auto_sync::executor::ExecutorExitCode;
 use crate::auto_sync::pending::{self, PendingState};
-use crate::auto_sync::policy::AutoSyncPolicy;
+use crate::auto_sync::policy::{AutoSyncPolicy, FailureClass, transient_backoff};
 use crate::auto_sync::spawn;
+use crate::auto_sync::status;
 use crate::config::get_sync_settings;
 use std::path::Path;
 use std::process::ExitStatus;
@@ -399,11 +400,9 @@ fn unix_ms_to_instant(target_unix_ms: u64, clock: &dyn Clock) -> Instant {
 /// waits a 2-second grace period, then SIGKILL (Unix) / kill (Windows)
 /// if still alive.
 ///
-/// Maps `ExecutorExitCode` to `WorkerOutcome`:
+/// Maps `ExecutorExitCode` to `WorkerOutcome` and records durable status:
 /// - `Success` → `Success` (caller may conditionally clear pending)
-/// - any other code (including `NotConfigured`, `AuthFailure`,
-///   `NetworkTimeout`, `ConflictPartial`, `LocalPersistence`,
-///   `InternalError`) → `Failed` (pending preserved for recovery)
+/// - any other code → `Failed` with failure class, backoff, and status
 ///
 /// The disabled-policy branch is retained as a defensive guard, but
 /// `run_locked` already exits with `NothingToDo` before reaching this
@@ -417,17 +416,48 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "failed to spawn sync executor");
+            // Record spawn failure status
+            let _ = status::record_failure(
+                state_dir,
+                0,
+                FailureClass::Internal,
+                -1,
+                0,
+                0,
+                &format!("executor spawn failed: {e}"),
+            );
             return WorkerOutcome::Failed;
         }
     };
 
     match wait_child_with_timeout(&mut child, policy.sync_timeout) {
-        Ok(Some(status)) => {
-            let code = status.code().unwrap_or(7);
-            match ExecutorExitCode::from_exit_status(status) {
-                ExecutorExitCode::Success => WorkerOutcome::Success,
-                _ => {
-                    tracing::warn!(exit_code = code, "sync executor failed");
+        Ok(Some(status_out)) => {
+            let code = status_out.code().unwrap_or(7);
+            match ExecutorExitCode::from_exit_status(status_out) {
+                ExecutorExitCode::Success => {
+                    let _ = status::record_success(state_dir, 0, "sync completed successfully");
+                    WorkerOutcome::Success
+                }
+                exit_code => {
+                    let failure_class = exit_code.failure_class();
+                    tracing::warn!(
+                        exit_code = code,
+                        failure_class = %failure_class.as_code(),
+                        "sync executor failed"
+                    );
+                    // Record failure with backoff
+                    let consecutive = next_consecutive_failures(state_dir);
+                    let backoff = transient_backoff(consecutive);
+                    let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
+                    let _ = status::record_failure(
+                        state_dir,
+                        0,
+                        failure_class,
+                        code,
+                        consecutive,
+                        next_attempt,
+                        &exit_code.to_string(),
+                    );
                     WorkerOutcome::Failed
                 }
             }
@@ -440,13 +470,49 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                 force_kill_child(&mut child);
                 let _ = child.wait();
             }
+            // Record timeout as network failure
+            let consecutive = next_consecutive_failures(state_dir);
+            let backoff = transient_backoff(consecutive);
+            let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
+            let _ = status::record_failure(
+                state_dir,
+                0,
+                FailureClass::TransientTimeout,
+                4,
+                consecutive,
+                next_attempt,
+                "sync executor timed out",
+            );
             WorkerOutcome::Failed
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to wait for sync executor");
+            let _ = status::record_failure(
+                state_dir,
+                0,
+                FailureClass::Internal,
+                -1,
+                0,
+                0,
+                &format!("wait failed: {e}"),
+            );
             WorkerOutcome::Failed
         }
     }
+}
+
+/// Read the current consecutive failure count from status.
+fn next_consecutive_failures(state_dir: &Path) -> u32 {
+    status::read_status(state_dir)
+        .map(|s| s.consecutive_failures.saturating_add(1))
+        .unwrap_or(1)
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Wait for a child process with a timeout.
@@ -574,13 +640,6 @@ pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pend
         Err(pending::PendingError::NotFound) => Ok(None),
         Err(e) => Err(e),
     }
-}
-
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 pub mod policy {

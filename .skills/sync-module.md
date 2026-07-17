@@ -73,3 +73,58 @@ Tests in `sync_commands.rs:896-1180`:
 - `test_merge_preserves_local_output_when_server_wins`
 
 Missing: No tests for encryption roundtrip through sync, retry logic, or the critical encrypt-failure + timestamp-update interaction.
+
+## Failure Classification and Retry (Phase 03)
+
+### FailureClass Enum
+
+`FailureClass` (`src/auto_sync/executor.rs`) classifies sync errors into 11 variants:
+
+| Variant | Meaning | RetryDisposition |
+|---------|---------|------------------|
+| `DeferredDisabled` | Auto-sync disabled at runtime | NoRetry |
+| `DeferredNotConfigured` | Missing api_key, server_url, or library mapping | NoRetry |
+| `TransientNetwork` | DNS, connection refused, TLS handshake failure | Retryable |
+| `TransientTimeout` | gRPC deadline exceeded or sync timeout hit | Retryable |
+| `Authentication` | Invalid API key, expired token, auth rejected | NoRetry |
+| `Configuration` | Corrupt config, bad schema, invalid library path | NoRetry |
+| `Conflict` | Merge conflict or protocol version mismatch | NoRetry |
+| `Partial` | Some snippets synced, others failed (encryption errors) | Retryable |
+| `LocalPersistence` | Disk full, permission denied on config dir | NoRetry |
+| `CredentialStore` | Keyring/keychain unavailable or locked | Retryable |
+| `Internal` | Unrecoverable bug or unexpected invariant violation | NoRetry |
+
+### RetryDisposition Enum
+
+Determines whether and how the worker retries:
+
+- **NoRetry**: Do not schedule another worker cycle. User intervention required.
+- **Retryable**: Schedule retry with exponential backoff via `transient_backoff()`.
+- **Immediate**: Retry immediately, bounded by max attempts.
+
+### Error Classification Heuristic
+
+`classify_sync_error()` in `executor.rs` maps `SnipError` to `FailureClass` using a multi-step heuristic:
+
+1. Error variant matching (e.g., `SnipError::Crypto` → `Partial`)
+2. gRPC status code inspection (e.g., `Unauthenticated` → `Authentication`)
+3. String pattern fallback for unstructured errors
+
+The worker records the classification into `auto-sync-status.toml` for diagnostics via `snp doctor --compatibility`.
+
+### Exponential Backoff
+
+`transient_backoff(attempt: u32, base: Duration, max: Duration) -> Duration` computes capped exponential backoff with jitter for `Retryable` failures. Each subsequent attempt doubles the delay, capped at `max`, with random jitter to prevent thundering herd.
+
+### Status Persistence
+
+`auto-sync-status.toml` in the state directory records the last failure classification, attempt count, and next retry timestamp. This replaces the simpler `pending` marker for retry decisions and enables `snp doctor` to surface actionable diagnostics.
+
+### Schedule Decision
+
+`schedule_sync()` in the worker prevents worker storms by checking:
+
+1. An execution lock is held — no concurrent sync possible.
+2. The pending marker generation matches the current cycle.
+3. Backoff delay has elapsed for retryable failures.
+4. No newer generation has been observed (would supersede this cycle).

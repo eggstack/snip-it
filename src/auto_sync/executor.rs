@@ -10,6 +10,7 @@
 //! exit-code taxonomy, the effective sync direction resolver, and the
 //! executor command entry point.
 
+use crate::auto_sync::policy::FailureClass;
 use crate::config::{SyncDirection, SyncSettings};
 use std::path::Path;
 use std::process::ExitStatus;
@@ -62,6 +63,42 @@ impl ExecutorExitCode {
     /// subprocess to call directly.
     pub fn to_exit_status(self) -> i32 {
         self as i32
+    }
+}
+
+impl ExecutorExitCode {
+    /// Map this exit code to a `FailureClass`.
+    ///
+    /// This is the reverse of `from_failure_class` and is used by the
+    /// worker to determine retry disposition from the executor's result.
+    pub fn failure_class(self) -> FailureClass {
+        match self {
+            Self::Success => FailureClass::Internal, // shouldn't be called on Success
+            Self::NotConfigured => FailureClass::DeferredNotConfigured,
+            Self::AuthFailure => FailureClass::Authentication,
+            Self::NetworkTimeout => FailureClass::TransientNetwork,
+            Self::ConflictPartial => FailureClass::Conflict,
+            Self::LocalPersistence => FailureClass::LocalPersistence,
+            Self::InternalError => FailureClass::Internal,
+        }
+    }
+
+    /// Map a `FailureClass` to an `ExecutorExitCode`.
+    ///
+    /// This is used by the executor to encode the failure class into
+    /// the process exit status for the worker to observe.
+    pub fn from_failure_class(class: FailureClass) -> Self {
+        match class {
+            FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured => {
+                Self::NotConfigured
+            }
+            FailureClass::TransientNetwork | FailureClass::TransientTimeout => Self::NetworkTimeout,
+            FailureClass::Authentication | FailureClass::CredentialStore => Self::AuthFailure,
+            FailureClass::Configuration => Self::InternalError,
+            FailureClass::Conflict | FailureClass::Partial => Self::ConflictPartial,
+            FailureClass::LocalPersistence => Self::LocalPersistence,
+            FailureClass::Internal => Self::InternalError,
+        }
     }
 }
 
@@ -165,59 +202,21 @@ pub fn run_executor(_state_dir: &Path) -> i32 {
             ExecutorExitCode::Success.to_exit_status()
         }
         Err(e) => {
-            let code = classify_sync_error(&e);
-            tracing::error!(exit_code = ?code, error = %e, "executor: sync failed");
+            let class = classify_sync_error(&e);
+            let code = ExecutorExitCode::from_failure_class(class);
+            tracing::error!(exit_code = ?code, failure_class = %class.as_code(), error = %e, "executor: sync failed");
             code.to_exit_status()
         }
     }
 }
 
-/// Map a `SnipError` from `run_sync` to an `ExecutorExitCode`.
+/// Map a `SnipError` from `run_sync` to a `FailureClass`.
 ///
-/// Uses heuristic matching on the error message since `SnipError::Runtime`
-/// does not carry typed error categories.
-fn classify_sync_error(error: &crate::error::SnipError) -> ExecutorExitCode {
-    let msg = error.to_string();
-    let lower = msg.to_lowercase();
-
-    match error {
-        crate::error::SnipError::Io { .. } | crate::error::SnipError::Toml { .. } => {
-            ExecutorExitCode::LocalPersistence
-        }
-        crate::error::SnipError::Runtime { message, .. } => {
-            if lower.contains("not configured") || lower.contains("sync not enabled") {
-                ExecutorExitCode::NotConfigured
-            } else if lower.contains("api key") || lower.contains("auth") {
-                ExecutorExitCode::AuthFailure
-            } else if lower.contains("health check")
-                || lower.contains("server")
-                || lower.contains("network")
-                || lower.contains("connection")
-                || lower.contains("timeout")
-                || lower.contains("unreachable")
-            {
-                ExecutorExitCode::NetworkTimeout
-            } else if lower.contains("conflict")
-                || lower.contains("failed to sync")
-                || lower.contains("some libraries")
-                || lower.contains("skipped")
-            {
-                ExecutorExitCode::ConflictPartial
-            } else if lower.contains("failed to save")
-                || lower.contains("failed to read")
-                || lower.contains("failed to initialize")
-                || lower.contains("failed to create")
-                || lower.contains("i/o")
-                || lower.contains("permission")
-            {
-                ExecutorExitCode::LocalPersistence
-            } else {
-                let _ = message;
-                ExecutorExitCode::InternalError
-            }
-        }
-        _ => ExecutorExitCode::InternalError,
-    }
+/// This is the canonical classification function. The `FailureClass`
+/// is then mapped to an `ExecutorExitCode` for process exit status,
+/// and used by the worker for retry disposition and status persistence.
+pub fn classify_sync_error(error: &crate::error::SnipError) -> FailureClass {
+    FailureClass::from_error(error)
 }
 
 #[cfg(test)]
@@ -364,13 +363,19 @@ mod tests {
     #[test]
     fn test_classify_sync_error_not_configured() {
         let err = crate::error::SnipError::runtime_error("Sync not configured", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NotConfigured);
+        assert_eq!(
+            classify_sync_error(&err),
+            FailureClass::DeferredNotConfigured
+        );
     }
 
     #[test]
     fn test_classify_sync_error_sync_disabled() {
         let err = crate::error::SnipError::runtime_error("sync not enabled", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NotConfigured);
+        assert_eq!(
+            classify_sync_error(&err),
+            FailureClass::DeferredNotConfigured
+        );
     }
 
     #[test]
@@ -379,66 +384,122 @@ mod tests {
             "Sync is enabled but no API key configured",
             None,
         );
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::AuthFailure);
+        assert_eq!(classify_sync_error(&err), FailureClass::Authentication);
     }
 
     #[test]
     fn test_classify_sync_error_health_check() {
         let err = crate::error::SnipError::runtime_error("Server health check failed", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
     }
 
     #[test]
     fn test_classify_sync_error_server_unreachable() {
         let err =
             crate::error::SnipError::runtime_error("Server is not reachable", Some("timeout"));
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
     }
 
     #[test]
     fn test_classify_sync_error_network() {
         let err = crate::error::SnipError::runtime_error("network error", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::NetworkTimeout);
+        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
     }
 
     #[test]
     fn test_classify_sync_error_partial_failure() {
         let err = crate::error::SnipError::runtime_error("Some libraries failed to sync", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::ConflictPartial);
+        assert_eq!(classify_sync_error(&err), FailureClass::Partial);
     }
 
     #[test]
     fn test_classify_sync_error_library_manager() {
         let err =
             crate::error::SnipError::runtime_error("Failed to initialize library manager", None);
-        assert_eq!(
-            classify_sync_error(&err),
-            ExecutorExitCode::LocalPersistence
-        );
+        assert_eq!(classify_sync_error(&err), FailureClass::LocalPersistence);
     }
 
     #[test]
     fn test_classify_sync_error_save() {
         let err = crate::error::SnipError::runtime_error("Failed to save merged library", None);
-        assert_eq!(
-            classify_sync_error(&err),
-            ExecutorExitCode::LocalPersistence
-        );
+        assert_eq!(classify_sync_error(&err), FailureClass::LocalPersistence);
     }
 
     #[test]
     fn test_classify_sync_error_unknown_runtime() {
         let err = crate::error::SnipError::runtime_error("something went wrong", None);
-        assert_eq!(classify_sync_error(&err), ExecutorExitCode::InternalError);
+        assert_eq!(classify_sync_error(&err), FailureClass::Internal);
     }
 
     #[test]
     fn test_classify_sync_error_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         let err: crate::error::SnipError = io_err.into();
-        assert_eq!(
-            classify_sync_error(&err),
-            ExecutorExitCode::LocalPersistence
-        );
+        assert_eq!(classify_sync_error(&err), FailureClass::LocalPersistence);
+    }
+
+    #[test]
+    fn test_failure_class_to_exit_code_mapping() {
+        let cases = [
+            (
+                FailureClass::DeferredDisabled,
+                ExecutorExitCode::NotConfigured,
+            ),
+            (
+                FailureClass::DeferredNotConfigured,
+                ExecutorExitCode::NotConfigured,
+            ),
+            (
+                FailureClass::TransientNetwork,
+                ExecutorExitCode::NetworkTimeout,
+            ),
+            (
+                FailureClass::TransientTimeout,
+                ExecutorExitCode::NetworkTimeout,
+            ),
+            (FailureClass::Authentication, ExecutorExitCode::AuthFailure),
+            (FailureClass::CredentialStore, ExecutorExitCode::AuthFailure),
+            (FailureClass::Configuration, ExecutorExitCode::InternalError),
+            (FailureClass::Conflict, ExecutorExitCode::ConflictPartial),
+            (FailureClass::Partial, ExecutorExitCode::ConflictPartial),
+            (
+                FailureClass::LocalPersistence,
+                ExecutorExitCode::LocalPersistence,
+            ),
+            (FailureClass::Internal, ExecutorExitCode::InternalError),
+        ];
+        for (class, expected_code) in cases {
+            assert_eq!(
+                ExecutorExitCode::from_failure_class(class),
+                expected_code,
+                "FailureClass::{class:?} should map to {expected_code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_exit_code_to_failure_class_roundtrip() {
+        // Every exit code should map to a valid failure class
+        let codes = [
+            ExecutorExitCode::Success,
+            ExecutorExitCode::NotConfigured,
+            ExecutorExitCode::AuthFailure,
+            ExecutorExitCode::NetworkTimeout,
+            ExecutorExitCode::ConflictPartial,
+            ExecutorExitCode::LocalPersistence,
+            ExecutorExitCode::InternalError,
+        ];
+        for code in &codes {
+            let class = code.failure_class();
+            // The roundtrip through from_failure_class should give back
+            // the same exit code (except Success which maps to Internal)
+            if *code != ExecutorExitCode::Success {
+                assert_eq!(
+                    ExecutorExitCode::from_failure_class(class),
+                    *code,
+                    "roundtrip failed for {code:?}"
+                );
+            }
+        }
     }
 }

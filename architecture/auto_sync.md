@@ -183,6 +183,8 @@ pub enum ExecutorExitCode {
 
 Standardized exit codes for the executor subprocess. The worker maps these to `WorkerOutcome`. Code 1 is reserved for the general CLI error path.
 
+Each exit code maps to a `FailureClass` via the `failure_class()` method on `ExecutorExitCode`. `FailureClass` maps back to an exit code via `from_failure_class()`. This bidirectional mapping is used by the durable status system to record the failure category for backoff and retry decisions.
+
 ### SubcommandTag
 
 ```rust
@@ -379,13 +381,16 @@ The worker spawns a child process (`snp auto-sync-execute`) instead of running s
 
 ## Retry and Backoff
 
-There is no in-process retry loop. The detached worker attempts one sync per generation, spawning an executor subprocess and supervising it with a timeout. The debounce loop may cycle multiple times in one worker invocation:
+The detached worker uses a **one-attempt-per-lifecycle** model: each worker invocation performs a single sync attempt, spawning an executor subprocess and supervising it with a timeout. However, failure outcomes are persisted as durable backoff state via `auto-sync-status.toml`, allowing the *next* scheduling decision to defer retry based on an exponential backoff schedule.
+
+**Backoff schedule:** ~5s, ~15s, ~30s, ~60s, then exponential growth capped at 15 minutes with bounded jitter. Each failure class that permits retry records a `next_attempt_at_unix_ms` timestamp in the status file. The worker never sleeps to honor backoff — it simply exits with `Failed` and the `schedule_sync()` function defers spawning until the backoff window expires.
 
 - If sync succeeds but a newer generation is now on disk, the worker loops again to service the newer work.
-- If sync fails, the worker exits; the pending marker is preserved (generation unchanged).
+- If sync fails, the worker exits; the pending marker is preserved (generation unchanged) and the failure class determines whether backoff is recorded or attention is required.
 - The next `record_pending_mutation` from a future mutation will increment the generation, signaling that the next worker should service the new work.
 - `startup_recover_pending` always schedules a worker for valid pending work regardless of age; it no longer clears stale pending based on the 5-minute threshold alone.
 - On timeout, the executor subprocess is terminated (SIGTERM then SIGKILL) before the execution lock is released.
+- Configuration or credential changes can clear deferred disposition by resetting `next_attempt_at_unix_ms` to zero in the status file, allowing immediate retry.
 
 For users who want stronger delivery guarantees, manual `snp sync` and `snp cron` remain the canonical recovery paths.
 
@@ -399,11 +404,101 @@ For users who want stronger delivery guarantees, manual `snp sync` and `snp cron
 
 These messages fire only when the **parent** fails to record the pending marker or spawn the worker. Worker-side failures are logged to `~/.config/snp/logs/` and surface via `snp doctor` diagnostics, not stderr — the user is no longer present when the worker runs.
 
-## Local-Only Fields
+### Failure Class Retry Dispositions
 
-The `output` field is local-only — not in `ProtoSnippet`, never uploaded or downloaded. Edits that change only the `output` field do NOT trigger auto-sync.
+Each `FailureClass` maps to a specific retry disposition:
 
-The `favorite` and `folders` fields are also local-only — preserved when server wins the merge conflict.
+| Failure Class | Retry Disposition |
+|---|---|
+| `DeferredDisabled` | WaitForConfigurationChange |
+| `DeferredNotConfigured` | WaitForConfigurationChange |
+| `TransientNetwork` | RetryAfter(exponential backoff) |
+| `TransientTimeout` | RetryAfter(exponential backoff) |
+| `Authentication` | RequiresAttention |
+| `Configuration` | RequiresAttention |
+| `CredentialStore` | RequiresAttention |
+| `Conflict` | RequiresAttention |
+| `Partial` | RequiresAttention |
+| `LocalPersistence` | RequiresAttention |
+| `Internal` | RetryAfter with bounded budget (3 attempts then RequiresAttention) |
+
+`WaitForConfigurationChange` clears the deferred disposition when the user updates sync settings or credentials. `RequiresAttention` surfaces via `snp doctor` and is not retried automatically. `Internal` retries are bounded to 3 attempts before escalating to `RequiresAttention`, preventing infinite loops on persistent internal errors.
+
+## Durable Status
+
+**File:** `~/.config/snp/auto-sync-status.toml`
+
+A bounded, private, secret-free artifact that records the outcome of the most recent sync attempt and drives backoff/retry decisions. Unlike the pending marker (which tracks intent), status tracks *results*.
+
+```toml
+pending_generation = 1
+last_attempt_generation = 1
+last_attempt_at_unix_ms = 1700000000000
+last_success_at_unix_ms = 1700000000000
+last_result = "success"
+last_failure_class = "none"
+consecutive_failures = 0
+next_attempt_at_unix_ms = 0
+executor_exit_code = 0
+attention_required = false
+message = ""
+integrity = "crc32:441c462e"
+```
+
+**Schema fields:**
+
+- `pending_generation` — generation of the pending marker at last attempt.
+- `last_attempt_generation` — generation that was actually synced.
+- `last_attempt_at_unix_ms` — wall-clock time of the last attempt.
+- `last_success_at_unix_ms` — wall-clock time of the last successful sync.
+- `last_result` — `"success"` or `"failed"`.
+- `last_failure_class` — the `FailureClass` variant name (e.g. `"TransientNetwork"`, `"Internal"`), or `"none"` on success.
+- `consecutive_failures` — count of back-to-back failures; resets to 0 on success.
+- `next_attempt_at_unix_ms` — earliest time the next attempt may be scheduled (backoff window). Zero means no deferral.
+- `executor_exit_code` — raw exit code from the last executor run.
+- `attention_required` — `true` when the failure class maps to `RequiresAttention`.
+- `message` — human-readable summary of the last outcome (truncated, no secrets).
+- `integrity` — `crc32:<hex>` over all behavior-driving fields; rejects tampered or corrupted files.
+
+**Invariants:**
+
+- Written atomically via unique temp file + rename + fsync + directory fsync.
+- Status write failure must **not** clear pending — a write failure leaves the existing status file intact and does not affect the pending marker.
+- No command text, API keys, encryption keys, or raw server responses are stored.
+- 0o600 permissions on Unix.
+
+## Schedule Decision
+
+The `schedule_sync()` function is the centralized entry point for all worker scheduling decisions. It prevents worker storms by evaluating whether a new worker should be spawned, deferred, or skipped entirely.
+
+```rust
+pub enum ScheduleDecision {
+    /// Conditions are met — spawn a worker immediately.
+    SpawnNow,
+    /// A worker is already active (execution lock held) — skip.
+    AlreadyActive,
+    /// Backoff window has not expired — defer until `next_attempt_at_unix_ms`.
+    DeferredUntil(u64),
+    /// Auto-sync is disabled — do not schedule.
+    Disabled,
+    /// Failure class requires user attention — do not schedule.
+    RequiresAttention,
+    /// No pending work exists — nothing to do.
+    NoPending,
+    /// Sync is not configured (no account) — do not schedule.
+    NotConfigured,
+}
+```
+
+**Checks performed (in order):**
+
+1. Pending marker exists and contains valid work.
+2. Policy is enabled (`settings.auto_sync && settings.enabled`).
+3. Execution lock is not held (`try_acquire` or inspection).
+4. Backoff status: `next_attempt_at_unix_ms` in status file has elapsed.
+5. Failure class retry allowance: `Internal` failures have a 3-attempt budget; `RequiresAttention` failures are not retried.
+
+Only `SpawnNow` invokes the process spawner (`spawn::spawn_worker`). All other variants are terminal for that scheduling call — no process is created. This function is called from notification handlers, startup recovery, and any path that previously called `schedule_existing_pending` directly.
 
 ## Explicit Sync Precedence
 
@@ -554,6 +649,9 @@ Diagnostics emitted:
 26. **Phase 02:** Debounce returns the latest observed state, not the first state seen.
 27. **Phase 02:** Pre-executor preflight check closes the race between debounce completion and executor spawn.
 28. **Phase 02:** Disabled auto-sync execution does not silently erase synchronization intent — pending marker is created when sync is configured, regardless of auto-sync setting.
+29. **Phase 03:** Status write failure must never clear pending — a write failure leaves the existing status file intact and does not affect the pending marker.
+30. **Phase 03:** Backoff is persisted across CLI process restarts via `auto-sync-status.toml` — deferred disposition survives process death and system reboot.
+31. **Phase 03:** New mutations do not spawn per-mutation workers — debounce + centralized `schedule_sync()` decision prevent worker storms.
 
 ## Hidden Subcommands
 
