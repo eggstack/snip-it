@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Auto-sync correctness closure (Phase 01)**
+  - Worker `NothingToDo` no longer clears the pending marker — pending is
+    preserved for the next cycle, recovery, or manual sync (Phase 01
+    invariant).
+  - Disabled-policy worker exits with `NothingToDo` before touching pending
+    state, avoiding pointless cycle loops.
+  - Executor subprocess documentation clarified: it does NOT acquire the
+    `SyncExecutionLock` (worker-owned for the cycle); it only invokes the
+    canonical `crate::sync_commands::run_sync`.
+  - Architecture deep-dives updated to reflect the truthful invariant
+    (worker-owned lock, executor-doesn't-reacquire).
+  - New regression test file `tests/auto_sync_closure.rs` (15 tests)
+    covering real-server end-to-end, negative paths, lock ownership,
+    direction parity, and worker outcome invariants.
+
 ### Added
 - **Detached one-shot auto-sync worker (Release 5D corrective)**
   - Replaced in-process debounce coordinator with a hidden `auto-sync-worker` subcommand re-execed by the parent. The worker is fully detached via `setsid` on Unix and `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows, with `stdin`/`stdout`/`stderr` routed to `null`. The parent returns immediately after spawning — no in-process latency for the user.

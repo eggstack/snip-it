@@ -506,6 +506,8 @@ auto_sync_failure = "warn"
 - Local mutations always succeed before any remote work begins.
 - A failed auto-sync never rolls back or corrupts a successful local save.
 - The parent spawns the worker and returns immediately — no in-process debounce delay.
+- The detached worker uses a two-process-per-cycle model: it spawns a killable executor subprocess (`snp auto-sync-execute`) for the actual sync work. This allows proper timeout enforcement — on timeout the executor is killed via SIGTERM then SIGKILL.
+- All sync operations (worker, manual `snp sync`, explicit `--sync`, cron) share a single `SyncExecutionLock`. The worker owns this lock for the entire detached cycle; the executor subprocess does NOT reacquire it.
 - Each `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
 - A durable pending marker (`auto-sync-pending.toml`) records the latest mutation generation with CRC32 integrity; only the worker that observes its own generation may clear it.
 - PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness detection prevents concurrent worker executions across processes.

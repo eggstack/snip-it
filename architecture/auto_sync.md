@@ -219,12 +219,13 @@ Auto-sync uses a two-process-per-cycle model: a detached debounce worker and a k
 
 The detached worker:
 
-- Acquires the `SyncExecutionLock` itself (or exits with `NothingToDo` if another sync holds it).
+- Acquires the `SyncExecutionLock` itself (or exits with `NothingToDo` if another sync holds it). **Phase 01 invariant:** the worker is the *only* component that holds this lock during a detached cycle.
 - Reads pending state, then runs a **debounce loop**: it reloads the marker every ≤250ms, restarts the deadline if a newer generation has appeared, and waits up to `policy.debounce + max_lifetime` (default 5 minutes).
-- Spawns an executor subprocess (`snp auto-sync-execute`) that acquires the execution lock and performs the actual sync.
-- Supervises the executor with `wait_child_with_timeout(policy.sync_timeout)` (default 30s). On timeout, sends SIGTERM, waits 2 seconds, then SIGKILL.
-- Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Release 5 corrective:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state.
-- On failure or `NothingToDo`, the marker is preserved for `startup_recover_pending`.
+- Spawns an executor subprocess (`snp auto-sync-execute`) that **does not acquire the execution lock** — the worker is already holding it for the cycle. The executor simply invokes the canonical sync operation (`crate::sync_commands::run_sync`).
+- Supervises the executor with `wait_child_with_timeout(policy.sync_timeout)` (default 30s). On timeout, sends SIGTERM, waits 2 seconds, then SIGKILL. **Phase 01 invariant:** the executor is reaped before the lock is released.
+- Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Phase 01 invariant:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state.
+- On failure, the marker is preserved for `startup_recover_pending`; the worker exits with `Failed`.
+- On `NothingToDo` (no pending state, lock contention, max-lifetime exceeded, or policy disabled), the marker is preserved — pending is only cleared on a real successful comparison.
 - A newer generation that appears during sync is detected on the next loop iteration and triggers a follow-up cycle.
 - Exits with `WorkerOutcome::{Success, Failed, NothingToDo}` mapped to internal exit codes (0/0/0).
 
@@ -330,8 +331,9 @@ Parent (snp new)
 Child (snp auto-sync-worker --state-dir ...)
   |
   |-- AutoSyncPolicy::resolve(get_sync_settings())
+  |-- if !policy.enabled -> NothingToDo, exit early (pending preserved)
   |-- execution_lock::try_acquire(state_dir)
-  |     |-- AlreadyHeld -> NothingToDo (another sync is in progress)
+  |     |-- AlreadyHeld -> NothingToDo (another sync is in progress; pending preserved)
   |-- read_state_from_dir(state_dir) -> PendingState{generation, timestamp, snapshot}
   |-- DEBOUNCE LOOP (bounded by max_lifetime, default 5 minutes):
   |     |-- compute_deadline(observed_timestamp, policy.debounce, start, max_lifetime)
@@ -340,27 +342,32 @@ Child (snp auto-sync-worker --state-dir ...)
   |            this iteration observes the change via reload and may restart
   |            the loop with the new generation)
   |     |-- execute_sync(state_dir, policy)
-  |           |-- if !policy.enabled -> WorkerOutcome::NothingToDo
   |           |-- spawn::spawn_executor(state_dir)
-  |           |     (snp auto-sync-execute --state-dir <dir>, NOT detached)
+  |           |     (snp auto-sync-execute --state-dir <dir>, NOT detached,
+  |           |      does NOT acquire the execution lock — worker owns it)
   |           |-- wait_child_with_timeout(child, policy.sync_timeout)
   |           |     |-- on exit: map ExecutorExitCode -> WorkerOutcome
-  |           |     |-- on timeout: SIGTERM -> 2s grace -> SIGKILL -> WorkerOutcome::Failed
+  |           |         (Success=0, NotConfigured=2, AuthFailure=3,
+  |           |          NetworkTimeout=4, ConflictPartial=5,
+  |           |          LocalPersistence=6, InternalError=7)
+  |           |     |-- on timeout: SIGTERM -> 2s grace -> SIGKILL -> reap -> Failed
   |     |-- if Success && newer_generation_observed -> continue loop (follow-up)
   |     |-- if Success && no newer generation -> clear_if_generation_matches, exit
   |     |-- if Failed -> preserve pending, exit
+  |     |-- if NothingToDo -> preserve pending, exit (no clearing)
   |-- release execution lock
   |-- exit(0)  (WorkerOutcome mapping is internal; parent never sees it)
 ```
 
-### Executor Subprocess (Release 5F)
+### Executor Subprocess (Release 5F, Phase 01 invariant)
 
 The worker spawns a child process (`snp auto-sync-execute`) instead of running sync in-process. This provides:
 
 1. **Killable sync work:** On timeout, the worker sends SIGTERM then SIGKILL to the child. Unlike `tokio::time::timeout` (which cannot cancel a `spawn_blocking` task), killing a child process guarantees the sync work terminates.
-2. **Shared execution lock:** The executor acquires the `SyncExecutionLock` before performing sync. All sync paths (worker, manual, explicit, cron) share this lock.
-3. **Direction correctness:** The executor resolves the effective sync direction via `effective_sync_direction()`, which applies CLI flag overrides (`--push-only`, `--pull-only`) to the config setting.
-4. **Standardized exit codes:** The executor exits with codes from `ExecutorExitCode` (0=success, 2=not configured, 3=auth, 4=network/timeout, 5=conflict, 6=local persistence, 7=internal).
+2. **Worker-owned execution lock:** The executor does **not** acquire the `SyncExecutionLock` — the worker is already holding it for the cycle. All other sync entry points (`snp sync`, `snp sync --push-only`/`--pull-only`, `run --sync`, `clip --sync`, `search --sync`, post-selection `--sync`) acquire that same lock via `wait_acquire` to serialize with the worker.
+3. **Canonical sync invocation:** The executor invokes `crate::sync_commands::run_sync(...)` directly — the same function used by foreground `snp sync`. There is no second sync implementation.
+4. **Direction correctness:** The executor resolves the effective sync direction via `effective_sync_direction()`, which applies CLI flag overrides (`--push-only`, `--pull-only`) to the config setting. Detached sync uses the configured direction (no CLI override); foreground sync accepts explicit CLI overrides.
+5. **Standardized exit codes:** The executor exits with codes from `ExecutorExitCode` (0=success, 2=not configured, 3=auth, 4=network/timeout, 5=conflict, 6=local persistence, 7=internal).
 
 ## Retry and Backoff
 
@@ -465,6 +472,9 @@ Diagnostics emitted:
 19. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
 20. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
 21. **Release 5F:** Startup recovery suppressed for sync-related commands (`sync`, `cron`, `register`, internal subprocesses).
+22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`.
+23. **Phase 01:** Disabled-policy worker exits with `NothingToDo` *before* touching pending state.
+24. **Phase 01:** Executor subprocess never references the execution lock; the worker owns it for the entire cycle.
 
 ## Hidden Subcommands
 

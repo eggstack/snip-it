@@ -1,9 +1,13 @@
 //! Executor subprocess exit codes and sync direction resolution.
 //!
 //! The executor is a one-shot subprocess spawned by the detached worker.
-//! It acquires the execution lock, performs the sync, and exits with a
-//! status code that the worker observes. This module defines the exit
-//! code taxonomy, the effective sync direction resolver, and the
+//! The worker already holds the shared execution lock for the duration
+//! of the cycle, so the executor never acquires or even references that
+//! lock — that would deadlock the worker waiting on its own child.
+//! The executor simply invokes the canonical sync operation
+//! (`crate::sync_commands::run_sync`) and exits with a status code the
+//! worker observes via `ExecutorExitCode`. This module defines the
+//! exit-code taxonomy, the effective sync direction resolver, and the
 //! executor command entry point.
 
 use crate::config::{SyncDirection, SyncSettings};

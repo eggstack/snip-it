@@ -332,11 +332,14 @@ data.
 
 ### Auto-sync policy
 
-Auto-sync is disabled by default. When enabled, mutation commands (new, edit,
-import) trigger a **detached one-shot worker** (`snp auto-sync-worker`) after
-the local change is committed. The worker is fully detached from the parent
-process via `setsid` on Unix (or `DETACHED_PROCESS | CREATE_NO_WINDOW` on
-Windows), so the user never waits on network round-trips.
+Auto-sync is disabled by default. When enabled, mutation commands (`new`, `edit`,
+`import`, `delete`, `library create/delete`) trigger a **detached one-shot
+worker** (`snp auto-sync-worker`) after the local change is committed. The
+worker spawns a killable executor subprocess (`snp auto-sync-execute`) for the
+actual sync work. All sync operations — worker, manual `snp sync`, explicit
+`--sync`, and cron — share a single `SyncExecutionLock` to prevent concurrent
+sync. The parent returns immediately — the user never waits on network
+round-trips.
 
 Configure it via:
 

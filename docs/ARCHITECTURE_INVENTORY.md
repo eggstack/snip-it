@@ -165,7 +165,7 @@ Optional post-mutation background synchronization (Release 5A–5F). Disabled by
 - **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
 - **`startup_recover_pending()`** — runs at startup for non-worker subcommands; preserves pending markers and re-schedules a worker if recent pending state is found.
 - **`auto-sync-worker`** — hidden subcommand (clap `hide = true`) that runs debounce loop, spawns executor, supervises with timeout, then exits.
-- **`auto-sync-execute`** — hidden subcommand that acquires `SyncExecutionLock`, performs sync, exits with `ExecutorExitCode`.
+- **`auto-sync-execute`** — hidden subcommand that invokes `crate::sync_commands::run_sync` (the canonical sync operation); does NOT acquire `SyncExecutionLock` — the worker owns it for the cycle. Exits with `ExecutorExitCode`.
 - **Trigger matrix**: all syncable mutation commands call `notify_mutation()` after their local atomic commit. Output-only edits (`snp edit --output`) are excluded (output is local-only).
 - **Debounce**: configurable 0–300 seconds (default 2). Rapid mutations coalesce. Maximum deadline bound prevents indefinite postponement.
 - **Failure modes**: `Ignore` (silent), `Warn` (stderr message), `Error` (nonzero exit code). Local mutation always committed regardless.
@@ -294,7 +294,7 @@ Key invariants:
 - Remote failure never rolls back local state.
 - Sync-merge writes never trigger auto-sync (prevents feedback loops).
 - Explicit manual sync clears pending auto-sync state (prevents duplicates).
-- Parent never acquires the worker execution lock — only the detached worker does.
+- Parent never acquires the worker execution lock — only the detached worker does. The executor subprocess does NOT acquire it either; it invokes `run_sync` directly.
 - Scheduling never mutates the pending marker; only `record_pending_mutation` increments generation.
 
 ## Exit Codes

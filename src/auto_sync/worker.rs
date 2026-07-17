@@ -90,6 +90,11 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
     let start = Instant::now();
     let max_lifetime = Duration::from_secs(policy::WORKER_MAX_LIFETIME_SECS);
 
+    if !policy.enabled {
+        tracing::info!("auto-sync worker exiting: policy disabled; pending preserved");
+        return WorkerOutcome::NothingToDo;
+    }
+
     loop {
         if start.elapsed() >= max_lifetime {
             tracing::warn!(
@@ -146,7 +151,10 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 let _ = pending::record_failure(state_dir, observed_generation, "unknown");
             }
             WorkerOutcome::NothingToDo => {
-                let _ = pending::clear_if_generation_matches(state_dir, observed_generation);
+                tracing::info!(
+                    generation = observed_generation,
+                    "auto-sync worker NothingToDo: pending preserved for next cycle"
+                );
             }
         }
 
@@ -254,9 +262,15 @@ fn unix_ms_to_instant(target_unix_ms: u64) -> Instant {
 /// waits a 2-second grace period, then SIGKILL (Unix) / kill (Windows)
 /// if still alive.
 ///
-/// Refuses to clear pending on success; callers handle that
-/// generation-safely. Returns `NothingToDo` only when the policy is
-/// disabled.
+/// Maps `ExecutorExitCode` to `WorkerOutcome`:
+/// - `Success` → `Success` (caller may conditionally clear pending)
+/// - any other code (including `NotConfigured`, `AuthFailure`,
+///   `NetworkTimeout`, `ConflictPartial`, `LocalPersistence`,
+///   `InternalError`) → `Failed` (pending preserved for recovery)
+///
+/// The disabled-policy branch is retained as a defensive guard, but
+/// `run_locked` already exits with `NothingToDo` before reaching this
+/// function when policy is disabled.
 fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
     if !policy.enabled {
         return WorkerOutcome::NothingToDo;

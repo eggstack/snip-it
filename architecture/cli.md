@@ -43,6 +43,13 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
 | `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
+| `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden.** Detached debounce worker for auto-sync (internal use) |
+| `auto-sync-execute` | — | `auto_sync::executor` | No | **Hidden.** Killable sync executor subprocess (internal use) |
+
+The `auto-sync-worker` and `auto-sync-execute` subcommands are registered with
+`hide = true` in the clap CLI — they do not appear in `--help` output and are
+used internally by the detached worker protocol. See
+[auto_sync.md](auto_sync.md) for the full architecture.
 
 ## Shared Command Utilities
 

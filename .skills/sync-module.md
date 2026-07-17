@@ -48,6 +48,13 @@ Last-write-wins based on `updated_at` timestamp:
 | `encrypt_snippet()` | `sync.rs:518-544` | Encrypt snippet for server |
 | `decrypt_snippet()` | `sync.rs:547-571` | Decrypt snippet from server |
 | `sync_with_retry()` | `sync.rs:261-304` | Retry logic with exponential backoff |
+| `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
+| `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
+| `clear_pending_after_explicit_sync()` | `auto_sync/notification.rs` | Generation-safe pending clear after manual sync |
+
+**Note:** The executor subprocess (`auto-sync-execute`) invokes `run_sync`
+directly — it does NOT acquire the `SyncExecutionLock`. The worker owns the
+lock for the entire detached cycle.
 
 ## Test Coverage
 

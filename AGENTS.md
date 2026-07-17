@@ -19,6 +19,9 @@ cargo test --test sync_integration
 # Run PTY end-to-end tests (MUST run single-threaded)
 cargo test --test pty_integration -- --test-threads=1
 
+# Run only auto-sync closure tests
+cargo test --test auto_sync_closure
+
 # Run only snip-sync tests
 cargo test -p snip-sync
 
@@ -94,6 +97,9 @@ src/update.rs             Self-update support (crates.io, Homebrew, GitHub relea
 
 ### No command filtering (by design)
 Snippet commands execute as-is — no sanitization, no guardrails. This is intentional for power users.
+
+### Executor subprocess never reacquires execution lock
+`src/auto_sync/executor.rs` invokes `crate::sync_commands::run_sync` directly. The worker (`src/auto_sync/worker.rs`) holds the `SyncExecutionLock` for the entire detached cycle. Adding any `execution_lock::try_acquire` or `wait_acquire` call to the executor would deadlock the worker waiting on its own child. The closure-phase structural test `test_executor_source_does_not_reference_execution_lock` pins this invariant.
 
 ### `AGENTS.override.md` exists
 Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.

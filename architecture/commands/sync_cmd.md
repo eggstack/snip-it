@@ -7,8 +7,23 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()>
 ```
+
+## Sync Execution Lock
+
+The sync command acquires `SyncExecutionLock` via `wait_acquire` with a 30-second
+timeout (foreground behavior). This serializes manual sync with the detached
+auto-sync worker and any other concurrent sync caller.
+
+Before running sync, the command captures the observed pending generation via
+`observe_pending_generation()`. After sync succeeds (or fails), it clears the
+pending marker via `clear_pending_after_explicit_sync(observed_generation,
+sync_succeeded)` — generation-safe clearing that prevents a stale manual sync
+from clobbering a newer pending mutation.
+
+This means any manual `snp sync` call clears any pending auto-sync intent,
+preventing duplicate delayed sync attempts for the same mutation generation.
 
 ## Sync Modes
 
