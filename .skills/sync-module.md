@@ -76,55 +76,71 @@ Missing: No tests for encryption roundtrip through sync, retry logic, or the cri
 
 ## Failure Classification and Retry (Phase 03)
 
+### SyncFailureKind Enum
+
+`SyncFailureKind` (`src/error.rs`) provides typed error variants for sync operations:
+
+| Variant | Maps to FailureClass | Source |
+|---------|---------------------|--------|
+| `NotConfigured` | DeferredNotConfigured | sync_commands.rs |
+| `ConnectFailed` | TransientNetwork | sync.rs |
+| `HealthCheckFailed` | TransientNetwork | sync_commands.rs |
+| `AuthenticationFailed` | Authentication | sync.rs |
+| `SyncRequestFailed` | TransientNetwork | sync.rs |
+| `CreateLibraryFailed` | Configuration | sync.rs |
+| `GetPremadeLibraryFailed` | TransientNetwork | sync.rs |
+| `RegistrationFailed` | Authentication | sync.rs |
+| `LibraryManagerInitFailed` | LocalPersistence | sync_commands.rs |
+| `LibraryModeInitFailed` | LocalPersistence | sync_commands.rs |
+| `LibrariesDirReadFailed` | LocalPersistence | sync_commands.rs |
+| `NoLibrariesToSync` | Internal | sync_commands.rs |
+| `SaveMergedLibraryFailed` | LocalPersistence | sync_commands.rs |
+| `PartialSyncFailure` | Partial | sync_commands.rs |
+| `PremadePartialFailure` | Partial | sync_commands.rs |
+| `EncryptionFailed` | Internal | sync.rs |
+| `DecryptionFailed` | Internal | sync.rs |
+
 ### FailureClass Enum
 
-`FailureClass` (`src/auto_sync/executor.rs`) classifies sync errors into 11 variants:
+`FailureClass` (`src/auto_sync/policy.rs`) classifies sync errors into 11 variants:
 
-| Variant | Meaning | RetryDisposition |
-|---------|---------|------------------|
-| `DeferredDisabled` | Auto-sync disabled at runtime | NoRetry |
-| `DeferredNotConfigured` | Missing api_key, server_url, or library mapping | NoRetry |
-| `TransientNetwork` | DNS, connection refused, TLS handshake failure | Retryable |
-| `TransientTimeout` | gRPC deadline exceeded or sync timeout hit | Retryable |
-| `Authentication` | Invalid API key, expired token, auth rejected | NoRetry |
-| `Configuration` | Corrupt config, bad schema, invalid library path | NoRetry |
-| `Conflict` | Merge conflict or protocol version mismatch | NoRetry |
-| `Partial` | Some snippets synced, others failed (encryption errors) | Retryable |
-| `LocalPersistence` | Disk full, permission denied on config dir | NoRetry |
-| `CredentialStore` | Keyring/keychain unavailable or locked | Retryable |
-| `Internal` | Unrecoverable bug or unexpected invariant violation | NoRetry |
+| Variant | Meaning | Retry Disposition |
+|---------|---------|-------------------|
+| `DeferredDisabled` | Auto-sync disabled at runtime | WaitForConfigurationChange |
+| `DeferredNotConfigured` | Missing api_key, server_url, or library mapping | WaitForConfigurationChange |
+| `TransientNetwork` | DNS, connection refused, TLS handshake failure | RetryAfter(exponential backoff) |
+| `TransientTimeout` | gRPC deadline exceeded or sync timeout hit | RetryAfter(exponential backoff) |
+| `Authentication` | Invalid API key, expired token, auth rejected | RequiresAttention |
+| `Configuration` | Corrupt config, bad schema, invalid library path | RequiresAttention |
+| `Conflict` | Merge conflict or protocol version mismatch | RequiresAttention |
+| `Partial` | Some snippets synced, others failed | RequiresAttention |
+| `LocalPersistence` | Disk full, permission denied on config dir | RequiresAttention |
+| `CredentialStore` | Keyring/keychain unavailable or locked | RequiresAttention |
+| `Internal` | Unrecoverable bug or unexpected invariant violation | RetryAfter (bounded to 3 attempts) |
 
-### RetryDisposition Enum
+### Classification: Variant-Based (Not String Matching)
 
-Determines whether and how the worker retries:
-
-- **NoRetry**: Do not schedule another worker cycle. User intervention required.
-- **Retryable**: Schedule retry with exponential backoff via `transient_backoff()`.
-- **Immediate**: Retry immediately, bounded by max attempts.
-
-### Error Classification Heuristic
-
-`classify_sync_error()` in `executor.rs` maps `SnipError` to `FailureClass` using a multi-step heuristic:
-
-1. Error variant matching (e.g., `SnipError::Crypto` → `Partial`)
-2. gRPC status code inspection (e.g., `Unauthenticated` → `Authentication`)
-3. String pattern fallback for unstructured errors
-
-The worker records the classification into `auto-sync-status.toml` for diagnostics via `snp doctor --compatibility`.
+`classify_sync_error()` in `executor.rs` delegates to `FailureClass::from_error()` in `policy.rs`. For `SnipError::SyncFailure` variants, classification is direct variant matching — no string analysis. For legacy `SnipError::Runtime` variants, fallback heuristic string matching is used.
 
 ### Exponential Backoff
 
-`transient_backoff(attempt: u32, base: Duration, max: Duration) -> Duration` computes capped exponential backoff with jitter for `Retryable` failures. Each subsequent attempt doubles the delay, capped at `max`, with random jitter to prevent thundering herd.
+`transient_backoff(consecutive_failures: u32) -> Duration` computes capped exponential backoff with jitter: ~5s, ~15s, ~30s, ~60s, then exponential growth capped at 15 minutes. Jitter is 0-20% of base delay.
 
 ### Status Persistence
 
-`auto-sync-status.toml` in the state directory records the last failure classification, attempt count, and next retry timestamp. This replaces the simpler `pending` marker for retry decisions and enables `snp doctor` to surface actionable diagnostics.
+`auto-sync-status.toml` in the state directory records the last failure classification, attempt count, next retry timestamp, and a config fingerprint for deferral release detection. Messages are sanitized: control characters stripped, Bearer tokens and API key values redacted.
+
+### Config Fingerprint and Deferral Release
+
+`compute_config_fingerprint()` hashes non-secret structural inputs (server URL, enabled flags, direction, API key presence). `release_deferral_on_config_change()` checks if the fingerprint has changed since a deferred failure; if so, it clears `attention_required`, resets `consecutive_failures`, and permits a new attempt.
 
 ### Schedule Decision
 
-`schedule_sync()` in the worker prevents worker storms by checking:
+`schedule_sync()` in schedule.rs is the centralized entry point for all worker scheduling decisions:
 
-1. An execution lock is held — no concurrent sync possible.
-2. The pending marker generation matches the current cycle.
-3. Backoff delay has elapsed for retryable failures.
-4. No newer generation has been observed (would supersede this cycle).
+1. Policy configured and enabled.
+2. Pending marker exists with valid work.
+3. Execution lock is not held by a live process.
+4. Backoff delay has elapsed (unless explicit retry).
+5. Failure class allows automatic retry.
+6. Config change releases deferred failures (authentication/credential/configuration).

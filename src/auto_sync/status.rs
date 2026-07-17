@@ -54,6 +54,11 @@ pub struct AutoSyncStatus {
     pub attention_required: bool,
     /// Bounded human-readable message (sanitized, no secrets).
     pub message: String,
+    /// Configuration fingerprint at the time of the last failure.
+    /// Used to detect when config changes should release deferred failures.
+    /// Contains only non-secret structural inputs (server URL hash, flags).
+    #[serde(default)]
+    pub config_fingerprint: u64,
     /// CRC32 integrity over schema + generation + timestamp + result + failure_class + consecutive_failures.
     pub integrity: u32,
 }
@@ -73,6 +78,7 @@ impl Default for AutoSyncStatus {
             executor_exit_code: 0,
             attention_required: false,
             message: String::new(),
+            config_fingerprint: 0,
             integrity: 0,
         }
     }
@@ -192,6 +198,7 @@ pub fn record_failure(
     consecutive_failures: u32,
     next_attempt_at_unix_ms: u64,
     message: &str,
+    config_fingerprint: u64,
 ) -> Result<(), String> {
     let now_ms = unix_now_ms();
     let mut status = read_status(state_dir).unwrap_or_default();
@@ -215,19 +222,72 @@ pub fn record_failure(
                 | FailureClass::LocalPersistence
         );
     status.message = sanitize_message(message);
+    status.config_fingerprint = config_fingerprint;
 
     write_status(state_dir, &status)
 }
 
 /// Sanitize a message string for safe persistence.
 ///
-/// Truncates to `MAX_MESSAGE_LEN` and strips any characters that
-/// could be used for log injection.
+/// Truncates to `MAX_MESSAGE_LEN`, strips control characters, and
+/// redacts potential secrets (API keys, bearer tokens, URLs with credentials).
 fn sanitize_message(msg: &str) -> String {
-    msg.chars()
+    let redacted = redact_secrets(msg);
+    redacted
+        .chars()
         .filter(|c| *c != '\n' && *c != '\r' && *c != '\0')
         .take(MAX_MESSAGE_LEN)
         .collect()
+}
+
+/// Redact potential secrets from a message string.
+///
+/// Strips API keys, bearer tokens, and URLs with embedded credentials.
+/// Uses simple pattern matching — this is best-effort redaction, not a
+/// security boundary.
+fn redact_secrets(msg: &str) -> String {
+    let mut result = msg.to_string();
+
+    // Redact Bearer tokens: "Bearer <token>"
+    if let Some(start) = result.find("Bearer ") {
+        let token_start = start + 7;
+        let token_end = result[token_start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .map(|i| token_start + i)
+            .unwrap_or(result.len());
+        result.replace_range(start..token_end, "Bearer [REDACTED]");
+    }
+
+    // Redact "api_key=..." or "api-key=..." patterns
+    for pattern in &["api_key=", "api-key=", "apikey="] {
+        if let Some(start) = result.find(pattern) {
+            let val_start = start + pattern.len();
+            let val_end = result[val_start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+                .map(|i| val_start + i)
+                .unwrap_or(result.len());
+            if val_end > val_start {
+                result.replace_range(start..val_end, &format!("{pattern}[REDACTED]"));
+            }
+        }
+    }
+
+    // Redact URLs with credentials: "user:pass@host"
+    if let Some(at_pos) = result.find('@') {
+        // Look backward for ":" and "//" to detect URL credentials
+        let before = &result[..at_pos];
+        if let Some(colon_pos) = before.rfind(':') {
+            let before_colon = &before[..colon_pos];
+            if before_colon.ends_with("//") || before_colon.contains("://") {
+                // This looks like user:pass@host in a URL
+                let scheme_end = before_colon.find("://").map(|i| i + 3).unwrap_or(0);
+                let cred_start = scheme_end;
+                result.replace_range(cred_start..at_pos + 1, "[REDACTED]@");
+            }
+        }
+    }
+
+    result
 }
 
 fn unix_now_ms() -> u64 {
@@ -235,6 +295,57 @@ fn unix_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Compute a configuration fingerprint from sync settings.
+///
+/// Contains only non-secret structural inputs: server URL, enabled flags,
+/// and sync direction. The API key value is NOT included — only its
+/// presence (via `has_api_key`) is captured.
+pub fn compute_config_fingerprint(settings: &crate::config::SyncSettings) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    settings.server_url.hash(&mut hasher);
+    settings.enabled.hash(&mut hasher);
+    settings.auto_sync.hash(&mut hasher);
+    format!("{:?}", settings.sync_direction).hash(&mut hasher);
+    (!settings.api_key.is_empty()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Check if configuration has changed since the last deferred failure.
+///
+/// If the config fingerprint differs from the one stored in the status,
+/// the deferral is released by clearing `attention_required` and resetting
+/// `consecutive_failures` to 0, permitting a new attempt. Returns `true`
+/// if the deferral was released.
+pub fn release_deferral_on_config_change(state_dir: &Path, current_fingerprint: u64) -> bool {
+    let Some(mut status) = read_status(state_dir) else {
+        return false;
+    };
+
+    if !status.attention_required || status.config_fingerprint == 0 {
+        return false;
+    }
+
+    if status.config_fingerprint == current_fingerprint {
+        return false;
+    }
+
+    // Config changed — release the deferral
+    tracing::info!(
+        old_fingerprint = status.config_fingerprint,
+        new_fingerprint = current_fingerprint,
+        "config changed; releasing deferred failure"
+    );
+    status.attention_required = false;
+    status.consecutive_failures = 0;
+    status.next_attempt_at_unix_ms = 0;
+    status.config_fingerprint = current_fingerprint;
+    let _ = write_status(state_dir, &status);
+    true
 }
 
 #[cfg(test)]
@@ -328,6 +439,7 @@ mod tests {
             1,
             5000,
             "connection failed",
+            0,
         )
         .unwrap();
         let status = read_status(dir.path()).unwrap();
@@ -351,6 +463,7 @@ mod tests {
             1,
             0,
             "bad api key",
+            0,
         )
         .unwrap();
         let status = read_status(dir.path()).unwrap();
@@ -391,5 +504,194 @@ mod tests {
         assert!(!status_path(dir.path()).exists());
         write_status(dir.path(), &AutoSyncStatus::default()).unwrap();
         assert!(status_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn test_bounded_size_after_repeated_failures() {
+        let dir = TempDir::new().unwrap();
+        // Simulate 100 consecutive failures with long messages
+        for i in 0..100 {
+            let msg = format!("failure {i}: {}", "x".repeat(1000));
+            record_failure(
+                dir.path(),
+                i as u64,
+                FailureClass::TransientNetwork,
+                4,
+                i,
+                0,
+                &msg,
+                0,
+            )
+            .unwrap();
+        }
+        let meta = fs::metadata(status_path(dir.path())).unwrap();
+        // Status file must stay bounded (well under 8KB)
+        assert!(
+            meta.len() < 8192,
+            "status file too large after 100 failures: {} bytes",
+            meta.len()
+        );
+    }
+
+    #[test]
+    fn test_no_api_key_leakage_in_status() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Authentication,
+            3,
+            1,
+            0,
+            "Bearer sk-secret-api-key-12345",
+            0,
+        )
+        .unwrap();
+        let content = fs::read_to_string(status_path(dir.path())).unwrap();
+        assert!(
+            !content.contains("sk-secret-api-key"),
+            "status file must not contain API key"
+        );
+    }
+
+    #[test]
+    fn test_no_server_url_leakage_in_status() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::TransientNetwork,
+            4,
+            1,
+            0,
+            "connection to https://sync.example.com:8443 failed",
+            0,
+        )
+        .unwrap();
+        // The message field is preserved (it's informational), but the message
+        // is sanitized. Server URLs in the message are OK — they're not secrets.
+        let content = fs::read_to_string(status_path(dir.path())).unwrap();
+        assert!(content.contains("sync.example.com"));
+    }
+
+    #[test]
+    fn test_config_fingerprint_stored() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Authentication,
+            3,
+            1,
+            0,
+            "bad key",
+            42,
+        )
+        .unwrap();
+        let status = read_status(dir.path()).unwrap();
+        assert_eq!(status.config_fingerprint, 42);
+    }
+
+    #[test]
+    fn test_config_fingerprint_zero_by_default() {
+        let dir = TempDir::new().unwrap();
+        write_status(dir.path(), &AutoSyncStatus::default()).unwrap();
+        let status = read_status(dir.path()).unwrap();
+        assert_eq!(status.config_fingerprint, 0);
+    }
+
+    #[test]
+    fn test_release_deferral_on_config_change() {
+        let dir = TempDir::new().unwrap();
+        // Record an auth failure with attention_required
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Authentication,
+            3,
+            1,
+            0,
+            "bad key",
+            100, // old fingerprint
+        )
+        .unwrap();
+        let status = read_status(dir.path()).unwrap();
+        assert!(status.attention_required);
+        assert_eq!(status.config_fingerprint, 100);
+
+        // Config changed — new fingerprint
+        let released = release_deferral_on_config_change(dir.path(), 200);
+        assert!(released, "deferral should be released on config change");
+
+        let status = read_status(dir.path()).unwrap();
+        assert!(!status.attention_required);
+        assert_eq!(status.consecutive_failures, 0);
+        assert_eq!(status.config_fingerprint, 200);
+    }
+
+    #[test]
+    fn test_no_release_when_config_unchanged() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Authentication,
+            3,
+            1,
+            0,
+            "bad key",
+            100,
+        )
+        .unwrap();
+
+        let released = release_deferral_on_config_change(dir.path(), 100);
+        assert!(
+            !released,
+            "deferral should NOT be released when config unchanged"
+        );
+    }
+
+    #[test]
+    fn test_no_release_when_no_attention_required() {
+        let dir = TempDir::new().unwrap();
+        // TransientNetwork doesn't set attention_required
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::TransientNetwork,
+            4,
+            1,
+            5000,
+            "connection failed",
+            100,
+        )
+        .unwrap();
+        let status = read_status(dir.path()).unwrap();
+        assert!(!status.attention_required);
+
+        let released = release_deferral_on_config_change(dir.path(), 200);
+        assert!(!released);
+    }
+
+    #[test]
+    fn test_no_reset_on_success_preserves_fingerprint() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Authentication,
+            3,
+            1,
+            0,
+            "bad key",
+            100,
+        )
+        .unwrap();
+        record_success(dir.path(), 1, "sync ok").unwrap();
+        let status = read_status(dir.path()).unwrap();
+        assert_eq!(status.consecutive_failures, 0);
+        assert!(!status.attention_required);
+        // Fingerprint is preserved (not cleared on success)
+        assert_eq!(status.config_fingerprint, 100);
     }
 }

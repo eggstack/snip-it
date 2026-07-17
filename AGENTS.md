@@ -71,7 +71,7 @@ src/sync.rs               gRPC client for snip-sync server
 src/sync_commands.rs      Sync orchestration and merge logic
 src/encryption.rs         AES-256-GCM + Argon2id end-to-end encryption
 src/config.rs             Sync settings, path resolution, keychain API key
-src/error.rs              SnipError enum and SnipResult type
+src/error.rs              SnipError enum (with SyncFailure variant + SyncFailureKind) and SnipResult type
 src/logging.rs            Structured logging with file rotation
 src/clipboard.rs          Cross-platform clipboard access
 src/sort.rs               Sort modes, ranking, tie-break chain
@@ -119,11 +119,14 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `Clock` trait for deterministic testing of time-dependent logic
 - `max_delay` separate from `debounce` — bounded latency prevents starvation
 - Startup recovery always schedules workers for valid pending work regardless of age
-- Failure classification is typed (`FailureClass` enum, 11 variants), not heuristic string matching
-- Status is persisted in `auto-sync-status.toml` with CRC32 integrity checks
+- Failure classification is typed (`FailureClass` enum, 11 variants) with variant-based classification via `SyncFailureKind` (no string matching for sync errors)
+- Status is persisted in `auto-sync-status.toml` with CRC32 integrity, secret redaction, and config fingerprint
 - Backoff is durable (survives CLI restarts) with exponential schedule capped at 15 minutes
 - `schedule_sync()` centralizes scheduling decisions and prevents worker storms
+- Config-change detection releases deferred failures when credentials/settings change
+- Foreground `snp sync` records durable status alongside detached workers
 - Executor maps errors → `FailureClass` → `ExecutorExitCode`; worker maps back on exit
+- Signal death on Unix is captured and logged for executor processes
 - Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification, status, schedule
 
 ### Error Handling

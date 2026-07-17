@@ -204,7 +204,10 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
         let mut client = runtime
             .block_on(crate::sync::SyncClient::create(sync_settings.clone()))
             .map_err(|e| {
-                SnipError::runtime_error("Failed to create sync client", Some(&e.to_string()))
+                SnipError::sync_failure(
+                    crate::error::SyncFailureKind::ConnectFailed,
+                    Some(&e.to_string()),
+                )
             })?;
 
         match runtime.block_on(client.list_libraries()) {
@@ -222,14 +225,17 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
     let mut client = runtime
         .block_on(crate::sync::SyncClient::create(sync_settings.clone()))
         .map_err(|e| {
-            SnipError::runtime_error("Failed to create sync client", Some(&e.to_string()))
+            SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
+                Some(&e.to_string()),
+            )
         })?;
 
     match runtime.block_on(client.list_libraries()) {
         Ok(libs) => {
             let mut mgr = init_library_manager().map_err(|e| {
-                SnipError::runtime_error(
-                    "Failed to initialize library manager",
+                SnipError::sync_failure(
+                    crate::error::SyncFailureKind::LibraryManagerInitFailed,
                     Some(&e.to_string()),
                 )
             })?;
@@ -283,6 +289,37 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                 effective_pull,
                 runtime,
             );
+
+            // Record durable status for foreground sync (Workstream H).
+            // Status write is best-effort; failure must not prevent sync result
+            // from propagating to the caller.
+            let observed_gen = observed_generation.unwrap_or(0);
+            match &sync_result {
+                Ok(()) => {
+                    let _ = crate::auto_sync::status::record_success(
+                        &state_dir,
+                        observed_gen,
+                        "foreground sync completed",
+                    );
+                }
+                Err(e) => {
+                    let failure_class = crate::auto_sync::policy::FailureClass::from_error(e);
+                    let _ = crate::auto_sync::status::record_failure(
+                        &state_dir,
+                        observed_gen,
+                        failure_class,
+                        crate::auto_sync::executor::ExecutorExitCode::from_failure_class(
+                            failure_class,
+                        )
+                        .to_exit_status(),
+                        0,
+                        0,
+                        &e.to_string(),
+                        crate::auto_sync::status::compute_config_fingerprint(&sync_settings),
+                    );
+                }
+            }
+
             let sync_succeeded = sync_result.is_ok();
             sync_result?;
 
@@ -297,8 +334,8 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
         }
         Err(e) => {
             eprintln!("Failed to pull libraries: {e}");
-            Err(SnipError::runtime_error(
-                "Failed to list server libraries",
+            Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
                 Some(&e.to_string()),
             ))
         }

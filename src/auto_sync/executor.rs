@@ -43,6 +43,8 @@ impl ExecutorExitCode {
     ///
     /// Maps successful exit (code 0) to `Success`, known nonzero
     /// codes to their variant, and unknown codes to `InternalError`.
+    /// On Unix, signal death (no exit code) maps to `InternalError`
+    /// and is logged as a signal termination.
     pub fn from_exit_status(status: ExitStatus) -> Self {
         match status.code() {
             Some(0) => Self::Success,
@@ -52,6 +54,17 @@ impl ExecutorExitCode {
             Some(5) => Self::ConflictPartial,
             Some(6) => Self::LocalPersistence,
             Some(7) => Self::InternalError,
+            None => {
+                // On Unix, None means the process was killed by a signal.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(signal) = status.signal() {
+                        tracing::error!(signal, "executor killed by signal");
+                    }
+                }
+                Self::InternalError
+            }
             _ => Self::InternalError,
         }
     }
@@ -362,7 +375,10 @@ mod tests {
 
     #[test]
     fn test_classify_sync_error_not_configured() {
-        let err = crate::error::SnipError::runtime_error("Sync not configured", None);
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::NotConfigured,
+            None,
+        );
         assert_eq!(
             classify_sync_error(&err),
             FailureClass::DeferredNotConfigured
@@ -379,49 +395,56 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_sync_error_api_key() {
-        let err = crate::error::SnipError::runtime_error(
-            "Sync is enabled but no API key configured",
+    fn test_classify_sync_error_connect_failed() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::ConnectFailed,
+            Some("connection refused"),
+        );
+        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
+    }
+
+    #[test]
+    fn test_classify_sync_error_health_check() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::HealthCheckFailed,
             None,
+        );
+        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
+    }
+
+    #[test]
+    fn test_classify_sync_error_auth() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::AuthenticationFailed,
+            Some("unauthorized"),
         );
         assert_eq!(classify_sync_error(&err), FailureClass::Authentication);
     }
 
     #[test]
-    fn test_classify_sync_error_health_check() {
-        let err = crate::error::SnipError::runtime_error("Server health check failed", None);
-        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
-    }
-
-    #[test]
-    fn test_classify_sync_error_server_unreachable() {
-        let err =
-            crate::error::SnipError::runtime_error("Server is not reachable", Some("timeout"));
-        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
-    }
-
-    #[test]
-    fn test_classify_sync_error_network() {
-        let err = crate::error::SnipError::runtime_error("network error", None);
-        assert_eq!(classify_sync_error(&err), FailureClass::TransientNetwork);
-    }
-
-    #[test]
-    fn test_classify_sync_error_partial_failure() {
-        let err = crate::error::SnipError::runtime_error("Some libraries failed to sync", None);
+    fn test_classify_sync_error_partial() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::PartialSyncFailure,
+            None,
+        );
         assert_eq!(classify_sync_error(&err), FailureClass::Partial);
     }
 
     #[test]
-    fn test_classify_sync_error_library_manager() {
-        let err =
-            crate::error::SnipError::runtime_error("Failed to initialize library manager", None);
+    fn test_classify_sync_error_save_library() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::SaveMergedLibraryFailed,
+            Some("disk full"),
+        );
         assert_eq!(classify_sync_error(&err), FailureClass::LocalPersistence);
     }
 
     #[test]
-    fn test_classify_sync_error_save() {
-        let err = crate::error::SnipError::runtime_error("Failed to save merged library", None);
+    fn test_classify_sync_error_library_manager() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::LibraryManagerInitFailed,
+            Some("permission denied"),
+        );
         assert_eq!(classify_sync_error(&err), FailureClass::LocalPersistence);
     }
 

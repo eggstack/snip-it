@@ -127,12 +127,31 @@ pub enum FailureClass {
 impl FailureClass {
     /// Classify a `SnipError` into a failure class.
     ///
-    /// Uses heuristic matching on the error message since `SnipError::Runtime`
-    /// does not carry typed error categories. Mapping is based on known
-    /// error message patterns from `sync_commands.rs`.
+    /// For `SyncFailure` variants, uses direct variant matching (no string analysis).
+    /// For `Runtime` variants, falls back to heuristic matching on the error message
+    /// since `SnipError::Runtime` does not carry typed error categories.
     pub fn from_error(err: &crate::error::SnipError) -> Self {
-        use crate::error::SnipError;
+        use crate::error::{SnipError, SyncFailureKind};
         match err {
+            SnipError::SyncFailure { kind, .. } => match kind {
+                SyncFailureKind::NotConfigured => FailureClass::DeferredNotConfigured,
+                SyncFailureKind::ConnectFailed => FailureClass::TransientNetwork,
+                SyncFailureKind::HealthCheckFailed => FailureClass::TransientNetwork,
+                SyncFailureKind::AuthenticationFailed => FailureClass::Authentication,
+                SyncFailureKind::SyncRequestFailed => FailureClass::TransientNetwork,
+                SyncFailureKind::CreateLibraryFailed => FailureClass::Configuration,
+                SyncFailureKind::GetPremadeLibraryFailed => FailureClass::TransientNetwork,
+                SyncFailureKind::RegistrationFailed => FailureClass::Authentication,
+                SyncFailureKind::LibraryManagerInitFailed => FailureClass::LocalPersistence,
+                SyncFailureKind::LibraryModeInitFailed => FailureClass::LocalPersistence,
+                SyncFailureKind::LibrariesDirReadFailed => FailureClass::LocalPersistence,
+                SyncFailureKind::NoLibrariesToSync => FailureClass::Internal,
+                SyncFailureKind::SaveMergedLibraryFailed => FailureClass::LocalPersistence,
+                SyncFailureKind::PartialSyncFailure => FailureClass::Partial,
+                SyncFailureKind::PremadePartialFailure => FailureClass::Partial,
+                SyncFailureKind::EncryptionFailed => FailureClass::Internal,
+                SyncFailureKind::DecryptionFailed => FailureClass::Internal,
+            },
             SnipError::Runtime { message, detail } => {
                 let combined = format!("{message} {}", detail.as_deref().unwrap_or(""));
                 let lower = combined.to_lowercase();
@@ -480,7 +499,114 @@ mod tests {
         assert!(!FailureClass::Conflict.is_deferred());
     }
 
-    // ── Table-driven classification tests ─────────────────────────
+    // ── Table-driven classification tests (SyncFailure variants) ────
+
+    #[test]
+    fn test_classify_sync_failure_not_configured() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::NotConfigured,
+            None,
+        );
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::DeferredNotConfigured
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_failure_connect_failed() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::ConnectFailed,
+            Some("connection refused"),
+        );
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_failure_health_check() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::HealthCheckFailed,
+            None,
+        );
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_failure_auth() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::AuthenticationFailed,
+            Some("unauthorized"),
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+    }
+
+    #[test]
+    fn test_classify_sync_failure_sync_request() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::SyncRequestFailed,
+            Some("tonic status: cancelled"),
+        );
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::TransientNetwork
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_failure_create_library() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::CreateLibraryFailed,
+            Some("already exists"),
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
+    }
+
+    #[test]
+    fn test_classify_sync_failure_save_library() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::SaveMergedLibraryFailed,
+            Some("disk full"),
+        );
+        assert_eq!(
+            FailureClass::from_error(&err),
+            FailureClass::LocalPersistence
+        );
+    }
+
+    #[test]
+    fn test_classify_sync_failure_partial() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::PartialSyncFailure,
+            None,
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Partial);
+    }
+
+    #[test]
+    fn test_classify_sync_failure_registration() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::RegistrationFailed,
+            Some("device limit reached"),
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+    }
+
+    #[test]
+    fn test_classify_sync_failure_encryption() {
+        let err = crate::error::SnipError::sync_failure(
+            crate::error::SyncFailureKind::EncryptionFailed,
+            None,
+        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Internal);
+    }
+
+    // ── Table-driven classification tests (legacy Runtime variants) ──
 
     #[test]
     fn test_classify_not_configured() {

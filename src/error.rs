@@ -19,6 +19,73 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+/// Typed sync failure kinds for variant-based classification.
+///
+/// Each variant maps directly to a [`FailureClass`](crate::auto_sync::policy::FailureClass)
+/// without string matching. The `detail` field carries the upstream error message
+/// for display/logging but is not used for classification.
+#[derive(Debug, Clone)]
+pub enum SyncFailureKind {
+    /// Sync is not configured or disabled.
+    NotConfigured,
+    /// Failed to connect to the sync server (TLS, DNS, transport).
+    ConnectFailed,
+    /// Server health check failed.
+    HealthCheckFailed,
+    /// Authentication or registration failed.
+    AuthenticationFailed,
+    /// gRPC sync request failed (after retries exhausted).
+    SyncRequestFailed,
+    /// Failed to create a library on the server.
+    CreateLibraryFailed,
+    /// Failed to get a premade library from the server.
+    GetPremadeLibraryFailed,
+    /// Registration request failed.
+    RegistrationFailed,
+    /// Library manager initialization failed.
+    LibraryManagerInitFailed,
+    /// Failed to initialize library mode (directory/permissions).
+    LibraryModeInitFailed,
+    /// Failed to read the libraries directory.
+    LibrariesDirReadFailed,
+    /// No libraries exist to sync.
+    NoLibrariesToSync,
+    /// Failed to save merged library after sync.
+    SaveMergedLibraryFailed,
+    /// Some libraries failed to sync (partial failure).
+    PartialSyncFailure,
+    /// Some premade libraries failed to sync.
+    PremadePartialFailure,
+    /// Encryption/serialization of snippet data failed.
+    EncryptionFailed,
+    /// Decryption/deserialization of snippet data failed.
+    DecryptionFailed,
+}
+
+impl fmt::Display for SyncFailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotConfigured => write!(f, "Sync not configured"),
+            Self::ConnectFailed => write!(f, "Failed to connect to sync server"),
+            Self::HealthCheckFailed => write!(f, "Server health check failed"),
+            Self::AuthenticationFailed => write!(f, "Authentication failed"),
+            Self::SyncRequestFailed => write!(f, "Sync request failed"),
+            Self::CreateLibraryFailed => write!(f, "Failed to create library"),
+            Self::GetPremadeLibraryFailed => write!(f, "Failed to get premade library"),
+            Self::RegistrationFailed => write!(f, "Registration failed"),
+            Self::LibraryManagerInitFailed => write!(f, "Failed to initialize library manager"),
+            Self::LibraryModeInitFailed => write!(f, "Failed to initialize library mode"),
+            Self::LibrariesDirReadFailed => write!(f, "Failed to read libraries directory"),
+            Self::NoLibrariesToSync => write!(f, "No libraries to sync"),
+            Self::SaveMergedLibraryFailed => write!(f, "Failed to save merged library"),
+            Self::PartialSyncFailure => write!(f, "Some libraries failed to sync"),
+            Self::PremadePartialFailure => write!(f, "Some premade libraries failed to sync"),
+            Self::EncryptionFailed => write!(f, "Failed to encrypt snippet data"),
+            Self::DecryptionFailed => write!(f, "Failed to decrypt snippet data"),
+        }
+    }
+}
+
 /// All possible errors that can occur in snp.
 ///
 /// Errors are categorized by domain to make debugging and handling easier.
@@ -62,6 +129,16 @@ pub enum SnipError {
     /// General-purpose errors for sync failures, validation errors, etc.
     Runtime {
         message: String,
+        detail: Option<String>,
+    },
+
+    /// Typed sync failure with variant-based classification.
+    ///
+    /// Carries a [`SyncFailureKind`] for direct mapping to [`FailureClass`]
+    /// without string matching. The `detail` field carries the upstream error
+    /// message for display/logging.
+    SyncFailure {
+        kind: SyncFailureKind,
         detail: Option<String>,
     },
 }
@@ -114,6 +191,13 @@ impl fmt::Display for SnipError {
                     .map(|d| format!(": {d}"))
                     .unwrap_or_default();
                 write!(f, "Runtime error: {message}{detail_str}")
+            }
+            SnipError::SyncFailure { kind, detail } => {
+                let detail_str = detail
+                    .as_ref()
+                    .map(|d| format!(": {d}"))
+                    .unwrap_or_default();
+                write!(f, "{kind}{detail_str}")
             }
         }
     }
@@ -192,6 +276,14 @@ impl SnipError {
     pub fn runtime_error(message: &str, detail: Option<&str>) -> Self {
         SnipError::Runtime {
             message: message.to_string(),
+            detail: detail.map(ToString::to_string),
+        }
+    }
+
+    /// Create a typed sync failure with a [`SyncFailureKind`] and optional detail.
+    pub fn sync_failure(kind: SyncFailureKind, detail: Option<&str>) -> Self {
+        SnipError::SyncFailure {
+            kind,
             detail: detail.map(ToString::to_string),
         }
     }
@@ -297,6 +389,29 @@ mod tests {
     #[test]
     fn test_error_source_runtime() {
         let err = SnipError::runtime_error("msg", None);
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_sync_failure_display_with_detail() {
+        let err =
+            SnipError::sync_failure(SyncFailureKind::ConnectFailed, Some("connection refused"));
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to connect"));
+        assert!(msg.contains("connection refused"));
+    }
+
+    #[test]
+    fn test_sync_failure_display_without_detail() {
+        let err = SnipError::sync_failure(SyncFailureKind::NotConfigured, None);
+        let msg = err.to_string();
+        assert!(msg.contains("Sync not configured"));
+        assert!(!msg.contains(":"));
+    }
+
+    #[test]
+    fn test_sync_failure_source_none() {
+        let err = SnipError::sync_failure(SyncFailureKind::HealthCheckFailed, None);
         assert!(err.source().is_none());
     }
 }

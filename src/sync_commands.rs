@@ -237,8 +237,8 @@ pub fn run_premade_sync(
     let mut client = match runtime.block_on(sync::SyncClient::create(sync_settings.clone())) {
         Ok(c) => c,
         Err(e) => {
-            return Err(SnipError::runtime_error(
-                "Failed to create sync client",
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
                 Some(&e.to_string()),
             ));
         }
@@ -259,8 +259,8 @@ pub fn run_premade_sync(
     let mgr = match library::LibraryManager::new() {
         Ok(m) => m,
         Err(e) => {
-            return Err(SnipError::runtime_error(
-                "Failed to initialize library manager",
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::LibraryManagerInitFailed,
                 Some(&e.to_string()),
             ));
         }
@@ -299,8 +299,8 @@ pub fn run_premade_sync(
         }
 
         if premade_results.iter().any(|(_, success, _)| !success) {
-            return Err(SnipError::runtime_error(
-                "Some premade libraries failed to sync",
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::PremadePartialFailure,
                 None,
             ));
         }
@@ -348,8 +348,8 @@ fn merge_and_save(
     // save_library uses atomic rename, so the original file is always safe
     // on failure. No explicit backup/restore is needed here.
     if let Err(e) = library::save_library(lib_path, &merged) {
-        return Err(SnipError::runtime_error(
-            "Failed to save merged library",
+        return Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::SaveMergedLibraryFailed,
             Some(&e.to_string()),
         ));
     }
@@ -385,30 +385,39 @@ pub fn run_sync(
     }
 
     if !ensure_sync_configured(sync_settings) {
-        return Err(SnipError::runtime_error("Sync not configured", None));
+        return Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::NotConfigured,
+            None,
+        ));
     }
 
     let mut client = create_sync_client(runtime, sync_settings).map_err(|e| {
-        SnipError::runtime_error("Failed to create sync client", Some(&e.to_string()))
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::ConnectFailed,
+            Some(&e.to_string()),
+        )
     })?;
 
     if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
-        return Err(SnipError::runtime_error("Server health check failed", None));
+        return Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::HealthCheckFailed,
+            None,
+        ));
     }
 
     let mut mgr = match library::LibraryManager::new() {
         Ok(m) => m,
         Err(e) => {
-            return Err(SnipError::runtime_error(
-                "Failed to initialize library manager",
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::LibraryManagerInitFailed,
                 Some(&e.to_string()),
             ));
         }
     };
 
     if let Err(e) = mgr.ensure_library_mode() {
-        return Err(SnipError::runtime_error(
-            "Failed to initialize library mode",
+        return Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::LibraryModeInitFailed,
             Some(&e.to_string()),
         ));
     }
@@ -436,8 +445,8 @@ pub fn run_sync(
                     error = %e,
                     "Failed to read libraries directory"
                 );
-                return Err(SnipError::runtime_error(
-                    "Failed to read libraries directory",
+                return Err(SnipError::sync_failure(
+                    crate::error::SyncFailureKind::LibrariesDirReadFailed,
                     Some(&e.to_string()),
                 ));
             }
@@ -446,7 +455,10 @@ pub fn run_sync(
 
     if libraries_to_sync.is_empty() {
         tracing::warn!("No libraries to sync");
-        return Err(SnipError::runtime_error("No libraries to sync", None));
+        return Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::NoLibrariesToSync,
+            None,
+        ));
     }
 
     for lib_name in &libraries_to_sync {
@@ -732,8 +744,8 @@ pub fn run_sync(
     );
 
     if status.failed > 0 {
-        Err(SnipError::runtime_error(
-            "Some libraries failed to sync",
+        Err(SnipError::sync_failure(
+            crate::error::SyncFailureKind::PartialSyncFailure,
             None,
         ))
     } else {

@@ -142,9 +142,12 @@ impl SyncClient {
     pub async fn create(settings: SyncSettings) -> SnipResult<Self> {
         let server_url = settings.server_url.clone();
 
-        let channel = create_tls_channel(&server_url)
-            .await
-            .map_err(|e| SnipError::runtime_error("Failed to connect", Some(&e.to_string())))?;
+        let channel = create_tls_channel(&server_url).await.map_err(|e| {
+            SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
+                Some(&e.to_string()),
+            )
+        })?;
 
         Ok(Self {
             client: SnippetSyncClient::new(channel),
@@ -275,8 +278,8 @@ impl SyncClient {
                     if !SyncRetryConfig::is_retryable_grpc_error(&e)
                         || attempt >= config.max_retries
                     {
-                        return Err(SnipError::runtime_error(
-                            "Sync request",
+                        return Err(SnipError::sync_failure(
+                            crate::error::SyncFailureKind::SyncRequestFailed,
                             Some(&e.to_string()),
                         ));
                     }
@@ -319,9 +322,12 @@ impl SyncClient {
 
     /// Registers a new device with the server and returns the API key and device ID.
     pub async fn register(server_url: String) -> SnipResult<(String, String)> {
-        let channel = create_tls_channel(&server_url)
-            .await
-            .map_err(|e| SnipError::runtime_error("Failed to connect", Some(&e.to_string())))?;
+        let channel = create_tls_channel(&server_url).await.map_err(|e| {
+            SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
+                Some(&e.to_string()),
+            )
+        })?;
 
         let mut client = SnippetSyncClient::new(channel);
 
@@ -336,8 +342,8 @@ impl SyncClient {
         if response.success {
             Ok((response.api_key, response.device_id))
         } else {
-            Err(SnipError::runtime_error(
-                "Registration failed",
+            Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::RegistrationFailed,
                 Some(&response.message),
             ))
         }
@@ -404,8 +410,8 @@ impl SyncClient {
                 snippet_count: 0,
             })
         } else {
-            Err(SnipError::runtime_error(
-                "Failed to create library",
+            Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::CreateLibraryFailed,
                 Some(&response.message),
             ))
         }
@@ -447,8 +453,8 @@ impl SyncClient {
         if response.success {
             Ok(response.content)
         } else {
-            Err(SnipError::runtime_error(
-                "Failed to get premade library",
+            Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::GetPremadeLibraryFailed,
                 Some(&response.message),
             ))
         }
@@ -525,8 +531,12 @@ pub fn encrypt_snippet(
         tags: snippet.tags.clone(),
     };
 
-    let json = serde_json::to_string(&data)
-        .map_err(|e| SnipError::runtime_error("Serialize snippet data", Some(&e.to_string())))?;
+    let json = serde_json::to_string(&data).map_err(|e| {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::EncryptionFailed,
+            Some(&e.to_string()),
+        )
+    })?;
 
     let encrypted = encryption::encrypt(api_key, &json)?;
 
@@ -554,8 +564,12 @@ pub fn decrypt_snippet(
 
     let decrypted = encryption::decrypt(api_key, &snippet.command)?;
 
-    let data: EncryptedSnippetData = serde_json::from_str(&decrypted)
-        .map_err(|e| SnipError::runtime_error("Deserialize snippet data", Some(&e.to_string())))?;
+    let data: EncryptedSnippetData = serde_json::from_str(&decrypted).map_err(|e| {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::DecryptionFailed,
+            Some(&e.to_string()),
+        )
+    })?;
 
     Ok(crate::proto::Snippet {
         id: snippet.id.clone(),

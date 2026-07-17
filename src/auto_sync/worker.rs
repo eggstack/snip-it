@@ -425,6 +425,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                 0,
                 0,
                 &format!("executor spawn failed: {e}"),
+                current_config_fingerprint(),
             );
             return WorkerOutcome::Failed;
         }
@@ -457,6 +458,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                         consecutive,
                         next_attempt,
                         &exit_code.to_string(),
+                        current_config_fingerprint(),
                     );
                     WorkerOutcome::Failed
                 }
@@ -482,6 +484,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                 consecutive,
                 next_attempt,
                 "sync executor timed out",
+                current_config_fingerprint(),
             );
             WorkerOutcome::Failed
         }
@@ -495,6 +498,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                 0,
                 0,
                 &format!("wait failed: {e}"),
+                current_config_fingerprint(),
             );
             WorkerOutcome::Failed
         }
@@ -506,6 +510,12 @@ fn next_consecutive_failures(state_dir: &Path) -> u32 {
     status::read_status(state_dir)
         .map(|s| s.consecutive_failures.saturating_add(1))
         .unwrap_or(1)
+}
+
+/// Compute the current config fingerprint for deferral release detection.
+fn current_config_fingerprint() -> u64 {
+    let settings = get_sync_settings();
+    status::compute_config_fingerprint(&settings)
 }
 
 fn unix_now_ms() -> u64 {
@@ -1424,5 +1434,84 @@ mod tests {
             crate::auto_sync::execution_lock::execution_lock_path(dir.path()).exists(),
             "execution lock must remain held after startup_recover"
         );
+    }
+
+    /// Dead worker is recoverable: spawning to a nonexistent state dir
+    /// returns Failed, not a panic.
+    #[test]
+    fn test_dead_worker_is_recoverable() {
+        let nonexistent = Path::new("/nonexistent/state/dir/recovery-test");
+        let policy = AutoSyncPolicy {
+            enabled: true,
+            ..AutoSyncPolicy::default()
+        };
+        let outcome = execute_sync(nonexistent, &policy);
+        assert_eq!(outcome, WorkerOutcome::Failed);
+    }
+
+    /// Foreground and detached paths classify the same injected error identically.
+    #[test]
+    fn test_foreground_detached_parity_classification() {
+        use crate::auto_sync::executor::ExecutorExitCode;
+        use crate::error::SyncFailureKind;
+
+        // Both paths use the same FailureClass classification
+        let err = crate::error::SnipError::sync_failure(
+            SyncFailureKind::ConnectFailed,
+            Some("connection refused"),
+        );
+        let class = FailureClass::from_error(&err);
+        assert_eq!(class, FailureClass::TransientNetwork);
+
+        // The same class maps to the same exit code
+        let code = ExecutorExitCode::from_failure_class(class);
+        assert_eq!(code, ExecutorExitCode::NetworkTimeout);
+
+        // And back again
+        let roundtrip = code.failure_class();
+        assert_eq!(roundtrip, FailureClass::TransientNetwork);
+    }
+
+    /// Startup recovery preserves backoff: if status has a future
+    /// next_attempt_at, startup_recover still schedules a worker
+    /// (the worker itself will check backoff via schedule_sync).
+    #[test]
+    fn test_startup_recovery_preserves_backoff_state() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+
+        // Record a failure with active backoff
+        let future_ms = unix_now_ms() + 60_000;
+        status::record_failure(
+            dir.path(),
+            1,
+            FailureClass::TransientNetwork,
+            4,
+            3,
+            future_ms,
+            "connection failed",
+            0,
+        )
+        .unwrap();
+
+        // Verify backoff is active
+        let status = status::read_status(dir.path()).unwrap();
+        assert_eq!(status.next_attempt_at_unix_ms, future_ms);
+        assert_eq!(status.consecutive_failures, 3);
+
+        // Startup recovery should still return the pending state
+        let result = startup_recover(dir.path()).unwrap();
+        assert!(result.is_some());
+
+        // Backoff state must be preserved after recovery
+        let status = status::read_status(dir.path()).unwrap();
+        assert_eq!(status.next_attempt_at_unix_ms, future_ms);
+        assert_eq!(status.consecutive_failures, 3);
     }
 }

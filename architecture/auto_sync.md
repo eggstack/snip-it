@@ -53,16 +53,18 @@ detached worker process (snp auto-sync-worker --state-dir ...)
 
 The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 
-- `policy.rs` — `AutoSyncPolicy`, `MutationKind`, `MutationOrigin`, `FailureClass`, debounce/timeout constants
+- `policy.rs` — `AutoSyncPolicy`, `MutationKind`, `MutationOrigin`, `FailureClass`, `RetryDisposition`, `transient_backoff()`, debounce/timeout constants
 - `pending.rs` — durable `PendingState` (schema v2, CRC32 integrity), v1 → v2 migration, `ConditionalClearResult`
 - `pending_lock.rs` — `PendingTxnGuard` RAII, short-lived transaction lock for pending-marker operations, unique temp paths, atomic writes, directory fsync
 - `lock.rs` — `WorkerLock` RAII, `WorkerLockContents` (`pid`/`started_at_unix_ms`/`nonce`), `process_alive`, ownership-checked drop
 - `execution_lock.rs` — `SyncExecutionLock` RAII, shared execution lock for all sync operations, `try_acquire`, `wait_acquire`, `ExecutionLockError`
-- `executor.rs` — `ExecutorExitCode`, `effective_sync_direction`, `run_executor` entry point
+- `executor.rs` — `ExecutorExitCode`, `classify_sync_error()`, `effective_sync_direction`, `run_executor` entry point
 - `spawn.rs` — `spawn_worker`, `spawn_executor`, `apply_platform_detach` (libc `setsid` on Unix, `DETACHED_PROCESS|CREATE_NO_WINDOW` on Windows)
-- `worker.rs` — `run`, `try_schedule`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`
+- `worker.rs` — `run`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`, `Clock` trait for deterministic testing
+- `status.rs` — `AutoSyncStatus` (durable status persistence), `record_success()`, `record_failure()`, `compute_config_fingerprint()`, `release_deferral_on_config_change()`, secret redaction
+- `schedule.rs` — `schedule_sync()` (centralized scheduling decision), `ScheduleDecision` enum, `Caller` enum, worker storm prevention
 - `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`, `SubcommandTag`, `should_attempt_auto_sync_recovery`
-- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock, execution_lock}` helpers used by `snp doctor`
+- `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock, execution_lock, status_file}` helpers used by `snp doctor`
 
 ## Key Types
 
@@ -442,6 +444,7 @@ next_attempt_at_unix_ms = 0
 executor_exit_code = 0
 attention_required = false
 message = ""
+config_fingerprint = 0
 integrity = "crc32:441c462e"
 ```
 
@@ -457,14 +460,15 @@ integrity = "crc32:441c462e"
 - `next_attempt_at_unix_ms` — earliest time the next attempt may be scheduled (backoff window). Zero means no deferral.
 - `executor_exit_code` — raw exit code from the last executor run.
 - `attention_required` — `true` when the failure class maps to `RequiresAttention`.
-- `message` — human-readable summary of the last outcome (truncated, no secrets).
+- `message` — human-readable summary of the last outcome (truncated, secrets redacted).
+- `config_fingerprint` — hash of non-secret structural config (server URL, enabled flags, direction, API key presence). Used by `release_deferral_on_config_change()` to detect when credential/config changes should release deferred failures. Zero means no fingerprint recorded.
 - `integrity` — `crc32:<hex>` over all behavior-driving fields; rejects tampered or corrupted files.
 
 **Invariants:**
 
 - Written atomically via unique temp file + rename + fsync + directory fsync.
 - Status write failure must **not** clear pending — a write failure leaves the existing status file intact and does not affect the pending marker.
-- No command text, API keys, encryption keys, or raw server responses are stored.
+- No command text, API keys, encryption keys, or raw server responses are stored. Messages are sanitized: control characters stripped, Bearer tokens and API key values redacted.
 - 0o600 permissions on Unix.
 
 ## Schedule Decision
@@ -496,7 +500,8 @@ pub enum ScheduleDecision {
 2. Policy is enabled (`settings.auto_sync && settings.enabled`).
 3. Execution lock is not held (`try_acquire` or inspection).
 4. Backoff status: `next_attempt_at_unix_ms` in status file has elapsed.
-5. Failure class retry allowance: `Internal` failures have a 3-attempt budget; `RequiresAttention` failures are not retried.
+5. Failure class retry allowance: `Internal` failures have a 3-attempt budget; `RequiresAttention` failures are not retried automatically.
+6. Config-change detection: if `RequiresAttention` is due to `Authentication`, `CredentialStore`, or `Configuration`, check if the config fingerprint has changed since the failure. If so, release the deferral and allow a new attempt.
 
 Only `SpawnNow` invokes the process spawner (`spawn::spawn_worker`). All other variants are terminal for that scheduling call — no process is created. This function is called from notification handlers, startup recovery, and any path that previously called `schedule_existing_pending` directly.
 
