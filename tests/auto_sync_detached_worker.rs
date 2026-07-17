@@ -852,7 +852,8 @@ auto_sync_failure = "ignore"
         "run_locked",
         "execute_sync",
         "clear_if_generation_matches",
-        "wait_for_quiet",
+        "debounce",
+        "preflight_check",
         "compute_deadline",
     ];
     for pattern in &forbidden {

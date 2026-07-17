@@ -347,8 +347,11 @@ Configure it via:
 snp sync config --show                         # inspect current settings
 snp sync config --auto-sync on                 # enable auto-sync
 snp sync config --debounce 5                   # 5-second debounce (0-300)
+snp sync config --max-delay 60                 # max 60s before forced sync
 snp sync config --failure warn                 # ignore, warn, or error
 ```
+
+Maximum delay forces a sync attempt after bounded time even if changes continue, preventing indefinite starvation.
 
 Local mutations always succeed before any remote work begins. A failed
 auto-sync never rolls back or corrupts a successful local save.

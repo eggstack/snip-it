@@ -111,6 +111,10 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Parent never holds the worker lock — it's the worker's responsibility
 - All sync operations acquire `SyncExecutionLock` to prevent concurrent sync
 - Local mutations always commit before remote work; failed sync never rolls back local state
+- Debounce returns `DebounceResult` with latest observed state; preflight check before executor spawn
+- `Clock` trait for deterministic testing of time-dependent logic
+- `max_delay` separate from `debounce` — bounded latency prevents starvation
+- Startup recovery always schedules workers for valid pending work regardless of age
 - Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification
 
 ### Error Handling

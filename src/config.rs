@@ -23,6 +23,10 @@ pub const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
 pub const AUTO_SYNC_DEBOUNCE_MIN: u64 = 0;
 /// Maximum accepted value for `auto_sync_debounce_seconds`.
 pub const AUTO_SYNC_DEBOUNCE_MAX: u64 = 300;
+/// Maximum accepted value for `auto_sync_max_delay_seconds`.
+pub const AUTO_SYNC_MAX_DELAY_MIN: u64 = 0;
+/// Maximum accepted value for `auto_sync_max_delay_seconds`.
+pub const AUTO_SYNC_MAX_DELAY_MAX: u64 = 600;
 
 /// Failure behavior for post-mutation auto-sync.
 ///
@@ -202,6 +206,10 @@ pub struct SyncSettings {
     /// Does not affect local mutation guarantees.
     #[serde(default)]
     pub auto_sync_failure: AutoSyncFailureMode,
+    /// Maximum latency (in seconds) before an auto-sync is forced regardless
+    /// of debounce state. Clamped to [`AUTO_SYNC_MAX_DELAY_MIN`]..[`AUTO_SYNC_MAX_DELAY_MAX`].
+    #[serde(default)]
+    pub auto_sync_max_delay_seconds: Option<u64>,
     #[serde(default)]
     pub sync_direction: SyncDirection,
     #[serde(default)]
@@ -224,6 +232,10 @@ impl std::fmt::Debug for SyncSettings {
                 &self.auto_sync_debounce_seconds,
             )
             .field("auto_sync_failure", &self.auto_sync_failure)
+            .field(
+                "auto_sync_max_delay_seconds",
+                &self.auto_sync_max_delay_seconds,
+            )
             .field("sync_direction", &self.sync_direction)
             .field(
                 "clipboard_auto_clear_seconds",
@@ -252,6 +264,7 @@ impl Clone for SyncSettings {
             auto_sync: self.auto_sync,
             auto_sync_debounce_seconds: self.auto_sync_debounce_seconds,
             auto_sync_failure: self.auto_sync_failure.clone(),
+            auto_sync_max_delay_seconds: self.auto_sync_max_delay_seconds,
             sync_direction: self.sync_direction.clone(),
             clipboard_auto_clear_seconds: self.clipboard_auto_clear_seconds,
             sync_limit: self.sync_limit,
@@ -272,6 +285,16 @@ impl SyncSettings {
             .auto_sync_debounce_seconds
             .clamp(AUTO_SYNC_DEBOUNCE_MIN, AUTO_SYNC_DEBOUNCE_MAX);
         std::time::Duration::from_secs(clamped)
+    }
+
+    /// Returns the effective auto-sync max delay duration, clamped to
+    /// [`AUTO_SYNC_MAX_DELAY_MIN`]..[`AUTO_SYNC_MAX_DELAY_MAX`].
+    pub fn auto_sync_max_delay(&self) -> std::time::Duration {
+        let secs = self
+            .auto_sync_max_delay_seconds
+            .unwrap_or(300)
+            .clamp(AUTO_SYNC_MAX_DELAY_MIN, AUTO_SYNC_MAX_DELAY_MAX);
+        std::time::Duration::from_secs(secs)
     }
 }
 
@@ -396,6 +419,7 @@ impl Default for SyncSettings {
             auto_sync: false,
             auto_sync_debounce_seconds: 2,
             auto_sync_failure: AutoSyncFailureMode::default(),
+            auto_sync_max_delay_seconds: None,
             sync_direction: SyncDirection::default(),
             clipboard_auto_clear_seconds: None,
             sync_limit: None,
@@ -560,6 +584,7 @@ mod tests {
             auto_sync: true,
             auto_sync_debounce_seconds: 5,
             auto_sync_failure: AutoSyncFailureMode::Error,
+            auto_sync_max_delay_seconds: Some(60),
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(2000),
@@ -733,6 +758,7 @@ sync_direction = "Bidirectional"
             auto_sync: true,
             auto_sync_debounce_seconds: 5,
             auto_sync_failure: AutoSyncFailureMode::Error,
+            auto_sync_max_delay_seconds: Some(120),
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(500),
@@ -761,6 +787,7 @@ sync_direction = "Bidirectional"
             auto_sync: true,
             auto_sync_debounce_seconds: 10,
             auto_sync_failure: AutoSyncFailureMode::Ignore,
+            auto_sync_max_delay_seconds: None,
             sync_direction: SyncDirection::Push,
             clipboard_auto_clear_seconds: Some(60),
             sync_limit: Some(500),

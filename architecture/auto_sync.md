@@ -78,6 +78,8 @@ pub struct AutoSyncPolicy {
 
 Resolved once per command invocation from `SyncSettings`. Worker uses an internal copy created from `get_sync_settings()` at startup; the parent uses a short-lived resolved copy.
 
+**Note:** `max_delay` is a separate config from `debounce`. `debounce` controls the quiet period (how long to wait after the last change), while `max_delay` caps the total elapsed time before forcing a sync attempt — even if changes continue to arrive. This prevents indefinite starvation under continuous mutations.
+
 ### MutationKind
 
 ```rust
@@ -249,7 +251,7 @@ integrity = "crc32:441c462e"
 - Schema `2` — v1 markers migrate transparently on load.
 - Monotonic `generation` increments per `record_pending_mutation` (the only writer). **Release 5E corrective:** `mark_pending` is module-private; all generation writes go through `record_pending_mutation` under `PendingTxnGuard`.
 - `clear_if_generation_matches(observed_generation)` returns typed `ConditionalClearResult` (Cleared/Missing/GenerationChanged); stale workers cannot clobber newer state. **Release 5E corrective:** the read-compare-delete is atomic under `PendingTxnGuard`.
-- `created_at_unix_ms` records when the marker was written; >5 minute age → cleared by `startup_recover_pending` only after re-checking the lock state.
+- `created_at_unix_ms` records when the marker was written. **Phase 02:** startup recovery is read-only with respect to generation — valid pending work is recoverable regardless of age, not just within 5 minutes.
 - `integrity` is `crc32:<hex>` over all behavior-driving fields (schema, generation, created_at_unix_ms, snapshot) — rejects tampered or corrupted files.
 - Written atomically via unique temp file per transaction (`pending_lock::unique_temp_path`) + rename + fsync + directory fsync.
 - No secrets, commands, or snippet content in the file.
@@ -336,11 +338,10 @@ Child (snp auto-sync-worker --state-dir ...)
   |     |-- AlreadyHeld -> NothingToDo (another sync is in progress; pending preserved)
   |-- read_state_from_dir(state_dir) -> PendingState{generation, timestamp, snapshot}
   |-- DEBOUNCE LOOP (bounded by max_lifetime, default 5 minutes):
-  |     |-- compute_deadline(observed_timestamp, policy.debounce, start, max_lifetime)
-  |     |-- wait_for_quiet(state_dir, observed_generation, deadline, ...)
+  |     |-- debounce(state_dir, observed_generation, policy.debounce, max_delay, clock) -> DebounceResult
   |           (reloads marker every ≤250ms; if a newer generation appears,
   |            this iteration observes the change via reload and may restart
-  |            the loop with the new generation)
+  |            the loop with the new generation; returns the latest observed state)
   |     |-- execute_sync(state_dir, policy)
   |           |-- spawn::spawn_executor(state_dir)
   |           |     (snp auto-sync-execute --state-dir <dir>, NOT detached,
@@ -376,7 +377,7 @@ There is no in-process retry loop. The detached worker attempts one sync per gen
 - If sync succeeds but a newer generation is now on disk, the worker loops again to service the newer work.
 - If sync fails, the worker exits; the pending marker is preserved (generation unchanged).
 - The next `record_pending_mutation` from a future mutation will increment the generation, signaling that the next worker should service the new work.
-- `startup_recover_pending` clears stale pending state (>5 min) on next parent startup, then re-spawns a worker to retry.
+- `startup_recover_pending` always schedules a worker for valid pending work regardless of age; it no longer clears stale pending based on the 5-minute threshold alone.
 - On timeout, the executor subprocess is terminated (SIGTERM then SIGKILL) before the execution lock is released.
 
 For users who want stronger delivery guarantees, manual `snp sync` and `snp cron` remain the canonical recovery paths.
@@ -419,6 +420,10 @@ Alternatives evaluated:
 - **Detached one-shot worker with in-process sync** (Release 5D) — re-exec is portable and zero-cost IPC, but `tokio::time::timeout` around `spawn_blocking` does not cancel the underlying thread. Sync work could outlive the timeout.
 - **Detached worker + killable executor subprocess** (chosen, Release 5F) — re-exec is portable; the executor is a real child process that can be SIGTERM/SIGKILLed on timeout; shared `SyncExecutionLock` prevents concurrent sync across all callers.
 
+### Clock Trait for Testability
+
+The debounce and worker logic depends on wall-clock time (`Instant::now`, `thread::sleep`). To enable deterministic testing without real sleeps, the implementation uses a `Clock` trait that abstracts time sources. Production code uses a `RealClock`; tests inject a `ManualClock` that advances time programmatically. This avoids flaky time-dependent tests and allows precise control over debounce deadlines and max-delay boundaries in unit tests.
+
 ### Sync Target: Global
 
 `run_default_sync` syncs all configured libraries. The `MutationContext::library_id` field is retained for forward compatibility but currently unused.
@@ -426,6 +431,55 @@ Alternatives evaluated:
 ### Delivery Guarantees: Best-Effort
 
 Auto-sync is convenience, not durable delivery. The durable pending marker survives crash/restart, and `startup_recover_pending` clears stale state (>5 minutes). Manual `snp sync` and `snp cron` remain the recovery path for missed syncs.
+
+## Phase 02: Debounce and Max-Delay Semantics
+
+### DebounceResult
+
+The `debounce()` function returns a `DebounceResult` enum:
+
+```rust
+pub enum DebounceResult {
+    /// Quiet period elapsed with no new generations — safe to sync
+    /// the observed generation and snapshot.
+    Ready { generation: u64, snapshot: PendingSnapshot },
+    /// max_delay elapsed while changes were still arriving. Returns
+    /// the latest observed state so the caller can sync it.
+    MaxDelayReached { generation: u64, snapshot: PendingSnapshot },
+    /// No pending work found (marker cleared or missing).
+    NothingToDo,
+}
+```
+
+`Ready` fires when the quiet period (`debounce`) elapses without a new generation appearing. `MaxDelayReached` fires when the total elapsed time hits `max_delay`, even if changes continue to arrive — this prevents indefinite starvation under continuous mutations.
+
+### Separate debounce vs max_delay
+
+- **`debounce`** (quiet period): how long to wait after the *last* observed change before syncing. Resets every time a newer generation appears during the wait.
+- **`max_delay`** (bounded latency): absolute upper bound on total debounce time. When hit, the worker syncs the latest observed state immediately, regardless of whether the quiet period has elapsed.
+
+These are configured independently: `snp sync config --debounce 5 --max-delay 60`.
+
+### Preflight check before executor spawn
+
+Between debounce completion and executor spawn, the worker performs a preflight check:
+
+1. Re-reads the pending marker to confirm no newer generation appeared during the debounce-to-spawn window.
+2. If a newer generation is found, the worker loops back to debounce rather than spawning a stale executor.
+3. This closes a race condition where a mutation could arrive in the tiny window between debounce returning `Ready` and the executor subprocess starting.
+
+### Clock trait for deterministic testing
+
+All time-dependent operations (`Instant::now`, `thread::sleep`) go through a `Clock` trait:
+
+```rust
+pub trait Clock {
+    fn now(&self) -> Instant;
+    fn sleep(&self, duration: Duration);
+}
+```
+
+Production uses `RealClock`; tests inject `ManualClock` to advance time without real sleeps. This enables deterministic testing of debounce deadlines, max-delay boundaries, and worker lifecycle timing.
 
 ### Process Detachment
 
@@ -475,6 +529,9 @@ Diagnostics emitted:
 22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`.
 23. **Phase 01:** Disabled-policy worker exits with `NothingToDo` *before* touching pending state.
 24. **Phase 01:** Executor subprocess never references the execution lock; the worker owns it for the entire cycle.
+25. **Phase 02:** Startup recovery never increments generation and always schedules a worker for valid pending work regardless of age.
+26. **Phase 02:** Debounce returns the latest observed state, not the first state seen.
+27. **Phase 02:** Pre-executor preflight check closes the race between debounce completion and executor spawn.
 
 ## Hidden Subcommands
 

@@ -262,6 +262,7 @@ async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {
         auto_sync: false,
         auto_sync_debounce_seconds: 2,
         auto_sync_failure: snip_it::config::AutoSyncFailureMode::Warn,
+        auto_sync_max_delay_seconds: None,
         sync_direction: SyncDirection::Bidirectional,
         clipboard_auto_clear_seconds: None,
         sync_limit: None,

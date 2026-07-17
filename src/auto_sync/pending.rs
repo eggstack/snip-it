@@ -18,7 +18,7 @@ pub enum PendingSnapshot {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingState {
     pub generation: u64,
     pub snapshot: PendingSnapshot,
@@ -175,6 +175,20 @@ pub fn set_local_generation(state_dir: &Path, generation: u64) -> Result<(), Pen
         kind: MutationKind::SnippetCreate,
     };
     write_pending_state(state_dir, &path, generation, unix_now_ms(), snapshot)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn set_local_generation_with_timestamp(
+    state_dir: &Path,
+    generation: u64,
+    created_at_ms: u64,
+) -> Result<(), PendingError> {
+    let path = pending_path(state_dir);
+    let snapshot = PendingSnapshot::Mutation {
+        kind: MutationKind::SnippetCreate,
+    };
+    write_pending_state(state_dir, &path, generation, created_at_ms, snapshot)?;
     Ok(())
 }
 

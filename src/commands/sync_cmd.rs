@@ -336,6 +336,10 @@ pub fn run_config(
             "  auto_sync_debounce_seconds: {}",
             settings.auto_sync_debounce_seconds
         );
+        println!(
+            "  auto_sync_max_delay_seconds: {:?}",
+            settings.auto_sync_max_delay_seconds
+        );
         println!("  auto_sync_failure:        {}", settings.auto_sync_failure);
         println!(
             "  sync_enabled:             {}",

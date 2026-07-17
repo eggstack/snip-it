@@ -21,7 +21,7 @@ use crate::auto_sync::spawn;
 use crate::config::get_sync_settings;
 use std::path::Path;
 use std::process::ExitStatus;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerOutcome {
@@ -35,6 +35,39 @@ pub enum SpawnResult {
     Spawned,
     Suppressed,
     SpawnFailed,
+}
+
+pub trait Clock {
+    fn now_instant(&self) -> Instant;
+    fn now_unix_ms(&self) -> u64;
+    fn sleep(&self, duration: Duration);
+}
+
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_instant(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn now_unix_ms(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn sleep(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DebounceResult {
+    Ready(PendingState),
+    CancelledMarkerRemoved,
+    DeferredMaximumLifetime(PendingState),
+    Failed(String),
 }
 
 /// Spawns a detached worker to process any existing pending work.
@@ -87,7 +120,8 @@ pub fn run(state_dir: &Path) -> WorkerOutcome {
 
 fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy) -> WorkerOutcome {
     let _lock_keepalive = lock;
-    let start = Instant::now();
+    let clock = SystemClock;
+    let start = clock.now_instant();
     let max_lifetime = Duration::from_secs(policy::WORKER_MAX_LIFETIME_SECS);
 
     if !policy.enabled {
@@ -117,142 +151,245 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
         };
 
         let observed_generation = pending.generation;
-        let observed_timestamp = pending.created_at_unix_ms;
 
         tracing::info!(
             generation = observed_generation,
             "auto-sync worker starting cycle"
         );
 
-        if let Some(deadline) =
-            compute_deadline(observed_timestamp, policy.debounce, start, max_lifetime)
-            && let Err(e) = wait_for_quiet(
+        let initial_deadline = compute_deadline(
+            pending.created_at_unix_ms,
+            policy.debounce,
+            start,
+            max_lifetime,
+            &clock,
+        );
+
+        let observed = if let Some(deadline) = initial_deadline {
+            match debounce(
                 state_dir,
-                observed_generation,
+                pending,
                 deadline,
                 start,
                 max_lifetime,
-            )
-        {
-            tracing::warn!(error = %e, "auto-sync worker quiet-period wait failed");
-        }
+                policy.max_delay,
+                &clock,
+            ) {
+                DebounceResult::Ready(state) => state,
+                DebounceResult::CancelledMarkerRemoved => {
+                    tracing::info!(
+                        "auto-sync worker exiting: pending marker removed during debounce"
+                    );
+                    return WorkerOutcome::NothingToDo;
+                }
+                DebounceResult::DeferredMaximumLifetime(state) => {
+                    tracing::info!(
+                        generation = state.generation,
+                        "auto-sync worker: max delay reached, forcing sync"
+                    );
+                    state
+                }
+                DebounceResult::Failed(e) => {
+                    tracing::warn!(error = %e, "auto-sync worker debounce failed");
+                    return WorkerOutcome::Failed;
+                }
+            }
+        } else {
+            pending
+        };
 
-        let outcome = execute_sync(state_dir, policy);
+        match preflight_check(state_dir, observed.generation) {
+            Ok(latest) => {
+                let sync_observed = if latest.generation != observed.generation {
+                    tracing::info!(
+                        observed = observed.generation,
+                        latest = latest.generation,
+                        "auto-sync worker: preflight detected newer generation"
+                    );
+                    latest
+                } else {
+                    observed
+                };
 
-        match outcome {
-            WorkerOutcome::Success => {
-                let _ = pending::clear_if_generation_matches(state_dir, observed_generation);
-                tracing::info!(
-                    generation = observed_generation,
-                    "auto-sync worker cycle completed"
-                );
-            }
-            WorkerOutcome::Failed => {
-                let _ = pending::record_failure(state_dir, observed_generation, "unknown");
-            }
-            WorkerOutcome::NothingToDo => {
-                tracing::info!(
-                    generation = observed_generation,
-                    "auto-sync worker NothingToDo: pending preserved for next cycle"
-                );
-            }
-        }
+                let outcome = execute_sync(state_dir, policy);
 
-        match pending::read_state_from_dir(state_dir) {
-            Ok(current) if current.generation > observed_generation => {
-                tracing::info!(
-                    previous = observed_generation,
-                    current = current.generation,
-                    "auto-sync worker: newer generation detected, starting follow-up cycle"
-                );
-                continue;
+                match outcome {
+                    WorkerOutcome::Success => {
+                        let _ = pending::clear_if_generation_matches(
+                            state_dir,
+                            sync_observed.generation,
+                        );
+                        tracing::info!(
+                            generation = sync_observed.generation,
+                            "auto-sync worker cycle completed"
+                        );
+                    }
+                    WorkerOutcome::Failed => {
+                        let _ =
+                            pending::record_failure(state_dir, sync_observed.generation, "unknown");
+                    }
+                    WorkerOutcome::NothingToDo => {
+                        tracing::info!(
+                            generation = sync_observed.generation,
+                            "auto-sync worker NothingToDo: pending preserved for next cycle"
+                        );
+                    }
+                }
+
+                match pending::read_state_from_dir(state_dir) {
+                    Ok(current) if current.generation > sync_observed.generation => {
+                        tracing::info!(
+                            previous = sync_observed.generation,
+                            current = current.generation,
+                            "auto-sync worker: newer generation detected, starting follow-up cycle"
+                        );
+                        continue;
+                    }
+                    _ => return outcome,
+                }
             }
-            _ => return outcome,
+            Err(e) => {
+                tracing::info!(error = %e, "auto-sync worker preflight: nothing to do");
+                return WorkerOutcome::NothingToDo;
+            }
         }
     }
 }
 
-/// Computes the wall-clock instant at which the worker should begin sync
-/// for the observed generation.
-///
-/// Returns `None` if there is no need to wait (debounce is zero or
-/// already exceeded by the worker's lifetime budget).
 fn compute_deadline(
     observed_timestamp_ms: u64,
     debounce: Duration,
     start: Instant,
     max_lifetime: Duration,
+    clock: &dyn Clock,
 ) -> Option<Instant> {
-    let now = Instant::now();
+    let now = clock.now_instant();
     if debounce.is_zero() {
         return None;
     }
     let target_unix_ms = observed_timestamp_ms.saturating_add(debounce.as_millis() as u64);
-    let target = unix_ms_to_instant(target_unix_ms);
+    let target = unix_ms_to_instant(target_unix_ms, clock);
     let max_target = start
         .checked_add(max_lifetime)
         .unwrap_or_else(|| now.checked_add(max_lifetime).unwrap_or(now));
     Some(target.min(max_target))
 }
 
-/// Sleeps until the quiet-period deadline, reloading the marker on each
-/// wakeup. If the generation or timestamp changes, the deadline is
-/// recomputed. Returns an error string only on internal failures; the
-/// caller decides how to react.
-fn wait_for_quiet(
+pub fn debounce(
     state_dir: &Path,
-    observed_generation: u64,
+    observed: PendingState,
     initial_deadline: Instant,
     start: Instant,
     max_lifetime: Duration,
-) -> Result<(), String> {
+    max_delay: Duration,
+    clock: &dyn Clock,
+) -> DebounceResult {
     let mut deadline = initial_deadline;
     let max_target = start.checked_add(max_lifetime).unwrap_or(deadline);
+    let mut current = observed;
+
+    if clock.now_instant() >= max_target {
+        return DebounceResult::Ready(current);
+    }
 
     loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(());
-        }
-        if now >= max_target {
-            return Ok(());
+        let now = clock.now_instant();
+        if now >= deadline || now >= max_target {
+            match pending::read_state_from_dir(state_dir) {
+                Ok(latest) => {
+                    if latest.generation != current.generation {
+                        current = latest;
+                        let new_deadline = compute_deadline(
+                            current.created_at_unix_ms,
+                            current_debounce(state_dir),
+                            start,
+                            max_lifetime,
+                            clock,
+                        );
+                        if let Some(d) = new_deadline {
+                            deadline = d.min(max_target);
+                            continue;
+                        }
+                        return DebounceResult::Ready(current);
+                    }
+                    return DebounceResult::Ready(current);
+                }
+                Err(pending::PendingError::NotFound) => {
+                    return DebounceResult::CancelledMarkerRemoved;
+                }
+                Err(e) => {
+                    return DebounceResult::Failed(format!("{e}"));
+                }
+            }
         }
 
         let sleep_for = deadline.saturating_duration_since(now);
-        std::thread::sleep(sleep_for.min(Duration::from_millis(250)));
+        clock.sleep(sleep_for.min(Duration::from_millis(250)));
 
         match pending::read_state_from_dir(state_dir) {
-            Ok(current) => {
-                if current.generation > observed_generation {
-                    let policy = AutoSyncPolicy::resolve(&get_sync_settings());
-                    let next = compute_deadline(
+            Ok(current_state) => {
+                if current_state.generation > current.generation {
+                    current = current_state;
+                    let new_deadline = compute_deadline(
                         current.created_at_unix_ms,
-                        policy.debounce,
+                        current_debounce(state_dir),
                         start,
                         max_lifetime,
+                        clock,
                     );
-                    if let Some(next_deadline) = next {
-                        deadline = next_deadline.min(max_target);
+                    if let Some(d) = new_deadline {
+                        deadline = d.min(max_target);
                     } else {
-                        return Ok(());
+                        return DebounceResult::Ready(current);
                     }
+                } else if current_state.generation < current.generation {
+                    current = current_state;
                 }
             }
-            Err(pending::PendingError::NotFound) => return Ok(()),
-            Err(e) => return Err(format!("{e}")),
+            Err(pending::PendingError::NotFound) => {
+                return DebounceResult::CancelledMarkerRemoved;
+            }
+            Err(e) => {
+                return DebounceResult::Failed(format!("{e}"));
+            }
+        }
+
+        if start.elapsed() >= max_delay {
+            return DebounceResult::DeferredMaximumLifetime(current);
         }
     }
 }
 
-fn unix_ms_to_instant(target_unix_ms: u64) -> Instant {
-    let now_unix_ms = unix_now_ms();
+pub fn preflight_check(
+    state_dir: &Path,
+    _observed_generation: u64,
+) -> Result<PendingState, String> {
+    match pending::read_state_from_dir(state_dir) {
+        Ok(state) => Ok(state),
+        Err(pending::PendingError::NotFound) => {
+            Err("pending marker removed, nothing to do".to_string())
+        }
+        Err(e) => Err(format!("corrupt pending state: {e}")),
+    }
+}
+
+fn current_debounce(state_dir: &Path) -> Duration {
+    match pending::read_state_from_dir(state_dir) {
+        Ok(_) => get_sync_settings().auto_sync_debounce(),
+        Err(_) => Duration::ZERO,
+    }
+}
+
+fn unix_ms_to_instant(target_unix_ms: u64, clock: &dyn Clock) -> Instant {
+    let now_unix_ms = clock.now_unix_ms();
     if target_unix_ms <= now_unix_ms {
-        return Instant::now();
+        return clock.now_instant();
     }
     let delta = Duration::from_millis(target_unix_ms - now_unix_ms);
-    Instant::now()
+    clock
+        .now_instant()
         .checked_add(delta)
-        .unwrap_or_else(Instant::now)
+        .unwrap_or_else(|| clock.now_instant())
 }
 
 /// Performs the bounded sync attempt for the observed generation.
@@ -379,17 +516,17 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
         tracing::warn!(
             generation = current.generation,
             age_ms,
-            "startup recovery: stale pending marker; preserving for worker scheduling"
+            "startup recovery: stale pending marker; scheduling worker for recoverable work"
         );
-        Ok(Some(current))
     } else {
         tracing::info!(
             generation = current.generation,
             "startup recovery: pending state present; scheduling worker"
         );
-        let _ = schedule_existing_pending(state_dir);
-        Ok(Some(current))
     }
+
+    let _ = schedule_existing_pending(state_dir);
+    Ok(Some(current))
 }
 
 /// Generation-aware explicit-sync clearing.
@@ -436,7 +573,41 @@ pub mod policy {
 mod tests {
     use super::*;
     use crate::auto_sync::pending::PendingSnapshot;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    struct MockClock {
+        instant: Mutex<Instant>,
+        unix_ms: Mutex<u64>,
+    }
+
+    impl MockClock {
+        fn new(start_instant: Instant, start_unix_ms: u64) -> Self {
+            Self {
+                instant: Mutex::new(start_instant),
+                unix_ms: Mutex::new(start_unix_ms),
+            }
+        }
+
+        fn advance(&self, duration: Duration) {
+            let mut inst = self.instant.lock().unwrap();
+            *inst += duration;
+            let mut ms = self.unix_ms.lock().unwrap();
+            *ms += duration.as_millis() as u64;
+        }
+    }
+
+    impl Clock for MockClock {
+        fn now_instant(&self) -> Instant {
+            *self.instant.lock().unwrap()
+        }
+        fn now_unix_ms(&self) -> u64 {
+            *self.unix_ms.lock().unwrap()
+        }
+        fn sleep(&self, duration: Duration) {
+            self.advance(duration);
+        }
+    }
 
     #[test]
     fn test_nothing_to_do_without_pending() {
@@ -636,5 +807,180 @@ mod tests {
         force_kill_child(&mut child);
         let status = child.wait().unwrap();
         assert!(!status.success());
+    }
+
+    #[test]
+    fn test_debounce_zero_is_immediate() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        let deadline = start; // already at deadline (zero debounce means compute_deadline returns None, caller passes start)
+        let result = debounce(
+            dir.path(),
+            observed.clone(),
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(state.generation, observed.generation);
+            }
+            other => panic!("expected Ready, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_debounce_marker_removed_returns_cancelled() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        // Deadline is in the past so debounce checks the marker immediately.
+        let deadline = start - Duration::from_secs(10);
+        // Remove the marker before debounce reads it.
+        pending::clear(dir.path()).unwrap();
+        let result = debounce(
+            dir.path(),
+            observed,
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+        assert!(matches!(result, DebounceResult::CancelledMarkerRemoved));
+    }
+
+    #[test]
+    fn test_debounce_generation_change_promotes_observation() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(observed.generation, 1);
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        // max_delay reached immediately so debounce exits after first sleep/read cycle.
+        let max_delay = Duration::ZERO;
+        // Deadline far in the future so the sleep path is taken.
+        let deadline = start + Duration::from_secs(60);
+        // Arrive with a newer generation before debounce reads.
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+        let result = debounce(
+            dir.path(),
+            observed,
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+        match result {
+            DebounceResult::DeferredMaximumLifetime(state) => {
+                assert_eq!(state.generation, 2);
+            }
+            other => panic!("expected DeferredMaximumLifetime, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_preflight_check_returns_current_state() {
+        let dir = TempDir::new().unwrap();
+        let initial = pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let result = preflight_check(dir.path(), initial.generation).unwrap();
+        assert_eq!(result.generation, initial.generation);
+    }
+
+    #[test]
+    fn test_preflight_check_returns_error_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let result = preflight_check(dir.path(), 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("nothing to do"));
+    }
+
+    #[test]
+    fn test_startup_recover_always_schedules_worker() {
+        let dir = TempDir::new().unwrap();
+        // Create a marker with a stale timestamp (created >5 min ago).
+        let stale_ms = unix_now_ms() - pending::STALE_PENDING_THRESHOLD_MS - 60_000;
+        pending::set_local_generation_with_timestamp(dir.path(), 1, stale_ms).unwrap();
+        // startup_recover should return the stale state (not None) — it always recovers.
+        let result = startup_recover(dir.path()).unwrap();
+        assert!(result.is_some());
+        let state = result.unwrap();
+        assert_eq!(state.generation, 1);
+    }
+
+    #[test]
+    fn test_debounce_result_ready_equality() {
+        let a = DebounceResult::Ready(PendingState {
+            generation: 1,
+            snapshot: PendingSnapshot::None,
+            created_at_unix_ms: 0,
+        });
+        let b = DebounceResult::Ready(PendingState {
+            generation: 1,
+            snapshot: PendingSnapshot::None,
+            created_at_unix_ms: 0,
+        });
+        assert_eq!(a, b);
+        assert_ne!(
+            DebounceResult::CancelledMarkerRemoved,
+            DebounceResult::Failed("x".into())
+        );
+    }
+
+    #[test]
+    fn test_clock_system_clock_methods() {
+        let clock = SystemClock;
+        let t1 = clock.now_instant();
+        let ms1 = clock.now_unix_ms();
+        std::thread::sleep(Duration::from_millis(10));
+        let t2 = clock.now_instant();
+        let ms2 = clock.now_unix_ms();
+        assert!(t2 >= t1);
+        assert!(ms2 >= ms1);
+        assert!(ms2 - ms1 < 1000);
     }
 }

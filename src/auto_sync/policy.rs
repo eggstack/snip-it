@@ -16,6 +16,7 @@ pub struct AutoSyncPolicy {
     pub failure_mode: AutoSyncFailureMode,
     pub max_retries: u32,
     pub sync_timeout: Duration,
+    pub max_delay: Duration,
 }
 
 impl AutoSyncPolicy {
@@ -30,6 +31,7 @@ impl AutoSyncPolicy {
                     .auto_sync_debounce_seconds
                     .clamp(1, MAX_SYNC_TIMEOUT_SECS),
             ),
+            max_delay: settings.auto_sync_max_delay(),
         }
     }
 
@@ -46,6 +48,7 @@ impl Default for AutoSyncPolicy {
             failure_mode: AutoSyncFailureMode::Warn,
             max_retries: DEFAULT_MAX_RETRIES,
             sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
+            max_delay: Duration::from_secs(300),
         }
     }
 }
