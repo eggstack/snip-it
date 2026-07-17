@@ -24,8 +24,17 @@ pub struct MutationContext {
 pub enum AutoSyncNotificationResult {
     Disabled,
     Suppressed,
-    Scheduled { generation: u64 },
-    SchedulingFailed { generation: Option<u64> },
+    /// Pending intent recorded but no worker scheduled (auto-sync disabled,
+    /// sync account exists).
+    PendingRecorded {
+        generation: u64,
+    },
+    Scheduled {
+        generation: u64,
+    },
+    SchedulingFailed {
+        generation: Option<u64>,
+    },
 }
 
 pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult {
@@ -51,7 +60,7 @@ pub fn notify_local_mutation(
     policy: &AutoSyncPolicy,
     context: MutationContext,
 ) -> AutoSyncNotificationResult {
-    if !policy.should_trigger() {
+    if !policy.sync_configured {
         return AutoSyncNotificationResult::Disabled;
     }
 
@@ -68,15 +77,22 @@ pub fn notify_local_mutation(
     let snapshot = PendingSnapshot::Mutation { kind: context.kind };
 
     match pending::record_pending_mutation(&state_dir, snapshot) {
-        Ok(marked) => match schedule_after_record(&state_dir, &marked) {
-            SpawnResult::Spawned => AutoSyncNotificationResult::Scheduled {
-                generation: marked.generation,
-            },
-            SpawnResult::Suppressed => AutoSyncNotificationResult::Suppressed,
-            SpawnResult::SpawnFailed => AutoSyncNotificationResult::SchedulingFailed {
-                generation: Some(marked.generation),
-            },
-        },
+        Ok(marked) => {
+            if !policy.should_trigger() {
+                return AutoSyncNotificationResult::PendingRecorded {
+                    generation: marked.generation,
+                };
+            }
+            match schedule_after_record(&state_dir, &marked) {
+                SpawnResult::Spawned => AutoSyncNotificationResult::Scheduled {
+                    generation: marked.generation,
+                },
+                SpawnResult::Suppressed => AutoSyncNotificationResult::Suppressed,
+                SpawnResult::SpawnFailed => AutoSyncNotificationResult::SchedulingFailed {
+                    generation: Some(marked.generation),
+                },
+            }
+        }
         Err(e) => {
             tracing::warn!(error = %e, "failed to record auto-sync pending generation");
             apply_scheduling_failure_policy(policy);
@@ -185,6 +201,7 @@ mod tests {
     #[test]
     fn test_sync_merge_origin_returns_suppressed() {
         let policy = AutoSyncPolicy {
+            sync_configured: true,
             enabled: true,
             ..AutoSyncPolicy::default()
         };
@@ -308,5 +325,37 @@ mod tests {
     fn test_subcommand_tag_debug() {
         let debug = format!("{:?}", SubcommandTag::AutoSyncWorker);
         assert_eq!(debug, "AutoSyncWorker");
+    }
+
+    #[test]
+    fn test_sync_configured_but_auto_sync_disabled_records_pending() {
+        let policy = AutoSyncPolicy {
+            sync_configured: true,
+            enabled: false,
+            ..AutoSyncPolicy::default()
+        };
+        let result = notify_local_mutation(
+            &policy,
+            MutationContext {
+                kind: MutationKind::SnippetCreate,
+                origin: MutationOrigin::User,
+                library_id: None,
+            },
+        );
+        match &result {
+            AutoSyncNotificationResult::PendingRecorded { generation } => {
+                assert!(*generation >= 1, "generation must be at least 1");
+            }
+            other => panic!("expected PendingRecorded, got {other:?}"),
+        }
+        // The pending marker must exist on disk.
+        let state_dir = derive_state_dir();
+        let pending_path = state_dir.join("auto-sync-pending.toml");
+        assert!(
+            pending_path.exists(),
+            "pending marker must exist on disk when sync is configured but auto_sync is disabled"
+        );
+        // Clean up the marker so it doesn't leak into other tests.
+        let _ = std::fs::remove_file(&pending_path);
     }
 }

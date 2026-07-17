@@ -6648,7 +6648,22 @@ fn test_auto_sync_new_creates_pending_marker() {
 #[test]
 fn test_auto_sync_disabled_no_pending_marker() {
     let (_tmp, config_dir) = setup_test_env();
-    // No sync.toml — auto_sync defaults to false.
+    // Write sync.toml with sync enabled but auto_sync disabled.
+    let sync_path = config_dir.join("sync.toml");
+    fs::write(
+        &sync_path,
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:1"
+api_key = "test-api-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+auto_sync_debounce_seconds = 0
+auto_sync_failure = "warn"
+"#,
+    )
+    .unwrap();
     create_test_library_for_auto_sync(&config_dir, "no-sync-test");
 
     let mut cmd = snp_in(&config_dir);
@@ -6664,11 +6679,12 @@ fn test_auto_sync_disabled_no_pending_marker() {
 
     assert!(output.status.success());
 
-    // No pending marker should exist.
+    // Pending marker IS created when sync is configured but auto_sync is disabled.
     let pending_path = config_dir.join("auto-sync-pending.toml");
     assert!(
-        !pending_path.exists(),
-        "pending marker should NOT exist when auto-sync is disabled"
+        pending_path.exists(),
+        "pending marker should exist when sync is configured but auto_sync is disabled; \
+         the mutation must not be lost"
     );
 }
 

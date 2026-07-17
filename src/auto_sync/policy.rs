@@ -11,6 +11,9 @@ pub const WORKER_MAX_LIFETIME_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct AutoSyncPolicy {
+    /// Whether a sync account is configured (`settings.enabled`).
+    pub sync_configured: bool,
+    /// Whether auto-sync is actively running (`settings.auto_sync && settings.enabled`).
     pub enabled: bool,
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
@@ -22,6 +25,7 @@ pub struct AutoSyncPolicy {
 impl AutoSyncPolicy {
     pub fn resolve(settings: &SyncSettings) -> Self {
         Self {
+            sync_configured: settings.enabled,
             enabled: settings.auto_sync && settings.enabled,
             debounce: settings.auto_sync_debounce(),
             failure_mode: settings.auto_sync_failure.clone(),
@@ -43,6 +47,7 @@ impl AutoSyncPolicy {
 impl Default for AutoSyncPolicy {
     fn default() -> Self {
         Self {
+            sync_configured: false,
             enabled: false,
             debounce: Duration::from_secs(2),
             failure_mode: AutoSyncFailureMode::Warn,
@@ -164,6 +169,7 @@ mod tests {
     fn test_policy_disabled_by_default() {
         let settings = SyncSettings::default();
         let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(!policy.sync_configured);
         assert!(!policy.enabled);
         assert!(!policy.should_trigger());
     }
@@ -174,12 +180,25 @@ mod tests {
         settings.enabled = false;
         settings.auto_sync = true;
         let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(!policy.sync_configured);
         assert!(!policy.enabled);
 
         settings.enabled = true;
         let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(policy.sync_configured);
         assert!(policy.enabled);
         assert!(policy.should_trigger());
+    }
+
+    #[test]
+    fn test_sync_configured_without_auto_sync() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = false;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(policy.sync_configured);
+        assert!(!policy.enabled);
+        assert!(!policy.should_trigger());
     }
 
     #[test]
@@ -218,6 +237,7 @@ mod tests {
     #[test]
     fn test_default_policy_is_disabled() {
         let policy = AutoSyncPolicy::default();
+        assert!(!policy.sync_configured);
         assert!(!policy.enabled);
         assert_eq!(policy.debounce, Duration::from_secs(2));
         assert_eq!(policy.failure_mode, AutoSyncFailureMode::Warn);
@@ -277,5 +297,74 @@ mod tests {
         ] {
             assert_eq!(FailureClass::from_code(class.as_code()), class);
         }
+    }
+
+    #[test]
+    fn test_re_enable_auto_sync_preserves_pending_intent() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = false;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(
+            policy.sync_configured,
+            "sync_configured must remain true when auto_sync is disabled but sync is enabled"
+        );
+
+        settings.auto_sync = true;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(
+            policy.sync_configured,
+            "sync_configured must remain true after re-enabling auto_sync"
+        );
+        assert!(
+            policy.enabled,
+            "enabled must be true after re-enabling auto_sync"
+        );
+    }
+
+    #[test]
+    fn test_manual_sync_works_while_auto_sync_disabled() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = false;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(
+            policy.sync_configured,
+            "sync_configured must be true so manual sync can use it"
+        );
+        assert!(
+            !policy.enabled,
+            "enabled must be false when auto_sync is disabled"
+        );
+        assert!(
+            !policy.should_trigger(),
+            "should_trigger must be false when auto_sync is disabled"
+        );
+    }
+
+    #[test]
+    fn test_malformed_settings_result_in_failure_not_disable() {
+        let mut settings = SyncSettings::default();
+        settings.enabled = true;
+        settings.auto_sync = true;
+        settings.auto_sync_debounce_seconds = u64::MAX;
+        let policy = AutoSyncPolicy::resolve(&settings);
+        assert!(
+            policy.sync_configured,
+            "sync_configured must remain true despite malformed debounce"
+        );
+        assert!(
+            policy.enabled,
+            "enabled must remain true despite malformed debounce"
+        );
+        assert_eq!(
+            policy.debounce,
+            std::time::Duration::from_secs(MAX_DEBOUNCE_SECS),
+            "debounce must be clamped to MAX"
+        );
+        assert!(
+            !policy.sync_timeout.is_zero(),
+            "sync_timeout must be non-zero despite malformed debounce"
+        );
     }
 }

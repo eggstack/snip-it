@@ -502,6 +502,10 @@ fn force_kill_child(child: &mut std::process::Child) {
 /// Loads the pending marker. If absent, nothing to do. If present, the
 /// marker is preserved (old valid work is not silently discarded); the
 /// caller may spawn a worker through `schedule_existing_pending`.
+///
+/// If the execution lock is already held (another sync in progress),
+/// scheduling is skipped — the active worker or foreground sync will
+/// handle the pending state.
 pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending::PendingError> {
     let pending_path = pending::pending_path(state_dir);
     if !pending_path.exists() {
@@ -509,6 +513,21 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
     }
 
     let current = pending::read_state_from_dir(state_dir)?;
+
+    // Check if the execution lock is already held by another process.
+    // If so, skip scheduling — the active holder will handle pending work.
+    let lock_path = execution_lock::execution_lock_path(state_dir);
+    if let Some(contents) = execution_lock::inspect(&lock_path)
+        && execution_lock::process_alive(contents.pid)
+    {
+        tracing::info!(
+            generation = current.generation,
+            owner_pid = contents.pid,
+            "startup recovery: execution lock held; skipping scheduling (active sync in progress)"
+        );
+        return Ok(Some(current));
+    }
+
     let now_ms = unix_now_ms();
     let age_ms = now_ms.saturating_sub(current.created_at_unix_ms);
 
@@ -982,5 +1001,369 @@ mod tests {
         assert!(t2 >= t1);
         assert!(ms2 >= ms1);
         assert!(ms2 - ms1 < 1000);
+    }
+
+    // ── Debounce tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_one_mutation_produces_one_ready_state() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(observed.generation, 1);
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        let deadline = start;
+        let result = debounce(
+            dir.path(),
+            observed.clone(),
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(
+                    state.generation, 1,
+                    "Ready must carry the correct generation"
+                );
+            }
+            other => panic!("expected Ready, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rapid_mutations_produce_single_ready_for_final_generation() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(observed.generation, 1);
+
+        for i in 0..5 {
+            pending::record_pending_mutation(
+                dir.path(),
+                PendingSnapshot::Mutation {
+                    kind: if i % 2 == 0 {
+                        crate::auto_sync::policy::MutationKind::SnippetCreate
+                    } else {
+                        crate::auto_sync::policy::MutationKind::SnippetUpdate
+                    },
+                },
+            )
+            .unwrap();
+        }
+
+        let latest = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(
+            latest.generation, 6,
+            "final generation must be 6 after 5 additional mutations"
+        );
+
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        let deadline = start + Duration::from_secs(1);
+
+        let result = debounce(
+            dir.path(),
+            observed,
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(
+                    state.generation, 6,
+                    "Ready must return the final generation, not intermediate ones"
+                );
+            }
+            other => panic!("expected Ready with generation 6, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_wall_clock_skew_does_not_panic() {
+        let dir = TempDir::new().unwrap();
+        pending::set_local_generation_with_timestamp(dir.path(), 1, u64::MAX - 1000).unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(observed.generation, 1);
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        let deadline = start + Duration::from_secs(1);
+
+        let result = debounce(
+            dir.path(),
+            observed,
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(
+                    state.generation, 1,
+                    "Ready must return without panicking on extreme timestamps"
+                );
+            }
+            other => panic!("expected Ready, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_debounce_returns_latest_generation_not_initial() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let initial = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(initial.generation, 1);
+
+        let clock = MockClock::new(Instant::now(), 1_000_000);
+        let start = clock.now_instant();
+        let max_lifetime = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(300);
+        let deadline = start + Duration::from_secs(60);
+
+        // Before the deadline, update to gen 2.
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+
+        let result = debounce(
+            dir.path(),
+            initial,
+            deadline,
+            start,
+            max_lifetime,
+            max_delay,
+            &clock,
+        );
+
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(
+                    state.generation, 2,
+                    "Ready must return the latest generation, not the initial one"
+                );
+            }
+            other => panic!("expected Ready with generation 2, got {:?}", other),
+        }
+    }
+
+    // ── Active-sync tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_follow_up_cycle_detects_newer_generation() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let initial = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(initial.generation, 1);
+
+        // Simulate a sync completing for gen 1, but a newer mutation arrived.
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+
+        let current = pending::read_state_from_dir(dir.path()).unwrap();
+        assert!(
+            current.generation > initial.generation,
+            "follow-up detection: current generation must be newer than initial"
+        );
+        assert_eq!(
+            current.generation, 2,
+            "follow-up detection: newer generation must be 2"
+        );
+    }
+
+    #[test]
+    fn test_failed_sync_preserves_newer_generation() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+
+        let current = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(current.generation, 2);
+
+        // Simulate a failed sync on gen 1 — it must not touch gen 2.
+        pending::record_failure(dir.path(), 1, "network").unwrap();
+
+        let after = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(
+            after.generation, 2,
+            "failed sync on gen 1 must preserve gen 2"
+        );
+        assert_eq!(
+            after.snapshot,
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
+            }
+        );
+    }
+
+    /// Workstream F: mutation during active sync triggers a follow-up cycle.
+    ///
+    /// The worker observes gen 1, launches sync. While sync is active, gen 2
+    /// arrives. On successful sync, the worker conditionally clears only gen 1
+    /// (which succeeds since gen 2 is now current, so gen 1 is already gone
+    /// or the conditional clear preserves gen 2). The worker then reads the
+    /// marker and detects a newer generation, starting a follow-up cycle.
+    #[test]
+    fn test_auto_sync_worker_follows_up_on_newer_generation() {
+        let dir = TempDir::new().unwrap();
+
+        // Step 1: Create gen 1 — the worker observes this and launches sync.
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(observed.generation, 1);
+
+        // Step 2: While sync is active, gen 2 arrives (mutation during sync).
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+
+        // Step 3: Sync completes successfully — conditional clear of gen 1.
+        // Since gen 2 is current, clear_if_generation_matches(gen 1) returns
+        // GenerationChanged (gen 1 is not the current generation). The marker
+        // is preserved with gen 2.
+        let clear_result =
+            pending::clear_if_generation_matches(dir.path(), observed.generation).unwrap();
+        assert!(
+            matches!(
+                clear_result,
+                pending::ConditionalClearResult::GenerationChanged { current: 2 }
+            ),
+            "clearing gen 1 when gen 2 is current must return GenerationChanged"
+        );
+
+        // Step 4: Worker reads the marker for follow-up detection (lines 239-249).
+        let current = pending::read_state_from_dir(dir.path()).unwrap();
+        assert!(
+            current.generation > observed.generation,
+            "follow-up detection: current generation ({}) must be newer than observed ({})",
+            current.generation,
+            observed.generation
+        );
+        assert_eq!(current.generation, 2);
+        assert_eq!(
+            current.snapshot,
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
+            }
+        );
+    }
+
+    /// Workstream G: startup recovery skips scheduling when execution lock is held.
+    ///
+    /// If another process (worker, manual sync, cron) already holds the
+    /// execution lock, startup_recover must return the pending state but
+    /// NOT schedule a duplicate worker.
+    #[test]
+    fn test_startup_recover_skips_scheduling_when_lock_held() {
+        let dir = TempDir::new().unwrap();
+
+        // Create pending state.
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let before_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
+
+        // Acquire the execution lock (simulating an active sync).
+        let _lock = crate::auto_sync::execution_lock::try_acquire(dir.path()).unwrap();
+        assert!(
+            crate::auto_sync::execution_lock::execution_lock_path(dir.path()).exists(),
+            "execution lock must exist while held"
+        );
+
+        // startup_recover should return the pending state but skip scheduling.
+        let result = startup_recover(dir.path()).unwrap();
+        assert!(
+            result.is_some(),
+            "pending state must be returned even when lock is held"
+        );
+        let state = result.unwrap();
+        assert_eq!(state.generation, 1);
+
+        // The pending marker must be byte-for-byte unchanged — no scheduling occurred.
+        let after_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
+        assert_eq!(
+            before_bytes, after_bytes,
+            "pending marker must not be mutated when execution lock is held"
+        );
+
+        // Verify the lock is still held (we didn't release it).
+        assert!(
+            crate::auto_sync::execution_lock::execution_lock_path(dir.path()).exists(),
+            "execution lock must remain held after startup_recover"
+        );
     }
 }

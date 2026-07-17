@@ -302,19 +302,17 @@ fn test_unreachable_server_preserves_pending_after_local_mutation() {
     );
 }
 
-/// A disabled auto-sync policy (`auto_sync = false`) means the
-/// parent must NOT record a pending marker for the mutation — there's
-/// no worker that will service it. The local mutation still commits.
-///
-/// This is the inverse of the "preserves pending" tests: when the
-/// policy is disabled, `notify_mutation` returns early and no
-/// generation is recorded.
+/// When auto-sync is disabled (`auto_sync = false`) but sync is
+/// configured (`enabled = true`), the parent MUST record a pending
+/// marker so that the mutation is not lost. No worker is scheduled,
+/// but the pending intent is preserved for manual `snp sync` or
+/// future re-enablement.
 #[test]
-fn test_disabled_config_does_not_record_pending_marker() {
+fn test_disabled_auto_sync_records_pending_marker() {
     let (_tmp, config_dir) = setup_test_env();
     create_closure_library(&config_dir);
 
-    // Write sync.toml with auto-sync disabled at the policy level.
+    // Write sync.toml with auto_sync disabled at the policy level.
     let sync_path = config_dir.join("sync.toml");
     fs::write(
         &sync_path,
@@ -331,22 +329,22 @@ auto_sync_failure = "warn"
     )
     .unwrap();
 
-    new_snippet(&config_dir, "disabled-config");
+    new_snippet(&config_dir, "disabled-auto-sync");
 
     // Local mutation is still committed.
     let lib_path = config_dir.join("libraries").join("closure.toml");
     assert!(lib_path.exists(), "library file must be created locally");
     let content = fs::read_to_string(&lib_path).unwrap();
     assert!(
-        content.contains("disabled-config"),
+        content.contains("disabled-auto-sync"),
         "library file must contain the new snippet"
     );
 
-    // Pending marker is NOT created when auto_sync is disabled.
+    // Pending marker IS created when auto_sync is disabled but sync is configured.
     assert!(
-        !pending_marker(&config_dir).exists(),
-        "pending marker must not be created when auto_sync policy is disabled; \
-         there is no worker to service it"
+        pending_marker(&config_dir).exists(),
+        "pending marker must be created when sync is configured but auto_sync is disabled; \
+         the mutation must not be lost"
     );
 }
 
@@ -699,6 +697,11 @@ fn test_worker_nothing_to_do_does_not_clear_pending() {
 /// Disabled-policy worker exits before touching pending state.
 /// Verified structurally: the worker checks `!policy.enabled` and
 /// returns `NothingToDo` early without entering the loop body.
+///
+/// Note: this tests the *worker* subprocess, not the parent notification.
+/// The parent may have already recorded a pending marker (when sync is
+/// configured but auto_sync is disabled); the worker still exits early
+/// because its `policy.enabled` is false.
 #[test]
 fn test_disabled_policy_exits_before_pending_operations() {
     let worker_src = include_str!("../src/auto_sync/worker.rs");

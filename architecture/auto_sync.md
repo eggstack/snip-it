@@ -18,8 +18,10 @@ mutation command
   -> notify_mutation(kind, origin)
   -> AutoSyncPolicy::resolve()
   -> origin check (SyncMerge -> suppress)
+  -> sync_configured check: if false -> Disabled (no sync account configured)
   -> pending::record_pending_mutation(state_dir, snapshot) -> PendingState{generation, ...}
      (the ONLY writer/incrementer of the pending generation)
+  -> if auto_sync disabled: return PendingRecorded{generation} (intent preserved, no worker scheduled)
   -> worker::schedule_existing_pending(state_dir)
      -> spawn::spawn_worker(current_exe, "auto-sync-worker", --state-dir)
         -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
@@ -68,15 +70,17 @@ The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 
 ```rust
 pub struct AutoSyncPolicy {
-    pub enabled: bool,
+    pub sync_configured: bool,  // settings.enabled — sync account exists
+    pub enabled: bool,          // settings.auto_sync && settings.enabled
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
     pub max_retries: u32,
     pub sync_timeout: Duration,
+    pub max_delay: Duration,
 }
 ```
 
-Resolved once per command invocation from `SyncSettings`. Worker uses an internal copy created from `get_sync_settings()` at startup; the parent uses a short-lived resolved copy.
+Resolved once per command invocation from `SyncSettings`. `sync_configured` indicates that a sync account is configured (`enabled = true` in sync.toml), regardless of whether auto-sync execution is enabled. The parent uses `sync_configured` to decide whether to record pending intent (preserving synchronization intent even when auto-sync is disabled). The worker uses `enabled` to decide whether to actually perform sync.
 
 **Note:** `max_delay` is a separate config from `debounce`. `debounce` controls the quiet period (how long to wait after the last change), while `max_delay` caps the total elapsed time before forcing a sync attempt — even if changes continue to arrive. This prevents indefinite starvation under continuous mutations.
 
@@ -113,9 +117,12 @@ pub enum AutoSyncNotificationResult {
     Disabled,
     Suppressed,
     Scheduled { generation: u64 },
+    PendingRecorded { generation: u64 },
     SchedulingFailed { generation: Option<u64> },
 }
 ```
+
+`PendingRecorded` is returned when sync is configured but auto-sync execution is disabled — the pending marker is created (preserving intent) but no worker is scheduled.
 
 ### PendingState (Schema v2)
 
@@ -430,7 +437,7 @@ The debounce and worker logic depends on wall-clock time (`Instant::now`, `threa
 
 ### Delivery Guarantees: Best-Effort
 
-Auto-sync is convenience, not durable delivery. The durable pending marker survives crash/restart, and `startup_recover_pending` clears stale state (>5 minutes). Manual `snp sync` and `snp cron` remain the recovery path for missed syncs.
+Auto-sync is convenience, not durable delivery. The durable pending marker survives crash/restart, and `startup_recover_pending` always schedules a worker for valid pending work regardless of age. Manual `snp sync` and `snp cron` remain the recovery path for missed syncs. Pending intent is preserved even when auto-sync execution is disabled — re-enabling auto-sync or running manual sync recovers accumulated work.
 
 ## Phase 02: Debounce and Max-Delay Semantics
 
@@ -487,6 +494,20 @@ Production uses `RealClock`; tests inject `ManualClock` to advance time without 
 - Windows: `DETACHED_PROCESS | CREATE_NO_WINDOW` flags on `CreateProcess`.
 - All file descriptors are released; stdin/stdout/stderr are routed to `null` so the worker cannot interfere with a TTY.
 
+## Pending Discard (Reserved for Phase 04)
+
+When a user needs to abandon synchronization intent, an explicit discard operation is reserved for Phase 04. This is distinct from disabling auto-sync — disabled policy preserves pending intent; discard deliberately removes it.
+
+The generation-safe primitive `pending::clear_if_generation_matches(state_dir, observed_generation)` already exists and is used by both the worker and explicit sync paths. A future `snp sync discard` command would:
+
+1. Display the current pending generation to the user.
+2. Require confirmation unless `--force` is passed.
+3. Call `clear_if_generation_matches` with the observed generation.
+4. Refuse if the generation changed during confirmation (require retry).
+5. Record the discard as an advanced recovery action.
+
+This operation must never delete local snippet data — it only removes the pending synchronization marker.
+
 ## Doctor Integration
 
 `snp doctor --compatibility` inspects auto-sync state using the new path helpers:
@@ -529,9 +550,10 @@ Diagnostics emitted:
 22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`.
 23. **Phase 01:** Disabled-policy worker exits with `NothingToDo` *before* touching pending state.
 24. **Phase 01:** Executor subprocess never references the execution lock; the worker owns it for the entire cycle.
-25. **Phase 02:** Startup recovery never increments generation and always schedules a worker for valid pending work regardless of age.
+25. **Phase 02:** Startup recovery never increments generation and schedules a worker for valid pending work regardless of age — unless the execution lock is already held (active sync in progress), in which case scheduling is skipped.
 26. **Phase 02:** Debounce returns the latest observed state, not the first state seen.
 27. **Phase 02:** Pre-executor preflight check closes the race between debounce completion and executor spawn.
+28. **Phase 02:** Disabled auto-sync execution does not silently erase synchronization intent — pending marker is created when sync is configured, regardless of auto-sync setting.
 
 ## Hidden Subcommands
 
