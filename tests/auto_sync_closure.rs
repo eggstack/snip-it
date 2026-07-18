@@ -177,11 +177,16 @@ fn test_real_server_executor_clears_pending_after_server_change() {
     );
 
     // 5. The library_create mutation should leave a pending marker.
+    //    On Windows the subprocess may not have flushed the file before
+    //    returning, so poll briefly.
     let marker = pending_marker(&config_dir);
+    wait_until(Duration::from_secs(5), || marker.exists());
+    let lib_stderr = String::from_utf8_lossy(&lib_create_out.stderr);
     assert!(
         marker.exists(),
         "pending marker should exist after library_create mutation; \
-         auto-sync is enabled with a 5s debounce"
+         auto-sync is enabled with a 5s debounce\n\
+         library create stderr:\n{lib_stderr}"
     );
     let observed_gen = read_pending_generation(&config_dir).unwrap_or_else(|| {
         panic!(
