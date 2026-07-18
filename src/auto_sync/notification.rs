@@ -69,7 +69,6 @@ fn notify_local_mutation_with_dir(
     state_dir: &std::path::Path,
 ) -> AutoSyncNotificationResult {
     if !policy.sync_configured {
-        eprintln!("auto-sync notification: DISABLED (sync_configured=false)");
         return AutoSyncNotificationResult::Disabled;
     }
 
@@ -86,10 +85,6 @@ fn notify_local_mutation_with_dir(
 
     match pending::record_pending_mutation(state_dir, snapshot) {
         Ok(marked) => {
-            eprintln!(
-                "auto-sync notification: pending recorded gen={}",
-                marked.generation
-            );
             if !policy.should_trigger() {
                 return AutoSyncNotificationResult::PendingRecorded {
                     generation: marked.generation,
@@ -106,7 +101,6 @@ fn notify_local_mutation_with_dir(
             }
         }
         Err(e) => {
-            eprintln!("auto-sync notification: failed to record pending generation: {e}");
             tracing::warn!(error = %e, "failed to record auto-sync pending generation");
             apply_scheduling_failure_policy(policy);
             AutoSyncNotificationResult::SchedulingFailed { generation: None }
