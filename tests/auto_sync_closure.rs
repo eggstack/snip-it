@@ -182,11 +182,24 @@ fn test_real_server_executor_clears_pending_after_server_change() {
     let marker = pending_marker(&config_dir);
     wait_until(Duration::from_secs(5), || marker.exists());
     let lib_stderr = String::from_utf8_lossy(&lib_create_out.stderr);
+    let lib_stdout = String::from_utf8_lossy(&lib_create_out.stdout);
+    let sync_toml_content = fs::read_to_string(config_dir.join("sync.toml"))
+        .unwrap_or_else(|e| format!("<unreadable: {e}>"));
+    let config_entries: Vec<String> = fs::read_dir(&config_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         marker.exists(),
         "pending marker should exist after library_create mutation; \
          auto-sync is enabled with a 5s debounce\n\
-         library create stderr:\n{lib_stderr}"
+         library create stderr:\n{lib_stderr}\n\
+         library create stdout:\n{lib_stdout}\n\
+         config_dir entries: {config_entries:?}\n\
+         sync.toml content:\n{sync_toml_content}"
     );
     let observed_gen = read_pending_generation(&config_dir).unwrap_or_else(|| {
         panic!(
