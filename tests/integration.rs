@@ -740,7 +740,7 @@ fn test_new_editor_with_fake_editor() {
     let fake_editor = _tmp.path().join("fake_editor.py");
     fs::write(
         &fake_editor,
-        "import sys\nopen(sys.argv[1], 'w').write('editor content here\\n')\n",
+        "import sys\nopen(sys.argv[1], 'wb').write(b'editor content here\\n')\n",
     )
     .unwrap();
 
