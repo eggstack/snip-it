@@ -744,7 +744,7 @@ fn test_new_editor_with_fake_editor() {
     )
     .unwrap();
 
-    let editor_spec = format!("python3 {}", fake_editor.display());
+    let editor_spec = format!("python3 \"{}\"", fake_editor.display());
 
     let output = snp_in(&config_dir)
         .args(["new", "--editor", "--description", "editor test"])
@@ -778,7 +778,7 @@ fn test_new_editor_empty_content_rejected() {
     let fake_editor = _tmp.path().join("empty_editor.py");
     fs::write(&fake_editor, "import sys\nopen(sys.argv[1], 'w').close()\n").unwrap();
 
-    let editor_spec = format!("python3 {}", fake_editor.display());
+    let editor_spec = format!("python3 \"{}\"", fake_editor.display());
 
     let output = snp_in(&config_dir)
         .args(["new", "--editor", "--description", "empty test"])
@@ -812,7 +812,7 @@ fn test_new_editor_nonzero_exit_rejected() {
     let fake_editor = _tmp.path().join("fail_editor.py");
     fs::write(&fake_editor, "import sys\nsys.exit(1)\n").unwrap();
 
-    let editor_spec = format!("python3 {}", fake_editor.display());
+    let editor_spec = format!("python3 \"{}\"", fake_editor.display());
 
     let output = snp_in(&config_dir)
         .args([
@@ -2414,7 +2414,7 @@ fn test_golden_corpus_editor_preserves_all_commands() {
         // EDITOR is parsed by shell_words::split, so "python3 <path>"
         // splits into program=python3, args=[<path>]. The temp file is
         // appended as the final argument by the editor-spawn code.
-        let editor_spec = format!("python3 {}", editor_script.display());
+        let editor_spec = format!("python3 \"{}\"", editor_script.display());
 
         let output = snp_in(&config_dir)
             .args([
