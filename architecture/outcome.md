@@ -111,3 +111,46 @@ Unit tests in `src/outcome.rs` verify:
 - `ExecutionFailed` with a child code propagates that code
 - `PersistenceFailed` maps to general error (1)
 - All exit codes are distinct (no collisions)
+- `OutputContext` suppresses ANSI in machine modes
+- `OutputContext` strips ANSI sequences when `suppress_ansi()` is true
+
+## `OutputContext`
+
+The machine-output guard ensures stdout is not contaminated in
+non-interactive and machine-readable modes:
+
+```rust
+pub struct OutputContext {
+    pub mode: OutputMode,      // Human, Json, Csv, Raw, Field, Expanded
+    pub color: ColorPolicy,    // Auto, Always, Never
+    pub interactive: bool,
+}
+```
+
+### Rules
+
+| Rule | Enforcement |
+|------|-------------|
+| Data only on stdout | `write_stdout()` handles broken pipe gracefully |
+| Diagnostics on stderr | `diagnostic()` writes to stderr |
+| No ANSI in machine mode | `suppress_ansi()` returns true for machine modes |
+| No update notices | Commands check `ctx.is_machine_mode()` before printing |
+| No tracing on stdout | Tracing subscriber uses stderr |
+| No prompts | Machine modes never prompt |
+| Exact-byte output | `write_all()` without trailing newline |
+
+### Construction
+
+```rust
+OutputContext::human()   // Interactive, Auto color
+OutputContext::json()    // Machine, Never color
+OutputContext::csv()     // Machine, Never color
+OutputContext::raw()     // Machine, Never color
+OutputContext::field()   // Machine, Never color
+```
+
+### Integration
+
+Commands check `ctx.suppress_ansi()` before formatting output, and
+use `ctx.write_stdout()` for byte-safe output that handles broken pipe
+without noise or backtraces.

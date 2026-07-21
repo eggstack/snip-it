@@ -330,6 +330,22 @@ impl SnippetSelector {
     }
 }
 
+/// Sort snippet matches deterministically: library name → description → snippet ID.
+fn sort_matches(matches: &mut [SnippetMatch]) {
+    matches.sort_by(|a, b| {
+        a.library_name
+            .to_lowercase()
+            .cmp(&b.library_name.to_lowercase())
+            .then_with(|| {
+                a.snippet
+                    .description
+                    .to_lowercase()
+                    .cmp(&b.snippet.description.to_lowercase())
+            })
+            .then_with(|| a.snippet.id.cmp(&b.snippet.id))
+    });
+}
+
 /// Resolve a selector across potentially multiple libraries.
 ///
 /// This is the top-level entry point for non-TUI snippet resolution.
@@ -385,6 +401,9 @@ pub fn resolve_selector(selector: &SnippetSelector) -> SnipResult<SelectionResul
                     _ => {}
                 }
             }
+
+            // Deterministic tie-break: library name → description → snippet ID
+            sort_matches(&mut all_matches);
 
             match all_matches.len() {
                 0 => Ok(SelectionResult::NotFound),

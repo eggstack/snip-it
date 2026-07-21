@@ -1,10 +1,13 @@
 //! **Layer: Domain/Core**
 //!
-//! Public CLI outcome types and exit-code mapping.
+//! Public CLI outcome types, exit-code mapping, and machine-output guard.
 //!
-//! Provides [`CliOutcome`] for typed command results and [`exit_code`]
-//! for centralized exit-code mapping. Internal worker/executor codes
-//! remain hidden.
+//! Provides [`CliOutcome`] for typed command results, [`exit_code`]
+//! for centralized exit-code mapping, and [`OutputContext`] for
+//! enforcing machine-output purity rules. Internal worker/executor
+//! codes remain hidden.
+
+use std::io::Write;
 
 /// Typed application outcome for public CLI exit-code mapping.
 ///
@@ -84,6 +87,173 @@ impl CliOutcome {
     }
 }
 
+/// Color output policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorPolicy {
+    /// Use ANSI colors if terminal supports it (default).
+    #[default]
+    Auto,
+    /// Force ANSI color codes.
+    Always,
+    /// Never emit ANSI color codes.
+    Never,
+}
+
+/// Output mode for command results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputMode {
+    /// Human-readable output (default).
+    #[default]
+    Human,
+    /// Machine-readable JSON output.
+    Json,
+    /// Machine-readable CSV output.
+    Csv,
+    /// Raw byte output (no trailing newline).
+    Raw,
+    /// Field-specific output (no trailing newline).
+    Field,
+    /// Expanded variable output.
+    Expanded,
+}
+
+/// Application-level guard for machine-output purity.
+///
+/// Commands that produce machine output (`--json`, `--csv`, `--raw`,
+/// `--field`) should construct an `OutputContext` and use its guard
+/// methods to ensure stdout is not contaminated by ANSI codes, update
+/// notices, tracing output, or prompts.
+///
+/// # Rules
+///
+/// - Data only on stdout; diagnostics on stderr.
+/// - No ANSI unless explicitly requested in a human mode.
+/// - No update notices or auto-sync advisories on stdout.
+/// - No prompts in machine mode.
+/// - No progress spinners.
+/// - No tracing subscriber writing to stdout.
+/// - No extra newline in exact-byte modes (`Raw`, `Field`).
+/// - Broken pipe handled gracefully without backtrace/noise.
+/// - Serialization failure returns nonzero exit code.
+#[derive(Debug, Clone)]
+pub struct OutputContext {
+    /// The active output mode.
+    pub mode: OutputMode,
+    /// The color policy.
+    pub color: ColorPolicy,
+    /// Whether the output is going to an interactive terminal.
+    pub interactive: bool,
+}
+
+impl OutputContext {
+    /// Create a new output context with default settings.
+    pub fn human() -> Self {
+        Self {
+            mode: OutputMode::Human,
+            color: ColorPolicy::Auto,
+            interactive: true,
+        }
+    }
+
+    /// Create a context for JSON output.
+    pub fn json() -> Self {
+        Self {
+            mode: OutputMode::Json,
+            color: ColorPolicy::Never,
+            interactive: false,
+        }
+    }
+
+    /// Create a context for CSV output.
+    pub fn csv() -> Self {
+        Self {
+            mode: OutputMode::Csv,
+            color: ColorPolicy::Never,
+            interactive: false,
+        }
+    }
+
+    /// Create a context for raw byte output.
+    pub fn raw() -> Self {
+        Self {
+            mode: OutputMode::Raw,
+            color: ColorPolicy::Never,
+            interactive: false,
+        }
+    }
+
+    /// Create a context for field-specific output.
+    pub fn field() -> Self {
+        Self {
+            mode: OutputMode::Field,
+            color: ColorPolicy::Never,
+            interactive: false,
+        }
+    }
+
+    /// Returns `true` if the output mode is machine-readable.
+    pub fn is_machine_mode(&self) -> bool {
+        matches!(
+            self.mode,
+            OutputMode::Json | OutputMode::Csv | OutputMode::Raw | OutputMode::Field
+        )
+    }
+
+    /// Returns `true` if ANSI color should be suppressed.
+    pub fn suppress_ansi(&self) -> bool {
+        self.color == ColorPolicy::Never
+            || self.is_machine_mode()
+            || (self.color == ColorPolicy::Auto && !self.interactive)
+    }
+
+    /// Write raw bytes to stdout, handling broken pipe gracefully.
+    pub fn write_stdout(&self, data: &[u8]) -> std::io::Result<()> {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        match handle.write_all(data) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write a line to stdout (adds newline).
+    pub fn writeln(&self, text: &str) -> std::io::Result<()> {
+        let mut data = text.as_bytes().to_vec();
+        data.push(b'\n');
+        self.write_stdout(&data)
+    }
+
+    /// Write a diagnostic message to stderr.
+    pub fn diagnostic(&self, text: &str) {
+        let _ = writeln!(std::io::stderr(), "{text}");
+    }
+
+    /// Ensure no ANSI codes are present in machine mode output.
+    pub fn strip_ansi_if_needed(&self, text: &str) -> String {
+        if self.suppress_ansi() {
+            // Strip ANSI escape sequences
+            let mut result = String::with_capacity(text.len());
+            let mut chars = text.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    // Skip until 'm' (SGR sequence end) or non-control
+                    for next in chars.by_ref() {
+                        if next == 'm' {
+                            break;
+                        }
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+            result
+        } else {
+            text.to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +315,73 @@ mod tests {
     #[test]
     fn test_persistence_failed_uses_general_error() {
         assert_eq!(CliOutcome::PersistenceFailed.exit_code(), 1);
+    }
+
+    #[test]
+    fn test_output_context_human() {
+        let ctx = OutputContext::human();
+        assert_eq!(ctx.mode, OutputMode::Human);
+        assert!(!ctx.is_machine_mode());
+    }
+
+    #[test]
+    fn test_output_context_json_is_machine() {
+        let ctx = OutputContext::json();
+        assert!(ctx.is_machine_mode());
+        assert!(ctx.suppress_ansi());
+    }
+
+    #[test]
+    fn test_output_context_raw_is_machine() {
+        let ctx = OutputContext::raw();
+        assert!(ctx.is_machine_mode());
+    }
+
+    #[test]
+    fn test_output_context_field_is_machine() {
+        let ctx = OutputContext::field();
+        assert!(ctx.is_machine_mode());
+    }
+
+    #[test]
+    fn test_suppress_ansi_never_policy() {
+        let ctx = OutputContext {
+            color: ColorPolicy::Never,
+            ..OutputContext::human()
+        };
+        assert!(ctx.suppress_ansi());
+    }
+
+    #[test]
+    fn test_suppress_ansi_auto_noninteractive() {
+        let ctx = OutputContext {
+            color: ColorPolicy::Auto,
+            interactive: false,
+            ..OutputContext::human()
+        };
+        assert!(ctx.suppress_ansi());
+    }
+
+    #[test]
+    fn test_suppress_ansi_auto_interactive() {
+        let ctx = OutputContext::human();
+        assert!(!ctx.suppress_ansi());
+    }
+
+    #[test]
+    fn test_strip_ansi_in_machine_mode() {
+        let ctx = OutputContext::json();
+        let text = "\x1b[32msome text\x1b[0m";
+        let stripped = ctx.strip_ansi_if_needed(text);
+        assert_eq!(stripped, "some text");
+    }
+
+    #[test]
+    fn test_no_strip_ansi_in_human_mode() {
+        let ctx = OutputContext::human();
+        let text = "\x1b[32msome text\x1b[0m";
+        let result = ctx.strip_ansi_if_needed(text);
+        assert_eq!(result, text);
     }
 
     #[test]

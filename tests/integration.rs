@@ -3051,6 +3051,45 @@ fn test_shell_init_all_shells_use_output_file_flag() {
     }
 }
 
+#[test]
+fn test_shell_init_all_shells_no_ansi_sequences() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = snp_cmd().args(["shell", "init", shell]).output().unwrap();
+        assert!(output.status.success());
+        let bytes = &output.stdout;
+        assert!(
+            !bytes.windows(1).any(|w| w == b"\x1b"),
+            "{shell} init must not contain ANSI escape sequences"
+        );
+    }
+}
+
+#[test]
+fn test_shell_init_all_shells_handle_temp_cleanup() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = snp_cmd().args(["shell", "init", shell]).output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("rm ") || stdout.contains("unlink") || stdout.contains("cleanup"),
+            "{shell} init should reference temp file cleanup"
+        );
+    }
+}
+
+#[test]
+fn test_shell_init_all_shells_define_snp_select() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = snp_cmd().args(["shell", "init", shell]).output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("snp_select_raw") && stdout.contains("snp_select_expanded"),
+            "{shell} init must define both snp_select_raw and snp_select_expanded"
+        );
+    }
+}
+
 // ============================================================
 // Release 3A: Pet choice variable serialization compatibility (E)
 // ============================================================

@@ -55,7 +55,7 @@ fn setup_signal_handler() {
     name = "snp",
     about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and optional self-hosted sync",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "Config: ~/.config/snp/snippets.toml | Docs: https://github.com/eggstack/snip-it"
+    after_help = "Exit codes:\n  0  success\n  1  general error\n  2  usage/argument error\n  3  not found\n  4  cancelled\n  5  ambiguous match\n  6  validation failure\n  7  sync failure\n  8  execution failure\n  9  conflict/refused\n\nConfig: ~/.config/snp/snippets.toml\nDocs: https://github.com/eggstack/snip-it\nShell: snp shell init bash|zsh|fish"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -128,7 +128,7 @@ enum Commands {
         #[arg(short, long)]
         library: Option<String>,
     },
-    /// List all snippets (l)
+    /// List all snippets (l) — never executes
     #[command(alias = "l")]
     List {
         #[arg(short, long)]
@@ -153,7 +153,7 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         favorites_first: bool,
     },
-    /// Run a snippet via TUI selection (r)
+    /// Run a snippet via TUI selection (r) — executes via shell
     #[command(alias = "r")]
     Run {
         #[arg(short, long)]
@@ -417,7 +417,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Show auto-sync status
+    /// Show auto-sync status (read-only)
     Status {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         json: bool,
@@ -732,25 +732,29 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     selector = selector.with_command_exact(cmd);
                 }
                 let result = snip_it::selector::resolve_selector(&selector)?;
-                match result {
+                let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
                         commands::run_cmd::run_exact(&m.snippet, sync, &RUNTIME)?;
+                        snip_it::outcome::CliOutcome::Success
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                        eprintln!("Ambiguous match. Multiple snippets match:");
                         for identity in &identities {
                             eprintln!(
                                 "  {} - {} ({})",
                                 identity.id, identity.description, identity.library_name
                             );
                         }
-                        std::process::exit(5);
+                        snip_it::outcome::CliOutcome::Ambiguous
                     }
+                    _ => snip_it::outcome::CliOutcome::NotFound,
+                };
+                return match outcome {
+                    snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
+                    snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
                     _ => {
-                        eprintln!("Snippet not found");
-                        std::process::exit(3);
+                        std::process::exit(outcome.exit_code());
                     }
-                }
+                };
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -788,25 +792,29 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     selector = selector.with_command_exact(cmd);
                 }
                 let result = snip_it::selector::resolve_selector(&selector)?;
-                match result {
+                let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
                         commands::clip_cmd::run_exact(&m.snippet)?;
+                        snip_it::outcome::CliOutcome::Success
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                        eprintln!("Ambiguous match. Multiple snippets match:");
                         for identity in &identities {
                             eprintln!(
                                 "  {} - {} ({})",
                                 identity.id, identity.description, identity.library_name
                             );
                         }
-                        std::process::exit(5);
+                        snip_it::outcome::CliOutcome::Ambiguous
                     }
+                    _ => snip_it::outcome::CliOutcome::NotFound,
+                };
+                return match outcome {
+                    snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
+                    snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
                     _ => {
-                        eprintln!("Snippet not found");
-                        std::process::exit(3);
+                        std::process::exit(outcome.exit_code());
                     }
-                }
+                };
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -902,29 +910,33 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                         selector = selector.with_command_exact(cmd);
                     }
                     let result = snip_it::selector::resolve_selector(&selector)?;
-                    match result {
+                    let outcome = match result {
                         snip_it::selector::SelectionResult::One(m) => {
                             commands::edit_cmd::run_edit_output(
                                 library,
                                 m.snippet.description.clone(),
                                 output_value,
                             )?;
+                            snip_it::outcome::CliOutcome::Success
                         }
                         snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                            eprintln!("Ambiguous match. Multiple snippets match:");
                             for identity in &identities {
                                 eprintln!(
                                     "  {} - {} ({})",
                                     identity.id, identity.description, identity.library_name
                                 );
                             }
-                            std::process::exit(5);
+                            snip_it::outcome::CliOutcome::Ambiguous
                         }
+                        _ => snip_it::outcome::CliOutcome::NotFound,
+                    };
+                    return match outcome {
+                        snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
+                        snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
                         _ => {
-                            eprintln!("Snippet not found");
-                            std::process::exit(3);
+                            std::process::exit(outcome.exit_code());
                         }
-                    }
+                    };
                 } else {
                     let filter_str = filter.ok_or_else(|| {
                         snip_it::error::SnipError::runtime_error(
