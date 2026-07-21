@@ -56,9 +56,9 @@ scripts/          build_themes.py — LZMA-compresses themes/ into src/ui/_gener
 ```
 src/main.rs              CLI entry point, clap dispatch
 src/lib.rs               Library crate (exports for integration tests)
-src/commands/             15 command modules (new, list, run, clip, select, search, edit,
+src/commands/             16 command modules (new, list, run, clip, select, search, edit,
                           sync, register, library, premade, import, doctor, cron, shell,
-                          keybindings) + shared helpers in mod.rs
+                          keybindings, status) + shared helpers in mod.rs
 src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification,
                           status, schedule)
 src/auto_sync/status.rs  Durable status persistence (auto-sync-status.toml), failure/success recording, integrity checks
@@ -78,6 +78,7 @@ src/sort.rs               Sort modes, ranking, tie-break chain
 src/usage.rs              Local usage metadata (use count, last-used)
 src/output.rs             Snippet output field rendering/presentation
 src/diagnostics.rs        Shared diagnostic model for import/doctor
+src/status_snapshot.rs    Canonical read-only status projection for `snp status` and doctor
 src/proto.rs              Prost-generated protobuf types
 src/update.rs             Self-update support (crates.io, Homebrew, GitHub releases)
 ```
@@ -190,6 +191,7 @@ The `architecture/` directory contains deep-dive documents for each module. Use 
 | `architecture/encryption.md` | AES-256-GCM encryption |
 | `architecture/sync.md` | Sync protocol, merge logic |
 | `architecture/auto_sync.md` | Auto-sync policy, debounce, triggers |
+| `architecture/status.md` | Status snapshot, recovery commands, diagnostics |
 | `architecture/tui.md` | TUI keybindings, state machine |
 | `architecture/ui.md` | UI components, theme system |
 | `architecture/server.md` | snip-sync server architecture |

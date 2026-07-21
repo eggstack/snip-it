@@ -144,3 +144,30 @@ Missing: No tests for encryption roundtrip through sync, retry logic, or the cri
 4. Backoff delay has elapsed (unless explicit retry).
 5. Failure class allows automatic retry.
 6. Config change releases deferred failures (authentication/credential/configuration).
+
+## Status Snapshot (Phase 04A)
+
+`capture_snapshot()` in `src/status_snapshot.rs` produces a read-only `StatusSnapshot` aggregating all auto-sync artifacts. `snp status` exposes this as JSON (`--json`) or human-readable text.
+
+**Top-level state precedence:** CorruptOrInaccessible → LiveExecution → PendingAttentionRequired → PendingRetryBackoff → PendingAwaitingScheduling → ConfiguredAndCurrent → ConfiguredAutoSyncDisabled → NotConfigured.
+
+**Attempt state derivation:** NeverAttempted → AttentionRequired → Succeeded → RetryScheduled → Deferred → Succeeded.
+
+**Diagnostic codes:** CONFIG_LOAD_FAILED, NOT_CONFIGURED, PENDING_CORRUPT, PENDING_INACCESSIBLE, EXECUTION_LOCK_STALE, EXECUTION_LOCK_MALFORMED, EXECUTION_LOCK_INACCESSIBLE, WORKER_LOCK_STALE, WORKER_LOCK_MALFORMED, WORKER_LOCK_INACCESSIBLE, ATTENTION_REQUIRED, STATUS_CORRUPT.
+
+## Recovery Commands (Phase 04A)
+
+| Command | Purpose | Acquires lock? | Clears pending? |
+|---------|---------|---------------|-----------------|
+| `snp sync retry` | Immediate sync, bypass backoff | Yes (wait_acquire) | Yes (on success) |
+| `snp sync clear-failure` | Reset failure disposition | No | No |
+| `snp sync discard-pending` | Remove pending marker | No | Yes (generation-safe) |
+| `snp sync repair` | Quarantine corrupt artifacts, remove stale locks | No | No |
+
+**`snp sync retry`:** Validates config, acquires execution lock, reads pending generation, runs `run_sync()`, records outcome. Use when status shows "attention required" or "pending retry".
+
+**`snp sync clear-failure`:** Resets `attention_required=false`, `consecutive_failures=0`, `next_attempt_at_unix_ms=0` in status file. Use after fixing the underlying issue to allow immediate retry.
+
+**`snp sync discard-pending`:** Reads pending generation, prompts for confirmation (unless `--force`), calls `clear_if_generation_matches`. Refuses if generation changed during prompt. Use to abandon sync intent.
+
+**`snp sync repair`:** Inspects status file, execution lock, worker lock, pending txn lock, temp files, and permissions. Without `--apply` lists issues; with `--apply` quarantines and removes stale/corrupt artifacts.

@@ -8,6 +8,7 @@ use crate::diagnostics::{
 };
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippets};
+use crate::status_snapshot::{self, StatusDiagnostic};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,127 @@ const STRICT_WARNING_CODES: &[&str] = &[
     "W-TYPE-MISMATCH",
     "W-TAG-EMPTY",
 ];
+
+/// Map a `StatusDiagnostic` from the canonical snapshot into a `CompatibilityDiagnostic`
+/// for the doctor report. Uses the required dotted diagnostic codes.
+///
+/// When `compat_mode` is true, the `CONFIG_LOAD_FAILED` severity is downgraded from Error
+/// to Warning for backward compatibility with `--compatibility` mode.
+fn map_snapshot_diagnostic(d: &StatusDiagnostic, compat_mode: bool) -> CompatibilityDiagnostic {
+    let (code, field) = match d.code.as_str() {
+        "CONFIG_LOAD_FAILED" => (
+            "sync.config.load_failed".to_string(),
+            "sync_config".to_string(),
+        ),
+        "NOT_CONFIGURED" => (
+            "sync.config.not_configured".to_string(),
+            "sync_config".to_string(),
+        ),
+        "PENDING_CORRUPT" => ("sync.pending.corrupt".to_string(), "pending".to_string()),
+        "PENDING_INACCESSIBLE" => (
+            "sync.pending.inaccessible".to_string(),
+            "pending".to_string(),
+        ),
+        "EXECUTION_LOCK_STALE" => (
+            "sync.execution.dead_stale".to_string(),
+            "execution_lock".to_string(),
+        ),
+        "EXECUTION_LOCK_MALFORMED" => (
+            "sync.execution.malformed".to_string(),
+            "execution_lock".to_string(),
+        ),
+        "EXECUTION_LOCK_INACCESSIBLE" => (
+            "sync.execution.malformed".to_string(),
+            "execution_lock".to_string(),
+        ),
+        "WORKER_LOCK_STALE" => (
+            "sync.worker_lock.dead_stale".to_string(),
+            "worker_lock".to_string(),
+        ),
+        "WORKER_LOCK_MALFORMED" => (
+            "sync.worker_lock.malformed".to_string(),
+            "worker_lock".to_string(),
+        ),
+        "WORKER_LOCK_INACCESSIBLE" => (
+            "sync.worker_lock.malformed".to_string(),
+            "worker_lock".to_string(),
+        ),
+        "STATUS_CORRUPT" => (
+            "sync.status.corrupt".to_string(),
+            "auto_sync_status".to_string(),
+        ),
+        "ATTENTION_REQUIRED" => {
+            // Map based on the message content which contains the failure class
+            let lower = d.message.to_lowercase();
+            let code = if lower.contains("authentication") {
+                "sync.attention.authentication"
+            } else if lower.contains("configuration") {
+                "sync.attention.configuration"
+            } else if lower.contains("credential") {
+                "sync.attention.credential_store"
+            } else if lower.contains("conflict") {
+                "sync.attention.conflict"
+            } else if lower.contains("partial") {
+                "sync.attention.partial"
+            } else if lower.contains("local") {
+                "sync.attention.local_persistence"
+            } else {
+                "sync.attention.configuration"
+            };
+            (code.to_string(), "auto_sync_status".to_string())
+        }
+        other => (format!("sync.{}", other.to_lowercase()), "sync".to_string()),
+    };
+
+    let severity = match d.severity {
+        status_snapshot::DiagnosticSeverity::Info => DiagnosticSeverity::Info,
+        status_snapshot::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+        status_snapshot::DiagnosticSeverity::Error => {
+            // In compatibility mode, downgrade config load failures from Error to Warning
+            // for backward compatibility with the old inline checks.
+            if compat_mode && d.code == "CONFIG_LOAD_FAILED" {
+                DiagnosticSeverity::Warning
+            } else {
+                DiagnosticSeverity::Error
+            }
+        }
+    };
+
+    CompatibilityDiagnostic {
+        code,
+        entry_index: None,
+        field: Some(field),
+        severity,
+        message: d.message.clone(),
+        suggestion: d.remediation.clone(),
+        span: None,
+    }
+}
+
+/// Collect sync diagnostics from the canonical `StatusSnapshot` into the doctor report.
+///
+/// When `compat_mode` is true, certain severities are downgraded for backward compatibility
+/// with the old inline sync checks in `--compatibility` mode.
+fn append_sync_diagnostics(report: &mut DoctorReport, compat_mode: bool) {
+    let snapshot = status_snapshot::capture_snapshot();
+
+    // Always include a summary entry so the report indicates sync was checked.
+    report.diagnostics.push(CompatibilityDiagnostic {
+        code: "compat.sync.checked".to_string(),
+        entry_index: None,
+        field: Some("auto_sync".to_string()),
+        severity: DiagnosticSeverity::Info,
+        message: format!("Sync status: {:?}", snapshot.sync.top_level),
+        suggestion: None,
+        span: None,
+    });
+
+    for d in &snapshot.diagnostics {
+        report
+            .diagnostics
+            .push(map_snapshot_diagnostic(d, compat_mode));
+    }
+}
 
 /// Elevate designated warning diagnostics to errors when `--strict` is active.
 fn apply_strict_elevation(report: &mut DoctorReport) {
@@ -885,145 +1007,8 @@ command = "echo ok"
         }
     }
 
-    // Auto-sync state inspection (Release 5D corrective: detached one-shot worker)
-    let state_dir = crate::auto_sync::paths::state_dir();
-    let pending_path = crate::auto_sync::paths::pending_marker(&state_dir);
-    let lock_path = crate::auto_sync::paths::worker_lock(&state_dir);
-
-    // Check auto-sync pending state
-    if pending_path.exists() {
-        match crate::auto_sync::pending::read_state_from_dir(&state_dir) {
-            Ok(state) => {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                let age_ms = now_ms.saturating_sub(state.created_at_unix_ms);
-                let is_stale = age_ms > crate::auto_sync::pending::STALE_PENDING_THRESHOLD_MS;
-
-                if is_stale {
-                    report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.auto_sync.pending_stale".to_string(),
-                        entry_index: None,
-                        field: Some("auto_sync".to_string()),
-                        severity: DiagnosticSeverity::Warning,
-                        message: format!(
-                            "Stale auto-sync pending state detected (generation {}, >5 min old)",
-                            state.generation
-                        ),
-                        suggestion: Some(
-                            "Run `snp sync` to recover, or it will be recovered on next mutation"
-                                .to_string(),
-                        ),
-                        span: None,
-                    });
-                } else {
-                    report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.auto_sync.pending_active".to_string(),
-                        entry_index: None,
-                        field: Some("auto_sync".to_string()),
-                        severity: DiagnosticSeverity::Info,
-                        message: format!(
-                            "Auto-sync pending state is active (generation {})",
-                            state.generation
-                        ),
-                        suggestion: None,
-                        span: None,
-                    });
-                }
-            }
-            Err(_) => {
-                report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "compat.auto_sync.pending_unreadable".to_string(),
-                    entry_index: None,
-                    field: Some("auto_sync".to_string()),
-                    severity: DiagnosticSeverity::Warning,
-                    message: "Auto-sync pending state file exists but is unreadable".to_string(),
-                    suggestion: None,
-                    span: None,
-                });
-            }
-        }
-    }
-
-    // Check auto-sync worker lock file
-    if lock_path.exists() {
-        match crate::auto_sync::lock::inspect(&lock_path) {
-            Some(lock) => {
-                let alive = crate::auto_sync::lock::process_alive(lock.pid);
-
-                if alive {
-                    report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.auto_sync.lock_held".to_string(),
-                        entry_index: None,
-                        field: Some("auto_sync".to_string()),
-                        severity: DiagnosticSeverity::Info,
-                        message: format!(
-                            "Auto-sync worker lock held by process {} (nonce {})",
-                            lock.pid, lock.nonce
-                        ),
-                        suggestion: None,
-                        span: None,
-                    });
-                } else {
-                    report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.auto_sync.lock_stale".to_string(),
-                        entry_index: None,
-                        field: Some("auto_sync".to_string()),
-                        severity: DiagnosticSeverity::Warning,
-                        message: format!(
-                            "Auto-sync worker lock exists but process {} is dead (stale)",
-                            lock.pid
-                        ),
-                        suggestion: Some(
-                            "Stale lock will be recovered on next worker spawn or `snp sync`"
-                                .to_string(),
-                        ),
-                        span: None,
-                    });
-                }
-            }
-            None => {
-                report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "compat.auto_sync.lock_unreadable".to_string(),
-                    entry_index: None,
-                    field: Some("auto_sync".to_string()),
-                    severity: DiagnosticSeverity::Warning,
-                    message: "Auto-sync worker lock file exists but is unreadable".to_string(),
-                    suggestion: None,
-                    span: None,
-                });
-            }
-        }
-    }
-
-    // Check auto-sync config
-    if let Ok(settings) = crate::config::load_sync_settings() {
-        if settings.auto_sync {
-            report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.auto_sync.enabled".to_string(),
-                entry_index: None,
-                field: Some("auto_sync".to_string()),
-                severity: DiagnosticSeverity::Info,
-                message: format!(
-                    "Auto-sync enabled (debounce: {}s, failure: {})",
-                    settings.auto_sync_debounce_seconds, settings.auto_sync_failure
-                ),
-                suggestion: None,
-                span: None,
-            });
-        } else {
-            report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.auto_sync.disabled".to_string(),
-                entry_index: None,
-                field: Some("auto_sync".to_string()),
-                severity: DiagnosticSeverity::Info,
-                message: "Auto-sync is disabled".to_string(),
-                suggestion: None,
-                span: None,
-            });
-        }
-    }
+    // Auto-sync state inspection — delegated to the canonical StatusSnapshot
+    append_sync_diagnostics(&mut report, true);
 
     report.total_entries = 0;
     apply_strict_elevation(&mut report);
@@ -1321,19 +1306,20 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
 pub fn run(
     pet_file: Option<PathBuf>,
     compatibility: bool,
+    sync: bool,
     check_shell: Option<String>,
     library: Option<String>,
     strict: bool,
     report_format: DiagnosticReportFormat,
 ) -> SnipResult<()> {
     let has_file_mode = pet_file.is_some() || library.is_some();
-    let has_mode = has_file_mode || compatibility || check_shell.is_some();
+    let has_mode = has_file_mode || compatibility || sync || check_shell.is_some();
 
     if !has_mode {
         return Err(SnipError::runtime_error(
             "No mode selected",
             Some(
-                "Specify --pet-file <path>, --library <name>, --compatibility, or --check-shell <shell>",
+                "Specify --pet-file <path>, --library <name>, --compatibility, --sync, or --check-shell <shell>",
             ),
         ));
     }
@@ -1365,6 +1351,13 @@ pub fn run(
         build_pet_report(&path, &content, strict, &existing_libs)?
     } else if compatibility {
         build_compatibility_report(strict)?
+    } else if sync {
+        // --sync only: focused sync diagnostics from the canonical snapshot,
+        // preserving the snapshot's native severity levels (including Error).
+        let mut report = DoctorReport::new(strict);
+        report.source = None;
+        append_sync_diagnostics(&mut report, false);
+        report
     } else {
         DoctorReport::new(strict)
     };

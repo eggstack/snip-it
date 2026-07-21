@@ -378,8 +378,13 @@ snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)
 snp doctor       Diagnose pet file, library, environment, or shell init syntax
 snp register     Register with a snip-sync server
+snp status       Show auto-sync status (--json, --sync-only)
 snp sync         Push, pull, or bidirectionally sync libraries
 snp sync config  View or update auto-sync policy
+snp sync retry   Retry a failed auto-sync now
+snp sync clear-failure  Clear failure state without discarding pending intent
+snp sync discard-pending  Discard pending sync intent (--force, --generation)
+snp sync repair  Repair sync control artifacts (--dry-run, --apply)
 snp cron         Print a periodic sync schedule
 snp keybindings  Show TUI keybindings
 snp update       Check for and install an update

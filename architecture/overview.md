@@ -30,7 +30,7 @@ The CLI is the primary interface for users. The entry point is `src/main.rs` whi
 - [doctor_cmd.md](commands/doctor_cmd.md) — Compatibility diagnostics and pet file analysis
 - [import_cmd.md](commands/import_cmd.md) — Pet snippet file import
 - [keybindings_cmd.md](commands/keybindings_cmd.md) — TUI keybindings reference
-- [sync_cmd.md](commands/sync_cmd.md) — Bidirectional sync with server
+- [sync_cmd.md](commands/sync_cmd.md) — Bidirectional sync with server, recovery commands (retry, clear-failure, discard-pending, repair)
 - [cron_cmd.md](commands/cron_cmd.md) — Crontab generation for periodic sync
 - [register_cmd.md](commands/register_cmd.md) — Device registration
 - [library_cmd.md](commands/library_cmd.md) — Library management subcommands
@@ -83,6 +83,13 @@ See [library.md](library.md) for detailed data model and persistence behavior.
 - `merge_snippets()` implements last-write-wins with local-only field preservation
 - Server `deleted: true` snippets mark local copies as deleted (data preserved)
 - Sync sorts results by `updated_at` descending
+
+**status_snapshot.rs** — Read-only projection of auto-sync state
+
+- `capture_snapshot()` — Aggregates pending, execution, status, and config into `StatusSnapshot`
+- `derive_top_level()` — Pure function mapping state to `TopLevelSyncState` (8 variants)
+- `collect_diagnostics()` — Severity-sorted diagnostic codes for machine and human consumers
+- See [status.md](status.md) for the full deep-dive
 
 **auto_sync/** — Optional post-mutation background synchronization (two-process-per-cycle model)
 
@@ -281,6 +288,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 | **Sync** | |
 | [sync.md](sync.md) | Sync protocol, merge logic, conflict resolution |
 | [auto_sync.md](auto_sync.md) | Auto-sync policy, coordinator, debounce, triggers |
+| [status.md](status.md) | Status snapshot, `snp status` command, diagnostic codes |
 | **UI** | |
 | [tui.md](tui.md) | TUI architecture, keybindings, state machine |
 | [ui.md](ui.md) | UI components, rendering, theme system |

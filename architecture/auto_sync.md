@@ -594,17 +594,19 @@ Production uses `RealClock`; tests inject `ManualClock` to advance time without 
 - Windows: `DETACHED_PROCESS | CREATE_NO_WINDOW` flags on `CreateProcess`.
 - All file descriptors are released; stdin/stdout/stderr are routed to `null` so the worker cannot interfere with a TTY.
 
-## Pending Discard (Reserved for Phase 04)
+## Pending Discard (Phase 04A)
 
-When a user needs to abandon synchronization intent, an explicit discard operation is reserved for Phase 04. This is distinct from disabling auto-sync — disabled policy preserves pending intent; discard deliberately removes it.
+The `snp sync discard-pending` command allows users to abandon synchronization intent. This is distinct from disabling auto-sync — disabled policy preserves pending intent; discard deliberately removes it.
 
-The generation-safe primitive `pending::clear_if_generation_matches(state_dir, observed_generation)` already exists and is used by both the worker and explicit sync paths. A future `snp sync discard` command would:
+```bash
+snp sync discard-pending [--force] [--generation <N>]
+```
 
-1. Display the current pending generation to the user.
-2. Require confirmation unless `--force` is passed.
-3. Call `clear_if_generation_matches` with the observed generation.
-4. Refuse if the generation changed during confirmation (require retry).
-5. Record the discard as an advanced recovery action.
+1. Reads the current pending generation.
+2. Requires confirmation unless `--force` is passed (non-interactive contexts require `--force`).
+3. Calls `clear_if_generation_matches` with the observed generation.
+4. Refuses if the generation changed during confirmation (requires retry).
+5. Exits with code 2 on generation mismatch, code 3 on corruption/inaccessibility.
 
 This operation must never delete local snippet data — it only removes the pending synchronization marker.
 
@@ -657,6 +659,62 @@ Diagnostics emitted:
 29. **Phase 03:** Status write failure must never clear pending — a write failure leaves the existing status file intact and does not affect the pending marker.
 30. **Phase 03:** Backoff is persisted across CLI process restarts via `auto-sync-status.toml` — deferred disposition survives process death and system reboot.
 31. **Phase 03:** New mutations do not spawn per-mutation workers — debounce + centralized `schedule_sync()` decision prevent worker storms.
+
+## Status Snapshot (Phase 04A)
+
+The `snp status` command provides a read-only view of auto-sync state via the `StatusSnapshot` module (`src/status_snapshot.rs`). It aggregates pending markers, execution locks, status persistence, and sync configuration into a single structured output.
+
+**Key properties:**
+- Strictly read-only — never mutates any artifact.
+- `TopLevelSyncState` is derived via `derive_top_level()` with a defined precedence order (corrupt → live execution → pending states → configured states).
+- JSON output uses schema version 1 with serde's externally-tagged enum representation.
+- Human output is conditionally formatted based on top-level state.
+- Diagnostics are severity-sorted (Info < Warning < Error) with machine-readable codes.
+
+See [status.md](status.md) for the full deep-dive.
+
+## Recovery Commands (Phase 04A)
+
+### `snp sync retry`
+
+Force an immediate sync attempt, bypassing backoff and schedule decisions. Acquires the execution lock, runs sync, records outcome, and clears pending on success.
+
+```bash
+snp sync retry [--library <name>]
+```
+
+**Difference from `snp sync`:** `retry` captures and clears the pending marker (like explicit `--sync`), while `snp sync` is the general-purpose sync command. Both acquire the execution lock and serialize with auto-sync workers.
+
+### `snp sync clear-failure`
+
+Clear the failure state from `auto-sync-status.toml`, resetting `attention_required`, `consecutive_failures`, and `next_attempt_at_unix_ms`. Does not trigger a sync — only clears the disposition so the next scheduling attempt can proceed.
+
+```bash
+snp sync clear-failure
+```
+
+### `snp sync discard-pending`
+
+Remove the pending sync marker, abandoning synchronization intent. See [Pending Discard](#pending-discard-phase-04a) above.
+
+```bash
+snp sync discard-pending [--force] [--generation <N>]
+```
+
+### `snp sync repair`
+
+Diagnose and repair corrupt auto-sync state. Without `--apply`, lists detected issues as dry-run actions. With `--apply`, executes repairs: quarantines corrupt files, removes stale locks, deletes orphaned temp files, fixes permissions.
+
+```bash
+snp sync repair [--dry-run] [--apply]
+```
+
+**Repair actions:**
+- Corrupt status file → quarantine to `.quarantine.{timestamp}/`, optionally recreate empty
+- Stale execution/worker lock (dead PID) → quarantine and remove
+- Stale pending transaction lock → quarantine and remove
+- Orphaned temp files (`snp-sync-tmp.*`, `.quarantine.*`) → remove
+- Incorrect permissions (not `0o600`) → fix on Unix
 
 ## Hidden Subcommands
 

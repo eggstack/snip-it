@@ -284,12 +284,15 @@ enum Commands {
         #[arg(
             long = "pet-file",
             value_name = "PATH",
-            conflicts_with_all = ["compatibility", "library"]
+            conflicts_with_all = ["compatibility", "library", "sync"]
         )]
         pet_file: Option<PathBuf>,
         /// Audit the installed snp environment
         #[arg(long, conflicts_with_all = ["pet_file", "library"])]
         compatibility: bool,
+        /// Run focused sync diagnostics using the canonical status snapshot
+        #[arg(long, conflicts_with_all = ["pet_file", "library"])]
+        sync: bool,
         /// Check shell init output syntax for a specific shell (bash, zsh, fish)
         #[arg(long, value_enum)]
         check_shell: Option<ShellIntegration>,
@@ -297,7 +300,7 @@ enum Commands {
         #[arg(
             long,
             value_name = "NAME_OR_PATH",
-            conflicts_with_all = ["pet_file", "compatibility"]
+            conflicts_with_all = ["pet_file", "compatibility", "sync"]
         )]
         library: Option<String>,
         /// Treat warnings as errors
@@ -324,6 +327,13 @@ enum Commands {
     Shell {
         #[command(subcommand)]
         command: ShellCommands,
+    },
+    /// Show auto-sync status
+    Status {
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        sync_only: bool,
     },
     /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
     #[command(name = "auto-sync-worker", hide = true)]
@@ -432,6 +442,30 @@ enum SyncCommands {
         /// Executor sync timeout in seconds (5-120, default 30)
         #[arg(long)]
         timeout: Option<u64>,
+    },
+    /// Retry a failed auto-sync now
+    #[command(alias = "r")]
+    Retry {
+        #[arg(short, long)]
+        library: Option<String>,
+    },
+    /// Clear failure state without discarding pending intent
+    #[command(alias = "f")]
+    ClearFailure,
+    /// Discard pending sync intent
+    #[command(alias = "d")]
+    DiscardPending {
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        force: bool,
+        #[arg(long)]
+        generation: Option<u64>,
+    },
+    /// Repair sync control artifacts
+    Repair {
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        dry_run: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        apply: bool,
     },
 }
 
@@ -680,6 +714,18 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     show, auto_sync, debounce, max_delay, failure, timeout,
                 )?;
             }
+            Some(SyncCommands::Retry { library }) => {
+                commands::sync_cmd::run_retry(library, &RUNTIME)?;
+            }
+            Some(SyncCommands::ClearFailure) => {
+                commands::sync_cmd::run_clear_failure()?;
+            }
+            Some(SyncCommands::DiscardPending { force, generation }) => {
+                commands::sync_cmd::run_discard_pending(force, generation)?;
+            }
+            Some(SyncCommands::Repair { dry_run, apply }) => {
+                commands::sync_cmd::run_repair(dry_run, apply)?;
+            }
         },
         Some(Commands::Cron { interval }) => {
             commands::cron_cmd::run(interval)?;
@@ -717,6 +763,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Doctor {
             pet_file,
             compatibility,
+            sync,
             check_shell,
             library,
             strict,
@@ -730,6 +777,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             commands::doctor_cmd::run(
                 pet_file,
                 compatibility,
+                sync,
                 check_shell_str,
                 library,
                 strict,
@@ -776,6 +824,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::import_cmd::run_import_pet(options)?;
             }
         },
+        Some(Commands::Status { json, sync_only }) => {
+            commands::status_cmd::run(json, sync_only)?;
+        }
         Some(Commands::AutoSyncWorker { state_dir }) => {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
             match outcome {
@@ -801,6 +852,7 @@ fn classify_command(cmd: &Commands) -> SubcommandTag {
         Commands::Register { .. } => SubcommandTag::Register,
         Commands::AutoSyncWorker { .. } => SubcommandTag::AutoSyncWorker,
         Commands::AutoSyncExecute { .. } => SubcommandTag::AutoSyncExecute,
+        Commands::Status { .. } => SubcommandTag::Mutation,
         _ => SubcommandTag::Mutation,
     }
 }

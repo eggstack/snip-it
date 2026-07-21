@@ -34,6 +34,7 @@ pub(crate) mod utils;
 pub mod diagnostics;
 pub mod output;
 pub mod sort;
+pub mod status_snapshot;
 pub mod usage;
 
 pub use error::{SnipError, SnipResult};

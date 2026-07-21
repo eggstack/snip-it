@@ -3,7 +3,7 @@ use crate::config::{AutoSyncFailureMode, SyncDirection, load_sync_settings, save
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use crate::proto::Library;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 fn server_library_filename(name: &str) -> String {
     name.to_lowercase().replace(' ', "-")
@@ -495,6 +495,448 @@ pub fn run_config(
         })?;
     }
 
+    Ok(())
+}
+
+pub fn run_retry(library: Option<String>, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    let sync_settings = load_sync_settings().map_err(|e| {
+        eprintln!("Failed to load sync settings: {e}");
+        e
+    })?;
+
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return Ok(());
+    }
+    if sync_settings.api_key.is_empty() {
+        eprintln!("Sync is enabled but no API key is configured. Run 'snp register --force'.");
+        return Ok(());
+    }
+
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+
+    let _exec_lock = crate::auto_sync::execution_lock::wait_acquire(
+        &state_dir,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|e| match e {
+        crate::auto_sync::execution_lock::ExecutionLockError::Timeout { owner_pid, .. } => {
+            SnipError::runtime_error(
+                "sync already in progress",
+                Some(&format!(
+                    "owner pid={owner_pid}; wait for it to complete or kill the process"
+                )),
+            )
+        }
+        crate::auto_sync::execution_lock::ExecutionLockError::AlreadyHeld { pid, .. } => {
+            SnipError::runtime_error(
+                "sync already in progress",
+                Some(&format!("held by pid={pid}")),
+            )
+        }
+        other => SnipError::runtime_error("failed to acquire sync lock", Some(&other.to_string())),
+    })?;
+
+    let observed_generation = match crate::auto_sync::pending::read_state_from_dir(&state_dir) {
+        Ok(state) => Some(state.generation),
+        Err(crate::auto_sync::pending::PendingError::NotFound) => {
+            println!("No pending sync work");
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(SnipError::runtime_error(
+                "failed to read pending state",
+                Some(&e.to_string()),
+            ));
+        }
+    };
+
+    let effective_push = sync_settings.sync_direction == crate::config::SyncDirection::Push;
+    let effective_pull = sync_settings.sync_direction == crate::config::SyncDirection::Pull;
+
+    let sync_result = crate::sync_commands::run_sync(
+        &sync_settings,
+        library.as_deref(),
+        effective_push,
+        effective_pull,
+        runtime,
+    );
+
+    let observed_gen = observed_generation.unwrap_or(0);
+    match &sync_result {
+        Ok(()) => {
+            let _ = crate::auto_sync::status::record_success(
+                &state_dir,
+                observed_gen,
+                "retry sync completed",
+            );
+            let _ =
+                crate::auto_sync::pending::clear_if_generation_matches(&state_dir, observed_gen);
+        }
+        Err(e) => {
+            let failure_class = crate::auto_sync::policy::FailureClass::from_error(e);
+            let _ = crate::auto_sync::status::record_failure(
+                &state_dir,
+                observed_gen,
+                failure_class,
+                crate::auto_sync::executor::ExecutorExitCode::from_failure_class(failure_class)
+                    .to_exit_status(),
+                0,
+                0,
+                &e.to_string(),
+                crate::auto_sync::status::compute_config_fingerprint(&sync_settings),
+            );
+        }
+    }
+
+    sync_result
+}
+
+pub fn run_clear_failure() -> SnipResult<()> {
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+
+    match crate::auto_sync::status::read_status_typed(&state_dir) {
+        crate::auto_sync::status::StatusRead::Corrupt(msg) => Err(SnipError::runtime_error(
+            "status file is corrupt",
+            Some(&msg),
+        )),
+        crate::auto_sync::status::StatusRead::Missing => {
+            println!("No failure recorded");
+            Ok(())
+        }
+        crate::auto_sync::status::StatusRead::Valid(mut status) => {
+            status.attention_required = false;
+            status.consecutive_failures = 0;
+            status.next_attempt_at_unix_ms = 0;
+            status.message = "cleared by operator".to_string();
+            crate::auto_sync::status::write_status(&state_dir, &status)
+                .map_err(|e| SnipError::runtime_error("failed to write status", Some(&e)))?;
+            println!("Failure state cleared");
+            Ok(())
+        }
+    }
+}
+
+pub fn run_discard_pending(force: bool, generation: Option<u64>) -> SnipResult<()> {
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+
+    let observed = match crate::auto_sync::pending::read_state_from_dir(&state_dir) {
+        Ok(state) => state,
+        Err(crate::auto_sync::pending::PendingError::NotFound) => {
+            println!("No pending sync work");
+            return Ok(());
+        }
+        Err(crate::auto_sync::pending::PendingError::Corrupted(msg)) => {
+            eprintln!("Corrupt pending state: {msg}");
+            std::process::exit(3);
+        }
+        Err(e) => {
+            eprintln!("Inaccessible pending state: {e}");
+            std::process::exit(4);
+        }
+    };
+
+    println!("Pending generation: {}", observed.generation);
+
+    if !force {
+        if std::io::stdin().is_terminal() {
+            print!("Discard pending sync intent? [y/N] ");
+            std::io::stdout().flush().ok();
+            let mut input = String::new();
+            if std::io::stdin().read_line(&mut input).is_ok() {
+                if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+                    println!("Aborted");
+                    return Ok(());
+                }
+            } else {
+                println!("Aborted");
+                return Ok(());
+            }
+        } else {
+            eprintln!("Non-interactive: use --force to discard pending intent");
+            std::process::exit(1);
+        }
+    }
+
+    if let Some(requested_gen) = generation
+        && requested_gen != observed.generation
+    {
+        eprintln!(
+            "Requested generation {} does not match observed {}",
+            requested_gen, observed.generation
+        );
+        std::process::exit(2);
+    }
+
+    match crate::auto_sync::pending::clear_if_generation_matches(&state_dir, observed.generation) {
+        Ok(crate::auto_sync::pending::ConditionalClearResult::Cleared) => {
+            println!("Pending intent discarded");
+            std::process::exit(0);
+        }
+        Ok(crate::auto_sync::pending::ConditionalClearResult::GenerationChanged { current }) => {
+            eprintln!("Generation changed to {current}, refusing to discard");
+            std::process::exit(2);
+        }
+        Ok(crate::auto_sync::pending::ConditionalClearResult::Missing) => {
+            println!("No pending sync work");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Failed to clear pending: {e}");
+            std::process::exit(3);
+        }
+    }
+}
+
+struct RepairAction {
+    artifact: String,
+    action: String,
+    reason: String,
+    applied: bool,
+}
+
+pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+    let mut actions: Vec<RepairAction> = Vec::new();
+
+    let status_path = crate::auto_sync::status::status_path(&state_dir);
+    let exec_lock_path = crate::auto_sync::execution_lock::execution_lock_path(&state_dir);
+    let worker_lock_path = crate::auto_sync::lock::lock_path(&state_dir);
+    let pending_txn_lock = state_dir.join(crate::auto_sync::pending_lock::PENDING_TXN_LOCK_NAME);
+
+    match crate::auto_sync::status::read_status_typed(&state_dir) {
+        crate::auto_sync::status::StatusRead::Corrupt(msg) => {
+            let has_pending = crate::auto_sync::pending::read_state_from_dir(&state_dir).is_ok();
+            if has_pending {
+                actions.push(RepairAction {
+                    artifact: "status".to_string(),
+                    action: "quarantine and recreate empty".to_string(),
+                    reason: format!("corrupt status while pending exists: {msg}"),
+                    applied: false,
+                });
+            } else {
+                actions.push(RepairAction {
+                    artifact: "status".to_string(),
+                    action: "quarantine".to_string(),
+                    reason: format!("corrupt status: {msg}"),
+                    applied: false,
+                });
+            }
+        }
+        crate::auto_sync::status::StatusRead::Missing => {}
+        crate::auto_sync::status::StatusRead::Valid(_) => {}
+    }
+
+    if let Some(contents) = crate::auto_sync::execution_lock::inspect(&exec_lock_path) {
+        if crate::auto_sync::execution_lock::is_stale(&contents) {
+            actions.push(RepairAction {
+                artifact: "execution_lock".to_string(),
+                action: "remove stale lock".to_string(),
+                reason: format!("dead pid={}", contents.pid),
+                applied: false,
+            });
+        }
+    } else if exec_lock_path.exists() {
+        actions.push(RepairAction {
+            artifact: "execution_lock".to_string(),
+            action: "remove malformed lock".to_string(),
+            reason: "unreadable lock file".to_string(),
+            applied: false,
+        });
+    }
+
+    if let Some(contents) = crate::auto_sync::lock::inspect(&worker_lock_path) {
+        if crate::auto_sync::lock::is_stale(&contents) {
+            actions.push(RepairAction {
+                artifact: "worker_lock".to_string(),
+                action: "remove stale lock".to_string(),
+                reason: format!("dead pid={}", contents.pid),
+                applied: false,
+            });
+        }
+    } else if worker_lock_path.exists() {
+        actions.push(RepairAction {
+            artifact: "worker_lock".to_string(),
+            action: "remove malformed lock".to_string(),
+            reason: "unreadable lock file".to_string(),
+            applied: false,
+        });
+    }
+
+    if pending_txn_lock.exists() {
+        let stale = match std::fs::read_to_string(&pending_txn_lock) {
+            Ok(contents) => {
+                match toml::from_str::<crate::auto_sync::execution_lock::ExecutionLockContents>(
+                    &contents,
+                ) {
+                    Ok(c) => crate::auto_sync::execution_lock::is_stale(&c),
+                    Err(_) => true,
+                }
+            }
+            Err(_) => true,
+        };
+        if stale {
+            actions.push(RepairAction {
+                artifact: "pending_txn_lock".to_string(),
+                action: "remove stale lock".to_string(),
+                reason: "dead or malformed transaction lock".to_string(),
+                applied: false,
+            });
+        }
+    }
+
+    for path in std::fs::read_dir(&state_dir).ok().into_iter().flatten() {
+        let entry = match path {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("snp-sync-tmp.") || name_str.starts_with(".quarantine.") {
+            actions.push(RepairAction {
+                artifact: format!("temp: {name_str}"),
+                action: "remove orphaned temp file".to_string(),
+                reason: "orphaned temporary file".to_string(),
+                applied: false,
+            });
+        }
+    }
+
+    for path in [
+        &status_path,
+        &exec_lock_path,
+        &worker_lock_path,
+        &pending_txn_lock,
+    ] {
+        if path.exists() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(path) {
+                    let mode = meta.permissions().mode() & 0o777;
+                    if mode != 0o600 {
+                        actions.push(RepairAction {
+                            artifact: path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string(),
+                            action: format!("fix permissions: {mode:#o} -> 0o600"),
+                            reason: "restrictive permissions".to_string(),
+                            applied: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if actions.is_empty() {
+        println!("No repair actions needed");
+        return Ok(());
+    }
+
+    let show_only = !apply || dry_run;
+    for action in &mut actions {
+        if show_only {
+            println!(
+                "[dry-run] {} {}: {}",
+                action.artifact, action.action, action.reason
+            );
+        } else {
+            println!(
+                "apply {} {}: {}",
+                action.artifact, action.action, action.reason
+            );
+            apply_repair_action(&state_dir, action)?;
+            action.applied = true;
+        }
+    }
+
+    if apply && !dry_run {
+        println!(
+            "{} repair actions applied",
+            actions.iter().filter(|a| a.applied).count()
+        );
+    }
+
+    Ok(())
+}
+
+fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> SnipResult<()> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let quarantine_dir = state_dir.join(format!(".quarantine.{timestamp}"));
+
+    if action.artifact == "status" {
+        let status_path = crate::auto_sync::status::status_path(state_dir);
+        if status_path.exists() {
+            let _ = std::fs::create_dir_all(&quarantine_dir);
+            let dest = quarantine_dir.join(crate::auto_sync::status::STATUS_FILE_NAME);
+            let _ = std::fs::copy(&status_path, &dest);
+            let _ = std::fs::remove_file(&status_path);
+        }
+        if action.action.contains("recreate") {
+            let default_status = crate::auto_sync::status::AutoSyncStatus::default();
+            let _ = crate::auto_sync::status::write_status(state_dir, &default_status);
+        }
+    } else if action.artifact == "execution_lock" {
+        quarantine_and_remove(
+            state_dir,
+            &crate::auto_sync::execution_lock::execution_lock_path(state_dir),
+        )?;
+    } else if action.artifact == "worker_lock" {
+        quarantine_and_remove(state_dir, &crate::auto_sync::lock::lock_path(state_dir))?;
+    } else if action.artifact == "pending_txn_lock" {
+        quarantine_and_remove(
+            state_dir,
+            &state_dir.join(crate::auto_sync::pending_lock::PENDING_TXN_LOCK_NAME),
+        )?;
+    } else if action.artifact.starts_with("temp:") {
+        let name = action
+            .artifact
+            .strip_prefix("temp: ")
+            .unwrap_or(&action.artifact);
+        let path = state_dir.join(name);
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    } else if action.action.contains("fix permissions") {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = if action.artifact == "status" {
+                crate::auto_sync::status::status_path(state_dir)
+            } else if action.artifact == "execution_lock" {
+                crate::auto_sync::execution_lock::execution_lock_path(state_dir)
+            } else if action.artifact == "worker_lock" {
+                crate::auto_sync::lock::lock_path(state_dir)
+            } else {
+                state_dir.join(&action.artifact)
+            };
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+
+    Ok(())
+}
+
+fn quarantine_and_remove(state_dir: &std::path::Path, path: &std::path::Path) -> SnipResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let quarantine_dir = state_dir.join(format!(".quarantine.{timestamp}"));
+    let _ = std::fs::create_dir_all(&quarantine_dir);
+    let name = path.file_name().unwrap_or_default();
+    let dest = quarantine_dir.join(name);
+    let _ = std::fs::copy(path, &dest);
+    let _ = std::fs::remove_file(path);
     Ok(())
 }
 
