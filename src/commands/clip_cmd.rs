@@ -30,6 +30,24 @@ fn process_snippet(
     ))
 }
 
+/// Copy a specific snippet's command to clipboard, bypassing TUI selection.
+pub fn run_exact(snippet: &crate::library::Snippet) -> SnipResult<()> {
+    use crate::commands::expand_snippet_command;
+    let final_command = match expand_snippet_command(snippet)? {
+        crate::commands::ExpandedCommand::Cancel => return Ok(()),
+        crate::commands::ExpandedCommand::Skip => return Ok(()),
+        crate::commands::ExpandedCommand::Expanded(cmd) => cmd,
+    };
+    crate::clipboard::copy_to_clipboard_auto(&final_command)?;
+    if let Err(e) = crate::logging::audit_log("copy", snippet, None) {
+        tracing::debug!("Audit log write failed: {}", e);
+    }
+    let mut usage_idx = crate::usage::UsageIndex::load();
+    usage_idx.record_use(&snippet.id);
+    let _ = usage_idx.save();
+    Ok(())
+}
+
 /// Copies the selected snippet's expanded command to the clipboard.
 pub fn run(
     filter: Option<String>,

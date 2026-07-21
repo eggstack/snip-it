@@ -33,16 +33,17 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `version` | `v` | — | No | Print version |
 | `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor |
 | `list` | `l` | `list_cmd` | No | List snippets (fuzzy filter; `--search-output` includes output in match) |
-| `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell |
-| `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard |
+| `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
+| `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |
-| `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`) |
+| `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`); exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI for output editing |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
 | `sync` | `y` | `sync_cmd` | Yes | Sync snippets with server |
 | `cron` | — | `cron_cmd` | No | Generate crontab entry for auto-sync |
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
 | `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
+| `get` | — | `get_cmd` | No | Deterministic non-TUI snippet retrieval (never executes, no clipboard) |
 | `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden.** Detached debounce worker for auto-sync (internal use) |
 | `auto-sync-execute` | — | `auto_sync::executor` | No | **Hidden.** Killable sync executor subprocess (internal use) |
 
@@ -83,6 +84,40 @@ and no empty/whitespace-only input. Source resolution completes before library
 mutation, so partial failures cannot corrupt the snippet collection. The editor
 command specification is parsed with `shell-words` — no shell is invoked.
 
+## Exact Selectors (Phase 08A)
+
+`run`, `clip`, and `edit` support `--id`, `--description-exact`, and `--command-exact`
+flags that bypass the TUI entirely. When any of these flags is provided, the command
+resolves the snippet deterministically via `SnippetSelector` and proceeds directly
+to the action (execute, copy, or edit output field).
+
+- `--id <UUID>` — match by exact snippet UUID
+- `--description-exact <text>` — match by exact description (case-insensitive)
+- `--command-exact <text>` — match by exact command text (case-insensitive)
+
+These flags conflict with `--filter` (TUI fuzzy filter) and with each other.
+See [selector.md](selector.md) for the full resolution model.
+
+## Exit Codes (Phase 08A)
+
+All commands map outcomes to stable exit codes via `CliOutcome`:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Usage/argument error (Clap) |
+| 3 | Not found |
+| 4 | User cancelled |
+| 5 | Ambiguous match |
+| 6 | Validation/persistence failure |
+| 7 | Sync failure |
+| 8 | Execution failure |
+| 9 | Conflict/refused |
+
+`PersistenceFailed` maps to code 1 (general error). `ExecutionFailed` propagates the
+child process exit code when available, falling back to code 8.
+
 ## Key Files
 
 - `src/main.rs` — CLI definition, signal handling, command dispatch
@@ -100,3 +135,6 @@ command specification is parsed with `shell-words` — no shell is invoked.
 - `src/commands/keybindings_cmd.rs` — Keybinding reference display
 - `src/commands/list_cmd.rs` — CLI-based snippet listing with fuzzy filter
 - `src/output.rs` — Output/notes presentation model, terminal sanitization, search scoring
+- `src/commands/get_cmd.rs` — Deterministic non-TUI snippet retrieval
+- `src/selector.rs` — Shared snippet selector model, resolution policies
+- `src/outcome.rs` — CLI outcome types, exit-code mapping

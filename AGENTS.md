@@ -42,6 +42,9 @@ cargo test --test identity_contract
 # Lint (warnings are errors)
 cargo clippy --workspace --all-targets -- -D warnings
 
+# Run clippy (warnings are errors)
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
 # Format check
 cargo fmt --all -- --check
 cargo fmt  # auto-format
@@ -106,6 +109,9 @@ src/commands/validate_cmd.rs Validation command (comprehensive read-only checks)
 src/commands/backup_cmd.rs  Backup snapshot command (manifest, checksums, secret-free)
 src/commands/restore_cmd.rs Restore command (dry-run, merge, replace, rollback)
 src/commands/repair_cmd.rs  Conservative repair command (idempotent, backed-up)
+src/selector.rs          Shared snippet selector model (SnippetSelector, ResolutionPolicy)
+src/outcome.rs           CLI outcome types and exit-code mapping (CliOutcome)
+src/commands/get_cmd.rs  Deterministic non-TUI snippet retrieval
 ```
 
 ## Critical Gotchas
@@ -201,6 +207,16 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 - Default theme (`Cyber Red`) hardcoded as fallback via `include_str!`
 - `SNP_THEME` env var for backward compat
 
+### CLI and Automation (Phase 08A)
+- `snp get` provides deterministic non-TUI snippet retrieval (never executes)
+- Exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI on `run`, `clip`, `edit`
+- `--var key=value` provides explicit noninteractive variable assignment (repeatable)
+- `CliOutcome` enum maps typed results to stable exit codes (0-9)
+- `SnippetSelector` / `ResolutionPolicy` provide shared selector model for all deterministic targeting
+- `VariableAssignments` type handles explicit variable values with duplicate detection
+- Machine-output modes: `--json`, `--csv`, `--raw`, `--field`, `--expanded`
+- Noninteractive modes never prompt; TTY detection prevents unexpected prompts
+
 ## Configuration Files
 
 - `~/.config/snp/snippets.toml` — main storage (or per-library in `libraries/`)
@@ -283,6 +299,45 @@ The following items were removed as dead public API:
 
 Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
 
+## Phase 08A: CLI and Automation Polish
+
+Phase 08A adds deterministic noninteractive retrieval, shared exact selectors, stable output and exit contracts, explicit variable assignment, and safe composition.
+
+### New Commands
+- `snp get` — deterministic non-TUI retrieval (never executes, no clipboard, no mutation)
+
+### New Flags
+- `--id`, `--description-exact`, `--command-exact` on `run`, `clip`, `edit` (bypass TUI)
+- `--var key=value` on `get` (explicit variable assignment, repeatable)
+- `--resolution` on `get` (unique, first, all)
+
+### Exit Codes
+- 0: success
+- 1: general error
+- 2: usage/argument error
+- 3: not found
+- 4: user cancelled
+- 5: ambiguous match
+- 6: validation/persistence failure
+- 7: sync failure
+- 8: execution failure
+- 9: conflict/refused
+
+### Key Types
+- `SnippetSelector` — shared selector model for all deterministic targeting
+- `ResolutionPolicy` — Unique, First, All
+- `SelectionResult` — One, Many, NotFound, Ambiguous
+- `CliOutcome` — typed application outcome for exit-code mapping
+- `VariableAssignments` — explicit noninteractive variable values
+- `GetField` — output field selector for `snp get`
+
+### Verification
+```bash
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+cargo test --workspace --all-features
+```
+
 ## Architecture Documentation
 
 The `architecture/` directory contains deep-dive documents for each module. Use them as reference when working on specific subsystems:
@@ -309,6 +364,8 @@ The `architecture/` directory contains deep-dive documents for each module. Use 
 | `architecture/logging.md` | Structured logging |
 | `architecture/clipboard.md` | Cross-platform clipboard |
 | `architecture/utils.md` | Config paths, TOML helpers |
+| `architecture/selector.md` | Snippet selector model, resolution policies |
+| `architecture/outcome.md` | CLI outcome types, exit-code mapping |
 
 ## Skills
 

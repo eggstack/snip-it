@@ -547,6 +547,85 @@ pub fn has_unmatched_angle_bracket(command: &str) -> bool {
     false
 }
 
+use crate::error::{SnipError, SnipResult};
+
+/// Explicit noninteractive variable assignments.
+///
+/// Parsed from `--var key=value` CLI arguments. Duplicate keys with
+/// different values are rejected.
+#[derive(Debug, Clone, Default)]
+pub struct VariableAssignments(std::collections::BTreeMap<String, String>);
+
+impl VariableAssignments {
+    /// Parse a `key=value` assignment string.
+    pub fn parse_arg(s: &str) -> SnipResult<(String, String)> {
+        let eq_pos = s.find('=').ok_or_else(|| {
+            SnipError::runtime_error(
+                "Invalid variable assignment",
+                Some(&format!("Expected key=value, got: {s}")),
+            )
+        })?;
+        let key = s[..eq_pos].trim().to_string();
+        let value = s[eq_pos + 1..].to_string();
+        if key.is_empty() {
+            return Err(SnipError::runtime_error(
+                "Invalid variable assignment",
+                Some("Variable name cannot be empty"),
+            ));
+        }
+        Ok((key, value))
+    }
+
+    /// Create from an iterator of parsed (key, value) pairs.
+    /// Rejects conflicting duplicate keys.
+    pub fn from_pairs(pairs: impl Iterator<Item = (String, String)>) -> SnipResult<Self> {
+        let mut map = std::collections::BTreeMap::new();
+        for (key, value) in pairs {
+            if let Some(existing) = map.get(&key)
+                && existing != &value
+            {
+                return Err(SnipError::runtime_error(
+                    "Conflicting variable assignment",
+                    Some(&format!(
+                        "Variable '{key}' assigned to both '{existing}' and '{value}'"
+                    )),
+                ));
+            }
+            map.insert(key, value);
+        }
+        Ok(Self(map))
+    }
+
+    /// Get the value for a variable name.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(|s| s.as_str())
+    }
+
+    /// Check if a variable has been assigned.
+    #[allow(dead_code)]
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
+    /// Iterate over (name, value) pairs.
+    #[allow(dead_code)]
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Number of assignments.
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are no assignments.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
     let tokens: Vec<String> = extract_variable_tokens(command)
         .into_iter()
@@ -1695,5 +1774,104 @@ mod tests {
             // Parsing the expanded result must not panic
             let _ = parse_variables(&expanded);
         }
+    }
+
+    // ========================================================================
+    // VariableAssignments unit tests
+    // ========================================================================
+
+    #[test]
+    fn test_var_assignments_parse_arg_valid() {
+        let (k, v) = VariableAssignments::parse_arg("host=example.com").unwrap();
+        assert_eq!(k, "host");
+        assert_eq!(v, "example.com");
+    }
+
+    #[test]
+    fn test_var_assignments_parse_arg_missing_eq() {
+        assert!(VariableAssignments::parse_arg("noeqsign").is_err());
+    }
+
+    #[test]
+    fn test_var_assignments_parse_arg_empty_key() {
+        assert!(VariableAssignments::parse_arg("=value").is_err());
+    }
+
+    #[test]
+    fn test_var_assignments_parse_arg_value_with_equals() {
+        let (k, v) = VariableAssignments::parse_arg("key=val=ue").unwrap();
+        assert_eq!(k, "key");
+        assert_eq!(v, "val=ue");
+    }
+
+    #[test]
+    fn test_var_assignments_parse_arg_empty_value() {
+        let (k, v) = VariableAssignments::parse_arg("key=").unwrap();
+        assert_eq!(k, "key");
+        assert_eq!(v, "");
+    }
+
+    #[test]
+    fn test_var_assignments_parse_arg_trims_key_whitespace() {
+        let (k, v) = VariableAssignments::parse_arg("  key  =value").unwrap();
+        assert_eq!(k, "key");
+        assert_eq!(v, "value");
+    }
+
+    #[test]
+    fn test_var_assignments_from_pairs_no_duplicates() {
+        let pairs = vec![("a".into(), "1".into()), ("b".into(), "2".into())];
+        let assignments = VariableAssignments::from_pairs(pairs.into_iter()).unwrap();
+        assert_eq!(assignments.len(), 2);
+        assert_eq!(assignments.get("a"), Some("1"));
+        assert_eq!(assignments.get("b"), Some("2"));
+    }
+
+    #[test]
+    fn test_var_assignments_from_pairs_same_value_duplicate_ok() {
+        let pairs = vec![("a".into(), "1".into()), ("a".into(), "1".into())];
+        let assignments = VariableAssignments::from_pairs(pairs.into_iter()).unwrap();
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments.get("a"), Some("1"));
+    }
+
+    #[test]
+    fn test_var_assignments_from_pairs_conflicting_duplicates() {
+        let pairs = vec![("a".into(), "1".into()), ("a".into(), "2".into())];
+        assert!(VariableAssignments::from_pairs(pairs.into_iter()).is_err());
+    }
+
+    #[test]
+    fn test_var_assignments_get_missing() {
+        let assignments = VariableAssignments::default();
+        assert_eq!(assignments.get("anything"), None);
+    }
+
+    #[test]
+    fn test_var_assignments_contains() {
+        let pairs = vec![("x".into(), "y".into())];
+        let assignments = VariableAssignments::from_pairs(pairs.into_iter()).unwrap();
+        assert!(assignments.contains("x"));
+        assert!(!assignments.contains("z"));
+    }
+
+    #[test]
+    fn test_var_assignments_iter() {
+        let pairs = vec![("a".into(), "1".into()), ("b".into(), "2".into())];
+        let assignments = VariableAssignments::from_pairs(pairs.into_iter()).unwrap();
+        let collected: Vec<_> = assignments.iter().collect();
+        assert_eq!(collected, vec![("a", "1"), ("b", "2")]);
+    }
+
+    #[test]
+    fn test_var_assignments_len_and_is_empty() {
+        let empty = VariableAssignments::default();
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
+
+        let pairs = vec![("k".into(), "v".into())];
+        let one = VariableAssignments::from_pairs(pairs.into_iter()).unwrap();
+        assert_eq!(one.len(), 1);
+        assert!(!one.is_empty());
     }
 }

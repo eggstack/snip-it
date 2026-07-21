@@ -243,6 +243,23 @@ pub fn run(
     Ok(())
 }
 
+/// Execute a specific snippet directly, bypassing TUI selection.
+pub fn run_exact(
+    snippet: &Snippet,
+    do_sync: bool,
+    _runtime: &tokio::runtime::Runtime,
+) -> SnipResult<()> {
+    let result = process_snippet(snippet, false)?;
+    if let crate::ProcessResult::Done(_) = result {}
+    if do_sync {
+        crate::auto_sync::notify_mutation(
+            crate::auto_sync::MutationKind::SnippetRun,
+            crate::auto_sync::MutationOrigin::User,
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

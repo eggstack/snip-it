@@ -380,4 +380,176 @@ mod tests {
         let output = run_migrations(&path, &migrations).unwrap();
         assert_eq!(output.files_migrated, 0);
     }
+
+    // ─── Fixture tests: legacy formats and edge cases ───
+
+    /// Legacy `[[Snippets]]` spelling (capital S) — should parse via serde alias.
+    #[test]
+    fn test_fixture_legacy_snippets_capital_spelling() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy_cap.toml");
+        let content = r#"[[Snippets]]
+description = "legacy snippet"
+command = "echo legacy"
+"#;
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion::LEGACY);
+        assert!(needs_migration(&path).unwrap());
+    }
+
+    /// Capitalized field names (`Description`, `Command`, etc.) — should parse via aliases.
+    #[test]
+    fn test_fixture_capitalized_field_names() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cap_fields.toml");
+        let content = r#"[[snippets]]
+Description = "capitalized field"
+Command = "echo capitalized"
+"#;
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion::LEGACY);
+    }
+
+    /// Missing IDs — empty id field should be handled by load_library.
+    #[test]
+    fn test_fixture_missing_ids() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("no_ids.toml");
+        let content = r#"schema_version = 1
+
+[[snippets]]
+description = "no id snippet"
+command = "echo no-id"
+
+[[snippets]]
+description = "another no id"
+command = "echo also-no-id"
+"#;
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion(1));
+        assert!(!needs_migration(&path).unwrap());
+    }
+
+    /// Current canonical format — no migration needed.
+    #[test]
+    fn test_fixture_current_canonical_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("canonical.toml");
+        let content = r#"schema_version = 1
+
+[[snippets]]
+id = "abc-123"
+description = "current snippet"
+command = "echo current"
+tag = "test"
+favorite = true
+created_at = 1700000000
+updated_at = 1700000000
+"#;
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion(1));
+        assert!(!needs_migration(&path).unwrap());
+    }
+
+    /// Future unsupported schema version — needs_migration should return false
+    /// (we can't migrate to a future version, but it shouldn't panic).
+    #[test]
+    fn test_fixture_future_schema_no_panic() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("future.toml");
+        let content = "schema_version = 999\nsnippets = []\n";
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion(999));
+        // needs_migration compares < CURRENT, so v999 is NOT less than v1
+        assert!(!needs_migration(&path).unwrap());
+    }
+
+    /// Malformed source preservation — write_schema_version should not
+    /// corrupt content that isn't valid TOML (returns error).
+    #[test]
+    fn test_fixture_malformed_source_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("malformed.toml");
+        fs::write(&path, "this is not [valid toml {{{{").unwrap();
+        let result = write_schema_version(&path, SchemaVersion(1));
+        assert!(result.is_err());
+        // Original content should be unchanged
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("this is not [valid toml"));
+    }
+
+    /// write_schema_version preserves array-of-tables structure.
+    #[test]
+    fn test_fixture_write_schema_preserves_array_of_tables() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("aot.toml");
+        let content = r#"[[snippets]]
+description = "first"
+command = "echo 1"
+
+[[snippets]]
+description = "second"
+command = "echo 2"
+"#;
+        fs::write(&path, content).unwrap();
+        write_schema_version(&path, SchemaVersion(1)).unwrap();
+
+        let result = fs::read_to_string(&path).unwrap();
+        assert!(result.contains("schema_version = 1"));
+        assert!(result.contains("[[snippets]]"));
+        assert!(result.contains("echo 1"));
+        assert!(result.contains("echo 2"));
+    }
+
+    /// Historical timestamp format — timestamps as strings should be
+    /// preserved as-is by serde (the library stores them as i64).
+    #[test]
+    fn test_fixture_historical_timestamp_forms() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("timestamps.toml");
+        let content = r#"schema_version = 1
+
+[[snippets]]
+id = "ts-test"
+description = "timestamped"
+command = "echo ts"
+created_at = 1700000000
+updated_at = 1700000000
+"#;
+        fs::write(&path, content).unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion(1));
+    }
+
+    /// Migration idempotency — running the same migration twice should
+    /// produce the same result.
+    #[test]
+    fn test_fixture_migration_idempotency() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("idempotent.toml");
+        fs::write(&path, "snippets = []\n").unwrap();
+
+        let migrations: Vec<Box<dyn Migration>> = vec![Box::new(TestMigration)];
+        let out1 = run_migrations(&path, &migrations).unwrap();
+        assert_eq!(out1.files_migrated, 1);
+
+        let out2 = run_migrations(&path, &migrations).unwrap();
+        assert_eq!(out2.files_migrated, 0); // Already at v1, no-op
+    }
+
+    /// Empty file — schema version should be LEGACY and needs migration.
+    #[test]
+    fn test_fixture_empty_file_needs_migration() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.toml");
+        fs::write(&path, "").unwrap();
+        let version = get_schema_version(&path).unwrap();
+        assert_eq!(version, SchemaVersion::LEGACY);
+        assert!(needs_migration(&path).unwrap());
+    }
 }

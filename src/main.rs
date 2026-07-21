@@ -168,6 +168,15 @@ enum Commands {
         /// Show favorites before other snippets
         #[arg(long, action = clap::ArgAction::SetTrue)]
         favorites_first: bool,
+        /// Match by exact snippet UUID (bypasses TUI)
+        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
+        id: Option<String>,
+        /// Match by exact description (bypasses TUI)
+        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
+        description_exact: Option<String>,
+        /// Match by exact command text (bypasses TUI)
+        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
+        command_exact: Option<String>,
     },
     /// Copy a snippet to clipboard via TUI selection (c)
     #[command(alias = "c")]
@@ -184,6 +193,15 @@ enum Commands {
         /// Show favorites before other snippets
         #[arg(long, action = clap::ArgAction::SetTrue)]
         favorites_first: bool,
+        /// Match by exact snippet UUID (bypasses TUI)
+        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
+        id: Option<String>,
+        /// Match by exact description (bypasses TUI)
+        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
+        description_exact: Option<String>,
+        /// Match by exact command text (bypasses TUI)
+        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
+        command_exact: Option<String>,
     },
     /// Search for a snippet via TUI selection (s)
     #[command(alias = "s")]
@@ -242,6 +260,15 @@ enum Commands {
         /// Filter to select which snippet to edit output on (required with output flags)
         #[arg(short, long)]
         filter: Option<String>,
+        /// Match by exact snippet UUID (bypasses TUI for output editing)
+        #[arg(long, conflicts_with_all = ["description_exact", "command_exact"])]
+        id: Option<String>,
+        /// Match by exact description (bypasses TUI)
+        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact"])]
+        description_exact: Option<String>,
+        /// Match by exact command text (bypasses TUI)
+        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact"])]
+        command_exact: Option<String>,
     },
     /// Show keybindings
     #[command(alias = "k")]
@@ -332,6 +359,19 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         json: bool,
     },
+    /// Validate snippet data (read-only)
+    #[command(alias = "val")]
+    Validate {
+        /// Validate a specific library
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Treat warnings as errors
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        strict: bool,
+        /// Output as JSON
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
     /// Generate shell completions
     #[command(alias = "g")]
     Completions {
@@ -383,6 +423,42 @@ enum Commands {
         json: bool,
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync_only: bool,
+    },
+    /// Retrieve a snippet deterministically (no TUI, no execution)
+    Get {
+        /// Match by exact snippet UUID
+        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "query"])]
+        id: Option<String>,
+        /// Match by exact description (case-insensitive)
+        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "query"])]
+        description_exact: Option<String>,
+        /// Match by exact command text (case-insensitive)
+        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "query"])]
+        command_exact: Option<String>,
+        /// Fuzzy query match
+        #[arg(short, long, conflicts_with_all = ["id", "description_exact", "command_exact"])]
+        query: Option<String>,
+        /// Library scope (name, or "all" for all libraries)
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Output only a specific field
+        #[arg(long, value_enum)]
+        field: Option<commands::get_cmd::GetField>,
+        /// Output raw stored bytes (no variable expansion, no trailing newline)
+        #[arg(long, conflicts_with = "expanded")]
+        raw: bool,
+        /// Output with variables expanded using defaults
+        #[arg(long, conflicts_with = "raw")]
+        expanded: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Resolution policy for multiple matches
+        #[arg(long, value_enum, default_value_t = snip_it::selector::ResolutionPolicy::Unique)]
+        resolution: snip_it::selector::ResolutionPolicy,
+        /// Explicit variable assignment (repeatable: --var host=example.com --var env=prod)
+        #[arg(long = "var", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+        vars: Option<Vec<String>>,
     },
     /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
     #[command(name = "auto-sync-worker", hide = true)]
@@ -632,12 +708,56 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             library,
             sort,
             favorites_first,
+            id,
+            description_exact,
+            command_exact,
         }) => {
-            let sort_opts = snip_it::sort::SortOptions {
-                mode: sort,
-                favorites_first,
-            };
-            commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
+            if id.is_some() || description_exact.is_some() || command_exact.is_some() {
+                // Exact targeting: bypass TUI
+                let lib_scope = match &library {
+                    Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
+                    None => snip_it::selector::LibraryScope::Primary,
+                };
+                let mut selector = snip_it::selector::SnippetSelector::new(
+                    snip_it::selector::ResolutionPolicy::Unique,
+                )
+                .with_library(lib_scope);
+                if let Some(id) = id {
+                    selector = selector.with_id(id);
+                }
+                if let Some(desc) = description_exact {
+                    selector = selector.with_description_exact(desc);
+                }
+                if let Some(cmd) = command_exact {
+                    selector = selector.with_command_exact(cmd);
+                }
+                let result = snip_it::selector::resolve_selector(&selector)?;
+                match result {
+                    snip_it::selector::SelectionResult::One(m) => {
+                        commands::run_cmd::run_exact(&m.snippet, sync, &RUNTIME)?;
+                    }
+                    snip_it::selector::SelectionResult::Ambiguous(identities) => {
+                        eprintln!("Ambiguous match. Multiple snippets match:");
+                        for identity in &identities {
+                            eprintln!(
+                                "  {} - {} ({})",
+                                identity.id, identity.description, identity.library_name
+                            );
+                        }
+                        std::process::exit(5);
+                    }
+                    _ => {
+                        eprintln!("Snippet not found");
+                        std::process::exit(3);
+                    }
+                }
+            } else {
+                let sort_opts = snip_it::sort::SortOptions {
+                    mode: sort,
+                    favorites_first,
+                };
+                commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
+            }
         }
         Some(Commands::Clip {
             filter,
@@ -645,12 +765,55 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             library,
             sort,
             favorites_first,
+            id,
+            description_exact,
+            command_exact,
         }) => {
-            let sort_opts = snip_it::sort::SortOptions {
-                mode: sort,
-                favorites_first,
-            };
-            commands::clip_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
+            if id.is_some() || description_exact.is_some() || command_exact.is_some() {
+                let lib_scope = match &library {
+                    Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
+                    None => snip_it::selector::LibraryScope::Primary,
+                };
+                let mut selector = snip_it::selector::SnippetSelector::new(
+                    snip_it::selector::ResolutionPolicy::Unique,
+                )
+                .with_library(lib_scope);
+                if let Some(id) = id {
+                    selector = selector.with_id(id);
+                }
+                if let Some(desc) = description_exact {
+                    selector = selector.with_description_exact(desc);
+                }
+                if let Some(cmd) = command_exact {
+                    selector = selector.with_command_exact(cmd);
+                }
+                let result = snip_it::selector::resolve_selector(&selector)?;
+                match result {
+                    snip_it::selector::SelectionResult::One(m) => {
+                        commands::clip_cmd::run_exact(&m.snippet)?;
+                    }
+                    snip_it::selector::SelectionResult::Ambiguous(identities) => {
+                        eprintln!("Ambiguous match. Multiple snippets match:");
+                        for identity in &identities {
+                            eprintln!(
+                                "  {} - {} ({})",
+                                identity.id, identity.description, identity.library_name
+                            );
+                        }
+                        std::process::exit(5);
+                    }
+                    _ => {
+                        eprintln!("Snippet not found");
+                        std::process::exit(3);
+                    }
+                }
+            } else {
+                let sort_opts = snip_it::sort::SortOptions {
+                    mode: sort,
+                    favorites_first,
+                };
+                commands::clip_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
+            }
         }
         Some(Commands::Search {
             filter,
@@ -696,8 +859,12 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             output_stdin,
             clear_output,
             filter,
+            id,
+            description_exact,
+            command_exact,
         }) => {
             let has_output_flags = output.is_some() || output_stdin || clear_output;
+            let has_exact = id.is_some() || description_exact.is_some() || command_exact.is_some();
             if has_output_flags {
                 let output_value = if clear_output {
                     Some(String::new())
@@ -716,13 +883,57 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 } else {
                     output
                 };
-                let filter_str = filter.ok_or_else(|| {
-                    snip_it::error::SnipError::runtime_error(
-                        "--filter is required when using --output, --output-stdin, or --clear-output",
-                        None,
+                if has_exact {
+                    let lib_scope = match &library {
+                        Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
+                        None => snip_it::selector::LibraryScope::Primary,
+                    };
+                    let mut selector = snip_it::selector::SnippetSelector::new(
+                        snip_it::selector::ResolutionPolicy::Unique,
                     )
-                })?;
-                commands::edit_cmd::run_edit_output(library, filter_str, output_value)?;
+                    .with_library(lib_scope);
+                    if let Some(id) = id {
+                        selector = selector.with_id(id);
+                    }
+                    if let Some(desc) = description_exact {
+                        selector = selector.with_description_exact(desc);
+                    }
+                    if let Some(cmd) = command_exact {
+                        selector = selector.with_command_exact(cmd);
+                    }
+                    let result = snip_it::selector::resolve_selector(&selector)?;
+                    match result {
+                        snip_it::selector::SelectionResult::One(m) => {
+                            commands::edit_cmd::run_edit_output(
+                                library,
+                                m.snippet.description.clone(),
+                                output_value,
+                            )?;
+                        }
+                        snip_it::selector::SelectionResult::Ambiguous(identities) => {
+                            eprintln!("Ambiguous match. Multiple snippets match:");
+                            for identity in &identities {
+                                eprintln!(
+                                    "  {} - {} ({})",
+                                    identity.id, identity.description, identity.library_name
+                                );
+                            }
+                            std::process::exit(5);
+                        }
+                        _ => {
+                            eprintln!("Snippet not found");
+                            std::process::exit(3);
+                        }
+                    }
+                } else {
+                    let filter_str = filter.ok_or_else(|| {
+                        snip_it::error::SnipError::runtime_error(
+                            "--filter is required when using --output, --output-stdin, or --clear-output",
+                            None,
+                        )
+                    })?;
+                    commands::edit_cmd::run_edit_output(library, filter_str, output_value)?;
+                }
             } else {
                 commands::edit_cmd::run(library, None)?;
             }
@@ -881,6 +1092,13 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         }) => {
             commands::repair_cmd::run(dry_run, apply, library, json)?;
         }
+        Some(Commands::Validate {
+            library,
+            strict,
+            json,
+        }) => {
+            commands::validate_cmd::run(library, strict, json)?;
+        }
         Some(Commands::Backup {
             output,
             include_usage,
@@ -903,6 +1121,40 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         }
         Some(Commands::Status { json, sync_only }) => {
             commands::status_cmd::run(json, sync_only)?;
+        }
+        Some(Commands::Get {
+            id,
+            description_exact,
+            command_exact,
+            query,
+            library,
+            field,
+            raw,
+            expanded,
+            json,
+            resolution,
+            vars,
+        }) => {
+            let outcome = commands::get_cmd::run(
+                id,
+                description_exact,
+                command_exact,
+                query,
+                library,
+                field,
+                raw,
+                expanded,
+                json,
+                resolution,
+                vars,
+            )?;
+            return match outcome {
+                snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
+                snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
+                _ => {
+                    std::process::exit(outcome.exit_code());
+                }
+            };
         }
         Some(Commands::AutoSyncWorker { state_dir }) => {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);

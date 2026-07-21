@@ -64,6 +64,7 @@ pub enum MutationKind {
     SnippetCreate,
     SnippetUpdate,
     SnippetDelete,
+    SnippetRun,
     Import,
     LibraryChange,
     PremadeInstall,

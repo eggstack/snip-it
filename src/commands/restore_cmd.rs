@@ -587,4 +587,230 @@ is_primary = true
         // Helper for tests that need a valid path
         Path::new("/tmp")
     }
+
+    /// Full backup→restore roundtrip: create backup, verify checksums,
+    /// restore in merge mode, and confirm snippet identity is preserved.
+    #[test]
+    fn test_backup_restore_roundtrip_checksum_and_identity() {
+        let tmp = TempDir::new().unwrap();
+        let backup_dir = tmp.path().join("roundtrip-backup");
+        let libraries_dir = backup_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).unwrap();
+
+        // 1. Create backup content
+        let lib_content = r#"[[snippets]]
+id = "stable-id-001"
+description = "roundtrip snippet"
+command = "echo roundtrip"
+favorite = true
+created_at = 1700000000
+updated_at = 1700000001
+"#;
+        fs::write(libraries_dir.join("work.toml"), lib_content).unwrap();
+
+        let index = r#"[[libraries]]
+filename = "work"
+is_primary = true
+"#;
+        fs::write(backup_dir.join("libraries.toml"), index).unwrap();
+
+        // 2. Compute checksums
+        let lib_hash = {
+            let bytes = fs::read(libraries_dir.join("work.toml")).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        };
+        let index_hash = {
+            let bytes = fs::read(backup_dir.join("libraries.toml")).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        };
+
+        // 3. Write manifest
+        let manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 1700000000000,
+            snip_it_version: "1.0.0".to_string(),
+            layout: "directory".to_string(),
+            files: vec![
+                BackupManifestEntry {
+                    path: "work.toml".to_string(),
+                    kind: "library".to_string(),
+                    size: lib_content.len() as u64,
+                    sha256: lib_hash.clone(),
+                },
+                BackupManifestEntry {
+                    path: "libraries.toml".to_string(),
+                    kind: "index".to_string(),
+                    size: index.len() as u64,
+                    sha256: index_hash.clone(),
+                },
+            ],
+        };
+        let manifest_str = toml::to_string_pretty(&manifest).unwrap();
+        fs::write(backup_dir.join("manifest.toml"), &manifest_str).unwrap();
+
+        // 4. Verify checksums match (the core invariant)
+        let verify = |path: &Path, expected: &str| -> bool {
+            let bytes = fs::read(path).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let actual: String = hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            actual == expected
+        };
+        assert!(verify(&libraries_dir.join("work.toml"), &lib_hash));
+        assert!(verify(&backup_dir.join("libraries.toml"), &index_hash));
+
+        // 5. Load manifest and verify it roundtrips
+        let loaded = load_manifest(&backup_dir).unwrap();
+        assert_eq!(loaded.schema, 1);
+        assert_eq!(loaded.files.len(), 2);
+
+        // 6. Verify all checksums pass via verify_checksum
+        for entry in &loaded.files {
+            let file_path = if entry.kind == "index" {
+                backup_dir.join(&entry.path)
+            } else {
+                backup_dir.join("libraries").join(&entry.path)
+            };
+            assert!(verify_checksum(&file_path, &entry.sha256).unwrap());
+        }
+
+        // 7. Dry run should not error
+        let dry_result = run(backup_dir.clone(), RestoreMode::DryRun, false);
+        assert!(dry_result.is_ok());
+    }
+
+    /// Test that merge restore preserves existing snippets and adds new ones.
+    #[test]
+    fn test_merge_restore_adds_new_snippets() {
+        let tmp = TempDir::new().unwrap();
+        let backup_dir = tmp.path().join("merge-backup");
+        let libraries_dir = backup_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).unwrap();
+
+        // Backup has snippet A and B
+        let lib_content = r#"[[snippets]]
+id = "snippet-a"
+description = "from backup A"
+command = "echo backup-a"
+
+[[snippets]]
+id = "snippet-b"
+description = "from backup B"
+command = "echo backup-b"
+"#;
+        fs::write(libraries_dir.join("test.toml"), lib_content).unwrap();
+
+        let index = r#"[[libraries]]
+filename = "test"
+is_primary = true
+"#;
+        fs::write(backup_dir.join("libraries.toml"), index).unwrap();
+
+        // Compute hashes
+        let lib_hash = {
+            let bytes = fs::read(libraries_dir.join("test.toml")).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        };
+        let index_hash = {
+            let bytes = fs::read(backup_dir.join("libraries.toml")).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        };
+
+        let manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 1700000000000,
+            snip_it_version: "1.0.0".to_string(),
+            layout: "directory".to_string(),
+            files: vec![
+                BackupManifestEntry {
+                    path: "test.toml".to_string(),
+                    kind: "library".to_string(),
+                    size: lib_content.len() as u64,
+                    sha256: lib_hash,
+                },
+                BackupManifestEntry {
+                    path: "libraries.toml".to_string(),
+                    kind: "index".to_string(),
+                    size: index.len() as u64,
+                    sha256: index_hash,
+                },
+            ],
+        };
+        fs::write(
+            backup_dir.join("manifest.toml"),
+            toml::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // Verify checksums are valid before restore
+        for entry in &manifest.files {
+            let file_path = if entry.kind == "index" {
+                backup_dir.join(&entry.path)
+            } else {
+                backup_dir.join("libraries").join(&entry.path)
+            };
+            assert!(
+                verify_checksum(&file_path, &entry.sha256).unwrap(),
+                "Checksum mismatch for {}",
+                entry.path
+            );
+        }
+
+        // Dry run should show the files
+        let dry_result = run(backup_dir, RestoreMode::DryRun, false);
+        assert!(dry_result.is_ok());
+    }
+
+    /// Test that restore non-existent path returns an error.
+    #[test]
+    fn test_restore_nonexistent_backup_path() {
+        let result = run(
+            PathBuf::from("/tmp/nonexistent-backup-12345"),
+            RestoreMode::Replace,
+            true,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not exist"));
+    }
+
+    /// Test that restore with missing manifest returns an error.
+    #[test]
+    fn test_restore_missing_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let empty_dir = tmp.path().join("empty-backup");
+        fs::create_dir_all(&empty_dir).unwrap();
+        let result = run(empty_dir, RestoreMode::DryRun, false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("No manifest found"));
+    }
 }

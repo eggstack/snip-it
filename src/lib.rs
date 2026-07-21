@@ -20,6 +20,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod logging;
+pub mod outcome;
 pub mod sort;
 pub mod ui;
 
@@ -30,6 +31,7 @@ pub(crate) mod library;
 pub(crate) mod migration;
 pub(crate) mod output;
 pub mod proto;
+pub mod selector;
 pub(crate) mod status_snapshot;
 pub mod sync;
 pub(crate) mod sync_commands;
