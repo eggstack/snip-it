@@ -147,12 +147,14 @@ pub fn process_alive(pid: u32) -> bool {
 }
 
 fn generate_nonce() -> String {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{:x}-{:x}", std::process::id(), nanos)
+    format!("{:x}-{:x}-{:x}", std::process::id(), nanos, seq)
 }
 
 fn restrict_permissions(path: &Path) {

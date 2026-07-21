@@ -2728,6 +2728,7 @@ fn test_golden_corpus_sync_round_trip_preserves_command() {
             sync_direction: snip_it::config::SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: None,
             sync_limit: None,
+            credential_revision: 0,
         };
         let mut client = snip_it::sync::SyncClient::create(settings)
             .await

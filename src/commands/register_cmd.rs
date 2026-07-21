@@ -35,6 +35,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             sync_settings.server_url = server_url.clone();
             sync_settings.api_key = api_key.clone();
             sync_settings.device_id = device_id.clone();
+            sync_settings.credential_revision = 1;
 
             if let Err(e) = save_sync_settings(&sync_settings) {
                 eprintln!("Failed to save sync settings: {e}");

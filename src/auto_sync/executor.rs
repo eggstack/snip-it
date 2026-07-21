@@ -614,4 +614,55 @@ mod tests {
             }
         }
     }
+
+    /// Full process-boundary round-trip: every failure class survives
+    /// exit-code → failure_class() → as_code() → from_code() without loss.
+    /// Note: DeferredDisabled and DeferredNotConfigured both map to NotConfigured
+    /// exit code, so the process-boundary round-trip is lossy for these two.
+    /// The code-string round-trip is always lossless.
+    #[test]
+    fn test_failure_class_full_roundtrip() {
+        let all_classes = [
+            FailureClass::DeferredDisabled,
+            FailureClass::DeferredNotConfigured,
+            FailureClass::TransientNetwork,
+            FailureClass::TransientTimeout,
+            FailureClass::Authentication,
+            FailureClass::CredentialStore,
+            FailureClass::Configuration,
+            FailureClass::Conflict,
+            FailureClass::Partial,
+            FailureClass::LocalPersistence,
+            FailureClass::Internal,
+        ];
+        for class in &all_classes {
+            let code = ExecutorExitCode::from_failure_class(*class);
+            let recovered = code.failure_class();
+            // DeferredDisabled → NotConfigured → DeferredNotConfigured (lossy but equivalent)
+            if matches!(
+                class,
+                FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured
+            ) {
+                assert!(
+                    matches!(
+                        recovered,
+                        FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured
+                    ),
+                    "Deferred* round-trip must stay deferred: {class:?} → {code:?} → {recovered:?}"
+                );
+            } else {
+                assert_eq!(
+                    recovered, *class,
+                    "round-trip failed: {class:?} → {code:?} → {recovered:?}"
+                );
+            }
+            // Also verify stable code string round-trip (always lossless)
+            let code_str = class.as_code();
+            let from_str = FailureClass::from_code(code_str);
+            assert_eq!(
+                from_str, *class,
+                "code string round-trip failed: {class:?} → \"{code_str}\" → {from_str:?}"
+            );
+        }
+    }
 }

@@ -423,6 +423,9 @@ enum SyncCommands {
         /// Debounce delay in seconds before auto-sync fires (0-300)
         #[arg(long)]
         debounce: Option<u64>,
+        /// Maximum delay in seconds before forcing a sync (0-600)
+        #[arg(long)]
+        max_delay: Option<u64>,
         /// Failure mode: ignore, warn, or error
         #[arg(long)]
         failure: Option<String>,
@@ -669,10 +672,13 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 show,
                 auto_sync,
                 debounce,
+                max_delay,
                 failure,
                 timeout,
             }) => {
-                commands::sync_cmd::run_config(show, auto_sync, debounce, failure, timeout)?;
+                commands::sync_cmd::run_config(
+                    show, auto_sync, debounce, max_delay, failure, timeout,
+                )?;
             }
         },
         Some(Commands::Cron { interval }) => {

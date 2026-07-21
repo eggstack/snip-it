@@ -267,6 +267,7 @@ async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {
         sync_direction: SyncDirection::Bidirectional,
         clipboard_auto_clear_seconds: None,
         sync_limit: None,
+        credential_revision: 0,
     };
     SyncClient::create(settings)
         .await

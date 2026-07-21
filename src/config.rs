@@ -226,6 +226,11 @@ pub struct SyncSettings {
     pub clipboard_auto_clear_seconds: Option<u32>,
     #[serde(default)]
     pub sync_limit: Option<i32>,
+    /// Monotonically increasing counter incremented whenever `api_key` changes.
+    /// Used by the config fingerprint to detect credential replacement without
+    /// persisting the key value itself.
+    #[serde(default)]
+    pub credential_revision: u64,
 }
 
 impl std::fmt::Debug for SyncSettings {
@@ -253,6 +258,7 @@ impl std::fmt::Debug for SyncSettings {
                 &self.clipboard_auto_clear_seconds,
             )
             .field("sync_limit", &self.sync_limit)
+            .field("credential_revision", &self.credential_revision)
             .finish()
     }
 }
@@ -280,6 +286,7 @@ impl Clone for SyncSettings {
             sync_direction: self.sync_direction.clone(),
             clipboard_auto_clear_seconds: self.clipboard_auto_clear_seconds,
             sync_limit: self.sync_limit,
+            credential_revision: self.credential_revision,
         }
     }
 }
@@ -452,6 +459,7 @@ impl Default for SyncSettings {
             sync_direction: SyncDirection::default(),
             clipboard_auto_clear_seconds: None,
             sync_limit: None,
+            credential_revision: 0,
         }
     }
 }
@@ -618,6 +626,7 @@ mod tests {
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(2000),
+            credential_revision: 0,
         };
 
         let toml_str = toml::to_string_pretty(&settings).unwrap();
@@ -793,6 +802,7 @@ sync_direction = "Bidirectional"
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(500),
+            credential_revision: 0,
         };
         let toml_str = toml::to_string_pretty(&settings).unwrap();
         // Use from_str directly to avoid keychain lookup
@@ -823,6 +833,7 @@ sync_direction = "Bidirectional"
             sync_direction: SyncDirection::Push,
             clipboard_auto_clear_seconds: Some(60),
             sync_limit: Some(500),
+            credential_revision: 0,
         };
         let toml_str = toml::to_string_pretty(&settings).unwrap();
         // Verify unrelated fields are present

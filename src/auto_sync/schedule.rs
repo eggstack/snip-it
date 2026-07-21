@@ -446,4 +446,60 @@ mod tests {
             );
         }
     }
+
+    /// 20 mutations while execution lock is held produce zero SpawnNow decisions.
+    #[test]
+    fn test_mutation_during_active_lock_does_not_spawn() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let _lock = execution_lock::try_acquire(dir.path()).unwrap();
+        for i in 0..20 {
+            pending::record_pending_mutation(
+                dir.path(),
+                PendingSnapshot::Mutation {
+                    kind: MutationKind::SnippetCreate,
+                },
+            )
+            .unwrap();
+            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+            assert_eq!(
+                decision,
+                ScheduleDecision::AlreadyActive,
+                "mutation {i} while lock held must be AlreadyActive, got {decision:?}"
+            );
+        }
+    }
+
+    /// Structural guard: verify `spawn_worker` is only referenced from
+    /// `schedule_and_spawn` in production code (not tests or docs).
+    #[test]
+    fn test_spawn_worker_only_called_from_scheduler() {
+        let src = include_str!("schedule.rs");
+        // The only production call to spawn::spawn_worker should be in schedule_and_spawn.
+        let lines: Vec<&str> = src.lines().collect();
+        let mut production_calls = 0;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("#[") {
+                continue;
+            }
+            if trimmed.contains("spawn::spawn_worker") || trimmed.contains("spawn_worker(") {
+                // Check if this is the schedule_and_spawn function or a test
+                let in_test = lines[..i].iter().any(|l| l.contains("#[cfg(test)]"));
+                if !in_test {
+                    production_calls += 1;
+                }
+            }
+        }
+        assert_eq!(
+            production_calls, 1,
+            "spawn_worker should be called in exactly one production location (schedule_and_spawn), found {production_calls}"
+        );
+    }
 }

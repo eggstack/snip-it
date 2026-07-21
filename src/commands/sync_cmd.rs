@@ -347,6 +347,7 @@ pub fn run_config(
     show: bool,
     auto_sync: Option<String>,
     debounce: Option<u64>,
+    max_delay: Option<u64>,
     failure: Option<String>,
     timeout: Option<u64>,
 ) -> SnipResult<()> {
@@ -355,12 +356,15 @@ pub fn run_config(
         e
     })?;
 
-    let has_changes =
-        auto_sync.is_some() || debounce.is_some() || failure.is_some() || timeout.is_some();
+    let has_changes = auto_sync.is_some()
+        || debounce.is_some()
+        || max_delay.is_some()
+        || failure.is_some()
+        || timeout.is_some();
 
     if !show && !has_changes {
         eprintln!(
-            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --timeout <secs> | --failure ignore|warn|error"
+            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --max-delay <secs> | --timeout <secs> | --failure ignore|warn|error"
         );
         return Ok(());
     }
@@ -433,6 +437,25 @@ pub fn run_config(
         eprintln!(
             "Debounce set to {} seconds",
             settings.auto_sync_debounce_seconds
+        );
+    }
+
+    if let Some(secs) = max_delay {
+        if secs > crate::config::AUTO_SYNC_MAX_DELAY_MAX {
+            eprintln!(
+                "Max delay value {} exceeds maximum {}; clamping to {}",
+                secs,
+                crate::config::AUTO_SYNC_MAX_DELAY_MAX,
+                crate::config::AUTO_SYNC_MAX_DELAY_MAX
+            );
+        }
+        settings.auto_sync_max_delay_seconds = Some(secs.clamp(
+            crate::config::AUTO_SYNC_MAX_DELAY_MIN,
+            crate::config::AUTO_SYNC_MAX_DELAY_MAX,
+        ));
+        eprintln!(
+            "Max delay set to {} seconds",
+            settings.auto_sync_max_delay().as_secs()
         );
     }
 

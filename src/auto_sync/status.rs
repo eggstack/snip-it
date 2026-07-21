@@ -334,8 +334,9 @@ fn unix_now_ms() -> u64 {
 /// Compute a configuration fingerprint from sync settings.
 ///
 /// Contains only non-secret structural inputs: server URL, enabled flags,
-/// and sync direction. The API key value is NOT included — only its
-/// presence (via `has_api_key`) is captured.
+/// sync direction, and a credential revision counter. The API key value is
+/// NOT included — only the monotonically-increasing `credential_revision`
+/// counter captures key replacement.
 pub fn compute_config_fingerprint(settings: &crate::config::SyncSettings) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -345,7 +346,7 @@ pub fn compute_config_fingerprint(settings: &crate::config::SyncSettings) -> u64
     settings.enabled.hash(&mut hasher);
     settings.auto_sync.hash(&mut hasher);
     format!("{:?}", settings.sync_direction).hash(&mut hasher);
-    (!settings.api_key.is_empty()).hash(&mut hasher);
+    settings.credential_revision.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -356,8 +357,13 @@ pub fn compute_config_fingerprint(settings: &crate::config::SyncSettings) -> u64
 /// `consecutive_failures` to 0, permitting a new attempt. Returns `true`
 /// if the deferral was released.
 pub fn release_deferral_on_config_change(state_dir: &Path, current_fingerprint: u64) -> bool {
-    let Some(mut status) = read_status(state_dir) else {
-        return false;
+    let mut status = match read_status_typed(state_dir) {
+        StatusRead::Valid(s) => s,
+        StatusRead::Corrupt(e) => {
+            tracing::warn!(error = %e, "corrupt status cannot release deferral");
+            return false;
+        }
+        StatusRead::Missing => return false,
     };
 
     if !status.attention_required || status.config_fingerprint == 0 {

@@ -111,7 +111,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
     let _lock_keepalive = lock;
     let clock = SystemClock;
     let start = clock.now_instant();
-    let max_lifetime = Duration::from_secs(policy::WORKER_MAX_LIFETIME_SECS);
+    let max_lifetime = policy.worker_lifetime;
 
     if !policy.enabled {
         tracing::info!("auto-sync worker exiting: policy disabled; pending preserved");
@@ -464,7 +464,7 @@ fn execute_sync(
         Ok(None) => {
             tracing::warn!("sync executor timed out, terminating");
             terminate_child(&mut child);
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(policy.termination_grace);
             if let Ok(None) = child.try_wait() {
                 force_kill_child(&mut child);
                 let _ = child.wait();
@@ -504,9 +504,14 @@ fn execute_sync(
 
 /// Read the current consecutive failure count from status.
 fn next_consecutive_failures(state_dir: &Path) -> u32 {
-    status::read_status(state_dir)
-        .map(|s| s.consecutive_failures.saturating_add(1))
-        .unwrap_or(1)
+    match status::read_status_typed(state_dir) {
+        status::StatusRead::Valid(s) => s.consecutive_failures.saturating_add(1),
+        status::StatusRead::Corrupt(e) => {
+            tracing::warn!(error = %e, "corrupt status reading consecutive_failures; starting fresh");
+            1
+        }
+        status::StatusRead::Missing => 1,
+    }
 }
 
 /// Compute the current config fingerprint for deferral release detection.
@@ -1031,6 +1036,63 @@ mod tests {
         let result = preflight_check(dir.path(), 1);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("nothing to do"));
+    }
+
+    /// When preflight detects a newer generation than what debounce returned,
+    /// the caller should restart debounce with the newer state.
+    #[test]
+    fn test_preflight_newer_generation_detected() {
+        let dir = TempDir::new().unwrap();
+        // Record generation 1
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let gen1 = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(gen1.generation, 1);
+
+        // Now bump to generation 2
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+        let gen2 = pending::read_state_from_dir(dir.path()).unwrap();
+        assert_eq!(gen2.generation, 2);
+
+        // Preflight with generation 1 should return gen2 (newer)
+        let result = preflight_check(dir.path(), gen1.generation).unwrap();
+        assert_eq!(
+            result.generation, 2,
+            "preflight must return the newer generation"
+        );
+
+        // Preflight with generation 2 should also return gen2 (unchanged)
+        let result = preflight_check(dir.path(), gen2.generation).unwrap();
+        assert_eq!(result.generation, 2);
+    }
+
+    /// Marker removal during preflight produces an error (no executor spawn).
+    #[test]
+    fn test_preflight_marker_removed_returns_error() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        // Remove the marker
+        pending::clear(dir.path()).unwrap();
+        // Preflight should error (nothing to do)
+        let result = preflight_check(dir.path(), 1);
+        assert!(result.is_err());
     }
 
     #[test]
