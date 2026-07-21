@@ -6,7 +6,7 @@ Deep-dive reference for the auto-sync subsystem. For the full sync protocol and 
 
 Auto-sync is an optional, opt-in background synchronization mechanism (Release 5A–5F). It is **disabled by default** and must be explicitly enabled via `snp sync config --auto-sync on`.
 
-When enabled, mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger a detached one-shot worker that performs the remote sync after the local change is committed. The architecture uses two subprocess roles: a **debounce worker** (`auto-sync-worker`) that manages timing and a **killable sync executor** (`auto-sync-execute`) that performs the actual sync. All sync operations — worker, manual `snp sync`, explicit `--sync`, and cron — share a single `SyncExecutionLock` to prevent concurrent sync. The core invariant: **local mutations always succeed before any remote work begins.**
+When enabled, mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger a detached one-shot worker that performs the remote sync after the local change is committed. The architecture uses two subprocess roles: a **debounce worker** (`auto-sync-worker`) that manages timing and a **killable sync executor** (`auto-sync-execute`) that performs the actual sync. All sync operations — worker, manual `snp sync`, explicit `--sync`, and cron — share a single `SyncExecutionLock` to prevent concurrent sync. The core invariant: **local mutations always succeed before any remote work begins.** The executor timeout (30s default, configurable via `AutoSyncPolicy::sync_timeout`) is independent of the debounce window.
 
 ## Canonical Data Flow
 
@@ -47,13 +47,13 @@ detached worker process (snp auto-sync-worker --state-dir ...)
   -> exit WorkerOutcome
 ```
 
-**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the execution lock — every spawned worker races for the lock and exactly one wins. **Release 5F:** the worker spawns an executor subprocess for the actual sync; on timeout the executor is killed via SIGTERM/SIGKILL.
+**Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. `schedule_sync()` is the sole scheduling authority — it centralizes all spawn decisions and prevents worker storms. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the execution lock — every spawned worker races for the lock and exactly one wins. **Release 5F:** the worker spawns an executor subprocess for the actual sync; on timeout the executor is killed via SIGTERM/SIGKILL.
 
 ## Module Layout
 
 The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 
-- `policy.rs` — `AutoSyncPolicy`, `MutationKind`, `MutationOrigin`, `FailureClass`, `RetryDisposition`, `transient_backoff()`, debounce/timeout constants
+- `policy.rs` — `AutoSyncPolicy` (typed policy loading distinguishes `NotConfigured` from config failure), `MutationKind`, `MutationOrigin`, `FailureClass` (11 variants with distinct exit codes), `RetryDisposition`, `transient_backoff()`, debounce/timeout constants
 - `pending.rs` — durable `PendingState` (schema v2, CRC32 integrity), v1 → v2 migration, `ConditionalClearResult`
 - `pending_lock.rs` — `PendingTxnGuard` RAII, short-lived transaction lock for pending-marker operations, unique temp paths, atomic writes, directory fsync
 - `lock.rs` — `WorkerLock` RAII, `WorkerLockContents` (`pid`/`started_at_unix_ms`/`nonce`), `process_alive`, ownership-checked drop
@@ -61,7 +61,7 @@ The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 - `executor.rs` — `ExecutorExitCode`, `classify_sync_error()`, `effective_sync_direction`, `run_executor` entry point
 - `spawn.rs` — `spawn_worker`, `spawn_executor`, `apply_platform_detach` (libc `setsid` on Unix, `DETACHED_PROCESS|CREATE_NO_WINDOW` on Windows)
 - `worker.rs` — `run`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`, `Clock` trait for deterministic testing
-- `status.rs` — `AutoSyncStatus` (durable status persistence), `record_success()`, `record_failure()`, `compute_config_fingerprint()`, `release_deferral_on_config_change()`, secret redaction
+- `status.rs` — `AutoSyncStatus` (durable status persistence with CRC32 integrity over behavior-driving fields), `record_success()`, `record_failure()`, `compute_config_fingerprint()`, `release_deferral_on_config_change()`, secret redaction
 - `schedule.rs` — `schedule_sync()` (centralized scheduling decision), `ScheduleDecision` enum, `Caller` enum, worker storm prevention
 - `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`, `SubcommandTag`, `should_attempt_auto_sync_recovery`
 - `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock, execution_lock, status_file}` helpers used by `snp doctor`
@@ -183,7 +183,7 @@ pub enum ExecutorExitCode {
 }
 ```
 
-Standardized exit codes for the executor subprocess. The worker maps these to `WorkerOutcome`. Code 1 is reserved for the general CLI error path.
+Standardized exit codes for the executor subprocess. The worker maps these to `WorkerOutcome`. Code 1 is reserved for the general CLI error path. Every failure class has a distinct exit code (11 distinct codes), enabling precise failure diagnosis from exit status alone.
 
 Each exit code maps to a `FailureClass` via the `failure_class()` method on `ExecutorExitCode`. `FailureClass` maps back to an exit code via `from_failure_class()`. This bidirectional mapping is used by the durable status system to record the failure category for backoff and retry decisions.
 
@@ -473,7 +473,7 @@ integrity = "crc32:441c462e"
 
 ## Schedule Decision
 
-The `schedule_sync()` function is the centralized entry point for all worker scheduling decisions. It prevents worker storms by evaluating whether a new worker should be spawned, deferred, or skipped entirely.
+The `schedule_sync()` function is the **sole** entry point for all worker scheduling decisions. It prevents worker storms by evaluating whether a new worker should be spawned, deferred, or skipped entirely. Every code path that wants to spawn a worker must go through this function — there are no per-mutation spawn paths.
 
 ```rust
 pub enum ScheduleDecision {
@@ -622,7 +622,7 @@ Diagnostics emitted:
 - `compat.auto_sync.pending_active` / `compat.auto_sync.pending_stale` / `compat.auto_sync.pending_unreadable` — pending marker status.
 - `compat.auto_sync.lock_held` / `compat.auto_sync.lock_stale` / `compat.auto_sync.lock_unreadable` — worker lock status.
 - `compat.auto_sync.execution_lock_held` / `compat.auto_sync.execution_lock_stale` — execution lock status.
-- Liveness probe uses `lock::process_alive(pid)` which calls `kill -0` on Unix and a placeholder always-true on Windows.
+- Liveness probe uses `lock::process_alive(pid)` which calls `kill -0` on Unix and `GetExitCodeProcess` API checks on Windows (not a placeholder).
 
 ## Safety Invariants
 
@@ -637,7 +637,7 @@ Diagnostics emitted:
 9. Local state survives every remote/scheduling failure.
 10. No auto-sync fields enter snippet TOML, ProtoSnippet, or import/export schema.
 11. Worker is fully detached — its lifetime is not coupled to the parent's TTY.
-12. Cross-process safety: stale locks reclaimed, dead processes detected via `kill -0`, no permanent deadlock.
+12. Cross-process safety: stale locks reclaimed, dead processes detected via `kill -0` (Unix) or `GetExitCodeProcess` (Windows), no permanent deadlock.
 13. Pending state generation is monotonic and conditional — stale workers cannot clobber fresh state.
 14. Pending marker integrity-checked via CRC32 over all behavior-driving fields; tampered files fail closed.
 15. **Release 5E:** Pending marker mutations serialized via `PendingTxnGuard`; unique temp files per transaction.

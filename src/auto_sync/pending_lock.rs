@@ -143,8 +143,26 @@ fn process_alive(pid: u32) -> bool {
 
 #[cfg(not(unix))]
 fn process_alive(pid: u32) -> bool {
-    let _ = pid;
-    true
+    if pid == 0 {
+        return true;
+    }
+    unsafe {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+        };
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return true;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        if ok == 0 {
+            return true;
+        }
+        exit_code == STILL_ACTIVE
+    }
 }
 
 fn generate_nonce() -> String {

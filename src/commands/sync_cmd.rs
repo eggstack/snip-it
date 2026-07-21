@@ -348,17 +348,19 @@ pub fn run_config(
     auto_sync: Option<String>,
     debounce: Option<u64>,
     failure: Option<String>,
+    timeout: Option<u64>,
 ) -> SnipResult<()> {
     let mut settings = load_sync_settings().map_err(|e| {
         eprintln!("Failed to load sync settings: {e}");
         e
     })?;
 
-    let has_changes = auto_sync.is_some() || debounce.is_some() || failure.is_some();
+    let has_changes =
+        auto_sync.is_some() || debounce.is_some() || failure.is_some() || timeout.is_some();
 
     if !show && !has_changes {
         eprintln!(
-            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --failure ignore|warn|error"
+            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --timeout <secs> | --failure ignore|warn|error"
         );
         return Ok(());
     }
@@ -376,6 +378,11 @@ pub fn run_config(
         println!(
             "  auto_sync_max_delay_seconds: {:?}",
             settings.auto_sync_max_delay_seconds
+        );
+        println!(
+            "  auto_sync_timeout_seconds:  {:?} (resolved: {}s)",
+            settings.auto_sync_timeout_seconds,
+            settings.auto_sync_timeout().as_secs()
         );
         println!("  auto_sync_failure:        {}", settings.auto_sync_failure);
         println!(
@@ -435,6 +442,27 @@ pub fn run_config(
         })?;
         settings.auto_sync_failure = mode.clone();
         eprintln!("Failure mode set to {mode}");
+    }
+
+    if let Some(secs) = timeout {
+        if !(crate::config::MIN_SYNC_TIMEOUT_SECS..=crate::config::MAX_SYNC_TIMEOUT_SECS)
+            .contains(&secs)
+        {
+            eprintln!(
+                "Timeout value {} outside valid range {}-{}; clamping",
+                secs,
+                crate::config::MIN_SYNC_TIMEOUT_SECS,
+                crate::config::MAX_SYNC_TIMEOUT_SECS
+            );
+        }
+        settings.auto_sync_timeout_seconds = Some(secs.clamp(
+            crate::config::MIN_SYNC_TIMEOUT_SECS,
+            crate::config::MAX_SYNC_TIMEOUT_SECS,
+        ));
+        eprintln!(
+            "Timeout set to {} seconds",
+            settings.auto_sync_timeout().as_secs()
+        );
     }
 
     if has_changes {

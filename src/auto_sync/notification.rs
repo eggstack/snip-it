@@ -5,7 +5,7 @@
 //! 1. Local mutation is committed (atomic).
 //! 2. `notify_local_mutation` calls `pending::record_pending_mutation` —
 //!    the only API that increments the pending generation.
-//! 3. `worker::schedule_existing_pending` spawns a detached worker.
+//! 3. `schedule::schedule_and_spawn` spawns a detached worker.
 //!    This never mutates the pending marker.
 //! 4. Parent returns immediately.
 
@@ -54,7 +54,7 @@ pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNo
 ///
 /// Performs one generation increment (via
 /// `pending::record_pending_mutation`) and one worker spawn (via
-/// `worker::schedule_existing_pending`). On spawn failure the pending
+/// `schedule::schedule_and_spawn`). On spawn failure the pending
 /// generation is preserved for recovery.
 pub fn notify_local_mutation(
     policy: &AutoSyncPolicy,
@@ -69,7 +69,14 @@ fn notify_local_mutation_with_dir(
     state_dir: &std::path::Path,
 ) -> AutoSyncNotificationResult {
     if !policy.sync_configured {
-        return AutoSyncNotificationResult::Disabled;
+        // Even if policy says not configured, check if config file exists.
+        // If it does, the config is broken — still record pending so the
+        // mutation is not lost.
+        let sync_path = state_dir.join("sync.toml");
+        if !sync_path.exists() {
+            return AutoSyncNotificationResult::Disabled;
+        }
+        // Config exists but is broken — fall through to record pending
     }
 
     if context.origin.should_suppress() {
@@ -109,7 +116,16 @@ fn notify_local_mutation_with_dir(
 }
 
 fn schedule_after_record(state_dir: &std::path::Path, _marked: &PendingState) -> SpawnResult {
-    worker::schedule_existing_pending(state_dir)
+    let settings = crate::config::get_sync_settings();
+    let policy = AutoSyncPolicy::resolve(&settings);
+    match crate::auto_sync::schedule::schedule_and_spawn(
+        state_dir,
+        &policy,
+        crate::auto_sync::schedule::Caller::Mutation,
+    ) {
+        crate::auto_sync::schedule::ScheduleDecision::SpawnNow => SpawnResult::Spawned,
+        _ => SpawnResult::Suppressed,
+    }
 }
 
 /// Clear pending intent after a successful explicit sync.
@@ -193,14 +209,16 @@ mod tests {
 
     #[test]
     fn test_disabled_policy_returns_disabled() {
+        let dir = tempfile::TempDir::new().unwrap();
         let policy = AutoSyncPolicy::default();
-        let result = notify_local_mutation(
+        let result = notify_local_mutation_with_dir(
             &policy,
             MutationContext {
                 kind: MutationKind::SnippetCreate,
                 origin: MutationOrigin::User,
                 library_id: None,
             },
+            dir.path(),
         );
         assert_eq!(result, AutoSyncNotificationResult::Disabled);
     }

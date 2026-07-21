@@ -117,16 +117,19 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Local mutations always commit before remote work; failed sync never rolls back local state
 - Debounce returns `DebounceResult` with latest observed state; preflight check before executor spawn
 - `Clock` trait for deterministic testing of time-dependent logic
+- Executor timeout (30s default) is independent of debounce; configurable via `sync_timeout` in `AutoSyncPolicy`
 - `max_delay` separate from `debounce` — bounded latency prevents starvation
+- `schedule_sync()` is the sole scheduling authority; replaces per-mutation spawn paths
 - Startup recovery always schedules workers for valid pending work regardless of age
 - Failure classification is typed (`FailureClass` enum, 11 variants) with variant-based classification via `SyncFailureKind` (no string matching for sync errors)
-- Status is persisted in `auto-sync-status.toml` with CRC32 integrity, secret redaction, and config fingerprint
+- Typed policy loading distinguishes `NotConfigured` (no sync account) from config failure
+- Status is persisted in `auto-sync-status.toml` with CRC32 integrity (not DefaultHasher), secret redaction, and config fingerprint
 - Backoff is durable (survives CLI restarts) with exponential schedule capped at 15 minutes
-- `schedule_sync()` centralizes scheduling decisions and prevents worker storms
 - Config-change detection releases deferred failures when credentials/settings change
 - Foreground `snp sync` records durable status alongside detached workers
-- Executor maps errors → `FailureClass` → `ExecutorExitCode`; worker maps back on exit
+- Executor maps errors → `FailureClass` → `ExecutorExitCode` (11 distinct codes: TransientTimeout, CredentialStore, Configuration, Partial); worker maps back on exit
 - Signal death on Unix is captured and logged for executor processes
+- Windows process liveness uses actual `GetExitCodeProcess` API checks (not placeholder)
 - Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification, status, schedule
 
 ### Error Handling

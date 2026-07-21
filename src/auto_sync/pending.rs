@@ -55,7 +55,7 @@ pub fn pending_path(state_dir: &Path) -> PathBuf {
 ///
 /// This is the **only** public API that increments the pending generation.
 /// It is called by the parent after a successful local commit. Subsequent
-/// scheduling (see `crate::auto_sync::worker::schedule_existing_pending`)
+/// scheduling (see `crate::auto_sync::schedule::schedule_and_spawn`)
 /// must not mutate pending state, change the generation, or replace the
 /// snapshot.
 ///

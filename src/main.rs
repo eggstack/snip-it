@@ -426,6 +426,9 @@ enum SyncCommands {
         /// Failure mode: ignore, warn, or error
         #[arg(long)]
         failure: Option<String>,
+        /// Executor sync timeout in seconds (5-120, default 30)
+        #[arg(long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -667,8 +670,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 auto_sync,
                 debounce,
                 failure,
+                timeout,
             }) => {
-                commands::sync_cmd::run_config(show, auto_sync, debounce, failure)?;
+                commands::sync_cmd::run_config(show, auto_sync, debounce, failure, timeout)?;
             }
         },
         Some(Commands::Cron { interval }) => {

@@ -1,11 +1,9 @@
 //! Effective auto-sync policy resolved from persisted configuration.
 
-use crate::config::{AutoSyncFailureMode, SyncSettings};
+use crate::config::{AutoSyncFailureMode, DEFAULT_SYNC_TIMEOUT_SECS, SyncSettings};
 use std::time::Duration;
 
 pub const MAX_DEBOUNCE_SECS: u64 = 300;
-pub const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 30;
-pub const MAX_SYNC_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_MAX_RETRIES: u32 = 1;
 pub const WORKER_MAX_LIFETIME_SECS: u64 = 300;
 
@@ -30,11 +28,7 @@ impl AutoSyncPolicy {
             debounce: settings.auto_sync_debounce(),
             failure_mode: settings.auto_sync_failure.clone(),
             max_retries: DEFAULT_MAX_RETRIES,
-            sync_timeout: Duration::from_secs(
-                settings
-                    .auto_sync_debounce_seconds
-                    .clamp(1, MAX_SYNC_TIMEOUT_SECS),
-            ),
+            sync_timeout: settings.auto_sync_timeout(),
             max_delay: settings.auto_sync_max_delay(),
         }
     }
@@ -319,16 +313,25 @@ impl FailureClass {
 
 /// Compute exponential backoff duration for transient failures.
 ///
-/// Schedule: ~5s, ~15s, ~30s, ~60s, then exponential growth capped at 15 minutes.
+/// Schedule (for `consecutive_failures` count after recording):
+/// | Count | Base delay |
+/// |-------|------------|
+/// | 1     | 5s         |
+/// | 2     | 15s        |
+/// | 3     | 30s        |
+/// | 4     | 60s        |
+/// | 5+    | exponential, capped at 15 minutes |
+///
 /// Includes bounded jitter (0-20% of base delay) to avoid synchronized retries.
 pub fn transient_backoff(consecutive_failures: u32) -> Duration {
     let base_secs: u64 = match consecutive_failures {
         0 => 5,
-        1 => 15,
-        2 => 30,
-        3 => 60,
+        1 => 5,
+        2 => 15,
+        3 => 30,
+        4 => 60,
         n => {
-            let exp = n.saturating_sub(2) as u64;
+            let exp = n.saturating_sub(3) as u64;
             60u64
                 .saturating_mul(2u64.saturating_pow(exp as u32))
                 .min(900)

@@ -27,6 +27,12 @@ pub const AUTO_SYNC_DEBOUNCE_MAX: u64 = 300;
 pub const AUTO_SYNC_MAX_DELAY_MIN: u64 = 0;
 /// Maximum accepted value for `auto_sync_max_delay_seconds`.
 pub const AUTO_SYNC_MAX_DELAY_MAX: u64 = 600;
+/// Default executor sync timeout in seconds.
+pub const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 30;
+/// Minimum accepted value for `auto_sync_timeout_seconds`.
+pub const MIN_SYNC_TIMEOUT_SECS: u64 = 5;
+/// Maximum accepted value for `auto_sync_timeout_seconds`.
+pub const MAX_SYNC_TIMEOUT_SECS: u64 = 120;
 
 /// Failure behavior for post-mutation auto-sync.
 ///
@@ -210,6 +216,10 @@ pub struct SyncSettings {
     /// of debounce state. Clamped to [`AUTO_SYNC_MAX_DELAY_MIN`]..[`AUTO_SYNC_MAX_DELAY_MAX`].
     #[serde(default)]
     pub auto_sync_max_delay_seconds: Option<u64>,
+    /// Executor sync timeout in seconds. Independent of debounce.
+    /// Clamped to [`MIN_SYNC_TIMEOUT_SECS`]..[`MAX_SYNC_TIMEOUT_SECS`].
+    #[serde(default)]
+    pub auto_sync_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub sync_direction: SyncDirection,
     #[serde(default)]
@@ -236,6 +246,7 @@ impl std::fmt::Debug for SyncSettings {
                 "auto_sync_max_delay_seconds",
                 &self.auto_sync_max_delay_seconds,
             )
+            .field("auto_sync_timeout_seconds", &self.auto_sync_timeout_seconds)
             .field("sync_direction", &self.sync_direction)
             .field(
                 "clipboard_auto_clear_seconds",
@@ -265,6 +276,7 @@ impl Clone for SyncSettings {
             auto_sync_debounce_seconds: self.auto_sync_debounce_seconds,
             auto_sync_failure: self.auto_sync_failure.clone(),
             auto_sync_max_delay_seconds: self.auto_sync_max_delay_seconds,
+            auto_sync_timeout_seconds: self.auto_sync_timeout_seconds,
             sync_direction: self.sync_direction.clone(),
             clipboard_auto_clear_seconds: self.clipboard_auto_clear_seconds,
             sync_limit: self.sync_limit,
@@ -295,6 +307,22 @@ impl SyncSettings {
             .unwrap_or(300)
             .clamp(AUTO_SYNC_MAX_DELAY_MIN, AUTO_SYNC_MAX_DELAY_MAX);
         std::time::Duration::from_secs(secs)
+    }
+
+    /// Returns the effective executor sync timeout, clamped to
+    /// [`MIN_SYNC_TIMEOUT_SECS`]..[`MAX_SYNC_TIMEOUT_SECS`].
+    /// Defaults to [`DEFAULT_SYNC_TIMEOUT_SECS`] when not configured.
+    pub fn auto_sync_timeout(&self) -> std::time::Duration {
+        let secs = self
+            .auto_sync_timeout_seconds
+            .unwrap_or(DEFAULT_SYNC_TIMEOUT_SECS)
+            .clamp(MIN_SYNC_TIMEOUT_SECS, MAX_SYNC_TIMEOUT_SECS);
+        std::time::Duration::from_secs(secs)
+    }
+
+    /// Returns true if the sync config file exists on disk.
+    pub fn sync_config_file_exists() -> bool {
+        get_sync_config_path().exists()
     }
 }
 
@@ -420,6 +448,7 @@ impl Default for SyncSettings {
             auto_sync_debounce_seconds: 2,
             auto_sync_failure: AutoSyncFailureMode::default(),
             auto_sync_max_delay_seconds: None,
+            auto_sync_timeout_seconds: None,
             sync_direction: SyncDirection::default(),
             clipboard_auto_clear_seconds: None,
             sync_limit: None,
@@ -585,6 +614,7 @@ mod tests {
             auto_sync_debounce_seconds: 5,
             auto_sync_failure: AutoSyncFailureMode::Error,
             auto_sync_max_delay_seconds: Some(60),
+            auto_sync_timeout_seconds: None,
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(2000),
@@ -759,6 +789,7 @@ sync_direction = "Bidirectional"
             auto_sync_debounce_seconds: 5,
             auto_sync_failure: AutoSyncFailureMode::Error,
             auto_sync_max_delay_seconds: Some(120),
+            auto_sync_timeout_seconds: None,
             sync_direction: SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: Some(30),
             sync_limit: Some(500),
@@ -788,6 +819,7 @@ sync_direction = "Bidirectional"
             auto_sync_debounce_seconds: 10,
             auto_sync_failure: AutoSyncFailureMode::Ignore,
             auto_sync_max_delay_seconds: None,
+            auto_sync_timeout_seconds: None,
             sync_direction: SyncDirection::Push,
             clipboard_auto_clear_seconds: Some(60),
             sync_limit: Some(500),

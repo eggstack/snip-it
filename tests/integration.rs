@@ -2724,6 +2724,7 @@ fn test_golden_corpus_sync_round_trip_preserves_command() {
             auto_sync_debounce_seconds: 2,
             auto_sync_failure: snip_it::config::AutoSyncFailureMode::Warn,
             auto_sync_max_delay_seconds: None,
+            auto_sync_timeout_seconds: None,
             sync_direction: snip_it::config::SyncDirection::Bidirectional,
             clipboard_auto_clear_seconds: None,
             sync_limit: None,

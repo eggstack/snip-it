@@ -9,6 +9,7 @@
 use crate::auto_sync::execution_lock;
 use crate::auto_sync::pending;
 use crate::auto_sync::policy::{AutoSyncPolicy, FailureClass};
+use crate::auto_sync::spawn;
 use crate::auto_sync::status;
 use std::path::Path;
 
@@ -80,54 +81,55 @@ pub fn schedule_sync(
     }
 
     // Check backoff status (unless explicit retry bypasses it)
-    if caller != Caller::ExplicitRetry
-        && let Some(status) = status::read_status(state_dir)
-    {
-        if status.next_attempt_at_unix_ms > 0 {
-            let now_ms = unix_now_ms();
-            if now_ms < status.next_attempt_at_unix_ms {
-                return ScheduleDecision::DeferredUntil(status.next_attempt_at_unix_ms);
-            }
-        }
-
-        // Check if last failure requires attention (no automatic retry).
-        // Before returning RequiresAttention, check if config has changed
-        // to release the deferral (Workstream I).
-        if status.attention_required
-            && status.consecutive_failures > 0
-            && !FailureClass::from_code(&status.last_failure_class).allows_automatic_retry()
-        {
-            let last_class = FailureClass::from_code(&status.last_failure_class);
-            if last_class.is_deferred()
-                || matches!(
-                    last_class,
-                    FailureClass::Authentication
-                        | FailureClass::CredentialStore
-                        | FailureClass::Configuration
-                )
-            {
-                // Check if config changed since the failure
-                let current_fingerprint =
-                    status::compute_config_fingerprint(&crate::config::get_sync_settings());
-                if status::release_deferral_on_config_change(state_dir, current_fingerprint) {
-                    // Config changed — fall through to SpawnNow
-                } else {
-                    return ScheduleDecision::RequiresAttention(last_class);
+    if caller != Caller::ExplicitRetry {
+        match status::read_status_typed(state_dir) {
+            status::StatusRead::Valid(status) => {
+                if status.next_attempt_at_unix_ms > 0 {
+                    let now_ms = unix_now_ms();
+                    if now_ms < status.next_attempt_at_unix_ms {
+                        return ScheduleDecision::DeferredUntil(status.next_attempt_at_unix_ms);
+                    }
                 }
-            } else {
-                return ScheduleDecision::RequiresAttention(last_class);
-            }
-        }
-    }
 
-    // Check if the failure class from last attempt allows retry
-    if let Some(status) = status::read_status(state_dir)
-        && status.consecutive_failures > 0
-        && !status.attention_required
-    {
-        let last_class = FailureClass::from_code(&status.last_failure_class);
-        if !last_class.allows_automatic_retry() && !last_class.is_deferred() {
-            return ScheduleDecision::RequiresAttention(last_class);
+                // Check if last failure requires attention (no automatic retry).
+                // Before returning RequiresAttention, check if config has changed
+                // to release the deferral.
+                if status.attention_required && status.consecutive_failures > 0 {
+                    let last_class = FailureClass::from_code(&status.last_failure_class);
+                    match last_class.retry_disposition(status.consecutive_failures) {
+                        crate::auto_sync::policy::RetryDisposition::RequiresAttention
+                        | crate::auto_sync::policy::RetryDisposition::NoAutomaticRetry => {
+                            if last_class.is_deferred()
+                                || matches!(
+                                    last_class,
+                                    FailureClass::Authentication
+                                        | FailureClass::CredentialStore
+                                        | FailureClass::Configuration
+                                )
+                            {
+                                let current_fingerprint = status::compute_config_fingerprint(
+                                    &crate::config::get_sync_settings(),
+                                );
+                                if status::release_deferral_on_config_change(
+                                    state_dir,
+                                    current_fingerprint,
+                                ) {
+                                    // Config changed — fall through to SpawnNow
+                                } else {
+                                    return ScheduleDecision::RequiresAttention(last_class);
+                                }
+                            } else {
+                                return ScheduleDecision::RequiresAttention(last_class);
+                            }
+                        }
+                        _ => {} // RetryAfter or WaitForConfigurationChange - proceed
+                    }
+                }
+            }
+            status::StatusRead::Corrupt(_) => {
+                return ScheduleDecision::RequiresAttention(FailureClass::Internal);
+            }
+            status::StatusRead::Missing => {}
         }
     }
 
@@ -139,6 +141,23 @@ pub fn schedule_sync_from_config(state_dir: &Path, caller: Caller) -> ScheduleDe
     let settings = crate::config::get_sync_settings();
     let policy = AutoSyncPolicy::resolve(&settings);
     schedule_sync(state_dir, &policy, caller)
+}
+
+/// The sole authority for translating a `SpawnNow` decision into an actual
+/// worker spawn. All automatic scheduling paths must call this function
+/// rather than calling `spawn::spawn_worker` directly.
+pub fn schedule_and_spawn(
+    state_dir: &Path,
+    policy: &AutoSyncPolicy,
+    caller: Caller,
+) -> ScheduleDecision {
+    let decision = schedule_sync(state_dir, policy, caller);
+    if decision == ScheduleDecision::SpawnNow
+        && let Err(e) = spawn::spawn_worker(state_dir)
+    {
+        tracing::warn!(error = %e, "schedule_and_spawn: failed to spawn worker");
+    }
+    decision
 }
 
 /// Who is requesting the scheduling decision.

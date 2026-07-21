@@ -6,7 +6,7 @@
 //! sync, and conditional clear loop. The parent only:
 //!
 //! 1. Calls `record_pending_mutation` exactly once after a local commit.
-//! 2. Calls `schedule_existing_pending` to spawn a detached worker that
+//! 2. Calls `schedule::schedule_and_spawn` to spawn a detached worker that
 //!    arbitrates the lock.
 //!
 //! The worker performs a bounded quiet-period debounce across separate CLI
@@ -69,18 +69,6 @@ pub enum DebounceResult {
     CancelledMarkerRemoved,
     DeferredMaximumLifetime(PendingState),
     Failed(String),
-}
-
-/// Spawns a detached worker to process any existing pending work.
-///
-/// **Never mutates pending state, never increments generation, never
-/// rewrites the marker.** Acquiring the worker lock is the child's job —
-/// every spawned worker races for the lock and exactly one wins.
-pub fn schedule_existing_pending(state_dir: &Path) -> SpawnResult {
-    match spawn::spawn_worker(state_dir) {
-        Ok(_) => SpawnResult::Spawned,
-        Err(_) => SpawnResult::SpawnFailed,
-    }
 }
 
 /// Worker entry point invoked by the detached child.
@@ -174,6 +162,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 start,
                 max_lifetime,
                 policy.max_delay,
+                policy.debounce,
                 &clock,
             ) {
                 DebounceResult::Ready(state) => state,
@@ -201,6 +190,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
 
         match preflight_check(state_dir, observed.generation) {
             Ok(latest) => {
+                let latest_gen = latest.generation;
                 let sync_observed = if latest.generation != observed.generation {
                     tracing::info!(
                         observed = observed.generation,
@@ -212,7 +202,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                     observed
                 };
 
-                let outcome = execute_sync(state_dir, policy);
+                let outcome = execute_sync(state_dir, policy, latest_gen);
 
                 match outcome {
                     WorkerOutcome::Success => {
@@ -283,6 +273,7 @@ pub fn debounce(
     start: Instant,
     max_lifetime: Duration,
     max_delay: Duration,
+    debounce_duration: Duration,
     clock: &dyn Clock,
 ) -> DebounceResult {
     let mut deadline = initial_deadline;
@@ -302,7 +293,7 @@ pub fn debounce(
                         current = latest;
                         let new_deadline = compute_deadline(
                             current.created_at_unix_ms,
-                            current_debounce(state_dir),
+                            debounce_duration,
                             start,
                             max_lifetime,
                             clock,
@@ -333,7 +324,7 @@ pub fn debounce(
                     current = current_state;
                     let new_deadline = compute_deadline(
                         current.created_at_unix_ms,
-                        current_debounce(state_dir),
+                        debounce_duration,
                         start,
                         max_lifetime,
                         clock,
@@ -355,7 +346,12 @@ pub fn debounce(
             }
         }
 
-        if start.elapsed() >= max_delay {
+        if clock
+            .now_instant()
+            .checked_duration_since(start)
+            .unwrap_or(Duration::ZERO)
+            >= max_delay
+        {
             return DebounceResult::DeferredMaximumLifetime(current);
         }
     }
@@ -371,13 +367,6 @@ pub fn preflight_check(
             Err("pending marker removed, nothing to do".to_string())
         }
         Err(e) => Err(format!("corrupt pending state: {e}")),
-    }
-}
-
-fn current_debounce(state_dir: &Path) -> Duration {
-    match pending::read_state_from_dir(state_dir) {
-        Ok(_) => get_sync_settings().auto_sync_debounce(),
-        Err(_) => Duration::ZERO,
     }
 }
 
@@ -407,7 +396,11 @@ fn unix_ms_to_instant(target_unix_ms: u64, clock: &dyn Clock) -> Instant {
 /// The disabled-policy branch is retained as a defensive guard, but
 /// `run_locked` already exits with `NothingToDo` before reaching this
 /// function when policy is disabled.
-fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
+fn execute_sync(
+    state_dir: &Path,
+    policy: &AutoSyncPolicy,
+    observed_generation: u64,
+) -> WorkerOutcome {
     if !policy.enabled {
         return WorkerOutcome::NothingToDo;
     }
@@ -419,7 +412,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
             // Record spawn failure status
             let _ = status::record_failure(
                 state_dir,
-                0,
+                observed_generation,
                 FailureClass::Internal,
                 -1,
                 0,
@@ -436,7 +429,11 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
             let code = status_out.code().unwrap_or(7);
             match ExecutorExitCode::from_exit_status(status_out) {
                 ExecutorExitCode::Success => {
-                    let _ = status::record_success(state_dir, 0, "sync completed successfully");
+                    let _ = status::record_success(
+                        state_dir,
+                        observed_generation,
+                        "sync completed successfully",
+                    );
                     WorkerOutcome::Success
                 }
                 exit_code => {
@@ -452,7 +449,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                     let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
                     let _ = status::record_failure(
                         state_dir,
-                        0,
+                        observed_generation,
                         failure_class,
                         code,
                         consecutive,
@@ -472,15 +469,15 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
                 force_kill_child(&mut child);
                 let _ = child.wait();
             }
-            // Record timeout as network failure
+            // Record timeout as transient timeout failure
             let consecutive = next_consecutive_failures(state_dir);
             let backoff = transient_backoff(consecutive);
             let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
             let _ = status::record_failure(
                 state_dir,
-                0,
+                observed_generation,
                 FailureClass::TransientTimeout,
-                4,
+                ExecutorExitCode::TransientTimeout.to_exit_status(),
                 consecutive,
                 next_attempt,
                 "sync executor timed out",
@@ -492,7 +489,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy) -> WorkerOutcome {
             tracing::error!(error = %e, "failed to wait for sync executor");
             let _ = status::record_failure(
                 state_dir,
-                0,
+                observed_generation,
                 FailureClass::Internal,
                 -1,
                 0,
@@ -577,7 +574,7 @@ fn force_kill_child(child: &mut std::process::Child) {
 ///
 /// Loads the pending marker. If absent, nothing to do. If present, the
 /// marker is preserved (old valid work is not silently discarded); the
-/// caller may spawn a worker through `schedule_existing_pending`.
+/// caller may spawn a worker through `schedule::schedule_and_spawn`.
 ///
 /// If the execution lock is already held (another sync in progress),
 /// scheduling is skipped — the active worker or foreground sync will
@@ -620,7 +617,13 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
         );
     }
 
-    let _ = schedule_existing_pending(state_dir);
+    let settings = crate::config::get_sync_settings();
+    let policy = AutoSyncPolicy::resolve(&settings);
+    let _ = crate::auto_sync::schedule::schedule_and_spawn(
+        state_dir,
+        &policy,
+        crate::auto_sync::schedule::Caller::StartupRecovery,
+    );
     Ok(Some(current))
 }
 
@@ -860,7 +863,7 @@ mod tests {
             enabled: false,
             ..AutoSyncPolicy::default()
         };
-        let outcome = execute_sync(dir.path(), &policy);
+        let outcome = execute_sync(dir.path(), &policy, 0);
         assert_eq!(outcome, WorkerOutcome::NothingToDo);
     }
 
@@ -871,7 +874,7 @@ mod tests {
             enabled: true,
             ..AutoSyncPolicy::default()
         };
-        let outcome = execute_sync(nonexistent, &policy);
+        let outcome = execute_sync(nonexistent, &policy, 0);
         assert_eq!(outcome, WorkerOutcome::Failed);
     }
 
@@ -920,6 +923,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
         match result {
@@ -956,6 +960,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
         assert!(matches!(result, DebounceResult::CancelledMarkerRemoved));
@@ -995,6 +1000,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
         match result {
@@ -1098,6 +1104,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
         match result {
@@ -1147,7 +1154,7 @@ mod tests {
         let clock = MockClock::new(Instant::now(), 1_000_000);
         let start = clock.now_instant();
         let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(600);
         let deadline = start + Duration::from_secs(1);
 
         let result = debounce(
@@ -1157,6 +1164,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
 
@@ -1190,6 +1198,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
 
@@ -1220,7 +1229,7 @@ mod tests {
         let clock = MockClock::new(Instant::now(), 1_000_000);
         let start = clock.now_instant();
         let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
+        let max_delay = Duration::from_secs(600);
         let deadline = start + Duration::from_secs(60);
 
         // Before the deadline, update to gen 2.
@@ -1239,6 +1248,7 @@ mod tests {
             start,
             max_lifetime,
             max_delay,
+            Duration::from_secs(2),
             &clock,
         );
 
@@ -1445,7 +1455,7 @@ mod tests {
             enabled: true,
             ..AutoSyncPolicy::default()
         };
-        let outcome = execute_sync(nonexistent, &policy);
+        let outcome = execute_sync(nonexistent, &policy, 0);
         assert_eq!(outcome, WorkerOutcome::Failed);
     }
 

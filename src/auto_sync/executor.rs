@@ -36,6 +36,14 @@ pub enum ExecutorExitCode {
     LocalPersistence = 6,
     /// Internal error (unexpected failure).
     InternalError = 7,
+    /// Transient timeout (deadline exceeded during sync).
+    TransientTimeout = 8,
+    /// Credential storage (keychain) failure.
+    CredentialStore = 9,
+    /// Configuration error that requires operator intervention.
+    Configuration = 10,
+    /// Partial sync completion (some libraries succeeded, some failed).
+    Partial = 11,
 }
 
 impl ExecutorExitCode {
@@ -54,6 +62,10 @@ impl ExecutorExitCode {
             Some(5) => Self::ConflictPartial,
             Some(6) => Self::LocalPersistence,
             Some(7) => Self::InternalError,
+            Some(8) => Self::TransientTimeout,
+            Some(9) => Self::CredentialStore,
+            Some(10) => Self::Configuration,
+            Some(11) => Self::Partial,
             None => {
                 // On Unix, None means the process was killed by a signal.
                 #[cfg(unix)]
@@ -93,6 +105,10 @@ impl ExecutorExitCode {
             Self::ConflictPartial => FailureClass::Conflict,
             Self::LocalPersistence => FailureClass::LocalPersistence,
             Self::InternalError => FailureClass::Internal,
+            Self::TransientTimeout => FailureClass::TransientTimeout,
+            Self::CredentialStore => FailureClass::CredentialStore,
+            Self::Configuration => FailureClass::Configuration,
+            Self::Partial => FailureClass::Partial,
         }
     }
 
@@ -105,10 +121,13 @@ impl ExecutorExitCode {
             FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured => {
                 Self::NotConfigured
             }
-            FailureClass::TransientNetwork | FailureClass::TransientTimeout => Self::NetworkTimeout,
-            FailureClass::Authentication | FailureClass::CredentialStore => Self::AuthFailure,
-            FailureClass::Configuration => Self::InternalError,
-            FailureClass::Conflict | FailureClass::Partial => Self::ConflictPartial,
+            FailureClass::TransientNetwork => Self::NetworkTimeout,
+            FailureClass::TransientTimeout => Self::TransientTimeout,
+            FailureClass::Authentication => Self::AuthFailure,
+            FailureClass::CredentialStore => Self::CredentialStore,
+            FailureClass::Configuration => Self::Configuration,
+            FailureClass::Conflict => Self::ConflictPartial,
+            FailureClass::Partial => Self::Partial,
             FailureClass::LocalPersistence => Self::LocalPersistence,
             FailureClass::Internal => Self::InternalError,
         }
@@ -121,10 +140,14 @@ impl std::fmt::Display for ExecutorExitCode {
             Self::Success => write!(f, "sync completed successfully"),
             Self::NotConfigured => write!(f, "sync not configured or disabled"),
             Self::AuthFailure => write!(f, "authentication failure"),
-            Self::NetworkTimeout => write!(f, "network or timeout failure"),
-            Self::ConflictPartial => write!(f, "conflict or partial sync failure"),
+            Self::NetworkTimeout => write!(f, "network failure"),
+            Self::ConflictPartial => write!(f, "conflict failure"),
             Self::LocalPersistence => write!(f, "local persistence failure"),
             Self::InternalError => write!(f, "internal error"),
+            Self::TransientTimeout => write!(f, "timeout failure"),
+            Self::CredentialStore => write!(f, "credential store failure"),
+            Self::Configuration => write!(f, "configuration error"),
+            Self::Partial => write!(f, "partial sync failure"),
         }
     }
 }
@@ -246,6 +269,10 @@ mod tests {
         assert_eq!(ExecutorExitCode::ConflictPartial as i32, 5);
         assert_eq!(ExecutorExitCode::LocalPersistence as i32, 6);
         assert_eq!(ExecutorExitCode::InternalError as i32, 7);
+        assert_eq!(ExecutorExitCode::TransientTimeout as i32, 8);
+        assert_eq!(ExecutorExitCode::CredentialStore as i32, 9);
+        assert_eq!(ExecutorExitCode::Configuration as i32, 10);
+        assert_eq!(ExecutorExitCode::Partial as i32, 11);
     }
 
     #[test]
@@ -264,11 +291,11 @@ mod tests {
         );
         assert_eq!(
             ExecutorExitCode::NetworkTimeout.to_string(),
-            "network or timeout failure"
+            "network failure"
         );
         assert_eq!(
             ExecutorExitCode::ConflictPartial.to_string(),
-            "conflict or partial sync failure"
+            "conflict failure"
         );
         assert_eq!(
             ExecutorExitCode::LocalPersistence.to_string(),
@@ -277,6 +304,22 @@ mod tests {
         assert_eq!(
             ExecutorExitCode::InternalError.to_string(),
             "internal error"
+        );
+        assert_eq!(
+            ExecutorExitCode::TransientTimeout.to_string(),
+            "timeout failure"
+        );
+        assert_eq!(
+            ExecutorExitCode::CredentialStore.to_string(),
+            "credential store failure"
+        );
+        assert_eq!(
+            ExecutorExitCode::Configuration.to_string(),
+            "configuration error"
+        );
+        assert_eq!(
+            ExecutorExitCode::Partial.to_string(),
+            "partial sync failure"
         );
     }
 
@@ -300,20 +343,21 @@ mod tests {
             ExecutorExitCode::ConflictPartial,
             ExecutorExitCode::LocalPersistence,
             ExecutorExitCode::InternalError,
+            ExecutorExitCode::TransientTimeout,
+            ExecutorExitCode::CredentialStore,
+            ExecutorExitCode::Configuration,
+            ExecutorExitCode::Partial,
         ];
         for code in &codes {
             let raw = code.to_exit_status();
-            let reconstructed = match raw {
-                0 => ExecutorExitCode::Success,
-                2 => ExecutorExitCode::NotConfigured,
-                3 => ExecutorExitCode::AuthFailure,
-                4 => ExecutorExitCode::NetworkTimeout,
-                5 => ExecutorExitCode::ConflictPartial,
-                6 => ExecutorExitCode::LocalPersistence,
-                7 => ExecutorExitCode::InternalError,
-                _ => ExecutorExitCode::InternalError,
-            };
-            assert_eq!(*code, reconstructed);
+            let reconstructed = ExecutorExitCode::from_exit_status(
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("exit {raw}"))
+                    .status()
+                    .unwrap(),
+            );
+            assert_eq!(*code, reconstructed, "roundtrip failed for {code:?}");
         }
     }
 
@@ -478,13 +522,16 @@ mod tests {
             ),
             (
                 FailureClass::TransientTimeout,
-                ExecutorExitCode::NetworkTimeout,
+                ExecutorExitCode::TransientTimeout,
             ),
             (FailureClass::Authentication, ExecutorExitCode::AuthFailure),
-            (FailureClass::CredentialStore, ExecutorExitCode::AuthFailure),
-            (FailureClass::Configuration, ExecutorExitCode::InternalError),
+            (
+                FailureClass::CredentialStore,
+                ExecutorExitCode::CredentialStore,
+            ),
+            (FailureClass::Configuration, ExecutorExitCode::Configuration),
             (FailureClass::Conflict, ExecutorExitCode::ConflictPartial),
-            (FailureClass::Partial, ExecutorExitCode::ConflictPartial),
+            (FailureClass::Partial, ExecutorExitCode::Partial),
             (
                 FailureClass::LocalPersistence,
                 ExecutorExitCode::LocalPersistence,
@@ -511,6 +558,10 @@ mod tests {
             ExecutorExitCode::ConflictPartial,
             ExecutorExitCode::LocalPersistence,
             ExecutorExitCode::InternalError,
+            ExecutorExitCode::TransientTimeout,
+            ExecutorExitCode::CredentialStore,
+            ExecutorExitCode::Configuration,
+            ExecutorExitCode::Partial,
         ];
         for code in &codes {
             let class = code.failure_class();
@@ -521,6 +572,44 @@ mod tests {
                     ExecutorExitCode::from_failure_class(class),
                     *code,
                     "roundtrip failed for {code:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_distinct_exit_codes_per_failure_class() {
+        // Every FailureClass must map to a unique exit code
+        let all_classes = [
+            FailureClass::DeferredDisabled,
+            FailureClass::DeferredNotConfigured,
+            FailureClass::TransientNetwork,
+            FailureClass::TransientTimeout,
+            FailureClass::Authentication,
+            FailureClass::CredentialStore,
+            FailureClass::Configuration,
+            FailureClass::Conflict,
+            FailureClass::Partial,
+            FailureClass::LocalPersistence,
+            FailureClass::Internal,
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for class in &all_classes {
+            let code = ExecutorExitCode::from_failure_class(*class);
+            let code_val = code as i32;
+            if let Some(prev_class) = seen.insert(code_val, class) {
+                // DeferredDisabled and DeferredNotConfigured both map to NotConfigured — that's OK
+                if matches!(
+                    class,
+                    FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured
+                ) && matches!(
+                    prev_class,
+                    FailureClass::DeferredDisabled | FailureClass::DeferredNotConfigured
+                ) {
+                    continue;
+                }
+                panic!(
+                    "FailureClass::{class:?} and FailureClass::{prev_class:?} both map to exit code {code_val}"
                 );
             }
         }

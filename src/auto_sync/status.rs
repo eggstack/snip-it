@@ -89,26 +89,48 @@ pub fn status_path(state_dir: &Path) -> PathBuf {
     state_dir.join(STATUS_FILE_NAME)
 }
 
-/// Read the status file. Returns `None` if not found or corrupted.
-pub fn read_status(state_dir: &Path) -> Option<AutoSyncStatus> {
+/// Typed result of reading the status file.
+pub enum StatusRead {
+    /// Status file does not exist.
+    Missing,
+    /// Status file exists and is valid.
+    Valid(AutoSyncStatus),
+    /// Status file exists but is corrupted or unreadable.
+    Corrupt(String),
+}
+
+/// Read the status file with typed error handling.
+pub fn read_status_typed(state_dir: &Path) -> StatusRead {
     let path = status_path(state_dir);
-    let content = fs::read_to_string(&path).ok()?;
-    let mut status: AutoSyncStatus = toml::from_str(&content).ok()?;
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StatusRead::Missing,
+        Err(e) => return StatusRead::Corrupt(format!("read error: {e}")),
+    };
+    let mut status: AutoSyncStatus = match toml::from_str(&content) {
+        Ok(s) => s,
+        Err(e) => return StatusRead::Corrupt(format!("parse error: {e}")),
+    };
 
     // Validate integrity
     let stored = status.integrity;
     status.integrity = 0;
     let computed = compute_integrity(&status);
     if computed != stored {
-        tracing::warn!(
-            expected = stored,
-            computed,
-            "auto-sync status integrity mismatch; treating as corrupt"
-        );
-        return None;
+        return StatusRead::Corrupt(format!(
+            "integrity mismatch: stored={stored:#010x} computed={computed:#010x}"
+        ));
     }
     status.integrity = stored;
-    Some(status)
+    StatusRead::Valid(status)
+}
+
+/// Read the status file. Returns `None` if not found or corrupted.
+pub fn read_status(state_dir: &Path) -> Option<AutoSyncStatus> {
+    match read_status_typed(state_dir) {
+        StatusRead::Valid(s) => Some(s),
+        _ => None,
+    }
 }
 
 /// Write the status file atomically with integrity.
@@ -144,25 +166,37 @@ pub fn write_status(state_dir: &Path, status: &AutoSyncStatus) -> Result<(), Str
     Ok(())
 }
 
-/// Compute CRC32 integrity over behavior-driving fields.
+/// Compute CRC32 integrity over all behavior-driving fields.
 fn compute_integrity(status: &AutoSyncStatus) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hash;
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = crc32fast::Hasher::new();
     status.schema.hash(&mut hasher);
-    status.pending_generation.hash(&mut hasher);
-    status.last_attempt_generation.hash(&mut hasher);
-    status.last_attempt_at_unix_ms.hash(&mut hasher);
-    status.last_success_at_unix_ms.hash(&mut hasher);
+    status.pending_generation.to_le_bytes().hash(&mut hasher);
+    status
+        .last_attempt_generation
+        .to_le_bytes()
+        .hash(&mut hasher);
+    status
+        .last_attempt_at_unix_ms
+        .to_le_bytes()
+        .hash(&mut hasher);
+    status
+        .last_success_at_unix_ms
+        .to_le_bytes()
+        .hash(&mut hasher);
     status.last_result.hash(&mut hasher);
     status.last_failure_class.hash(&mut hasher);
-    status.consecutive_failures.hash(&mut hasher);
-    status.next_attempt_at_unix_ms.hash(&mut hasher);
-    status.executor_exit_code.hash(&mut hasher);
+    status.consecutive_failures.to_le_bytes().hash(&mut hasher);
+    status
+        .next_attempt_at_unix_ms
+        .to_le_bytes()
+        .hash(&mut hasher);
+    status.executor_exit_code.to_le_bytes().hash(&mut hasher);
     status.attention_required.hash(&mut hasher);
+    status.config_fingerprint.to_le_bytes().hash(&mut hasher);
     // Note: message is NOT included in integrity — it's informational only
-    hasher.finish() as u32
+    hasher.finalize()
 }
 
 /// Record a successful sync attempt.
