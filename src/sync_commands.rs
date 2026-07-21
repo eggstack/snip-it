@@ -637,8 +637,13 @@ pub fn run_sync(
                     }
                 }
                 Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("Library not found") {
+                    if matches!(
+                        e,
+                        SnipError::SyncFailure {
+                            kind: crate::error::SyncFailureKind::LibraryNotFound,
+                            ..
+                        }
+                    ) {
                         handle_library_not_found(
                             lib_name,
                             &lib_path,
@@ -652,7 +657,7 @@ pub fn run_sync(
                         );
                     } else {
                         status.failed += 1;
-                        results.push((lib_name.clone(), false, err_msg));
+                        results.push((lib_name.clone(), false, e.to_string()));
                     }
                 }
             }
@@ -706,8 +711,13 @@ pub fn run_sync(
                     }
                 }
                 Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("Library not found") {
+                    if matches!(
+                        e,
+                        SnipError::SyncFailure {
+                            kind: crate::error::SyncFailureKind::LibraryNotFound,
+                            ..
+                        }
+                    ) {
                         handle_library_not_found(
                             lib_name,
                             &lib_path,
@@ -721,7 +731,7 @@ pub fn run_sync(
                         );
                     } else {
                         status.failed += 1;
-                        results.push((lib_name.clone(), false, err_msg));
+                        results.push((lib_name.clone(), false, e.to_string()));
                     }
                 }
             }

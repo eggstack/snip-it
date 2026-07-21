@@ -94,7 +94,7 @@ macro_rules! retry_grpc {
                     if !SyncRetryConfig::is_retryable_grpc_error(&e)
                         || attempt >= config.max_retries
                     {
-                        break Err(SnipError::runtime_error($name, Some(&e.to_string())));
+                        break Err(grpc_error_to_snip_error($name, &e));
                     }
                     let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     tracing::warn!(
@@ -112,6 +112,20 @@ macro_rules! retry_grpc {
             }
         }
     }};
+}
+
+/// Convert a gRPC error status into a typed `SnipError`.
+///
+/// Distinguishes `NotFound` (library not found) from other non-retryable errors.
+fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipError {
+    if status.code() == Code::NotFound {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::LibraryNotFound,
+            Some(&status.to_string()),
+        )
+    } else {
+        SnipError::runtime_error(operation, Some(&status.to_string()))
+    }
 }
 
 /// Add the API key as gRPC `authorization` metadata to a request.
@@ -280,10 +294,7 @@ impl SyncClient {
                     if !SyncRetryConfig::is_retryable_grpc_error(&e)
                         || attempt >= config.max_retries
                     {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::SyncRequestFailed,
-                            Some(&e.to_string()),
-                        ));
+                        return Err(grpc_error_to_snip_error("Sync request", &e));
                     }
                     let is_rate_limited = e.code() == Code::ResourceExhausted;
                     tracing::warn!(

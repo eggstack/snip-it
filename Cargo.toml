@@ -119,3 +119,12 @@ strip = true
 [workspace]
 members = ["snip-proto", "snip-sync"]
 resolver = "2"
+
+[features]
+default = ["tui", "clipboard", "sync", "self-update", "bundled-themes"]
+tui = []
+clipboard = []
+sync = []
+self-update = []
+bundled-themes = []
+test-support = []

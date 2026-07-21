@@ -12,30 +12,28 @@
 //
 // The `snp` binary lives in the same package as this library but is a
 // separate crate, so it can only see `pub` items here. The CLI uses
-// `commands`, `config`, `error`, `logging`, and `ui` directly. The
-// truly internal modules (`clipboard`, `library`, `sync_commands`,
-// `utils`) are accessed only via `crate::` from sibling modules, so
-// they can be hidden from external consumers.
+// `commands`, `config`, `error`, `logging`, `sort`, and `ui` directly.
+// Modules only used internally (sync client, encryption, proto,
+// diagnostics, output, status, usage) are `pub(crate)`.
 pub mod auto_sync;
 pub mod commands;
 pub mod config;
-pub mod encryption;
 pub mod error;
 pub mod logging;
-pub mod proto;
-pub mod sync;
+pub mod sort;
 pub mod ui;
 
 pub(crate) mod clipboard;
+pub(crate) mod diagnostics;
+pub(crate) mod encryption;
 pub(crate) mod library;
+pub(crate) mod output;
+pub mod proto;
+pub(crate) mod status_snapshot;
+pub mod sync;
 pub(crate) mod sync_commands;
-pub(crate) mod utils;
-
-pub mod diagnostics;
-pub mod output;
-pub mod sort;
-pub mod status_snapshot;
 pub mod usage;
+pub(crate) mod utils;
 
 pub use error::{SnipError, SnipResult};
 

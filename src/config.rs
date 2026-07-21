@@ -47,6 +47,7 @@ pub const MAX_SYNC_TIMEOUT_SECS: u64 = 120;
 /// remains committed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AutoSyncFailureMode {
     /// Retain local success, suppress user-facing failure.
     Ignore,

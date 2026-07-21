@@ -237,3 +237,31 @@ jobs:
             exit 1
           fi
           echo "No secrets detected"
+
+  architecture:
+    name: Architecture Boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Run architecture tests
+        run: cargo test --test architecture
+
+  feature-matrix:
+    name: Feature Check (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "tui", "sync", "test-support"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Check with features
+        run: cargo check --no-default-features --features ${{ matrix.features }}

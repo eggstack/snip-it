@@ -21,6 +21,7 @@ use std::process::ExitStatus;
 /// process) to determine the outcome of a sync operation.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutorExitCode {
     /// Sync completed successfully.
     Success = 0,

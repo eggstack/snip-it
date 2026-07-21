@@ -831,8 +831,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
             match outcome {
                 snip_it::auto_sync::WorkerOutcome::Success
-                | snip_it::auto_sync::WorkerOutcome::NothingToDo => {}
-                snip_it::auto_sync::WorkerOutcome::Failed => {}
+                | snip_it::auto_sync::WorkerOutcome::NothingToDo
+                | snip_it::auto_sync::WorkerOutcome::Failed => {}
+                _ => {}
             }
         }
         Some(Commands::AutoSyncExecute { state_dir }) => {

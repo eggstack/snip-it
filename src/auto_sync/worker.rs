@@ -25,6 +25,7 @@ use std::process::ExitStatus;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WorkerOutcome {
     Success,
     Failed,

@@ -62,6 +62,8 @@ pub enum SyncFailureKind {
     EncryptionFailed,
     /// Decryption/deserialization of snippet data failed.
     DecryptionFailed,
+    /// Server-side library not found (gRPC NOT_FOUND for library operations).
+    LibraryNotFound,
 }
 
 impl fmt::Display for SyncFailureKind {
@@ -84,6 +86,7 @@ impl fmt::Display for SyncFailureKind {
             Self::PremadePartialFailure => write!(f, "Some premade libraries failed to sync"),
             Self::EncryptionFailed => write!(f, "Failed to encrypt snippet data"),
             Self::DecryptionFailed => write!(f, "Failed to decrypt snippet data"),
+            Self::LibraryNotFound => write!(f, "Library not found"),
         }
     }
 }

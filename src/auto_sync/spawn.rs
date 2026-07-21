@@ -13,6 +13,7 @@ pub const WORKER_SUBCOMMAND: &str = "auto-sync-worker";
 pub const EXECUTOR_SUBCOMMAND: &str = "auto-sync-execute";
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SpawnError {
     Spawn(std::io::Error),
     NoExecutable,

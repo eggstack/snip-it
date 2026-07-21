@@ -14,13 +14,9 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use snip_it::encryption::{decrypt, encrypt};
-//!
-//! let api_key = "your-api-key";
-//! let encrypted = encrypt(api_key, "sensitive data").unwrap();
-//! let decrypted = decrypt(api_key, &encrypted).unwrap();
-//! assert_eq!(decrypted, "sensitive data");
+//! ```ignore
+//! // Internal API — not available to external consumers.
+//! // use snip_it::encryption::{decrypt, encrypt};
 //! ```
 
 use aes_gcm::{

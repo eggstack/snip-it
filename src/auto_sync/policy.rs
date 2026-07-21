@@ -153,6 +153,7 @@ impl FailureClass {
                 SyncFailureKind::PremadePartialFailure => FailureClass::Partial,
                 SyncFailureKind::EncryptionFailed => FailureClass::Internal,
                 SyncFailureKind::DecryptionFailed => FailureClass::Internal,
+                SyncFailureKind::LibraryNotFound => FailureClass::Configuration,
             },
             SnipError::Runtime { message, detail } => {
                 let combined = format!("{message} {}", detail.as_deref().unwrap_or(""));
