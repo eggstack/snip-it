@@ -1,7 +1,13 @@
+//! **Layer: Sync-Client** (with platform dependency: keyring)
+//!
 //! Configuration management for snp sync.
 //!
 //! Handles loading and saving sync settings including server configuration,
 //! API keys, and sync preferences. Settings are stored in `sync.toml`.
+//!
+//! **Known cross-layer dependency:** `save_sync_settings()` calls
+//! `crate::clipboard::invalidate_clipboard_settings_cache()` — this should
+//! be moved to the caller or an event bus in a future refactor.
 
 use crate::error::{SnipError, SnipResult};
 pub use crate::utils::config::get_sync_config_path;

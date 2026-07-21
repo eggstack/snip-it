@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! Cross-platform clipboard access.
 //!
 //! Provides a unified interface for clipboard operations across Windows, macOS, and Linux.

@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Shared sort and ranking model for snippet selection.
 //!
 //! Provides deterministic, stable sorting of snippets with support for
@@ -31,6 +33,7 @@ use crate::usage::UsageData;
     clap::ValueEnum,
 )]
 #[value(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum SnippetSort {
     /// Sort by fuzzy relevance score descending (highest first).
     #[default]

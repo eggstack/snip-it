@@ -877,6 +877,7 @@ fn main() {
             log_shutdown_info();
             std::process::exit(4);
         }
+        Ok(_) => {}
         Err(e) => {
             eprintln!("error: {e}");
             log_shutdown_info();

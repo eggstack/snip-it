@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Variable expansion for dynamic snippets.
 //!
 //! Handles parsing and expansion of `<variable>` and `<variable=default>` syntax

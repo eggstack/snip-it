@@ -2,6 +2,8 @@
 
 This document provides a bird's-eye view of the snip-it codebase. Each section links to a detailed deep-dive document in this directory.
 
+For the target logical layer architecture (Domain/Core → Sync-Client → Application), see [docs/LOGICAL_LAYERS.md](../docs/LOGICAL_LAYERS.md).
+
 ## Table of Contents
 
 - [CLI & Commands](#cli--commands)
@@ -10,6 +12,7 @@ This document provides a bird's-eye view of the snip-it codebase. Each section l
 - [TUI & User Interface](#tui--user-interface)
 - [Utilities](#utilities)
 - [Server (snip-sync)](#server-snip-sync)
+- [Phase 06A: Structural Tightening](#phase-06a-structural-tightening)
 - [Deep Dives](#deep-dives)
 
 ---
@@ -211,6 +214,27 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 **snip-sync/src/premade.rs** — Premade library file scanning
 
 ---
+
+## Phase 06A: Structural Tightening
+
+Phase 06A tightened the public API surface and documented the logical layering of the crate:
+
+- **Logical layers** documented in [docs/LOGICAL_LAYERS.md](../docs/LOGICAL_LAYERS.md) (Domain/Core → Sync-Client → Application).
+- **Public API inventory** in [docs/PUBLIC_API.md](../docs/PUBLIC_API.md) — full surface audit.
+- **Canonical operations** in [docs/CANONICAL_OPERATIONS.md](../docs/CANONICAL_OPERATIONS.md) — operation contracts.
+- **Feature gate analysis** in [docs/FEATURE_BOUNDARIES.md](../docs/FEATURE_BOUNDARIES.md) — feature boundary documentation.
+
+### Dead items removed
+
+- `AutoSyncPolicy.max_retries` — field was never read; backoff is now durable and retry-count-based.
+- `STALE_LOCK_THRESHOLD_SECS` — constant was unused; lock staleness is handled by timeout logic.
+- `encryption::ct_eq` — constant-time equality helper was unreferenced; replaced by downstream crate functionality.
+
+### `#[non_exhaustive]`
+
+Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
+
+See [docs/API_TIGHTENING_FINDINGS.md](../docs/API_TIGHTENING_FINDINGS.md) and [docs/OBSOLETE_ITEMS.md](../docs/OBSOLETE_ITEMS.md) for the full audit.
 
 ## Key Patterns
 

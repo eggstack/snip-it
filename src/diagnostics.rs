@@ -1,3 +1,9 @@
+//! **Layer: Domain/Core**
+//!
+//! Compatibility diagnostic models for import and doctor operations.
+//!
+//! Pure data types with no I/O or platform dependencies.
+
 use serde::{Deserialize, Serialize};
 
 /// Severity level for compatibility diagnostics.

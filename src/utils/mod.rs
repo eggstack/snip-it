@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core** (shared utilities)
+//!
 //! Utility modules for snp.
 //!
 //! This module provides helper functions for:

@@ -1,3 +1,5 @@
+//! **Layer: Sync-Client**
+//!
 //! gRPC sync client for communicating with snip-sync server.
 //!
 //! Handles bidirectional synchronization of snippets with encryption in transit.

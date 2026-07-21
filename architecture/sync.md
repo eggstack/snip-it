@@ -140,10 +140,11 @@ pub struct AutoSyncPolicy {
     pub enabled: bool,
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
-    pub max_retries: u32,
     pub sync_timeout: Duration,
 }
 ```
+
+**Note:** The `max_retries` field was removed in Phase 06A — it was never read. Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc!` macro).
 
 ### AutoSyncFailureMode
 

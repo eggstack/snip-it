@@ -232,6 +232,35 @@ env.new_snippet("my-snippet");
 - `TempDir` provides automatic cleanup
 - Event sink uses JSON-lines format for process-safe concurrent writes
 
+## Phase 06A: Public API Tightening
+
+Phase 06A tightened the public API surface and documented the logical layering of the crate.
+
+### Docs Directory
+
+The `docs/` directory contains reference documents produced during Phase 06A:
+
+| Document | Subject |
+|----------|---------|
+| `docs/PUBLIC_API.md` | Full public API surface inventory |
+| `docs/LOGICAL_LAYERS.md` | Logical layer separation (public vs internal) |
+| `docs/CANONICAL_OPERATIONS.md` | Canonical operation contracts |
+| `docs/API_TIGHTENING_FINDINGS.md` | Findings from the API tightening audit |
+| `docs/OBSOLETE_ITEMS.md` | Items removed as dead code |
+| `docs/FEATURE_BOUNDARIES.md` | Feature boundary documentation |
+
+### Dead Items Removed
+
+The following items were removed as dead public API:
+
+- `AutoSyncPolicy.max_retries` — field was never read; backoff is now durable and retry-count-based
+- `STALE_LOCK_THRESHOLD_SECS` — constant was unused; lock staleness is handled by timeout logic
+- `encryption::ct_eq` — constant-time equality helper was unreferenced; replaced by downstream crate functionality
+
+### `#[non_exhaustive]`
+
+Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
+
 ## Architecture Documentation
 
 The `architecture/` directory contains deep-dive documents for each module. Use them as reference when working on specific subsystems:

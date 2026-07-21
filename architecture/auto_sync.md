@@ -76,7 +76,6 @@ pub struct AutoSyncPolicy {
     pub enabled: bool,          // settings.auto_sync && settings.enabled
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
-    pub max_retries: u32,
     pub sync_timeout: Duration,
     pub max_delay: Duration,
 }
@@ -85,6 +84,8 @@ pub struct AutoSyncPolicy {
 Resolved once per command invocation from `SyncSettings`. `sync_configured` indicates that a sync account is configured (`enabled = true` in sync.toml), regardless of whether auto-sync execution is enabled. The parent uses `sync_configured` to decide whether to record pending intent (preserving synchronization intent even when auto-sync is disabled). The worker uses `enabled` to decide whether to actually perform sync.
 
 **Note:** `max_delay` is a separate config from `debounce`. `debounce` controls the quiet period (how long to wait after the last change), while `max_delay` caps the total elapsed time before forcing a sync attempt — even if changes continue to arrive. This prevents indefinite starvation under continuous mutations.
+
+**Note:** The previous `max_retries` field was removed in Phase 06A — it was never read. Retry behavior is now driven entirely by durable backoff state in `auto-sync-status.toml` (see [Retry and Backoff](#retry-and-backoff)).
 
 ### MutationKind
 

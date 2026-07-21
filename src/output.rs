@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Shared presentation model for snippet output metadata.
 //!
 //! The `output` field on [`Snippet`](crate::library::Snippet) stores

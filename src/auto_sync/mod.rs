@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! Auto-sync subsystem — detached one-shot worker model.
 
 pub mod execution_lock;

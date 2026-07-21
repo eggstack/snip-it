@@ -4,7 +4,6 @@ use crate::config::{AutoSyncFailureMode, DEFAULT_SYNC_TIMEOUT_SECS, SyncSettings
 use std::time::Duration;
 
 pub const MAX_DEBOUNCE_SECS: u64 = 300;
-pub const DEFAULT_MAX_RETRIES: u32 = 1;
 pub const DEFAULT_WORKER_LIFETIME_SECS: u64 = 300;
 pub const DEFAULT_TERMINATION_GRACE_SECS: u64 = 2;
 
@@ -16,7 +15,6 @@ pub struct AutoSyncPolicy {
     pub enabled: bool,
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
-    pub max_retries: u32,
     pub sync_timeout: Duration,
     pub max_delay: Duration,
     /// Time after SIGTERM before escalating to SIGKILL.
@@ -32,7 +30,6 @@ impl AutoSyncPolicy {
             enabled: settings.auto_sync && settings.enabled,
             debounce: settings.auto_sync_debounce(),
             failure_mode: settings.auto_sync_failure.clone(),
-            max_retries: DEFAULT_MAX_RETRIES,
             sync_timeout: settings.auto_sync_timeout(),
             max_delay: settings.auto_sync_max_delay(),
             termination_grace: Duration::from_secs(DEFAULT_TERMINATION_GRACE_SECS),
@@ -52,7 +49,6 @@ impl Default for AutoSyncPolicy {
             enabled: false,
             debounce: Duration::from_secs(2),
             failure_mode: AutoSyncFailureMode::Warn,
-            max_retries: DEFAULT_MAX_RETRIES,
             sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
             max_delay: Duration::from_secs(300),
             termination_grace: Duration::from_secs(DEFAULT_TERMINATION_GRACE_SECS),
@@ -63,6 +59,7 @@ impl Default for AutoSyncPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum MutationKind {
     SnippetCreate,
     SnippetUpdate,
@@ -81,6 +78,7 @@ impl MutationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MutationOrigin {
     User,
     Import,
@@ -102,6 +100,7 @@ impl MutationOrigin {
 /// decision function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FailureClass {
     /// Auto-sync is disabled in configuration.
     DeferredDisabled,
@@ -279,6 +278,7 @@ impl FailureClass {
 /// retry after a delay, wait for configuration change, require operator
 /// attention, or not retry at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RetryDisposition {
     /// Retry after the given duration (exponential backoff).
     RetryAfter(Duration),

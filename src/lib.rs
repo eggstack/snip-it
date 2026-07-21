@@ -53,6 +53,7 @@ pub struct SnippetData {
 }
 
 /// Result of processing a snippet selection from the TUI.
+#[non_exhaustive]
 pub enum ProcessResult {
     /// User cancelled the selection.
     Cancel,
@@ -63,6 +64,7 @@ pub enum ProcessResult {
 }
 
 /// Top-level outcome returned by command implementations for exit-code mapping.
+#[non_exhaustive]
 pub enum CommandOutcome {
     /// Command completed successfully.
     Success,
@@ -75,6 +77,7 @@ pub enum CommandOutcome {
 /// This is distinct from `CommandOutcome`: `SelectionOutcome` is the raw
 /// result of the TUI interaction, while `CommandOutcome` is the CLI-level
 /// semantic result mapped to exit codes in `main.rs`.
+#[non_exhaustive]
 pub enum SelectionOutcome {
     /// A snippet was selected and processed by the callback.
     Selected,

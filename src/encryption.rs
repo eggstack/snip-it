@@ -1,3 +1,5 @@
+//! **Layer: Sync-Client**
+//!
 //! Encryption utilities for secure sync.
 //!
 //! Provides end-to-end encryption for snippet data using AES-256-GCM with
@@ -100,7 +102,7 @@ const NONCE_SIZE: usize = 12;
 const SALT_SIZE: usize = 16;
 
 #[cfg(test)]
-pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 

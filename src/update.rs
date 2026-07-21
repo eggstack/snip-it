@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! Self-update support for the `snp` client.
 //!
 //! The update source follows the way the executable was installed: Cargo

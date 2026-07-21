@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! Logging infrastructure using the `tracing` crate.
 //!
 //! Provides structured logging with file rotation and panic handling.

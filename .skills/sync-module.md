@@ -126,6 +126,8 @@ Missing: No tests for encryption roundtrip through sync, retry logic, or the cri
 
 `transient_backoff(consecutive_failures: u32) -> Duration` computes capped exponential backoff with jitter: ~5s, ~15s, ~30s, ~60s, then exponential growth capped at 15 minutes. Jitter is 0-20% of base delay.
 
+**Note:** The `AutoSyncPolicy.max_retries` field was removed in Phase 06A — it was never read. Retry behavior is now driven entirely by durable backoff state in `auto-sync-status.toml`. The `SyncRetryConfig.max_retries` in `sync.rs` (controlling per-request gRPC retries within a single sync operation) is unaffected.
+
 ### Status Persistence
 
 `auto-sync-status.toml` in the state directory records the last failure classification, attempt count, next retry timestamp, and a config fingerprint for deferral release detection. Messages are sanitized: control characters stripped, Bearer tokens and API key values redacted.

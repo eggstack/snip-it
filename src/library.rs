@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Core data structures and library management.
 //!
 //! This module provides the foundational types for storing and managing snippets:

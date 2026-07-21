@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! CLI command implementations.
 //!
 //! Each subcommand in the CLI has its own module with a `run()` function.
@@ -29,6 +31,7 @@ use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use std::path::PathBuf;
 
 /// Result of expanding a snippet command with variables.
+#[non_exhaustive]
 pub enum ExpandedCommand {
     /// User cancelled the operation.
     Cancel,

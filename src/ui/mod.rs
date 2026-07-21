@@ -1,3 +1,5 @@
+//! **Layer: Application**
+//!
 //! Terminal user interface for snippet selection.
 //!
 //! Provides the main TUI event loop with fuzzy search, syntax highlighting,

@@ -183,7 +183,7 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
 /// verbatim. This helper is retained for callers that hand-write TOML and need
 /// the same conversion.
 #[allow(dead_code)]
-pub fn quote_strings_containing_backslashes(toml_str: &str) -> String {
+pub(crate) fn quote_strings_containing_backslashes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| content.contains('\\'))
 }
 

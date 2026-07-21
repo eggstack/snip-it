@@ -1,3 +1,10 @@
+//! **Layer: Application**
+//!
+//! Read-only status projection for `snp status` and doctor commands.
+//!
+//! Captures a point-in-time snapshot of local libraries, sync state,
+//! pending operations, and execution status.
+
 use crate::auto_sync::execution_lock::{self, ExecutionLockContents};
 use crate::auto_sync::lock::{self, WorkerLockContents};
 use crate::auto_sync::pending::{self, PendingError, PendingState};

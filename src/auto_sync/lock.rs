@@ -6,7 +6,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const WORKER_LOCK_NAME: &str = "auto-sync-worker.lock";
-pub const STALE_LOCK_THRESHOLD_SECS: u64 = 5 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerLockContents {

@@ -1,3 +1,5 @@
+//! **Layer: Sync-Client**
+//!
 //! Sync orchestration and merge logic.
 //!
 //! Coordinates the bidirectional sync flow between local snippet libraries

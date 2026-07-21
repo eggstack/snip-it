@@ -50,7 +50,15 @@
 - Use `LEFT JOIN ... GROUP BY` for counts
 - Add indexes for frequently queried columns
 
-### 10. Clippy Compliance
+### 10. Removing Dead Public Items
+- Audit public API surface before releasing (see `docs/PUBLIC_API.md`)
+- Remove unused fields, constants, and functions from public types
+- For removed items: verify no callers exist in the workspace (`rg <item_name>`)
+- Apply `#[non_exhaustive]` to public enums to prevent future breakage from variant additions
+- Document removed items in `docs/OBSOLETE_ITEMS.md` with rationale
+- Common pattern: a field/method was added speculatively but never wired up — delete it before it becomes a stability commitment
+
+### 11. Clippy Compliance
 - Use `sort_by_key` instead of `sort_by` for simple key extraction
 - Collapse nested `if` into match arm guards where practical
 - Use `#[allow(clippy::...)]` for complex patterns that can't be collapsed
@@ -61,3 +69,13 @@
 - Server tests with `sqlite::memory:` for database isolation
 - Run `cargo clippy --all-targets -- -D warnings` before committing
 - Run `cargo fmt --check` to verify formatting
+
+## Phase 06A Dead Items
+
+The following dead items were identified and removed during the API tightening audit:
+
+- **`AutoSyncPolicy.max_retries`** — field was never read; backoff is now durable and retry-count-based via `auto-sync-status.toml`. Do not re-add; use `schedule_sync()` backoff decisions instead.
+- **`STALE_LOCK_THRESHOLD_SECS`** — constant was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks. Do not re-add; use timeout-based staleness detection.
+- **`encryption::ct_eq`** — constant-time equality helper was unreferenced; replaced by downstream crate functionality. Do not re-add.
+
+Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.

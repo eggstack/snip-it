@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Error types and handling for snp.
 //!
 //! This module defines the [`SnipError`] enum which categorizes all errors

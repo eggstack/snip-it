@@ -1,3 +1,5 @@
+//! **Layer: Domain/Core**
+//!
 //! Local-only per-snippet usage metadata.
 //!
 //! Tracks how often and when each snippet has been used.  The data is stored
