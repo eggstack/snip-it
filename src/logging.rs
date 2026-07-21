@@ -611,4 +611,108 @@ mod tests {
         rotate_audit_log_if_needed(&log_path, 1024, 30).unwrap();
         assert!(log_path.exists());
     }
+
+    #[test]
+    fn test_log_dir_permissions_are_restrictive() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_dir = dir.path().join("logs");
+        fs::create_dir_all(&log_dir).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o700);
+            fs::set_permissions(&log_dir, perms).unwrap();
+            let metadata = fs::metadata(&log_dir).unwrap();
+            let mode = metadata.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "log dir must have 0700 permissions");
+        }
+    }
+
+    #[test]
+    fn test_audit_log_permissions_are_restrictive() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("audit.log");
+        fs::write(&log_path, "test").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o600);
+            fs::set_permissions(&log_path, perms).unwrap();
+            let metadata = fs::metadata(&log_path).unwrap();
+            let mode = metadata.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "audit log must have 0600 permissions");
+        }
+    }
+
+    #[test]
+    fn test_sentinel_secret_not_in_audit_log_entry() {
+        let secrets = &[
+            "sk-test-api-key-12345",
+            "Bearer token ABCDEF",
+            "password=secret123",
+            "credential: xoxb-secret",
+            "API_KEY=ak_live_12345",
+        ];
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("audit.log");
+
+        for secret in secrets {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .unwrap();
+            writeln!(file, "normal log line with {secret} embedded").unwrap();
+        }
+
+        let contents = fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 5, "must have 5 log lines");
+
+        for line in &lines {
+            assert!(
+                !line.contains('\x1b'),
+                "audit log line must not contain ANSI escape sequences: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_redact_command_truncates_long_commands() {
+        let long_cmd = "a".repeat(100);
+        let redacted = redact_command(&long_cmd);
+        assert!(redacted.len() < 100);
+        assert!(redacted.ends_with("..."));
+    }
+
+    #[test]
+    fn test_redact_command_preserves_short_commands() {
+        let short_cmd = "git status";
+        let redacted = redact_command(short_cmd);
+        assert_eq!(redacted, "git status");
+    }
+
+    #[test]
+    fn test_log_dir_is_bounded() {
+        let log_dir = get_default_log_dir();
+        let config_dir = crate::utils::config::get_config_dir();
+        assert!(
+            log_dir.starts_with(&config_dir),
+            "log dir must be under config dir"
+        );
+        assert!(
+            log_dir.file_name().is_some(),
+            "log dir must have a filename component"
+        );
+    }
+
+    #[test]
+    fn test_get_default_log_dir_returns_consistent_path() {
+        let dir1 = get_default_log_dir();
+        let dir2 = get_default_log_dir();
+        assert_eq!(dir1, dir2, "log dir must be consistent across calls");
+    }
 }

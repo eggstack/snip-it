@@ -12,6 +12,7 @@ pub struct StatusSnapshot {
     pub schema: u32,
     pub generated_at_unix_ms: u64,
     pub config_root: PathBuf,
+    pub log_dir: PathBuf,
     pub local: LocalSummary,
     pub sync: SyncSummary,
     pub pending: PendingSummary,
@@ -136,6 +137,7 @@ fn unix_now_ms() -> u64 {
 pub fn capture_snapshot() -> StatusSnapshot {
     let state_dir = crate::auto_sync::paths::state_dir();
     let config_root = crate::utils::config::get_config_dir();
+    let log_dir = crate::logging::get_default_log_dir();
     let generated_at = unix_now_ms();
 
     let sync_config = sync_configuration_state();
@@ -175,6 +177,7 @@ pub fn capture_snapshot() -> StatusSnapshot {
         schema: SNAPSHOT_SCHEMA,
         generated_at_unix_ms: generated_at,
         config_root,
+        log_dir,
         local,
         sync,
         pending,
@@ -970,6 +973,7 @@ mod tests {
             schema: SNAPSHOT_SCHEMA,
             generated_at_unix_ms: 0,
             config_root: dir.path().to_path_buf(),
+            log_dir: dir.path().join("logs"),
             local: LocalSummary {
                 libraries: 0,
                 snippets: 0,
@@ -1079,6 +1083,7 @@ mod tests {
             schema: SNAPSHOT_SCHEMA,
             generated_at_unix_ms: 12345,
             config_root: PathBuf::from("/tmp/test"),
+            log_dir: PathBuf::from("/tmp/test/logs"),
             local: LocalSummary {
                 libraries: 2,
                 snippets: 42,
@@ -1130,6 +1135,7 @@ mod tests {
             schema: SNAPSHOT_SCHEMA,
             generated_at_unix_ms: 0,
             config_root: dir.path().to_path_buf(),
+            log_dir: dir.path().join("logs"),
             local: LocalSummary {
                 libraries: 0,
                 snippets: 0,
@@ -1160,6 +1166,7 @@ mod tests {
             schema: SNAPSHOT_SCHEMA,
             generated_at_unix_ms: 0,
             config_root: dir.path().to_path_buf(),
+            log_dir: dir.path().join("logs"),
             local: LocalSummary {
                 libraries: 0,
                 snippets: 0,

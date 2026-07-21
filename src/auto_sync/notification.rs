@@ -195,10 +195,10 @@ fn apply_scheduling_failure_policy(policy: &AutoSyncPolicy) {
             tracing::debug!("auto-sync scheduling failed (ignored per policy)");
         }
         AutoSyncFailureMode::Warn => {
-            eprintln!("warning: auto-sync scheduling failed; pending work preserved for recovery");
+            tracing::warn!("auto-sync scheduling failed; pending work preserved for recovery");
         }
         AutoSyncFailureMode::Error => {
-            eprintln!("error: auto-sync scheduling failed; pending work preserved for recovery");
+            tracing::error!("auto-sync scheduling failed; pending work preserved for recovery");
         }
     }
 }

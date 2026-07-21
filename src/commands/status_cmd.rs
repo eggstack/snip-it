@@ -75,6 +75,8 @@ pub fn run(json: bool, sync_only: bool) -> SnipResult<()> {
         out.push_str(&format!("{action}\n"));
     }
 
+    out.push_str(&format!("Logs: {}\n", snapshot.log_dir.display()));
+
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     write!(handle, "{out}").map_err(|e| {
