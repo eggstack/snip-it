@@ -190,9 +190,21 @@ The canonical deterministic test (`tests/deterministic_e2e.rs:test_real_remote_e
 
 ## Future Work
 
-Subsequent phases will extend the infrastructure with:
-
 - **Barrier synchronization** — Deterministic coordination points between test, worker, and executor processes (replacing `sleep`-based timing)
 - **Failpoint injection** — Configurable failure modes at specific pipeline stages (connection refused, partial sync, timeout) without needing unreachable servers
-- **Exact assertion matrices** — Combinatorial tests across debounce values, failure modes, mutation types, and concurrent mutation counts
-- **Clock mocking** — `Clock` trait injection for time-dependent logic (backoff schedules, debounce windows) without real-time waits
+- **Crash-window recovery** — Table-driven tests proving state consistency across 9 crash windows (requires barriers/failpoints)
+
+## Completed Test Suites
+
+| Suite | File | Tests | What it proves |
+|-------|------|-------|----------------|
+| Deterministic E2E | `deterministic_e2e.rs` | 12 | Real binary → real server → pending lifecycle |
+| Failure-Class Contracts | `failure_class_contracts.rs` | 42 | FailureClass → ExitCode → Status → Schedule |
+| Debounce Matrix | `debounce_matrix.rs` | 22 | Exact debounce/scheduling behavior |
+| Sync Contracts | `sync_contracts.rs` | 19 | Direction, CLI overrides, config defaults |
+| Mutual Exclusion | `mutual_exclusion.rs` | 18 | Lock semantics, sequential writes |
+| Process Lifecycle | `process_lifecycle.rs` | 19 | SIGTERM/SIGKILL, exit codes, backoff |
+| Local Contracts | `local_contracts.rs` | 23 | CLI commands, golden corpus, help output |
+| Package Evidence | `package_evidence.rs` | 15 | Binary name, help, linking, no panics |
+
+Total: **170 new tests** (on top of existing 1527 = **1717 total**)

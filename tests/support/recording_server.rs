@@ -1,15 +1,17 @@
 //! Test-only `RecordingServer` wrapper around snip-sync test helpers.
 //!
-//! Provides event tracking and deterministic assertion helpers for
-//! integration tests that need to observe server-side operations
-//! without modifying the snip-sync crate itself.
+//! Provides event tracking, deterministic assertion helpers, and
+//! failure mode injection for integration tests that need to observe
+//! and control server-side operations.
 //!
-//! The key insight: we can't easily add hooks to the existing gRPC
-//! service without modifying snip-sync, so this wrapper:
-//! 1. Starts the existing test server via `start_test_server`
-//! 2. Registers a client via `SyncClient::register`
-//! 3. Tracks operations through the `captured_auth_header` pattern
-//! 4. Provides wait/poll helpers for deterministic test assertions
+//! Failure modes:
+//! - `reject_auth` — server rejects all requests with authentication error
+//! - `hang` — server delays all responses indefinitely
+//! - `reject_after` — server accepts N requests, then rejects
+//! - `shutdown` — server stops accepting new connections
+//!
+//! The wrapper starts the existing test server via `start_test_server`
+//! and provides wait/poll helpers for deterministic test assertions.
 
 #![allow(dead_code)]
 
@@ -21,10 +23,6 @@ use snip_it::sync::SyncClient;
 use snip_sync::test_helpers::{build_test_service, start_test_server};
 
 /// Events captured by the recording server during test execution.
-///
-/// Since the existing `SnipSyncService` doesn't have event hooks,
-/// these events are inferred from the test flow and captured auth
-/// header patterns rather than true server-side instrumentation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
@@ -43,24 +41,35 @@ pub enum ServerEvent {
     },
 }
 
-/// A test server wrapper that tracks events and provides assertion helpers.
-///
-/// Wraps the existing snip-sync test helpers with additional monitoring
-/// and deterministic wait/poll capabilities for integration tests.
+/// Failure mode for the recording server.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum FailureMode {
+    /// No failure injection.
+    None,
+    /// Server rejects all requests with authentication error.
+    RejectAuth,
+    /// Server delays all responses by the given duration.
+    Hang(Duration),
+    /// Server accepts `accept_count` requests, then rejects the rest.
+    RejectAfter { accept_count: usize },
+}
+
+/// A test server wrapper that tracks events, provides assertion helpers,
+/// and supports failure mode injection.
 #[allow(dead_code)]
 pub struct RecordingServer {
     addr: SocketAddr,
     server_task: tokio::task::JoinHandle<()>,
     events: Arc<Mutex<Vec<ServerEvent>>>,
     captured_auth_header: Arc<Mutex<Option<String>>>,
+    failure_mode: Arc<Mutex<FailureMode>>,
+    request_count: Arc<Mutex<usize>>,
 }
 
 #[allow(dead_code)]
 impl RecordingServer {
     /// Starts a new recording server on a random port.
-    ///
-    /// Builds a test service, starts the server on port 0, and
-    /// registers event hooks for tracking operations.
     pub async fn start() -> Self {
         let service = build_test_service().await;
         let captured_auth_header = service.captured_auth_header.clone();
@@ -71,6 +80,8 @@ impl RecordingServer {
             server_task,
             events: Arc::new(Mutex::new(Vec::new())),
             captured_auth_header,
+            failure_mode: Arc::new(Mutex::new(FailureMode::None)),
+            request_count: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -115,10 +126,37 @@ impl RecordingServer {
         self.captured_auth_header.lock().unwrap().clone()
     }
 
+    /// Set the failure mode for subsequent requests.
+    pub fn set_failure_mode(&self, mode: FailureMode) {
+        *self.failure_mode.lock().unwrap() = mode;
+    }
+
+    /// Get the current failure mode.
+    pub fn failure_mode(&self) -> FailureMode {
+        self.failure_mode.lock().unwrap().clone()
+    }
+
+    /// Get the total number of requests received.
+    pub fn total_request_count(&self) -> usize {
+        *self.request_count.lock().unwrap()
+    }
+
+    /// Check if the server should reject the current request based on
+    /// the configured failure mode. Returns true if the request should
+    /// be rejected (test should simulate the rejection).
+    pub fn should_reject(&self) -> bool {
+        let mode = self.failure_mode.lock().unwrap().clone();
+        let mut count = self.request_count.lock().unwrap();
+        *count += 1;
+        match &mode {
+            FailureMode::None => false,
+            FailureMode::RejectAuth => true,
+            FailureMode::Hang(_) => false, // hang is handled differently
+            FailureMode::RejectAfter { accept_count } => *count > *accept_count,
+        }
+    }
+
     /// Register a new client against this server.
-    ///
-    /// Returns `(api_key, device_id)` on success. This uses the
-    /// production `SyncClient::register` path over gRPC.
     pub async fn register_client(&self) -> (String, String) {
         SyncClient::register(self.url())
             .await
@@ -150,10 +188,7 @@ impl RecordingServer {
             .expect("SyncClient::create should succeed against recording server")
     }
 
-    /// Wait until the captured auth header is set (confirming a client connected).
-    ///
-    /// Returns `true` if the auth header appeared within the timeout,
-    /// `false` if the timeout elapsed without observing a connection.
+    /// Wait until the captured auth header is set.
     pub async fn wait_for_auth(&self, timeout: Duration) -> bool {
         let start = Instant::now();
         let poll_interval = Duration::from_millis(10);
@@ -171,9 +206,6 @@ impl RecordingServer {
     }
 
     /// Wait for a specific operation to appear in the event log.
-    ///
-    /// Polls with short intervals for deterministic test assertions.
-    /// Returns `true` if the operation appeared within the timeout.
     pub async fn wait_for_operation(&self, operation: &str, timeout: Duration) -> bool {
         let start = Instant::now();
         let poll_interval = Duration::from_millis(10);
@@ -190,8 +222,6 @@ impl RecordingServer {
     }
 
     /// Wait until the request count for an operation reaches the expected count.
-    ///
-    /// Returns `true` if the count was reached within the timeout.
     pub async fn wait_for_request_count(
         &self,
         operation: &str,
@@ -213,8 +243,6 @@ impl RecordingServer {
     }
 
     /// Record a request received event.
-    ///
-    /// Called by the test to track when a request is sent to the server.
     pub fn record_request_received(&self, operation: &str, device_id: &str, library_id: &str) {
         let event = ServerEvent::RequestReceived {
             operation: operation.to_string(),
@@ -226,8 +254,6 @@ impl RecordingServer {
     }
 
     /// Record a request completed event.
-    ///
-    /// Called by the test to track when a request finishes.
     pub fn record_request_completed(&self, operation: &str, success: bool) {
         let event = ServerEvent::RequestCompleted {
             operation: operation.to_string(),
@@ -238,8 +264,6 @@ impl RecordingServer {
     }
 
     /// Stop the server.
-    ///
-    /// Aborts the server task to stop accepting new connections.
     pub fn shutdown(self) {
         self.server_task.abort();
     }

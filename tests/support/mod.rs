@@ -13,6 +13,7 @@ pub mod helpers {
         Command::new(env!("CARGO_BIN_EXE_snp"))
     }
 
+    #[allow(dead_code)]
     pub fn setup_test_env() -> (TempDir, PathBuf) {
         let tmp = TempDir::new().unwrap();
         let config_dir = tmp.path().join(".config").join("snp");

@@ -10,6 +10,7 @@ pub mod policy;
 pub mod schedule;
 pub mod spawn;
 pub mod status;
+pub mod test_events;
 pub mod worker;
 
 pub use notification::{

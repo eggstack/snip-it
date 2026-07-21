@@ -187,21 +187,44 @@ pub enum ExecutorCommand {
 /// direction, creates a Tokio runtime, runs one sync, and maps the
 /// outcome to an internal exit code.
 pub fn run_executor(_state_dir: &Path) -> i32 {
+    crate::auto_sync::test_events::emit("executor", "started", std::process::id(), None, None);
+
     let settings = match crate::config::load_sync_settings() {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("executor: failed to load sync settings: {e}");
+            crate::auto_sync::test_events::emit(
+                "executor",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"success":false,"reason":"settings_error"}"#.into()),
+            );
             return ExecutorExitCode::InternalError.to_exit_status();
         }
     };
 
     if !settings.enabled {
         tracing::info!("executor: sync not enabled");
+        crate::auto_sync::test_events::emit(
+            "executor",
+            "exited",
+            std::process::id(),
+            None,
+            Some(r#"{"success":false,"reason":"not_enabled"}"#.into()),
+        );
         return ExecutorExitCode::NotConfigured.to_exit_status();
     }
 
     if settings.api_key.is_empty() {
         tracing::info!("executor: no API key configured");
+        crate::auto_sync::test_events::emit(
+            "executor",
+            "exited",
+            std::process::id(),
+            None,
+            Some(r#"{"success":false,"reason":"no_api_key"}"#.into()),
+        );
         return ExecutorExitCode::NotConfigured.to_exit_status();
     }
 
@@ -235,12 +258,33 @@ pub fn run_executor(_state_dir: &Path) -> i32 {
     match result {
         Ok(()) => {
             tracing::info!("executor: sync completed successfully");
+            crate::auto_sync::test_events::emit(
+                "executor",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"success":true}"#.into()),
+            );
             ExecutorExitCode::Success.to_exit_status()
         }
         Err(e) => {
             let class = classify_sync_error(&e);
             let code = ExecutorExitCode::from_failure_class(class);
             tracing::error!(exit_code = ?code, failure_class = %class.as_code(), error = %e, "executor: sync failed");
+            crate::auto_sync::test_events::emit(
+                "executor",
+                "exited",
+                std::process::id(),
+                None,
+                Some(
+                    serde_json::json!({
+                        "success": false,
+                        "exit_code": code as i32,
+                        "failure_class": class.as_code(),
+                    })
+                    .to_string(),
+                ),
+            );
             code.to_exit_status()
         }
     }

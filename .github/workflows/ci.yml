@@ -58,6 +58,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -213,6 +214,7 @@ jobs:
   server-test:
     name: Server Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -221,3 +223,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run snip-sync tests
         run: cargo test -p snip-sync
+
+  secret-sentinel:
+    name: Secret Sentinel
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for leaked secrets
+        run: |
+          if grep -rn --include='*.rs' --include='*.toml' --include='*.yml' -E '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[A-Z0-9]{16})' .; then
+            echo "::error::Potential secret detected in source code"
+            exit 1
+          fi
+          echo "No secrets detected"

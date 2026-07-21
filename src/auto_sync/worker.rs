@@ -92,17 +92,35 @@ pub enum DebounceResult {
 pub fn run(state_dir: &Path) -> WorkerOutcome {
     let policy = AutoSyncPolicy::resolve(&get_sync_settings());
 
+    crate::auto_sync::test_events::emit("worker", "started", std::process::id(), None, None);
+
     let lock = match execution_lock::try_acquire(state_dir) {
         Ok(l) => l,
         Err(ExecutionLockError::AlreadyHeld { .. }) => {
             tracing::info!("auto-sync worker exiting: execution lock already held");
+            crate::auto_sync::test_events::emit(
+                "worker",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"reason":"lock_held"}"#.into()),
+            );
             return WorkerOutcome::NothingToDo;
         }
         Err(e) => {
             tracing::error!(error = %e, "auto-sync worker failed to acquire execution lock");
+            crate::auto_sync::test_events::emit(
+                "worker",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"reason":"lock_error"}"#.into()),
+            );
             return WorkerOutcome::Failed;
         }
     };
+
+    crate::auto_sync::test_events::emit("worker", "lock_acquired", std::process::id(), None, None);
 
     run_locked(state_dir, lock, &policy)
 }
@@ -124,6 +142,13 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 elapsed_secs = start.elapsed().as_secs(),
                 "auto-sync worker exiting: maximum lifetime reached"
             );
+            crate::auto_sync::test_events::emit(
+                "worker",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"reason":"max_lifetime"}"#.into()),
+            );
             return WorkerOutcome::NothingToDo;
         }
 
@@ -131,15 +156,37 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
             Ok(p) => p,
             Err(pending::PendingError::NotFound) => {
                 tracing::debug!("auto-sync worker exiting: no pending state");
+                crate::auto_sync::test_events::emit(
+                    "worker",
+                    "exited",
+                    std::process::id(),
+                    None,
+                    Some(r#"{"reason":"no_pending"}"#.into()),
+                );
                 return WorkerOutcome::NothingToDo;
             }
             Err(e) => {
                 tracing::error!(error = %e, "auto-sync worker failed to read pending state");
+                crate::auto_sync::test_events::emit(
+                    "worker",
+                    "exited",
+                    std::process::id(),
+                    None,
+                    Some(r#"{"reason":"read_error"}"#.into()),
+                );
                 return WorkerOutcome::Failed;
             }
         };
 
         let observed_generation = pending.generation;
+
+        crate::auto_sync::test_events::emit(
+            "worker",
+            "cycle_started",
+            std::process::id(),
+            Some(observed_generation),
+            None,
+        );
 
         tracing::info!(
             generation = observed_generation,
@@ -405,6 +452,14 @@ fn execute_sync(
         return WorkerOutcome::NothingToDo;
     }
 
+    crate::auto_sync::test_events::emit(
+        "worker",
+        "sync_started",
+        std::process::id(),
+        Some(observed_generation),
+        None,
+    );
+
     let mut child = match spawn::spawn_executor(state_dir) {
         Ok(c) => c,
         Err(e) => {
@@ -434,6 +489,13 @@ fn execute_sync(
                         observed_generation,
                         "sync completed successfully",
                     );
+                    crate::auto_sync::test_events::emit(
+                        "worker",
+                        "sync_completed",
+                        std::process::id(),
+                        Some(observed_generation),
+                        Some(r#"{"success":true}"#.into()),
+                    );
                     WorkerOutcome::Success
                 }
                 exit_code => {
@@ -456,6 +518,20 @@ fn execute_sync(
                         next_attempt,
                         &exit_code.to_string(),
                         current_config_fingerprint(),
+                    );
+                    crate::auto_sync::test_events::emit(
+                        "worker",
+                        "sync_completed",
+                        std::process::id(),
+                        Some(observed_generation),
+                        Some(
+                            serde_json::json!({
+                                "success": false,
+                                "exit_code": code,
+                                "failure_class": failure_class.as_code(),
+                            })
+                            .to_string(),
+                        ),
                     );
                     WorkerOutcome::Failed
                 }
@@ -483,6 +559,13 @@ fn execute_sync(
                 "sync executor timed out",
                 current_config_fingerprint(),
             );
+            crate::auto_sync::test_events::emit(
+                "worker",
+                "sync_completed",
+                std::process::id(),
+                Some(observed_generation),
+                Some(r#"{"success":false,"timeout":true}"#.into()),
+            );
             WorkerOutcome::Failed
         }
         Err(e) => {
@@ -496,6 +579,19 @@ fn execute_sync(
                 0,
                 &format!("wait failed: {e}"),
                 current_config_fingerprint(),
+            );
+            crate::auto_sync::test_events::emit(
+                "worker",
+                "sync_completed",
+                std::process::id(),
+                Some(observed_generation),
+                Some(
+                    serde_json::json!({
+                        "success": false,
+                        "error": e,
+                    })
+                    .to_string(),
+                ),
             );
             WorkerOutcome::Failed
         }

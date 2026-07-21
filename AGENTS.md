@@ -25,6 +25,16 @@ cargo test --test auto_sync_closure
 # Run only snip-sync tests
 cargo test -p snip-sync
 
+# Run Phase 05A test suites
+cargo test --test deterministic_e2e
+cargo test --test failure_class_contracts
+cargo test --test debounce_matrix
+cargo test --test sync_contracts
+cargo test --test mutual_exclusion
+cargo test --test process_lifecycle
+cargo test --test local_contracts
+cargo test --test package_evidence
+
 # Lint (warnings are errors)
 cargo clippy --workspace --all-targets -- -D warnings
 
@@ -46,7 +56,10 @@ cargo fmt  # auto-format
 snip-it/          Main crate — binary "snp" (src/main.rs)
 snip-proto/       Protobuf definitions, tonic-generated gRPC code
 snip-sync/        Sync server (gRPC + HTTP/axum)
-tests/            Integration tests (integration.rs, pty_integration.rs, sync_integration.rs, auto_sync_*.rs)
+tests/            Integration tests (integration.rs, pty_integration.rs, sync_integration.rs, auto_sync_*.rs,
+                          deterministic_e2e.rs, failure_class_contracts.rs, debounce_matrix.rs,
+                          sync_contracts.rs, mutual_exclusion.rs, process_lifecycle.rs,
+                          local_contracts.rs, package_evidence.rs)
 themes/           50 Halloy TOML theme files
 scripts/          build_themes.py — LZMA-compresses themes/ into src/ui/_generated_bundled_themes.rs
 ```
@@ -61,6 +74,7 @@ src/commands/             16 command modules (new, list, run, clip, select, sear
                           keybindings, status) + shared helpers in mod.rs
 src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification,
                           status, schedule)
+src/auto_sync/test_events.rs Test-only event emission for worker/executor lifecycle tracking
 src/auto_sync/status.rs  Durable status persistence (auto-sync-status.toml), failure/success recording, integrity checks
 src/auto_sync/schedule.rs Centralized schedule decision function, worker storm prevention, ScheduleDecision enum
 src/auto_sync/policy.rs  Expanded FailureClass (11 variants), RetryDisposition, transient_backoff()
@@ -112,6 +126,12 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 ### Deterministic test assertions
 Phase 05A tests must use exact counts (not `>= 1`), prove server-side state effects,
 and verify pending clear ordering. See `tests/deterministic_e2e.rs` for the headline test pattern.
+
+### Test event emission
+Worker and executor processes emit lifecycle events when `SNP_TEST_EVENTS_DIR` is set.
+Events are JSON-lines in `<SNP_TEST_EVENTS_DIR>/test-events.jsonl`.
+Use `EventSink` (test-side) and `EventWriter` (child-side) from `tests/support/event_sink.rs`.
+Production code uses `src/auto_sync/test_events.rs` which checks the env var at runtime.
 
 ## Key Architecture Notes
 

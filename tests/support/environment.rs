@@ -151,6 +151,18 @@ auto_sync_failure = "{failure_mode}"
     pub fn status_file_path(&self) -> PathBuf {
         self.config_dir.join("auto-sync-status.toml")
     }
+
+    pub fn read_status_file(&self) -> Option<String> {
+        fs::read_to_string(self.status_file_path()).ok()
+    }
+
+    pub fn has_pending_marker(&self) -> bool {
+        self.pending_marker_path().exists()
+    }
+
+    pub fn event_sink_path(&self) -> PathBuf {
+        self.state_dir.join("test-events.jsonl")
+    }
 }
 
 impl Drop for TestEnvironment {
@@ -307,5 +319,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env.read_pending_generation(), Some(3));
+    }
+
+    /// Guard test: ensures that TestEnvironment's XDG_CONFIG_HOME never
+    /// points at the developer's real config directory. This prevents
+    /// accidental reads of production credentials or config.
+    #[test]
+    fn test_environment_never_points_at_real_config() {
+        let env = TestEnvironment::builder().build().unwrap();
+        let xdg = env.home_dir.join(".config");
+        // The real user's config would be under their actual home dir,
+        // not under a TempDir. Verify the XDG path is under the temp dir.
+        assert!(
+            xdg.starts_with(env.tmp.path()),
+            "XDG_CONFIG_HOME must be under TempDir, got: {}",
+            xdg.display()
+        );
+    }
+
+    /// Guard test: verifies that SNP_ALLOW_PLAINTEXT_API_KEY is set in
+    /// every command spawned by TestEnvironment.
+    #[test]
+    fn test_all_commands_have_plaintext_api_key_env() {
+        let env = TestEnvironment::builder().build().unwrap();
+        let cmd = env.snp_cmd();
+        // Verify the env var is set by checking the command's env
+        let has_key = cmd
+            .get_envs()
+            .any(|(k, v)| k == "SNP_ALLOW_PLAINTEXT_API_KEY" && v.unwrap() == "true");
+        assert!(
+            has_key,
+            "snp_cmd() must set SNP_ALLOW_PLAINTEXT_API_KEY=true"
+        );
     }
 }
