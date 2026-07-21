@@ -316,6 +316,22 @@ enum Commands {
         #[command(subcommand)]
         command: ImportSubcommands,
     },
+    /// Repair configuration and library files
+    #[command(alias = "rp")]
+    Repair {
+        /// Show planned repairs without making changes
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        dry_run: bool,
+        /// Apply safe repairs (creates backup first)
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        apply: bool,
+        /// Repair a specific library
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Output as JSON
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
     /// Generate shell completions
     #[command(alias = "g")]
     Completions {
@@ -327,6 +343,39 @@ enum Commands {
     Shell {
         #[command(subcommand)]
         command: ShellCommands,
+    },
+    /// Create a secret-free backup snapshot
+    Backup {
+        /// Output directory (default: ~/.config/snp/backups/<timestamp>/)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Include usage metadata in backup
+        #[arg(long)]
+        include_usage: bool,
+        /// Include sync.toml config in backup (API key redacted)
+        #[arg(long)]
+        include_config: bool,
+        /// Include sync state in backup
+        #[arg(long)]
+        include_sync_state: bool,
+        /// Backup format
+        #[arg(long, value_enum, default_value = "directory")]
+        format: commands::backup_cmd::BackupFormat,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore from a backup snapshot
+    Restore {
+        /// Path to the backup directory
+        #[arg(value_name = "BACKUP_DIR")]
+        backup: PathBuf,
+        /// Restore mode
+        #[arg(long, value_enum, default_value = "merge")]
+        mode: commands::restore_cmd::RestoreMode,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Show auto-sync status
     Status {
@@ -824,6 +873,34 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::import_cmd::run_import_pet(options)?;
             }
         },
+        Some(Commands::Repair {
+            dry_run,
+            apply,
+            library,
+            json,
+        }) => {
+            commands::repair_cmd::run(dry_run, apply, library, json)?;
+        }
+        Some(Commands::Backup {
+            output,
+            include_usage,
+            include_config,
+            include_sync_state,
+            format,
+            json,
+        }) => {
+            commands::backup_cmd::run(
+                output,
+                include_usage,
+                include_config,
+                include_sync_state,
+                format,
+                json,
+            )?;
+        }
+        Some(Commands::Restore { backup, mode, json }) => {
+            commands::restore_cmd::run(backup, mode, json)?;
+        }
         Some(Commands::Status { json, sync_only }) => {
             commands::status_cmd::run(json, sync_only)?;
         }
@@ -854,6 +931,9 @@ fn classify_command(cmd: &Commands) -> SubcommandTag {
         Commands::AutoSyncWorker { .. } => SubcommandTag::AutoSyncWorker,
         Commands::AutoSyncExecute { .. } => SubcommandTag::AutoSyncExecute,
         Commands::Status { .. } => SubcommandTag::Mutation,
+        Commands::Repair { .. } => SubcommandTag::Mutation,
+        Commands::Backup { .. } => SubcommandTag::Mutation,
+        Commands::Restore { .. } => SubcommandTag::Mutation,
         _ => SubcommandTag::Mutation,
     }
 }

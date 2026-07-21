@@ -27,15 +27,23 @@ pub(crate) mod clipboard;
 pub(crate) mod diagnostics;
 pub(crate) mod encryption;
 pub(crate) mod library;
+pub(crate) mod migration;
 pub(crate) mod output;
 pub mod proto;
 pub(crate) mod status_snapshot;
 pub mod sync;
 pub(crate) mod sync_commands;
+pub(crate) mod transaction;
 pub mod usage;
 pub(crate) mod utils;
 
 pub use error::{SnipError, SnipResult};
+
+// Re-export types needed by integration tests
+pub use library::{LibraryConfig, LibraryMeta, Snippet, Snippets, load_library, save_library};
+pub use utils::atomic::{
+    AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic,
+};
 
 /// Aggregated data for all snippets passed to the TUI selector.
 ///

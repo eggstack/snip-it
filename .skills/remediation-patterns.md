@@ -63,6 +63,36 @@
 - Collapse nested `if` into match arm guards where practical
 - Use `#[allow(clippy::...)]` for complex patterns that can't be collapsed
 
+### 12. Atomic write with durability classes
+- Use `atomic_replace` with `AtomicWriteOptions::for_durability()` instead of raw `fs::write` for all user-data files
+- Match durability class to data criticality:
+  - `DurableUserData` for libraries
+  - `SensitiveConfig` for credentials
+  - `RecoverableMetadata` for caches
+  - `EphemeralCoordination` for locks
+
+### 13. Transaction journals for multi-file ops
+- Use `transaction.rs` for any operation touching 2+ files
+- Begin → stage → commit removes the journal
+- On startup, check for interrupted journals via `check_interrupted_transactions`
+- Never schedule sync before local transaction is consistent
+
+### 14. Schema versioning for migrations
+- Use `migration.rs` with `SchemaVersion` ordinal type
+- `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure
+- Always test idempotency: second run should be a no-op
+
+### 15. Validation-first repair
+- Always run validation before repair
+- Safe repairs: rebuild index, fix primary selection, remove orphans, generate missing IDs
+- Refuse: same-ID divergence, partially parseable TOML, corrupt pending intent, multiple primary candidates
+
+### 16. Backup before destructive operations
+- `backup_cmd` creates secret-free snapshots with SHA-256 checksums
+- Default excludes API keys, locks, logs
+- `restore_cmd --replace` creates automatic pre-restore backup
+- `repair --apply` creates pre-repair backup
+
 ## Testing Approach
 - Unit tests for individual functions
 - Integration tests with TempDir for file system operations
@@ -79,3 +109,38 @@ The following dead items were identified and removed during the API tightening a
 - **`encryption::ct_eq`** — constant-time equality helper was unreferenced; replaced by downstream crate functionality. Do not re-add.
 
 Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
+
+## Phase 07A Patterns
+
+The following patterns were introduced in Phase 07A:
+
+### Durability Classes (`src/utils/atomic.rs`)
+| Class | Use case | fsync |
+|-------|----------|-------|
+| `DurableUserData` | Libraries, snippets | fsync parent + file |
+| `SensitiveConfig` | Credentials, sync settings | fsync parent + file |
+| `RecoverableMetadata` | Caches, status | file only |
+| `EphemeralCoordination` | Locks, temp state | no fsync |
+
+### Transaction Journal (`src/transaction.rs`)
+- Operations touching 2+ files must use `Transaction::begin()`
+- Journal lives at `<config>/transaction.journal` with operation list + file checksums
+- On crash recovery: `check_interrupted_transactions()` rolls back incomplete transactions
+- Journal is removed only after successful commit
+
+### Schema Migrations (`src/migration.rs`)
+- `SchemaVersion` ordinal type tracks schema state
+- `write_schema_version` preserves TOML array-of-tables structure
+- Migrations are idempotent: re-running applies no changes
+- `current_schema_version()` reads from `snippets.toml` header
+
+### Validation (`src/commands/validate_cmd.rs`)
+- Read-only checks: orphan detection, primary selection, ID uniqueness, TOML parseability
+- Run validation before any repair operation
+- Report severity: Warning vs Error; only Errors block repair
+
+### Backup (`src/commands/backup_cmd.rs`)
+- Creates snapshot directory with `manifest.toml` + SHA-256 checksums
+- Excludes: `api_key`, `lock`, `logs`, `themes`
+- `restore_cmd --replace` auto-creates pre-restore backup
+- `repair --apply` auto-creates pre-repair backup

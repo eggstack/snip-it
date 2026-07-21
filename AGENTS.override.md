@@ -49,3 +49,24 @@ During the plan review session, the following discrepancies were corrected:
 5. **CMD-3**: --clip copies command as intended; this is a documentation/expectation issue, not a code bug
 6. **TUI-1**: Visual line mode bug confirmed at lines 633-638; `selected` stays at cursor while `visual_end` extends to end of list
 7. **sync_commands.rs merge**: Uses `>=` at line 427 for timestamp comparison (server wins on tie) - already fixed per AGENTS.md
+
+### Session Notes (2026-07-21) - Phase 07A Implementation
+
+#### Phase 07A New Modules
+- `src/transaction.rs` — Transaction boundary with `TransactionJournal`, `TransactionLock`, begin/commit/rollback. Uses `toml::Table` for journal serialization.
+- `src/migration.rs` — Schema versioning with `SchemaVersion` ordinal type. `write_schema_version` must use `toml::Table` (not `toml::Value`) to preserve array-of-tables in TOML files.
+- `src/commands/validate_cmd.rs` — 12 validation check categories. Uses `LibraryManager::new()` with `XDG_CONFIG_HOME` override for isolated tests (requires `unsafe` in edition 2024).
+- `src/commands/backup_cmd.rs` — SHA-256 checksummed backup with manifest. Excludes secrets by default.
+- `src/commands/restore_cmd.rs` — DryRun/Merge/Replace modes. Replace creates automatic pre-restore backup.
+- `src/commands/repair_cmd.rs` — Validation-first repair with pre-repair backup. Safe repairs auto-apply; unsafe ones require manual review.
+
+#### Key Implementation Patterns
+- `atomic_replace` with `AtomicWriteOptions::for_durability()` replaces raw `fs::write` for all user-data
+- Transaction journals in `~/.config/snp/transaction-journals/` for crash recovery
+- `commit_transaction(state_dir, journal)` requires explicit state_dir parameter (not derived from staged files)
+- Integration tests use re-exported types from crate root (`snip_it::Snippet`, `snip_it::atomic_replace` etc.) to maintain `pub(crate)` visibility for `library` and `utils` modules
+
+#### Test Counts
+- Unit tests (lib): ~950
+- Integration tests: ~870
+- Phase 07A-specific: ~55 (persistence_unit, identity_contract, validate_cmd, backup_cmd, restore_cmd, repair_cmd, transaction, migration)

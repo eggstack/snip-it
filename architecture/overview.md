@@ -320,6 +320,7 @@ See [docs/API_TIGHTENING_FINDINGS.md](../docs/API_TIGHTENING_FINDINGS.md) and [d
 | [server.md](server.md) | snip-sync server architecture, gRPC/HTTP, database |
 | [proto.md](proto.md) | Protobuf definitions, gRPC service spec |
 | **Utilities** | |
+| [persistence.md](persistence.md) | Atomic writes, transactions, validation, backup/restore/repair |
 | [utils.md](utils.md) | Config paths, TOML helpers, variable expansion |
 | [clipboard.md](clipboard.md) | Cross-platform clipboard access |
 | [sort.md](sort.md) | Sort modes, ranking, tie-break chain |

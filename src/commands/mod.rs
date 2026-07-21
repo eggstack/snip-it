@@ -5,6 +5,7 @@
 //! Each subcommand in the CLI has its own module with a `run()` function.
 //! This module also provides shared utilities for loading and saving snippets.
 
+pub mod backup_cmd;
 pub mod clip_cmd;
 pub mod cron_cmd;
 pub mod doctor_cmd;
@@ -17,12 +18,15 @@ pub mod new_cmd;
 pub mod pet_analysis;
 pub mod premade_cmd;
 pub mod register_cmd;
+pub mod repair_cmd;
+pub mod restore_cmd;
 pub mod run_cmd;
 pub mod search_cmd;
 pub mod select_cmd;
 pub mod shell_cmd;
 pub mod status_cmd;
 pub mod sync_cmd;
+pub mod validate_cmd;
 
 use crate::config::invalidate_toml_cache;
 use crate::error::{SnipError, SnipResult};

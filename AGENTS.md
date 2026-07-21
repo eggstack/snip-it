@@ -35,6 +35,10 @@ cargo test --test process_lifecycle
 cargo test --test local_contracts
 cargo test --test package_evidence
 
+# Run Phase 07A test suites
+cargo test --test persistence_unit
+cargo test --test identity_contract
+
 # Lint (warnings are errors)
 cargo clippy --workspace --all-targets -- -D warnings
 
@@ -80,6 +84,7 @@ src/auto_sync/schedule.rs Centralized schedule decision function, worker storm p
 src/auto_sync/policy.rs  Expanded FailureClass (11 variants), RetryDisposition, transient_backoff()
 src/ui/                   TUI (ratatui + crossterm), theme system, syntax highlighting, variable prompts
 src/utils/                Config paths, TOML helpers, variable parsing, shell keywords, temp files, atomic writes
+src/utils/atomic.rs         Atomic file-write helpers (write_private_atomic, atomic_replace with durability classes)
 src/library.rs            Snippet/library data structures and TOML persistence
 src/sync.rs               gRPC client for snip-sync server
 src/sync_commands.rs      Sync orchestration and merge logic
@@ -95,6 +100,12 @@ src/diagnostics.rs        Shared diagnostic model for import/doctor
 src/status_snapshot.rs    Canonical read-only status projection for `snp status` and doctor
 src/proto.rs              Prost-generated protobuf types
 src/update.rs             Self-update support (crates.io, Homebrew, GitHub releases)
+src/transaction.rs          Local mutation transaction boundary (journal, lock, commit, rollback)
+src/migration.rs            Migration framework (schema versioning, trait-based migrations)
+src/commands/validate_cmd.rs Validation command (comprehensive read-only checks)
+src/commands/backup_cmd.rs  Backup snapshot command (manifest, checksums, secret-free)
+src/commands/restore_cmd.rs Restore command (dry-run, merge, replace, rollback)
+src/commands/repair_cmd.rs  Conservative repair command (idempotent, backed-up)
 ```
 
 ## Critical Gotchas
@@ -132,6 +143,15 @@ Worker and executor processes emit lifecycle events when `SNP_TEST_EVENTS_DIR` i
 Events are JSON-lines in `<SNP_TEST_EVENTS_DIR>/test-events.jsonl`.
 Use `EventSink` (test-side) and `EventWriter` (child-side) from `tests/support/event_sink.rs`.
 Production code uses `src/auto_sync/test_events.rs` which checks the env var at runtime.
+
+### Atomic write durability classes
+`atomic_replace` supports four durability classes: DurableUserData (fsync), SensitiveConfig (0o600), RecoverableMetadata (no fsync), EphemeralCoordination (no dir sync). Use `AtomicWriteOptions::for_durability()` for correct defaults.
+
+### Transaction journals
+Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk and can be recovered on startup. `commit_transaction` removes the journal; `rollback_transaction` restores from backups.
+
+### Migration schema versioning
+Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.
 
 ## Key Architecture Notes
 
@@ -192,6 +212,8 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 - `~/.config/snp/themes.toml` — active theme selection
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
 - `~/.config/snp/auto-sync-status.toml` — Durable sync attempt status (not synced, private)
+- `~/.config/snp/transaction-journals/` — Transaction journals (Phase 07A)
+- `~/.config/snp/backups/` — Backup snapshots (Phase 07A)
 
 ## Testing Notes
 
