@@ -109,6 +109,10 @@ Snippet commands execute as-is — no sanitization, no guardrails. This is inten
 ### `AGENTS.override.md` exists
 Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.
 
+### Deterministic test assertions
+Phase 05A tests must use exact counts (not `>= 1`), prove server-side state effects,
+and verify pending clear ordering. See `tests/deterministic_e2e.rs` for the headline test pattern.
+
 ## Key Architecture Notes
 
 ### Auto-Sync (two-process-per-cycle)
@@ -175,6 +179,38 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Server tests use `sqlite::memory:` for isolation
 - Sync integration tests (`tests/sync_integration.rs`) are async `#[tokio::test]` with real in-process server
 - Golden command corpus: 24 edge cases verifying exact-text preservation across all acquisition sources
+
+## Deterministic Test Infrastructure (Phase 05A)
+
+The `tests/support/` module provides reusable test infrastructure for deterministic end-to-end tests:
+
+- `environment.rs` — `TestEnvironment` builder with isolated HOME, XDG, config, and credential handling
+- `recording_server.rs` — `RecordingServer` wrapper around snip-sync test helpers with event tracking
+- `event_sink.rs` — Cross-process JSON-lines event channel for worker/executor lifecycle evidence
+
+### TestEnvironment Usage
+
+```rust
+use support::environment::TestEnvironment;
+
+let env = TestEnvironment::builder()
+    .with_server_url(&server_url)
+    .with_debounce(2)
+    .build()?;
+
+// All commands are pre-configured with XDG_CONFIG_HOME and SNP_ALLOW_PLAINTEXT_API_KEY
+env.snp_output(&["new", "--command-stdin", "--description", "test"]);
+env.create_library("mylib");
+env.new_snippet("my-snippet");
+```
+
+### Key Design Decisions
+
+- Tests never use the developer's real config, keychain, or ports
+- `SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on all test commands
+- Each test gets a unique `device_id` and fixed `api_key`
+- `TempDir` provides automatic cleanup
+- Event sink uses JSON-lines format for process-safe concurrent writes
 
 ## Architecture Documentation
 

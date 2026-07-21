@@ -1,3 +1,7 @@
+pub mod recording_server;
+
+pub mod environment;
+
 pub mod helpers {
     use std::fs;
     use std::io::Write;
@@ -169,3 +173,5 @@ auto_sync_failure = "ignore"
         ]
     }
 }
+
+pub mod event_sink;

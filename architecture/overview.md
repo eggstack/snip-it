@@ -302,5 +302,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP).
 | [usage.md](usage.md) | Local usage metadata, update policy, storage |
 | [output.md](output.md) | Snippet output field rendering |
 | [logging.md](logging.md) | Structured logging, audit trail, panic handler |
+| **Testing** | |
+| [test-infrastructure.md](test-infrastructure.md) | Deterministic E2E test infrastructure (Phase 05A) |
 
 > **Note**: Architecture docs for `select_cmd`, `shell_cmd`, `doctor_cmd`, `import_cmd`, and `pet_analysis` are not yet written. See `docs/ARCHITECTURE_INVENTORY.md` for a comprehensive module inventory.
