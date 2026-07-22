@@ -483,7 +483,7 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 |---|---|---|---|
 | Tar symlink following | **Mitigated (Phase 10)** | `tar -xf` followed symlinks by default in earlier versions. A malicious archive could contain symlinks pointing outside the work directory. | Self-update now uses Rust's `tar` crate with entry validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
 | Concurrent worker/update | Low | If an auto-sync worker is running when self-update replaces the binary, the worker continues running the old binary until it exits. | By design — the detached worker is fire-and-forget and holds no resources that the new binary needs. The worker will exit normally and the next cycle will use the new binary. |
-| Checksum manifest trust | Low | The `SHA256SUMS` file is fetched from the same release as the archive. A compromised release could ship matching checksums. | GitHub release signing and the user's trust in the repository provide the root of trust. This is standard practice for GitHub-distributed binaries. |
+| Checksum manifest trust | Low | The `SHA256SUMS` file is fetched from the same release as the archive. A compromised release could ship matching checksums. | GitHub repository trust and SHA-256 checksums provide the root of trust. Releases are not cryptographically signed — checksums detect accidental corruption but not a compromised release. This is standard practice for GitHub-distributed binaries. |
 
 ---
 

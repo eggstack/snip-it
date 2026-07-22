@@ -151,7 +151,7 @@ Use `EventSink` (test-side) and `EventWriter` (child-side) from `tests/support/e
 Production code uses `src/auto_sync/test_events.rs` which checks the env var at runtime.
 
 ### Atomic write durability classes
-`atomic_replace` supports four durability classes: DurableUserData (fsync), SensitiveConfig (0o600), RecoverableMetadata (no fsync), EphemeralCoordination (no dir sync). Use `AtomicWriteOptions::for_durability()` for correct defaults.
+`atomic_replace` supports four durability classes: DurableUserData (fsync file + fsync parent), SensitiveConfig (fsync parent only, 0o600 perms, symlink rejection), RecoverableMetadata (fsync parent only), EphemeralCoordination (no fsync). Use `AtomicWriteOptions::for_durability()` for correct defaults.
 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk and can be recovered on startup. `commit_transaction` removes the journal; `rollback_transaction` restores from backups.

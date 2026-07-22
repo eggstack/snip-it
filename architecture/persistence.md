@@ -329,13 +329,24 @@ Each file in the backup has a SHA-256 digest recorded in the manifest. Restore v
 
 ### Restore Flow
 
-1. Load and validate manifest (`manifest.toml` or `manifest.json`)
-2. Verify SHA-256 checksums for all files
-3. For `Replace`: create pre-restore backup of current config
-4. Restore library files (per-mode logic)
-5. Restore `libraries.toml` index
-6. Restore `usage.toml` if present
-7. Restore `sync.toml` if present (preserve local API key in merge mode)
+1. Acquire transaction lock (`acquire_transaction_lock`)
+2. Begin transaction journal (`begin_transaction`)
+3. Load and validate manifest (`manifest.toml` or `manifest.json`)
+4. Validate every source artifact (checksum, size, symlink rejection)
+5. Validate every destination path (traversal, reserved names, kind constraints)
+6. Parse incoming TOML files before any live write
+7. Load every affected current file
+8. Compute full restore plan in memory (detect conflicts, produce deterministic report)
+9. Create pre-restore snapshot for every affected live file
+10. Stage all replacement files in destination directories
+11. Atomically replace each live file via `atomic_replace` with `Durability::DurableUserData`
+12. Update library index only after all library files are staged and validated
+13. On any failure: roll back all committed replacements in reverse order (`rollback_transaction`)
+14. Mark journal committed only after all live writes succeed (`commit_transaction`)
+15. Record one pending generation if syncable local state changed
+16. Release transaction lock
+17. Schedule auto-sync once, after commit, if policy permits
+18. Clean backups and journal according to retention policy
 
 ### Merge Strategy
 

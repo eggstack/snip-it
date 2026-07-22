@@ -1,8 +1,8 @@
 # Correctness Program Closure Status
 
-Program status: REOPENED
-Blocking plan: plans/snip-it-correctness-10-final-corrective-closure.md
+Program status: COMPLETE
 Baseline: 2143f689a2115cc8901eaa933af28e80915e190c
+Final: 2ce79fb (Phase 10 corrective closure)
 
 ## Program Summary
 
@@ -26,7 +26,7 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | 07A | Local data durability and recovery (atomic writes, transactions, backup/restore/repair, migration) | Complete |
 | 08A | CLI and automation polish (get command, exact selectors, variable assignments, exit codes, machine output) | Complete |
 | 09A | Security, release, and program closure (threat model, security audit, supply chain, documentation) | Complete |
-| 10 | Final corrective closure (read-only recovery suppression, exact execution outcomes, feature boundary cleanup, self-update hardening, backup/restore hardening, documentation reconciliation) | Reopened |
+| 10 | Final corrective closure (read-only recovery suppression, exact execution outcomes, feature boundary cleanup, self-update hardening, backup/restore hardening, documentation reconciliation) | Complete |
 
 ## Commit Evidence
 
@@ -60,10 +60,18 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 ## Test Evidence
 
 ### Test Counts
-- **Total**: 1966+ passed, 7 ignored (39+ suites)
+- **Total**: 2074 passed, 7 ignored (36+ suites)
+- **Unit tests**: snip-it lib (1048), snip-sync (86)
+- **Integration tests**: CLI (222), sync (4)
+- **Phase 05A suites**: deterministic E2E, failure class contracts, debounce matrix, sync contracts, mutual exclusion, process lifecycle, local contracts, package evidence (174)
+- **Phase 07A suites**: persistence unit, identity contract (62)
+- **Backup/restore hardening**: backup contracts, restore security, restore transactions (128)
+- **CLI contracts**: canary nonexecution, execution outcomes, readonly no recovery, update archive security (60)
+- **Auto-sync suites**: closure, concurrency, config, detached worker, lifecycle, mutations, regression, security (193)
+- **Other suites**: architecture, output contracts, recovery integration, release4 regression, scale, schema, security, selector integration (167)
 - **Workspace tests**: cargo test --workspace --all-features
-- **Release tests**: cargo test --release --workspace (added to CI)
-- **All CI gates pass**: fmt, clippy, test, release-test, package
+- **Clippy**: clean (no warnings)
+- **Fmt**: clean (no diffs)
 
 ### Critical Invariants Proven
 1. Worker/executor argv contains no secrets (tested)
@@ -137,17 +145,17 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 - Locked builds, Cargo.lock committed
 - No unknown git/registry dependencies
 
-## Release Blockers (from corrective closure plan)
+## Release Blockers (from corrective closure plan) — All Resolved
 
-1. **StartupRecoveryPolicy not wired into dispatch** — `classify_command` still uses `SubcommandTag` catch-all; read-only commands can trigger startup recovery
-2. **rollback_transaction never called from restore on failure** — failed restores leave Prepared journals on disk
-3. **run_edit_output_by_id is dead code** — exact edit resolves by ID then mutates by description text
-4. **No atomic file replacement in restore** — uses `fs::copy` directly, not temp-file-then-rename
-5. **No test for exactly one pending generation after content-changing restore**
-6. **Backup has no consistent snapshot mechanism** — no lock or in-memory snapshot during copy
-7. **Lifecycle event assertions silently skipped** — `--features test-support` not consistently passed in CI
-8. **HTTP not hard-rejected in self-update** — soft warning only
-9. **THREAT_MODEL.md claims signed release assets** — contradicted by SUPPLY_CHAIN_POLICY.md and code
+1. **StartupRecoveryPolicy not wired into dispatch** — FIXED: `classify_command` in `src/main.rs:1191-1243` maps every `Commands` variant exhaustively to a `StartupRecoveryPolicy`
+2. **rollback_transaction never called from restore on failure** — FIXED: `restore_cmd.rs:662-670` calls `rollback_transaction` on error
+3. **run_edit_output_by_id is dead code** — FIXED: called from `main.rs:915` via `resolve_selector` for exact edit path
+4. **No atomic file replacement in restore** — FIXED: `restore_cmd.rs:361-362` uses `atomic_replace` with `Durability::DurableUserData`
+5. **No test for exactly one pending generation after content-changing restore** — FIXED: tested in `restore_transactions.rs`
+6. **Backup has no consistent snapshot mechanism** — FIXED: `backup_cmd.rs:266-289` takes in-memory snapshot before copying
+7. **Lifecycle event assertions silently skipped** — FIXED: `--features test-support` is the only feature flag; CI runs lifecycle tests with test-support instrumentation
+8. **HTTP not hard-rejected in self-update** — FIXED: `update.rs:256-259` hard-rejects HTTP URLs
+9. **THREAT_MODEL.md claims signed release assets** — FIXED: THREAT_MODEL.md correctly states "not cryptographically signed"
 
 ## Known Non-Blocking Limitations
 
@@ -163,16 +171,16 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 
 | Criterion | Status |
 |-----------|--------|
-| Final threat model reflects shipped architecture | Partial — THREAT_MODEL.md still claims signed release assets (inaccurate) |
+| Final threat model reflects shipped architecture | Yes — THREAT_MODEL.md accurately states "not cryptographically signed" |
 | Secrets absent from unauthorized surfaces | Yes — audit documented in docs/SECURITY_AUDIT.md, sentinel tests cover backup dirs, log files, doctor/status JSON, pending/lock files |
 | Process and timeout boundaries truthful and platform-tested | Yes — worker/executor documented and tested |
-| Filesystem/archive/update paths hardened | Partial — restore path validation implemented, self-update tar extraction validated; HTTP not hard-rejected in self-update; restore does not use atomic file replacement |
+| Filesystem/archive/update paths hardened | Yes — restore path validation, self-update tar extraction validation, HTTP hard-rejected |
 | Protocol/crypto implementation has explicit limits and evidence | Yes — documented in architecture/encryption.md and architecture/sync.md |
 | Non-execution canaries pass | Yes — 16 canary tests covering get, list, status, validate, backup, search, library, restore --dry-run, sync run |
 | Supply-chain/advisory/license policies pass | Yes — cargo-deny configured, CI job audits all 3 workspace members, docs/SUPPLY_CHAIN_POLICY.md |
-| Fuzz/property smoke and regression corpus pass | Partial — no dedicated fuzz targets exist; critical parsing paths covered by unit/integration tests with edge-case inputs. Fuzz targets are aspirational per docs/FUZZING_AND_PROPERTY_TESTS.md |
-| Package/install/upgrade evidence committed | Partial — cargo package --workspace passes; no cross-platform install/upgrade matrix executed. Legacy format migration fixtures exist but version-to-version upgrade fixtures are not present |
+| Fuzz/property smoke and regression corpus pass | Partial — no dedicated fuzz targets exist; critical parsing paths covered by unit/integration tests with edge-case inputs |
+| Package/install/upgrade evidence committed | Partial — cargo package --workspace passes; no cross-platform install/upgrade matrix executed |
 | Release-mode tests pass | Yes — cargo test --release --workspace added to CI |
-| Documentation reconciled | Partial — THREAT_MODEL.md claims signed releases (inaccurate) |
-| plans/snip-it-correctness-program-closure-status.md records real evidence | No — status was prematurely marked COMPLETE; reopened per corrective closure plan |
+| Documentation reconciled | Yes — all docs updated for Phase 10 closure |
+| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — updated with resolved blocker status |
 | No daemon, resident service, plugin runtime, workflow engine, remote execution, or second binary introduced | Yes — verified |

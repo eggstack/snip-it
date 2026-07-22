@@ -37,13 +37,23 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |
 | `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`); exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI for output editing |
-| `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
+| `get` | — | `get_cmd` | No | Deterministic non-TUI snippet retrieval (never executes, no clipboard) |
+| `validate` | — | `validate_cmd` | No | Validate snippet libraries and configuration |
+| `backup` | — | `backup_cmd` | No | Backup snippet libraries to directory with manifest |
+| `restore` | — | `restore_cmd` | No | Restore snippets from backup (dry-run, merge, replace) |
+| `repair` | — | `repair_cmd` | No | Repair snippet libraries and sync artifacts |
+| `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
+| `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
+| `import` | — | `import_cmd` | No | Import snippets from external formats |
+| `doctor` | — | `doctor_cmd` | No | Diagnose configuration and environment |
 | `sync` | `y` | `sync_cmd` | Yes | Sync snippets with server |
 | `cron` | — | `cron_cmd` | No | Generate crontab entry for auto-sync |
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
-| `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
-| `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
-| `get` | — | `get_cmd` | No | Deterministic non-TUI snippet retrieval (never executes, no clipboard) |
+| `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
+| `status` | — | `status_cmd` | No | Show auto-sync status |
+| `update` | — | `update_cmd` | No | Check for and install an update |
+| `shell` | — | `shell_cmd` | No | Generate interactive shell integration |
+| `completions` | — | `completions_cmd` | No | Generate shell completions |
 | `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden.** Detached debounce worker for auto-sync (internal use) |
 | `auto-sync-execute` | — | `auto_sync::executor` | No | **Hidden.** Killable sync executor subprocess (internal use) |
 
@@ -51,6 +61,35 @@ The `auto-sync-worker` and `auto-sync-execute` subcommands are registered with
 `hide = true` in the clap CLI — they do not appear in `--help` output and are
 used internally by the detached worker protocol. See
 [auto_sync.md](auto_sync.md) for the full architecture.
+
+## Startup Recovery Classification (Phase 10)
+
+`classify_command()` in `src/main.rs:1191` maps every `Commands` variant to a
+`StartupRecoveryPolicy` that gates whether auto-sync recovery runs before
+dispatch. This prevents read-only commands from triggering network work.
+
+```rust
+pub enum StartupRecoveryPolicy {
+    Allow,              // Mutation commands — recovery permitted
+    SuppressReadOnly,   // Read-only commands — no worker spawn, no network
+    SuppressExplicitSync, // sync, cron, register — manage own behavior
+    SuppressInternal,   // auto-sync-worker, auto-sync-execute
+    SuppressConfiguration, // doctor, keybindings, shell, completions, update
+}
+```
+
+### Command Classification
+
+| Policy | Commands |
+|--------|----------|
+| `Allow` | `new`, `run`, `clip`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary` |
+| `SuppressReadOnly` | `version`, `list`, `search`, `select`, `status`, `get`, `validate`, `backup`, `library list/show` |
+| `SuppressExplicitSync` | `sync`, `cron`, `register` |
+| `SuppressInternal` | `auto-sync-worker`, `auto-sync-execute` |
+| `SuppressConfiguration` | `update`, `doctor`, `completions`, `shell`, `keybindings` |
+
+The classification is exhaustive — every variant is mapped. Adding a new command
+requires selecting a policy, enforced by the compiler (no catch-all arm).
 
 ## Shared Command Utilities
 

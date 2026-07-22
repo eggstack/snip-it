@@ -117,9 +117,9 @@ The following patterns were introduced in Phase 07A:
 ### Durability Classes (`src/utils/atomic.rs`)
 | Class | Use case | fsync |
 |-------|----------|-------|
-| `DurableUserData` | Libraries, snippets | fsync parent + file |
-| `SensitiveConfig` | Credentials, sync settings | fsync parent + file |
-| `RecoverableMetadata` | Caches, status | file only |
+| `DurableUserData` | Libraries, snippets | fsync file + fsync parent |
+| `SensitiveConfig` | Credentials, sync settings | fsync parent only, 0o600 perms, symlink rejection |
+| `RecoverableMetadata` | Caches, status | fsync parent only |
 | `EphemeralCoordination` | Locks, temp state | no fsync |
 
 ### Transaction Journal (`src/transaction.rs`)

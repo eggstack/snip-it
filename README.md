@@ -372,10 +372,15 @@ snp run          Run a snippet from the TUI (--sort, --favorites-first)
 snp clip         Copy a snippet from the TUI (--sort, --favorites-first)
 snp select       Select a snippet and print its command (no execution)
 snp search       Search and inspect snippets (--sort, --favorites-first)
+snp get          Retrieve a snippet deterministically (--id, --description-exact, --command-exact, --json, --csv, --raw)
 snp edit         Edit a snippet library in $EDITOR (--output, --output-stdin, --clear-output)
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)
+snp validate     Validate snippet libraries and configuration
+snp backup       Backup snippet libraries (--output, --include-usage, --include-config, --include-sync-state)
+snp restore      Restore snippets from a backup (--mode dry-run|merge|replace)
+snp repair       Repair snippet libraries and sync artifacts (--dry-run, --apply)
 snp doctor       Diagnose pet file, library, environment, or shell init syntax
 snp register     Register with a snip-sync server
 snp status       Show auto-sync status (--json, --sync-only)
