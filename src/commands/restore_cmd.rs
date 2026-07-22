@@ -83,13 +83,21 @@ fn load_manifest(backup_dir: &Path) -> SnipResult<BackupManifest> {
     ))
 }
 
+/// Reserved Windows device names that must not appear as file components.
+const RESERVED_WINDOWS_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
 /// Validate a backup-relative path to prevent path traversal attacks.
 ///
 /// Returns the validated relative `PathBuf` on success. Rejects:
 /// - Empty paths
 /// - Absolute paths (Unix `/` or Windows drive letter `C:\`)
+/// - UNC paths (`\\server\share`)
 /// - `..` components (traversal)
 /// - NUL bytes
+/// - Reserved Windows device names (CON, PRN, NUL, etc.)
 /// - For library kind: requires `.toml` extension, rejects path separators (flat filename only)
 /// - For index/usage/sync_config: allows only the exact expected filename
 fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
@@ -125,6 +133,13 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
             Some(&format!("path={path}")),
         ));
     }
+    // Reject UNC paths (\\server\share or //server/share)
+    if (path.starts_with("\\\\") || path.starts_with("//")) && path.len() > 2 {
+        return Err(SnipError::runtime_error(
+            "UNC path in backup manifest",
+            Some(&format!("path={path}")),
+        ));
+    }
 
     let pb = PathBuf::from(path);
     for component in pb.components() {
@@ -141,6 +156,22 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
                     "Absolute path in backup manifest",
                     Some(&format!("path={path}")),
                 ));
+            }
+            Component::Normal(name) => {
+                // Reject reserved Windows device names (case-insensitive)
+                if let Some(name_str) = name.to_str() {
+                    let stem = name_str
+                        .split('.')
+                        .next()
+                        .unwrap_or(name_str)
+                        .to_uppercase();
+                    if RESERVED_WINDOWS_NAMES.contains(&stem.as_str()) {
+                        return Err(SnipError::runtime_error(
+                            "Reserved Windows device name in backup path",
+                            Some(&format!("path={path}, reserved={stem}")),
+                        ));
+                    }
+                }
             }
             _ => {}
         }
@@ -1093,6 +1124,64 @@ is_primary = true
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains(".toml extension"));
+    }
+
+    #[test]
+    fn test_validate_rejects_unc_path() {
+        let result = validate_backup_path("\\\\server\\share\\file.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("UNC"));
+    }
+
+    #[test]
+    fn test_validate_rejects_unc_path_forward_slash() {
+        let result = validate_backup_path("//server/share/file.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("UNC") || msg.contains("Absolute"),
+            "Should reject UNC/absolute path: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_reserved_windows_name_con() {
+        let result = validate_backup_path("CON.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Reserved Windows device name"));
+    }
+
+    #[test]
+    fn test_validate_rejects_reserved_windows_name_nul() {
+        let result = validate_backup_path("NUL.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Reserved Windows device name"));
+    }
+
+    #[test]
+    fn test_validate_rejects_reserved_windows_name_lpt1() {
+        let result = validate_backup_path("LPT1.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Reserved Windows device name"));
+    }
+
+    #[test]
+    fn test_validate_rejects_reserved_windows_name_case_insensitive() {
+        let result = validate_backup_path("con.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Reserved Windows device name"));
+    }
+
+    #[test]
+    fn test_validate_accepts_normal_name_similar_to_reserved() {
+        // "console.toml" should be fine — only exact "CON" stem is rejected
+        let result = validate_backup_path("console.toml", "library");
+        assert!(result.is_ok());
     }
 
     // === Transaction dry-run test (Workstream D) ===
