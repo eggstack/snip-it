@@ -248,3 +248,161 @@ fn test_backup_does_not_execute() {
     assert_sentinel_was_not_created(name);
     clean_sentinel(name);
 }
+
+// ── Additional canary tests for remaining non-executing surfaces ──
+
+#[test]
+fn test_search_help_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "search-help";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-10", &sentinel);
+
+    let output = snp_in(&config_dir)
+        .args(["search", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp search --help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}
+
+#[test]
+fn test_library_list_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "library-list";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-11", &sentinel);
+
+    let output = snp_in(&config_dir)
+        .args(["library", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp library list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}
+
+#[test]
+fn test_library_show_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "library-show";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-12", &sentinel);
+
+    let output = snp_in(&config_dir)
+        .args(["library", "show", "canary-test"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp library show failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}
+
+#[test]
+fn test_restore_dry_run_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "restore-dry-run";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-13", &sentinel);
+
+    // Create a backup first
+    let backup_dir = _tmp.path().join("backup-for-restore");
+    fs::create_dir_all(&backup_dir).unwrap();
+    let output = snp_in(&config_dir)
+        .args(["backup", "--output", backup_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp backup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Restore in dry-run mode
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp restore --dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}
+
+#[test]
+fn test_sync_run_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "sync-run";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-14", &sentinel);
+
+    // Configure sync with a non-existent server
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+"#,
+    )
+    .unwrap();
+
+    // sync run will fail (no server), but should not execute snippets
+    let output = snp_in(&config_dir).args(["sync", "run"]).output().unwrap();
+    // Command may fail due to no server — that's fine, we just need to ensure
+    // no sentinel was created (snippet was not executed)
+    let _ = output;
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}
+
+#[test]
+fn test_list_filter_does_not_execute() {
+    let (_tmp, config_dir) = setup_test_env();
+    let name = "list-filter";
+    let sentinel = sentinel_path(name);
+    clean_sentinel(name);
+    setup_canary_library(&config_dir, "canary-15", &sentinel);
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--filter", "canary"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp list --filter failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_sentinel_was_not_created(name);
+    clean_sentinel(name);
+}

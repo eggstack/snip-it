@@ -92,6 +92,19 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  release-test:
+    name: Release Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Run tests in release mode
+        run: cargo test --release --workspace
+
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

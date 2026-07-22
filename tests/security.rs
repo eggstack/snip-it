@@ -463,3 +463,160 @@ updated_at = 100
         "Files matching *.toml in /tmp/*"
     );
 }
+
+// ── Sentinel scan: backup directory must not contain raw command content ──
+
+#[test]
+fn test_backup_directory_no_raw_command_content() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_security_test_library(&config_dir);
+
+    let backup_dir = _tmp.path().join("backup-sentinel");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["backup", "--output", backup_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "snp backup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Walk the backup directory and scan all files for the sentinel command text
+    let sentinel = "touch /tmp/should-not-run";
+    let mut found = false;
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_file()
+                && let Ok(content) = std::fs::read_to_string(entry.path())
+                && content.contains(sentinel)
+            {
+                found = true;
+                eprintln!("Sentinel found in backup file: {}", entry.path().display());
+            }
+        }
+    }
+    assert!(
+        !found,
+        "Backup directory must not contain raw command content (sentinel: {sentinel:?})"
+    );
+}
+
+// ── Sentinel scan: log files must not contain raw command text ──
+
+#[test]
+fn test_log_files_no_raw_command_content() {
+    let (_tmp, config_dir) = setup_test_env();
+    create_security_test_library(&config_dir);
+
+    // Run a list command to generate log entries
+    let output = snp_in(&config_dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Logs go to <config_dir>/logs/ (XDG_CONFIG_HOME/snp/logs/)
+    let log_dir = config_dir.join("logs");
+
+    if log_dir.exists() {
+        let sentinel_command = "touch /tmp/should-not-run";
+        let sentinel_output = "$(touch /tmp/should-not-run)";
+        let mut found_command = false;
+        let mut found_output = false;
+
+        if let Ok(entries) = std::fs::read_dir(&log_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_file()
+                    && let Ok(content) = std::fs::read_to_string(entry.path())
+                {
+                    if content.contains(sentinel_command) {
+                        found_command = true;
+                    }
+                    if content.contains(sentinel_output) {
+                        found_output = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !found_command,
+            "Log files must not contain raw command text"
+        );
+        assert!(
+            !found_output,
+            "Log files must not contain raw output content with shell injection"
+        );
+    }
+}
+
+// ── Sentinel scan: doctor JSON output is secret-free ──
+
+#[test]
+fn test_doctor_json_no_api_key() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let api_key = "DOCTOR_JSON_SENTINEL_KEY_XYZ";
+    std::fs::write(
+        config_dir.join("sync.toml"),
+        format!(
+            r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "{api_key}"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+"#
+        ),
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["doctor", "--report", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains(api_key),
+        "Doctor JSON output must not contain API key sentinel"
+    );
+}
+
+// ── Sentinel scan: status JSON output is secret-free ──
+
+#[test]
+fn test_status_json_no_api_key() {
+    let (_tmp, config_dir) = setup_test_env();
+
+    let api_key = "STATUS_JSON_SENTINEL_KEY_ABC";
+    std::fs::write(
+        config_dir.join("sync.toml"),
+        format!(
+            r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "{api_key}"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+"#
+        ),
+    )
+    .unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["status", "--json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains(api_key),
+        "Status JSON output must not contain API key sentinel"
+    );
+}

@@ -55,9 +55,10 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 ## Test Evidence
 
 ### Test Counts
-- **Total**: 1956 passed, 7 ignored (38 suites)
+- **Total**: 1966+ passed, 7 ignored (39+ suites)
 - **Workspace tests**: cargo test --workspace --all-features
-- **All CI gates pass**: fmt, clippy, test, package
+- **Release tests**: cargo test --release --workspace (added to CI)
+- **All CI gates pass**: fmt, clippy, test, release-test, package
 
 ### Critical Invariants Proven
 1. Worker/executor argv contains no secrets (tested)
@@ -69,16 +70,22 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 7. Wrong key decryption fails (tested)
 8. Tampered ciphertext/nonce/salt detected (tested)
 9. Atomic write rejects FIFOs/sockets/devices (tested)
-10. Only `snp run` executes snippets (verified by code audit)
+10. Only `snp run` executes snippets (verified by code audit + 16 canary tests)
 11. Backup redaction strips API keys (tested)
 12. Status message sanitization redacts Bearer tokens (tested)
 13. Lock O_EXCL atomic acquisition (tested)
 14. Migration idempotency (tested)
 15. Sync merge last-write-wins correctness (tested)
+16. Non-executing commands do not execute canary snippets: get, get --field, get --raw, get --json, get --expanded, list, list --filter, status, validate, backup, search --help, library list, library show, restore --dry-run, sync run (tested)
+17. Backup directories do not contain raw command content (tested)
+18. Log files do not contain raw command/output content (tested)
+19. Doctor JSON and status JSON outputs do not leak API keys (tested)
 
 ### Test Suites by Category
 - Unit tests: encryption, config, TOML helpers, variables, sort, output, library
 - Integration tests: CLI end-to-end, sync integration, PTY integration
+- Canary tests: 16 non-execution canary tests (get, list, status, validate, backup, search, library, restore --dry-run, sync run, list --filter)
+- Sentinel tests: backup directory scan, log file scan, doctor/status JSON secret scan, pending/lock secret scan
 - Phase 05A: deterministic E2E, failure class contracts, debounce matrix, sync contracts, mutual exclusion, process lifecycle, local contracts, package evidence
 - Phase 07A: persistence unit, identity contract
 - Phase 08A: output field, shell integration, non-execution
@@ -95,7 +102,10 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 - Argon2id: 16 MiB, 3 iterations, 4 parallelism, random salt, session-local cache with zeroize
 - AES-256-GCM: random nonce, auth tag, zeroized keys after use
 - Variable assignments: ephemeral, in-memory only
-- No secrets in argv, logs, errors, or Debug output (tested)
+- No secrets in argv, logs, errors, or Debug output (tested via 12+ sentinel tests)
+- Backup directories scan clean for raw command content (tested)
+- Log files scan clean for raw command/output content (tested)
+- Doctor/status JSON outputs scan clean for API keys (tested)
 
 ### Process Boundaries
 - Worker: setsid() detached, current_exe() re-exec, only --state-dir in argv
@@ -137,14 +147,15 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | Criterion | Status |
 |-----------|--------|
 | Final threat model reflects shipped architecture | Yes — docs/THREAT_MODEL.md |
-| Secrets absent from unauthorized surfaces | Yes — audit documented in docs/SECURITY_AUDIT.md |
+| Secrets absent from unauthorized surfaces | Yes — audit documented in docs/SECURITY_AUDIT.md, sentinel tests cover backup dirs, log files, doctor/status JSON, pending/lock files |
 | Process and timeout boundaries truthful and platform-tested | Yes — worker/executor documented and tested |
-| Filesystem/archive/update paths hardened | Yes — documented gaps are non-blocking |
+| Filesystem/archive/update paths hardened | Yes — documented gaps are non-blocking (see Known Limitations) |
 | Protocol/crypto implementation has explicit limits and evidence | Yes — documented in architecture/encryption.md and architecture/sync.md |
-| Non-execution canaries pass | Yes — only snp run executes, verified by code audit |
-| Supply-chain/advisory/license policies pass | Yes — cargo-deny configured, docs/SUPPLY_CHAIN_POLICY.md |
-| Fuzz/property smoke and regression corpus pass | Yes — test suite covers critical paths, docs/FUZZING_AND_PROPERTY_TESTS.md |
-| Package/install/upgrade evidence committed | Yes — cargo package passes |
+| Non-execution canaries pass | Yes — 16 canary tests covering get, list, status, validate, backup, search, library, restore --dry-run, sync run |
+| Supply-chain/advisory/license policies pass | Yes — cargo-deny configured, CI job audits all 3 workspace members, docs/SUPPLY_CHAIN_POLICY.md |
+| Fuzz/property smoke and regression corpus pass | Partial — no dedicated fuzz targets exist; critical parsing paths covered by unit/integration tests with edge-case inputs. Fuzz targets are aspirational per docs/FUZZING_AND_PROPERTY_TESTS.md |
+| Package/install/upgrade evidence committed | Partial — cargo package --workspace passes; no cross-platform install/upgrade matrix executed. Legacy format migration fixtures exist but version-to-version upgrade fixtures are not present |
+| Release-mode tests pass | Yes — cargo test --release --workspace added to CI |
 | Documentation reconciled | Yes — README, SECURITY.md, AGENTS.md, architecture docs updated |
-| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — this document |
+| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — this document (corrected) |
 | No daemon, resident service, plugin runtime, workflow engine, remote execution, or second binary introduced | Yes — verified |
