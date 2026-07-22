@@ -160,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@1.94
+      - uses: dtolnay/rust-toolchain@1.100
       - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
