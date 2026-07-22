@@ -173,7 +173,7 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
 ///
 /// Restores each staged file from its backup, then marks the journal
 /// as `RolledBack`.
-pub fn rollback_transaction(journal: &TransactionJournal) -> SnipResult<()> {
+pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
     // Restore files from backups in reverse order
     for staged in journal.staged_files.iter().rev() {
         if let Some(ref backup) = staged.backup_path
@@ -185,27 +185,14 @@ pub fn rollback_transaction(journal: &TransactionJournal) -> SnipResult<()> {
         }
     }
 
-    let state_dir = journal
-        .staged_files
-        .first()
-        .and_then(|f| f.original_path.parent())
-        .ok_or_else(|| {
-            SnipError::runtime_error(
-                "Cannot determine state directory",
-                Some("Transaction has no staged files"),
-            )
-        })?
-        .join("..")
-        .join(".state");
-
     let mut rolled_back = journal.clone();
     rolled_back.state = TransactionState::RolledBack;
 
-    let journal_path = journal_path(&state_dir, &rolled_back.id);
+    let jpath = journal_path(state_dir, &rolled_back.id);
     let content = toml::to_string_pretty(&rolled_back)
         .map_err(|e| SnipError::toml_error("serialize transaction journal", e))?;
 
-    crate::utils::atomic::write_private_atomic(&journal_path, &content, "txn")?;
+    crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")?;
 
     // Remove backups and journal
     for staged in &rolled_back.staged_files {
@@ -213,7 +200,7 @@ pub fn rollback_transaction(journal: &TransactionJournal) -> SnipResult<()> {
             let _ = fs::remove_file(backup);
         }
     }
-    let _ = fs::remove_file(&journal_path);
+    let _ = fs::remove_file(&jpath);
 
     Ok(())
 }
@@ -332,7 +319,7 @@ mod tests {
             begin_transaction(state_dir, "test_op", std::slice::from_ref(&file1)).unwrap();
         journal.staged_files[0].backup_path = Some(backup_path.clone());
 
-        rollback_transaction(&journal).unwrap();
+        rollback_transaction(state_dir, &journal).unwrap();
 
         // Backup should be cleaned up
         assert!(!backup_path.exists());

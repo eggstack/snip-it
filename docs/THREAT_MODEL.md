@@ -64,7 +64,7 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Logs | Internal | `~/.config/snp/logs/` | No | Structured file-rotated logs |
 | Installed binary | N/A | System or user-local path | No | Integrity depends on install method |
 | Update channel | N/A | crates.io / GitHub Releases | No | SHA-256 verified downloads |
-| Release assets | N/A | GitHub Releases, crates.io | No | Signed and checksummed |
+| Release assets | N/A | GitHub Releases, crates.io | No | Checksummed (SHA-256); not cryptographically signed |
 
 ---
 
@@ -146,11 +146,11 @@ Each boundary below represents a transition where data crosses from one trust do
 
 ### Boundary 10: CI / Release Publishing
 
-**Description:** Build and release pipeline that produces signed artifacts.
+**Description:** Build and release pipeline that produces checksummed artifacts (no cryptographic signing).
 
-**Properties:** Compromised CI could inject malicious code. Release signing keys could be stolen.
+**Properties:** Compromised CI could inject malicious code.
 
-**Mitigations:** GitHub Actions with pinned runners, release signing, checksum publication, code review requirements.
+**Mitigations:** GitHub Actions with pinned runners, checksum publication, code review requirements.
 
 ---
 
@@ -297,9 +297,9 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | A release binary is replaced with a malicious version, or its checksum is tampered. |
 | **Attack vector** | Compromised GitHub account, CI pipeline, or CDN; MITM on download. |
-| **Mitigations** | SHA-256 checksum verification of downloaded binaries during self-update. Checksum file validation. Package managers (Homebrew, cargo) perform their own signature verification. Tar extraction rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories prevent collision. |
+| **Mitigations** | SHA-256 checksum verification of downloaded binaries during self-update. Checksum file validation. Package managers (Homebrew, cargo) perform their own signature verification where available. Tar extraction rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories prevent collision. |
 | **Residual risk** | Low. SHA-256 provides strong integrity verification. If both the binary and checksum are compromised in the same release, detection requires manual review of release artifacts. |
-| **User responsibility** | Verify release signatures where available. Use official installation channels. |
+| **User responsibility** | Use official installation channels. Verify package manager signatures where available. |
 | **Tests / evidence** | Self-update verification logic in `src/update.rs`. |
 | **Owner / module** | `src/update.rs` |
 

@@ -254,7 +254,9 @@ fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
     if url.starts_with("https://") {
         args.extend(["--proto", "=https", "--tlsv1.2"]);
     } else if url.starts_with("http://") {
-        eprintln!("warning: fetching from insecure HTTP URL (test override): {url}");
+        return Err(format!(
+            "insecure HTTP URL rejected (production update requires HTTPS): {url}"
+        ));
     }
     args.push(url);
     let output = Command::new("curl")
@@ -507,12 +509,31 @@ fn install_binary(source: &Path, destination: &Path, work_dir: &Path) -> Result<
             .permissions(),
     )
     .map_err(|e| format!("could not preserve executable permissions: {e}"))?;
+
+    // Preserve the old binary as a rollback target before replacement.
+    let backup_path = destination.with_extension("bak");
+    if destination.exists() {
+        fs::copy(destination, &backup_path).map_err(|e| {
+            format!(
+                "could not backup old binary to {}: {e}",
+                backup_path.display()
+            )
+        })?;
+    }
+
     fs::rename(source, destination).map_err(|e| {
+        // Attempt to restore old binary if rename fails.
+        if backup_path.exists() {
+            let _ = fs::copy(&backup_path, destination);
+        }
         format!(
             "could not replace {}: {e}. You may need permission to write the installation directory",
             destination.display()
         )
     })?;
+
+    // Clean up the backup on successful replacement.
+    let _ = fs::remove_file(&backup_path);
     fs::remove_dir_all(work_dir).ok();
     Ok(())
 }

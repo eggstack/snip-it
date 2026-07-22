@@ -5,6 +5,7 @@
 use crate::auto_sync::notification::notify_mutation;
 use crate::auto_sync::policy::{MutationKind, MutationOrigin};
 use crate::error::{SnipError, SnipResult};
+use crate::utils::atomic::{AtomicWriteOptions, Durability, atomic_replace};
 use crate::utils::config::get_config_dir;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -350,8 +351,15 @@ fn restore_library_file(
                 detail: format!("Replaced existing {}.toml", library_name),
             });
         }
-        fs::copy(backup_file, &dst)
-            .map_err(|e| SnipError::io_error("restore library file", dst.clone(), e))?;
+        let bytes = fs::read(backup_file).map_err(|e| {
+            SnipError::io_error(
+                "read backup library for restore",
+                backup_file.to_path_buf(),
+                e,
+            )
+        })?;
+        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+        atomic_replace(&dst, &bytes, &opts)?;
     }
 
     report.files_restored += 1;
@@ -375,9 +383,9 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         validate_backup_path(&entry.path, &entry.kind)?;
     }
 
-    // 3. Verify checksums
+    // 3. Validate source artifact sizes and types
+    const MAX_RESTORE_SOURCE_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB
     for entry in &manifest.files {
-        // Resolve path relative to backup directory
         let file_path =
             if entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage" {
                 backup.join(&entry.path)
@@ -385,6 +393,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                 backup.join("libraries").join(&entry.path)
             };
 
+        // Verify file exists
         if !file_path.exists() {
             return Err(SnipError::runtime_error(
                 "Backup file missing",
@@ -395,6 +404,67 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                 )),
             ));
         }
+
+        // Reject symlinks using symlink_metadata (does not follow)
+        let meta = fs::symlink_metadata(&file_path).map_err(|e| {
+            SnipError::io_error("stat backup source artifact", file_path.clone(), e)
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(SnipError::runtime_error(
+                "Backup source is a symlink",
+                Some(&format!(
+                    "Refusing to restore symlinked artifact: {}",
+                    file_path.display()
+                )),
+            ));
+        }
+        if !meta.is_file() {
+            return Err(SnipError::runtime_error(
+                "Backup source is not a regular file",
+                Some(&format!(
+                    "Expected regular file, got {:?}: {}",
+                    meta.file_type(),
+                    file_path.display()
+                )),
+            ));
+        }
+
+        // Reject oversized files before allocation
+        if meta.len() > MAX_RESTORE_SOURCE_SIZE {
+            return Err(SnipError::runtime_error(
+                "Backup source exceeds maximum size",
+                Some(&format!(
+                    "{}: {} bytes exceeds {} byte limit",
+                    entry.path,
+                    meta.len(),
+                    MAX_RESTORE_SOURCE_SIZE
+                )),
+            ));
+        }
+
+        // Manifest-declared size must match actual size
+        if entry.size != meta.len() {
+            return Err(SnipError::runtime_error(
+                "Manifest size mismatch",
+                Some(&format!(
+                    "{}: manifest declares {} bytes, actual {} bytes",
+                    entry.path,
+                    entry.size,
+                    meta.len()
+                )),
+            ));
+        }
+    }
+
+    // 4. Verify checksums
+    for entry in &manifest.files {
+        // Resolve path relative to backup directory
+        let file_path =
+            if entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage" {
+                backup.join(&entry.path)
+            } else {
+                backup.join("libraries").join(&entry.path)
+            };
 
         if !verify_checksum(&file_path, &entry.sha256)? {
             return Err(SnipError::runtime_error(
@@ -505,72 +575,99 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
-    // 6. For replace mode, create pre-restore backup of config
-    if mode == RestoreMode::Replace
-        && let Some(backup_path) = create_pre_restore_backup(&config_dir)?
-    {
-        report.pre_restore_backup = Some(backup_path.display().to_string());
-    }
-
-    // 7. Ensure libraries directory exists
-    let libraries_dir = config_dir.join("libraries");
-    fs::create_dir_all(&libraries_dir)
-        .map_err(|e| SnipError::io_error("create libraries directory", libraries_dir.clone(), e))?;
-
-    // 8. Restore library files
-    for entry in &manifest.files {
-        if entry.kind == "library" {
-            let src = backup.join("libraries").join(&entry.path);
-            let library_name = Path::new(&entry.path)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
-            restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
+    // Execute the restore within a transaction boundary; roll back on any failure.
+    let restore_result: SnipResult<()> = (|| {
+        // 6. For replace mode, create pre-restore backup of config
+        if mode == RestoreMode::Replace
+            && let Some(backup_path) = create_pre_restore_backup(&config_dir)?
+        {
+            report.pre_restore_backup = Some(backup_path.display().to_string());
         }
-    }
 
-    // 9. Restore libraries.toml index
-    if let Some(index_entry) = manifest.files.iter().find(|f| f.kind == "index") {
-        let src = backup.join(&index_entry.path);
-        let dst = config_dir.join("libraries.toml");
-        if mode == RestoreMode::Replace || !dst.exists() {
-            fs::copy(&src, &dst)
-                .map_err(|e| SnipError::io_error("restore index file", dst.clone(), e))?;
-            report.files_restored += 1;
-        }
-    }
+        // 7. Ensure libraries directory exists
+        let libraries_dir = config_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).map_err(|e| {
+            SnipError::io_error("create libraries directory", libraries_dir.clone(), e)
+        })?;
 
-    // 10. Restore usage.toml if present
-    if let Some(usage_entry) = manifest.files.iter().find(|f| f.kind == "usage") {
-        let src = backup.join(&usage_entry.path);
-        let dst = config_dir.join("usage.toml");
-        if mode == RestoreMode::Replace || !dst.exists() {
-            fs::copy(&src, &dst)
-                .map_err(|e| SnipError::io_error("restore usage file", dst.clone(), e))?;
-            report.files_restored += 1;
+        // 8. Restore library files
+        for entry in &manifest.files {
+            if entry.kind == "library" {
+                let src = backup.join("libraries").join(&entry.path);
+                let library_name = Path::new(&entry.path)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
+            }
         }
-    }
 
-    // 11. Restore sync.toml if present (preserve local API key if exists)
-    if let Some(sync_entry) = manifest.files.iter().find(|f| f.kind == "sync_config") {
-        let src = backup.join(&sync_entry.path);
-        let dst = config_dir.join("sync.toml");
-        if dst.exists() && mode == RestoreMode::Merge {
-            // In merge mode, don't overwrite local sync config (has real API key)
-            report
-                .skipped
-                .push("sync.toml (local config preserved)".to_string());
-        } else if mode == RestoreMode::Replace || !dst.exists() {
-            // For replace, restore but warn about redacted key
-            fs::copy(&src, &dst)
-                .map_err(|e| SnipError::io_error("restore sync config", dst.clone(), e))?;
-            report.conflicts.push(RestoreConflict {
-                library: "sync".to_string(),
-                kind: "redacted_key".to_string(),
-                detail: "API key was redacted in backup; re-enter with 'snp register'".to_string(),
-            });
-            report.files_restored += 1;
+        // 9. Restore libraries.toml index
+        if let Some(index_entry) = manifest.files.iter().find(|f| f.kind == "index") {
+            let src = backup.join(&index_entry.path);
+            let dst = config_dir.join("libraries.toml");
+            if mode == RestoreMode::Replace || !dst.exists() {
+                let bytes = fs::read(&src).map_err(|e| {
+                    SnipError::io_error("read index file for restore", src.clone(), e)
+                })?;
+                let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                atomic_replace(&dst, &bytes, &opts)?;
+                report.files_restored += 1;
+            }
         }
+
+        // 10. Restore usage.toml if present
+        if let Some(usage_entry) = manifest.files.iter().find(|f| f.kind == "usage") {
+            let src = backup.join(&usage_entry.path);
+            let dst = config_dir.join("usage.toml");
+            if mode == RestoreMode::Replace || !dst.exists() {
+                let bytes = fs::read(&src).map_err(|e| {
+                    SnipError::io_error("read usage file for restore", src.clone(), e)
+                })?;
+                let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                atomic_replace(&dst, &bytes, &opts)?;
+                report.files_restored += 1;
+            }
+        }
+
+        // 11. Restore sync.toml if present (preserve local API key if exists)
+        if let Some(sync_entry) = manifest.files.iter().find(|f| f.kind == "sync_config") {
+            let src = backup.join(&sync_entry.path);
+            let dst = config_dir.join("sync.toml");
+            if dst.exists() && mode == RestoreMode::Merge {
+                // In merge mode, don't overwrite local sync config (has real API key)
+                report
+                    .skipped
+                    .push("sync.toml (local config preserved)".to_string());
+            } else if mode == RestoreMode::Replace || !dst.exists() {
+                // For replace, restore but warn about redacted key
+                let bytes = fs::read(&src).map_err(|e| {
+                    SnipError::io_error("read sync config for restore", src.clone(), e)
+                })?;
+                let opts = AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
+                atomic_replace(&dst, &bytes, &opts)?;
+                report.conflicts.push(RestoreConflict {
+                    library: "sync".to_string(),
+                    kind: "redacted_key".to_string(),
+                    detail: "API key was redacted in backup; re-enter with 'snp register'"
+                        .to_string(),
+                });
+                report.files_restored += 1;
+            }
+        }
+
+        Ok(())
+    })();
+
+    // On failure, roll back the transaction to restore original files.
+    if let Err(ref e) = restore_result {
+        eprintln!("Restore failed, rolling back: {e}");
+        if let Err(rb_err) =
+            crate::transaction::rollback_transaction(&state_dir, &journal_with_backups)
+        {
+            eprintln!("Warning: rollback also failed: {rb_err}");
+        }
+        return restore_result;
     }
 
     // 12. Commit transaction

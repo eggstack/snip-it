@@ -1,6 +1,13 @@
 ---
 name: CI
 
+# Action pinning policy: GitHub-blessed actions (checkout, upload-artifact,
+# download-artifact) are pinned to full commit SHAs. Third-party actions
+# (dtolnay/rust-toolchain, Swatinem/rust-cache, EmbarkStudios/cargo-deny-action,
+# codecov/codecov-action) use version tags with comments noting the version.
+# Dependabot is configured to auto-update weekly.
+name: CI
+
 "on":
   push:
     branches: [main]
@@ -22,7 +29,7 @@ jobs:
     name: Repo Hygiene
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Check for tracked OS junk
         run: |
           if git ls-files | grep -E '(\.DS_Store$|Thumbs\.db$|desktop\.ini$)'; then
@@ -34,7 +41,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -45,11 +52,11 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run clippy
@@ -64,9 +71,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -97,9 +104,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run tests in release mode
@@ -113,9 +120,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -137,13 +144,13 @@ jobs:
         run: cargo build --release --workspace
       - name: Upload binary (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: snp-${{ matrix.os }}
           path: target/release/snp
       - name: Upload binary (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: snp-${{ matrix.os }}
           path: target/release/snp.exe
@@ -152,9 +159,9 @@ jobs:
     name: MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@1.94
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build MSRV
@@ -166,11 +173,11 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install cargo-llvm-cov
@@ -178,7 +185,7 @@ jobs:
       - name: Run coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67ab3f9f9f64e0e # v5.4.3
         with:
           files: lcov.info
           fail_ci_if_error: false
@@ -187,7 +194,7 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build snip-sync Docker image
         run: docker build -t snip-sync:test -f snip-sync/Dockerfile .
 
@@ -195,9 +202,9 @@ jobs:
     name: Proto Codegen Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build snip-proto to regenerate code
@@ -209,8 +216,8 @@ jobs:
     name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: EmbarkStudios/cargo-deny-action@098c688dc738ef6b6f10a5b41e7e26a45f80c073 # v2.0.2
         with:
           command: check
       - name: Audit snip-sync dependencies
@@ -229,9 +236,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run snip-sync tests
@@ -242,7 +249,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Scan for leaked secrets
         run: |
           if grep -rn --include='*.rs' --include='*.toml' --include='*.yml' -E '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[A-Z0-9]{16})' .; then
@@ -255,9 +262,9 @@ jobs:
     name: Architecture Boundaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run architecture tests
@@ -271,9 +278,9 @@ jobs:
       matrix:
         features: ["", "test-support"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Check with features
@@ -284,9 +291,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Deterministic E2E
@@ -298,26 +305,28 @@ jobs:
       - name: Mutual exclusion
         run: cargo test --test mutual_exclusion --features test-support
       - name: Restore security
-        run: cargo test --test restore_security
+        run: cargo test --test restore_security --features test-support
       - name: Restore transactions
-        run: cargo test --test restore_transactions
+        run: cargo test --test restore_transactions --features test-support
       - name: Backup contracts
-        run: cargo test --test backup_contracts
+        run: cargo test --test backup_contracts --features test-support
       - name: Execution outcomes
-        run: cargo test --test execution_outcomes
+        run: cargo test --test execution_outcomes --features test-support
       - name: Update archive security
-        run: cargo test --test update_archive_security
+        run: cargo test --test update_archive_security --features test-support
       - name: Read-only no recovery
-        run: cargo test --test readonly_no_recovery
+        run: cargo test --test readonly_no_recovery --features test-support
+      - name: Canary non-execution
+        run: cargo test --test canary_nonexecution --features test-support
 
   package-build:
     name: Package Build (from unpacked)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Package all crates

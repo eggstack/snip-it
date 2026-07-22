@@ -297,10 +297,10 @@ fn apply_repair(item: &RepairItem) -> SnipResult<()> {
         }
         "transaction" => {
             // Roll back interrupted transactions
-            let state_dir = crate::auto_sync::notification::derive_state_dir();
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
             let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
             for journal in &interrupted {
-                if let Err(e) = crate::transaction::rollback_transaction(journal) {
+                if let Err(e) = crate::transaction::rollback_transaction(&state_dir, journal) {
                     tracing::warn!(
                         txn_id = %journal.id,
                         error = %e,

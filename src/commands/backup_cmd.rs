@@ -15,6 +15,192 @@ pub enum BackupFormat {
     Directory,
 }
 
+/// Known kinds of entries in a backup manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupEntryKind {
+    Library,
+    Index,
+    Usage,
+    SyncConfig,
+}
+
+impl BackupEntryKind {
+    /// Parse a kind string into a typed variant.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "library" => Some(Self::Library),
+            "index" => Some(Self::Index),
+            "usage" => Some(Self::Usage),
+            "sync_config" => Some(Self::SyncConfig),
+            _ => None,
+        }
+    }
+}
+
+/// A validated path relative to the backup root.
+///
+/// Rejects absolute paths, parent traversal, NUL bytes, and reserved
+/// Windows device names. Used to prevent path-traversal attacks via
+/// malicious backup manifests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupRelativePath(PathBuf);
+
+impl BackupRelativePath {
+    /// Reserved Windows device names that must not appear as file components.
+    const RESERVED_WINDOWS_NAMES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    /// Parse and validate a backup-relative path.
+    pub fn parse(input: &str, expected_kind: BackupEntryKind) -> SnipResult<Self> {
+        if input.is_empty() {
+            return Err(SnipError::runtime_error(
+                "Empty backup path",
+                Some("Backup manifest entry path must not be empty"),
+            ));
+        }
+
+        // Reject NUL bytes
+        if input.contains('\0') {
+            return Err(SnipError::runtime_error(
+                "Path contains NUL byte",
+                Some(&format!("Backup path contains NUL: {input}")),
+            ));
+        }
+
+        let path = Path::new(input);
+
+        // Reject absolute paths
+        if path.is_absolute() {
+            return Err(SnipError::runtime_error(
+                "Absolute path in backup manifest",
+                Some(&format!("Path must be relative: {input}")),
+            ));
+        }
+
+        // Reject Windows drive letters and UNC paths
+        #[cfg(windows)]
+        {
+            use std::path::Component;
+            for component in path.components() {
+                if let Component::Prefix(p) = component {
+                    return Err(SnipError::runtime_error(
+                        "Windows prefix in backup path",
+                        Some(&format!("Path contains Windows prefix: {input}")),
+                    ));
+                }
+            }
+        }
+
+        // Reject traversal components
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    return Err(SnipError::runtime_error(
+                        "Path traversal in backup manifest",
+                        Some(&format!("Parent traversal rejected: {input}")),
+                    ));
+                }
+                std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                    return Err(SnipError::runtime_error(
+                        "Absolute path component in backup manifest",
+                        Some(&format!("Absolute component rejected: {input}")),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        // Kind-specific constraints
+        match expected_kind {
+            BackupEntryKind::Library => {
+                // Must be a flat filename (no directory components), ending in .toml
+                if path.components().count() > 1 {
+                    return Err(SnipError::runtime_error(
+                        "Library entry must be a flat filename",
+                        Some(&format!("Nested path rejected for library: {input}")),
+                    ));
+                }
+                if !input.ends_with(".toml") {
+                    return Err(SnipError::runtime_error(
+                        "Library entry must end with .toml",
+                        Some(&format!("Missing .toml extension: {input}")),
+                    ));
+                }
+                // Check reserved Windows names
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                for reserved in Self::RESERVED_WINDOWS_NAMES {
+                    if stem.eq_ignore_ascii_case(reserved) {
+                        return Err(SnipError::runtime_error(
+                            "Reserved Windows device name",
+                            Some(&format!("Filename '{stem}' is reserved on Windows")),
+                        ));
+                    }
+                }
+            }
+            BackupEntryKind::Index => {
+                if input != "libraries.toml" {
+                    return Err(SnipError::runtime_error(
+                        "Index entry must be libraries.toml",
+                        Some(&format!("Unexpected index path: {input}")),
+                    ));
+                }
+            }
+            BackupEntryKind::Usage => {
+                if input != "usage.toml" {
+                    return Err(SnipError::runtime_error(
+                        "Usage entry must be usage.toml",
+                        Some(&format!("Unexpected usage path: {input}")),
+                    ));
+                }
+            }
+            BackupEntryKind::SyncConfig => {
+                if input != "sync.toml" {
+                    return Err(SnipError::runtime_error(
+                        "Sync config entry must be sync.toml",
+                        Some(&format!("Unexpected sync config path: {input}")),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self(path.to_path_buf()))
+    }
+
+    /// Resolve the path relative to a backup root directory.
+    pub fn resolve_source(&self, backup_root: &Path) -> PathBuf {
+        backup_root.join(&self.0)
+    }
+}
+
+/// Read a file for backup snapshot, rejecting symlinks and non-regular files.
+fn read_for_snapshot(path: &Path, label: &str) -> SnipResult<Vec<u8>> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|e| SnipError::io_error(&format!("stat {label} for snapshot"), path, e))?;
+    if meta.file_type().is_symlink() {
+        return Err(SnipError::runtime_error(
+            "Backup entry is a symlink",
+            Some(&format!(
+                "Refusing to back up symlink {} (could point outside config)",
+                path.display()
+            )),
+        ));
+    }
+    if !meta.is_file() {
+        return Err(SnipError::runtime_error(
+            "Backup entry is not a regular file",
+            Some(&format!(
+                "Expected regular file, got {:?}: {}",
+                meta.file_type(),
+                path.display()
+            )),
+        ));
+    }
+    fs::read(path).map_err(|e| SnipError::io_error(&format!("read {label} for snapshot"), path, e))
+}
+
 /// Backup manifest entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BackupManifestEntry {
@@ -32,51 +218,6 @@ pub struct BackupManifest {
     pub snip_it_version: String,
     pub layout: String,
     pub files: Vec<BackupManifestEntry>,
-}
-
-/// Compute the SHA-256 hex digest of a file.
-fn sha256_file(path: &Path) -> SnipResult<String> {
-    let bytes =
-        fs::read(path).map_err(|e| SnipError::io_error("read file for hashing", path, e))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let result = hasher.finalize();
-    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
-}
-
-/// Copy a single file into the backup directory, computing its SHA-256.
-///
-/// Rejects symlinks to prevent following links outside the config directory.
-fn copy_and_hash(src: &Path, dst: &Path, kind: &str) -> SnipResult<BackupManifestEntry> {
-    let metadata =
-        fs::symlink_metadata(src).map_err(|e| SnipError::io_error("stat source file", src, e))?;
-    if metadata.file_type().is_symlink() {
-        return Err(SnipError::runtime_error(
-            "Backup entry is a symlink",
-            Some(&format!(
-                "Refusing to back up symlink {} (could point outside config)",
-                src.display()
-            )),
-        ));
-    }
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| SnipError::io_error("create backup subdirectory", parent, e))?;
-    }
-    fs::copy(src, dst).map_err(|e| SnipError::io_error("copy file to backup", dst, e))?;
-    let metadata =
-        fs::metadata(dst).map_err(|e| SnipError::io_error("stat backup file", dst, e))?;
-    let sha = sha256_file(dst)?;
-    Ok(BackupManifestEntry {
-        path: dst
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string(),
-        kind: kind.to_string(),
-        size: metadata.len(),
-        sha256: sha,
-    })
 }
 
 /// Run backup.
@@ -122,7 +263,12 @@ pub fn run(
         files: Vec::new(),
     };
 
-    // 1. Copy all library files
+    // Take a consistent in-memory snapshot of all source files before copying.
+    // This prevents a concurrent mutation from producing an inconsistent backup
+    // (e.g., index referencing a snippet that was deleted mid-copy).
+    let mut snapshot: Vec<(PathBuf, String, Vec<u8>)> = Vec::new();
+
+    // 1. Snapshot all library files
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
         let entries: Vec<_> = fs::read_dir(&libraries_dir)
@@ -136,57 +282,45 @@ pub fn run(
 
         for entry in &entries {
             let file_name = entry.file_name().to_string_lossy().to_string();
-            let dst = backup_dir.join("libraries").join(&file_name);
             let src = entry.path();
-            let manifest_entry = copy_and_hash(&src, &dst, "library")?;
-            manifest.files.push(manifest_entry);
+            let bytes = read_for_snapshot(&src, "library")?;
+            snapshot.push((src, file_name, bytes));
         }
     }
 
-    // 2. Copy libraries.toml index (always included)
+    // 2. Snapshot libraries.toml index
     let libraries_toml = config_dir.join("libraries.toml");
     if libraries_toml.exists() {
-        let dst = backup_dir.join("libraries.toml");
-        let entry = copy_and_hash(&libraries_toml, &dst, "index")?;
-        manifest.files.push(entry);
+        let bytes = read_for_snapshot(&libraries_toml, "libraries index")?;
+        snapshot.push((libraries_toml, "libraries.toml".to_string(), bytes));
     }
 
-    // 3. Optionally include usage.toml
+    // 3. Snapshot usage.toml if requested
     if include_usage {
         let usage_path = config_dir.join("usage.toml");
         if usage_path.exists() {
-            let dst = backup_dir.join("usage.toml");
-            let entry = copy_and_hash(&usage_path, &dst, "usage")?;
-            manifest.files.push(entry);
+            let bytes = read_for_snapshot(&usage_path, "usage")?;
+            snapshot.push((usage_path, "usage.toml".to_string(), bytes));
         }
     }
 
-    // 4. Optionally include sync.toml (redact API key)
-    if include_sync_state {
+    // 4. Snapshot sync.toml if requested (for redaction)
+    let sync_snapshot = if include_sync_state {
         let sync_path = config_dir.join("sync.toml");
         if sync_path.exists() {
-            let content = fs::read_to_string(&sync_path)
-                .map_err(|e| SnipError::io_error("read sync config", sync_path.clone(), e))?;
-            let redacted = redact_sync_config(&content)?;
-            let dst = backup_dir.join("sync.toml");
-            crate::utils::atomic::write_private_atomic(&dst, &redacted, "sync")?;
-            let entry = BackupManifestEntry {
-                path: "sync.toml".to_string(),
-                kind: "sync_config".to_string(),
-                size: redacted.len() as u64,
-                sha256: {
-                    let mut hasher = Sha256::new();
-                    hasher.update(redacted.as_bytes());
-                    let result = hasher.finalize();
-                    result.iter().map(|b| format!("{:02x}", b)).collect()
-                },
-            };
-            manifest.files.push(entry);
+            let content = fs::read_to_string(&sync_path).map_err(|e| {
+                SnipError::io_error("read sync config for snapshot", sync_path.clone(), e)
+            })?;
+            Some(content)
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
-    // 5. Optionally include general config .toml files (excluding already-handled files)
-    if include_config {
+    // 5. Snapshot general config files if requested
+    let config_snapshot: Vec<(PathBuf, String, Vec<u8>)> = if include_config {
         let handled_files: HashSet<&str> = [
             "libraries.toml",
             "usage.toml",
@@ -207,6 +341,7 @@ pub fn run(
         .into_iter()
         .collect();
 
+        let mut result = Vec::new();
         if let Ok(entries) = fs::read_dir(&config_dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -222,12 +357,138 @@ pub fn run(
                 }
                 let src = entry.path();
                 if src.is_file() {
-                    let dst = backup_dir.join(&name);
-                    let manifest_entry = copy_and_hash(&src, &dst, "config")?;
-                    manifest.files.push(manifest_entry);
+                    let bytes = read_for_snapshot(&src, &name)?;
+                    result.push((src, name, bytes));
                 }
             }
         }
+        result
+    } else {
+        Vec::new()
+    };
+
+    // === Write from snapshot to backup directory ===
+
+    // 1. Write library files from snapshot
+    for (_src, file_name, bytes) in &snapshot {
+        if _src.extension().is_some_and(|e| e == "toml")
+            && _src.parent().is_some_and(|p| p == libraries_dir)
+        {
+            let dst = backup_dir.join("libraries").join(file_name);
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| SnipError::io_error("create backup subdirectory", parent, e))?;
+            }
+            fs::write(&dst, bytes)
+                .map_err(|e| SnipError::io_error("write library to backup", dst.clone(), e))?;
+            let sha = {
+                let mut hasher = Sha256::new();
+                hasher.update(bytes);
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect()
+            };
+            manifest.files.push(BackupManifestEntry {
+                path: file_name.clone(),
+                kind: "library".to_string(),
+                size: bytes.len() as u64,
+                sha256: sha,
+            });
+        }
+    }
+
+    // 2. Write index from snapshot
+    for (_src, name, bytes) in &snapshot {
+        if name == "libraries.toml" {
+            let dst = backup_dir.join("libraries.toml");
+            fs::write(&dst, bytes)
+                .map_err(|e| SnipError::io_error("write index to backup", dst.clone(), e))?;
+            let sha = {
+                let mut hasher = Sha256::new();
+                hasher.update(bytes);
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect()
+            };
+            manifest.files.push(BackupManifestEntry {
+                path: "libraries.toml".to_string(),
+                kind: "index".to_string(),
+                size: bytes.len() as u64,
+                sha256: sha,
+            });
+        }
+    }
+
+    // 3. Write usage from snapshot
+    for (_src, name, bytes) in &snapshot {
+        if name == "usage.toml" {
+            let dst = backup_dir.join("usage.toml");
+            fs::write(&dst, bytes)
+                .map_err(|e| SnipError::io_error("write usage to backup", dst.clone(), e))?;
+            let sha = {
+                let mut hasher = Sha256::new();
+                hasher.update(bytes);
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect()
+            };
+            manifest.files.push(BackupManifestEntry {
+                path: "usage.toml".to_string(),
+                kind: "usage".to_string(),
+                size: bytes.len() as u64,
+                sha256: sha,
+            });
+        }
+    }
+
+    // 4. Write redacted sync.toml if snapshotted
+    if let Some(content) = sync_snapshot {
+        let redacted = redact_sync_config(&content)?;
+        let dst = backup_dir.join("sync.toml");
+        crate::utils::atomic::write_private_atomic(&dst, &redacted, "sync")?;
+        let sha = {
+            let mut hasher = Sha256::new();
+            hasher.update(redacted.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect()
+        };
+        manifest.files.push(BackupManifestEntry {
+            path: "sync.toml".to_string(),
+            kind: "sync_config".to_string(),
+            size: redacted.len() as u64,
+            sha256: sha,
+        });
+    }
+
+    // 5. Write config files from snapshot
+    for (_src, name, bytes) in &config_snapshot {
+        let dst = backup_dir.join(name);
+        fs::write(&dst, bytes)
+            .map_err(|e| SnipError::io_error("write config to backup", dst.clone(), e))?;
+        let sha = {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect()
+        };
+        manifest.files.push(BackupManifestEntry {
+            path: name.clone(),
+            kind: "config".to_string(),
+            size: bytes.len() as u64,
+            sha256: sha,
+        });
     }
 
     // 6. Write manifest
@@ -297,32 +558,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_sha256_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.txt");
-        fs::write(&path, "hello world").unwrap();
-        let hash = sha256_file(&path).unwrap();
-        assert_eq!(hash.len(), 64);
-        // SHA-256 of "hello world"
-        assert!(hash.starts_with("b94d27b9934d3e08"));
-    }
-
-    #[test]
-    fn test_copy_and_hash() {
-        let src_dir = TempDir::new().unwrap();
-        let dst_dir = TempDir::new().unwrap();
-        let src = src_dir.path().join("data.txt");
-        fs::write(&src, "test data").unwrap();
-        let dst = dst_dir.path().join("copied.txt");
-
-        let entry = copy_and_hash(&src, &dst, "test").unwrap();
-        assert_eq!(entry.kind, "test");
-        assert_eq!(entry.size, 9);
-        assert_eq!(entry.sha256.len(), 64);
-        assert!(dst.exists());
-    }
-
-    #[test]
     fn test_redact_sync_config() {
         let input = r#"enabled = true
 server_url = "https://sync.example.com"
@@ -377,40 +612,45 @@ timeout = 30
         assert_eq!(restored_json.schema, 1);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_copy_and_hash_creates_parent_dirs() {
-        let src_dir = TempDir::new().unwrap();
-        let dst_dir = TempDir::new().unwrap();
-        let src = src_dir.path().join("file.txt");
-        fs::write(&src, "content").unwrap();
-        let dst = dst_dir
-            .path()
-            .join("subdir")
-            .join("nested")
-            .join("file.txt");
+    fn test_read_for_snapshot_rejects_symlink() {
+        let dir = TempDir::new().unwrap();
+        let real_file = dir.path().join("real.toml");
+        fs::write(&real_file, "[[snippets]]\nid = \"test\"\n").unwrap();
+        let symlink_file = dir.path().join("linked.toml");
+        std::os::unix::fs::symlink(&real_file, &symlink_file).unwrap();
 
-        let entry = copy_and_hash(&src, &dst, "library").unwrap();
-        assert!(dst.exists());
-        assert_eq!(entry.size, 7);
+        let result = read_for_snapshot(&symlink_file, "test");
+        assert!(result.is_err(), "should reject symlink");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("symlink"), "Expected symlink error: {msg}");
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_copy_and_hash_rejects_symlinks() {
-        let src_dir = TempDir::new().unwrap();
-        let dst_dir = TempDir::new().unwrap();
-        let real_file = src_dir.path().join("real.txt");
-        fs::write(&real_file, "content").unwrap();
-        let symlink = src_dir.path().join("link.txt");
-        std::os::unix::fs::symlink(&real_file, &symlink).unwrap();
-        let dst = dst_dir.path().join("output.txt");
+    fn test_read_for_snapshot_rejects_directory() {
+        let dir = TempDir::new().unwrap();
+        let subdir = dir.path().join("subdir");
+        fs::create_dir(&subdir).unwrap();
 
-        let result = copy_and_hash(&symlink, &dst, "test");
-        assert!(result.is_err());
+        let result = read_for_snapshot(&subdir, "test");
+        assert!(result.is_err(), "should reject directory");
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("symlink"),
-            "Expected symlink error, got: {msg}"
+            msg.contains("regular file"),
+            "Expected regular file error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_read_for_snapshot_accepts_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.toml");
+        fs::write(&file, "content").unwrap();
+
+        let result = read_for_snapshot(&file, "test");
+        assert!(result.is_ok(), "should accept regular file");
+        assert_eq!(result.unwrap(), b"content");
     }
 }

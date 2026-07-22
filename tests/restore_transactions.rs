@@ -483,6 +483,66 @@ fn test_noop_merge_creates_no_pending() {
     );
 }
 
+// === Content-changing restore creates exactly one pending generation ===
+
+/// A successful restore that changes syncable local data must record
+/// exactly one pending generation after commit.
+#[test]
+fn test_content_changing_restore_creates_one_pending_generation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_env_tmp, config_dir) = setup_test_env();
+    let backup_dir = make_backup(tmp.path());
+
+    // Create sync.toml so notify_mutation records pending (not Disabled)
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+auto_sync = true
+"#,
+    )
+    .unwrap();
+
+    let pending_path = config_dir.join("auto-sync-pending.toml");
+
+    // Ensure no pending marker exists before restore
+    assert!(
+        !pending_path.exists(),
+        "no pending marker should exist before restore"
+    );
+
+    // Replace restore — this changes content, so should create pending
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "replace restore should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Exactly one pending marker should exist
+    assert!(
+        pending_path.exists(),
+        "content-changing restore must create a pending marker"
+    );
+
+    // The pending file should contain exactly one generation
+    let pending_content = fs::read_to_string(&pending_path).unwrap();
+    let generation_count = pending_content
+        .lines()
+        .filter(|l| l.contains("generation"))
+        .count();
+    assert_eq!(
+        generation_count, 1,
+        "exactly one generation line expected, got {generation_count}"
+    );
+}
+
 // === Dry run does not create pre-restore backup ===
 
 #[test]

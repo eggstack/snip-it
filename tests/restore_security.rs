@@ -300,17 +300,15 @@ sha256 = "{sha}"
     );
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
-    // Dry run should succeed (no reads of source artifact)
-    // Replace mode should fail when trying to copy the symlink
+    // Dry run should reject symlinked source artifacts (validates before any writes)
     let output = snp_in(&config_dir)
         .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
         .output()
         .unwrap();
-    // Dry run is fine — it doesn't read source files
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "dry-run with symlink source should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success() || stderr.contains("symlink"),
+        "dry-run with symlink source should reject the symlink: {stderr}"
     );
 }
 
@@ -441,5 +439,146 @@ sha256 = "{wrong_sha}"
     assert!(
         !output.status.success() || stderr.contains("Checksum mismatch"),
         "Dry run with wrong checksum should fail: {stderr}"
+    );
+}
+
+// === Size mismatch ===
+
+#[test]
+fn test_rejects_size_mismatch() {
+    let (_tmp, config_dir) = setup_test_env();
+    let backup_dir = _tmp.path().join("backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let content = r#"[[snippets]]
+id = "size-test"
+description = "size snippet"
+command = "echo size"
+"#;
+    fs::write(libraries_dir.join("size.toml"), content).unwrap();
+
+    let sha = sha256_hex(content.as_bytes().to_vec());
+    let wrong_size = content.len() + 100; // Wrong size
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 0
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "size.toml"
+kind = "library"
+size = {wrong_size}
+sha256 = "{sha}"
+"#,
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() || stderr.contains("size mismatch"),
+        "Restore with size mismatch should fail: {stderr}"
+    );
+}
+
+// === Symlinked source artifact ===
+
+#[cfg(unix)]
+#[test]
+fn test_rejects_symlinked_source_in_restore() {
+    use std::os::unix::fs::symlink;
+
+    let (_tmp, config_dir) = setup_test_env();
+    let backup_dir = _tmp.path().join("backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    // Create a real file and a symlink to it
+    let real_file = libraries_dir.join("real.toml");
+    let content = r#"[[snippets]]
+id = "symlink-test"
+description = "symlink snippet"
+command = "echo symlink"
+"#;
+    fs::write(&real_file, content).unwrap();
+    let link_file = libraries_dir.join("linked.toml");
+    symlink(&real_file, &link_file).unwrap();
+
+    let sha = sha256_hex(content.as_bytes().to_vec());
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 0
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "linked.toml"
+kind = "library"
+size = {size}
+sha256 = "{sha}"
+"#,
+        size = content.len(),
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() || stderr.contains("symlink"),
+        "Restore with symlinked source should fail: {stderr}"
+    );
+}
+
+// === Unsupported entry kind ===
+
+#[test]
+fn test_rejects_unsupported_entry_kind() {
+    let (_tmp, config_dir) = setup_test_env();
+    let backup_dir = _tmp.path().join("backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let content = r#"[[snippets]]
+id = "kind-test"
+description = "kind snippet"
+command = "echo kind"
+"#;
+    fs::write(libraries_dir.join("kind.toml"), content).unwrap();
+
+    let sha = sha256_hex(content.as_bytes().to_vec());
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 0
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "kind.toml"
+kind = "unknown_future_kind"
+size = {size}
+sha256 = "{sha}"
+"#,
+        size = content.len(),
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    // Dry run with unknown kind should still work (unknown kinds use the raw path)
+    // but the important thing is it doesn't crash
+    assert!(
+        output.status.success(),
+        "Dry run with unknown kind should not crash: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

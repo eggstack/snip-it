@@ -1,7 +1,7 @@
 # Correctness Program Closure Status
 
-Program status: COMPLETE
-Final plan: plans/snip-it-correctness-10-final-corrective-closure.md
+Program status: REOPENED
+Blocking plan: plans/snip-it-correctness-10-final-corrective-closure.md
 Baseline: 2143f689a2115cc8901eaa933af28e80915e190c
 
 ## Program Summary
@@ -26,7 +26,7 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | 07A | Local data durability and recovery (atomic writes, transactions, backup/restore/repair, migration) | Complete |
 | 08A | CLI and automation polish (get command, exact selectors, variable assignments, exit codes, machine output) | Complete |
 | 09A | Security, release, and program closure (threat model, security audit, supply chain, documentation) | Complete |
-| 10 | Final corrective closure (read-only recovery suppression, exact execution outcomes, feature boundary cleanup, self-update hardening, backup/restore hardening, documentation reconciliation) | Complete |
+| 10 | Final corrective closure (read-only recovery suppression, exact execution outcomes, feature boundary cleanup, self-update hardening, backup/restore hardening, documentation reconciliation) | Reopened |
 
 ## Commit Evidence
 
@@ -137,6 +137,18 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 - Locked builds, Cargo.lock committed
 - No unknown git/registry dependencies
 
+## Release Blockers (from corrective closure plan)
+
+1. **StartupRecoveryPolicy not wired into dispatch** — `classify_command` still uses `SubcommandTag` catch-all; read-only commands can trigger startup recovery
+2. **rollback_transaction never called from restore on failure** — failed restores leave Prepared journals on disk
+3. **run_edit_output_by_id is dead code** — exact edit resolves by ID then mutates by description text
+4. **No atomic file replacement in restore** — uses `fs::copy` directly, not temp-file-then-rename
+5. **No test for exactly one pending generation after content-changing restore**
+6. **Backup has no consistent snapshot mechanism** — no lock or in-memory snapshot during copy
+7. **Lifecycle event assertions silently skipped** — `--features test-support` not consistently passed in CI
+8. **HTTP not hard-rejected in self-update** — soft warning only
+9. **THREAT_MODEL.md claims signed release assets** — contradicted by SUPPLY_CHAIN_POLICY.md and code
+
 ## Known Non-Blocking Limitations
 
 1. **CRC32 integrity**: Detects accidental corruption but does not authenticate against a malicious local actor. This is by design — the threat model assumes local-only access.
@@ -151,16 +163,16 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 
 | Criterion | Status |
 |-----------|--------|
-| Final threat model reflects shipped architecture | Yes — docs/THREAT_MODEL.md |
+| Final threat model reflects shipped architecture | Partial — THREAT_MODEL.md still claims signed release assets (inaccurate) |
 | Secrets absent from unauthorized surfaces | Yes — audit documented in docs/SECURITY_AUDIT.md, sentinel tests cover backup dirs, log files, doctor/status JSON, pending/lock files |
 | Process and timeout boundaries truthful and platform-tested | Yes — worker/executor documented and tested |
-| Filesystem/archive/update paths hardened | Yes — restore path validation (Phase 10), self-update safe extraction (Phase 10) |
+| Filesystem/archive/update paths hardened | Partial — restore path validation implemented, self-update tar extraction validated; HTTP not hard-rejected in self-update; restore does not use atomic file replacement |
 | Protocol/crypto implementation has explicit limits and evidence | Yes — documented in architecture/encryption.md and architecture/sync.md |
 | Non-execution canaries pass | Yes — 16 canary tests covering get, list, status, validate, backup, search, library, restore --dry-run, sync run |
 | Supply-chain/advisory/license policies pass | Yes — cargo-deny configured, CI job audits all 3 workspace members, docs/SUPPLY_CHAIN_POLICY.md |
 | Fuzz/property smoke and regression corpus pass | Partial — no dedicated fuzz targets exist; critical parsing paths covered by unit/integration tests with edge-case inputs. Fuzz targets are aspirational per docs/FUZZING_AND_PROPERTY_TESTS.md |
 | Package/install/upgrade evidence committed | Partial — cargo package --workspace passes; no cross-platform install/upgrade matrix executed. Legacy format migration fixtures exist but version-to-version upgrade fixtures are not present |
 | Release-mode tests pass | Yes — cargo test --release --workspace added to CI |
-| Documentation reconciled | Yes — README, SECURITY.md, AGENTS.md, architecture docs updated |
-| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — this document (Phase 10 complete) |
+| Documentation reconciled | Partial — THREAT_MODEL.md claims signed releases (inaccurate) |
+| plans/snip-it-correctness-program-closure-status.md records real evidence | No — status was prematurely marked COMPLETE; reopened per corrective closure plan |
 | No daemon, resident service, plugin runtime, workflow engine, remote execution, or second binary introduced | Yes — verified |

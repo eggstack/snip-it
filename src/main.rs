@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use snip_it::CommandOutcome;
-use snip_it::auto_sync::SubcommandTag;
+use snip_it::auto_sync::StartupRecoveryPolicy;
 use snip_it::commands;
 use snip_it::config;
 use snip_it::error::SnipResult;
@@ -912,9 +912,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     let result = snip_it::selector::resolve_selector(&selector)?;
                     let outcome = match result {
                         snip_it::selector::SelectionResult::One(m) => {
-                            commands::edit_cmd::run_edit_output(
+                            commands::edit_cmd::run_edit_output_by_id(
                                 library,
-                                m.snippet.description.clone(),
+                                &m.snippet.id,
                                 output_value,
                             )?;
                             snip_it::outcome::CliOutcome::Success
@@ -1185,20 +1185,60 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     Ok(CommandOutcome::Success)
 }
 
-/// Map a CLI `Commands` variant to a `SubcommandTag` for startup
-/// recovery classification.
-fn classify_command(cmd: &Commands) -> SubcommandTag {
+/// Map a CLI `Commands` variant to a `StartupRecoveryPolicy` for startup
+/// recovery classification. Read-only and configuration commands suppress
+/// recovery; mutation commands allow it.
+fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
     match cmd {
-        Commands::Sync { .. } => SubcommandTag::Sync,
-        Commands::Cron { .. } => SubcommandTag::Cron,
-        Commands::Register { .. } => SubcommandTag::Register,
-        Commands::AutoSyncWorker { .. } => SubcommandTag::AutoSyncWorker,
-        Commands::AutoSyncExecute { .. } => SubcommandTag::AutoSyncExecute,
-        Commands::Status { .. } => SubcommandTag::Mutation,
-        Commands::Repair { .. } => SubcommandTag::Mutation,
-        Commands::Backup { .. } => SubcommandTag::Mutation,
-        Commands::Restore { .. } => SubcommandTag::Mutation,
-        _ => SubcommandTag::Mutation,
+        // Read-only commands: no recovery, no worker spawn, no network
+        Commands::Version
+        | Commands::List { .. }
+        | Commands::Search { .. }
+        | Commands::Select { .. }
+        | Commands::Status { .. }
+        | Commands::Get { .. }
+        | Commands::Validate { .. } => StartupRecoveryPolicy::SuppressReadOnly,
+
+        // Backup and restore dry-run: read-only (backup is snapshot, not mutation)
+        Commands::Backup { .. } => StartupRecoveryPolicy::SuppressReadOnly,
+
+        // Library read-only subcommands
+        Commands::Library {
+            command: LibraryCommands::List | LibraryCommands::Show { .. },
+        } => StartupRecoveryPolicy::SuppressReadOnly,
+
+        // Explicit sync commands: manage their own sync behavior
+        Commands::Sync { .. } | Commands::Cron { .. } | Commands::Register { .. } => {
+            StartupRecoveryPolicy::SuppressExplicitSync
+        }
+
+        // Internal worker/executor subprocesses
+        Commands::AutoSyncWorker { .. } | Commands::AutoSyncExecute { .. } => {
+            StartupRecoveryPolicy::SuppressInternal
+        }
+
+        // Configuration and setup commands
+        Commands::Update { .. }
+        | Commands::Doctor { .. }
+        | Commands::Completions { .. }
+        | Commands::Shell { .. }
+        | Commands::Keybindings => StartupRecoveryPolicy::SuppressConfiguration,
+
+        // Mutation commands: allow recovery
+        Commands::New { .. }
+        | Commands::Run { .. }
+        | Commands::Clip { .. }
+        | Commands::Edit { .. }
+        | Commands::Import { .. }
+        | Commands::Repair { .. }
+        | Commands::Restore { .. }
+        | Commands::Premade { .. }
+        | Commands::Library {
+            command:
+                LibraryCommands::Create { .. }
+                | LibraryCommands::Delete { .. }
+                | LibraryCommands::SetPrimary { .. },
+        } => StartupRecoveryPolicy::Allow,
     }
 }
 
@@ -1210,7 +1250,7 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if snip_it::auto_sync::should_attempt_auto_sync_recovery(
+    if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(
         cli.command.as_ref().map(classify_command),
     ) {
         snip_it::auto_sync::startup_recover_pending();
