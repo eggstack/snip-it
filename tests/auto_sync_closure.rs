@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use snip_it::auto_sync::executor::effective_sync_direction;
-use snip_it::config::{AutoSyncFailureMode, SyncDirection, SyncSettings};
+use snip_it::config::{SyncDirection, SyncSettings};
 use snip_sync::test_helpers::{build_test_service, start_test_server};
 
 use support::helpers::*;
@@ -408,17 +408,14 @@ auto_sync_failure = "warn"
 
     new_snippet(&config_dir, "timeout-test");
 
-    // Wait for the worker to give up (timeout + grace).
-    wait_until(Duration::from_secs(60), || {
-        // Worker has either:
-        //   (a) timed out and is gone — pending still exists
-        //   (b) is still alive but stuck — pending still exists
-        // Either way the marker should still be present after we observe.
-        pending_marker(&config_dir).exists()
-    });
-
-    // Give the worker a chance to record its failure outcome.
-    std::thread::sleep(Duration::from_secs(2));
+    // Wait for the worker to record its failure outcome in the status file.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if config_dir.join("auto-sync-status.toml").exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     assert!(
         pending_marker(&config_dir).exists(),
@@ -473,11 +470,14 @@ fn test_executor_nonzero_exit_preserves_pending() {
 
     new_snippet(&config_dir, "nonzero-exit");
 
-    wait_until(Duration::from_secs(60), || {
-        // After timeout the worker gives up. Marker must still be present.
-        pending_marker(&config_dir).exists()
-    });
-    std::thread::sleep(Duration::from_secs(2));
+    // Wait for the worker to record its failure outcome in the status file.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if config_dir.join("auto-sync-status.toml").exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     assert!(
         pending_marker(&config_dir).exists(),
         "pending must remain after executor nonzero exit"
@@ -760,27 +760,4 @@ fn test_disabled_policy_exits_before_pending_operations() {
         "the !policy.enabled guard must appear before the main loop body \
          so the worker exits before reading pending state"
     );
-}
-
-// ── Background-thread coordination guard ───────────────────────────
-
-/// Spawn a real-server test in the background and use it as a helper
-/// for tests that need a server URL but don't need to assert on its
-/// state. This is a stub for future expansion.
-#[allow(dead_code)]
-async fn _with_server<F, Fut>(f: F)
-where
-    F: FnOnce(String, String) -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    let (server_url, api_key, task) = boot_server_with_marker().await;
-    f(server_url, api_key).await;
-    task.abort();
-}
-
-/// Compile-time guard that the AutoSyncFailureMode enum is the same
-/// type across modules — preventing accidental forks.
-#[allow(dead_code)]
-fn _failure_mode_roundtrip(mode: AutoSyncFailureMode) -> AutoSyncFailureMode {
-    mode
 }

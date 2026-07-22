@@ -1,8 +1,12 @@
 # Correctness Program Closure Status
 
+Program status: COMPLETE
+Final plan: plans/snip-it-correctness-10-final-corrective-closure.md
+Baseline: 2143f689a2115cc8901eaa933af28e80915e190c
+
 ## Program Summary
 
-snip-it (`snp`) is a terminal-first snippet manager for short scripts and commands. The correctness program was initiated to address auto-sync correctness defects and evolved through nine phases to cover architecture, testing, security, and release hardening.
+snip-it (`snp`) is a terminal-first snippet manager for short scripts and commands. The correctness program was initiated to address auto-sync correctness defects and evolved through ten phases to cover architecture, testing, security, and release hardening.
 
 - **Initial critical defect**: Auto-sync worker/executor lifecycle and lock correctness
 - **Final architecture**: Single-binary CLI with optional gRPC sync server, detached auto-sync workers, AES-256-GCM end-to-end encryption, Argon2id key derivation
@@ -22,6 +26,7 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | 07A | Local data durability and recovery (atomic writes, transactions, backup/restore/repair, migration) | Complete |
 | 08A | CLI and automation polish (get command, exact selectors, variable assignments, exit codes, machine output) | Complete |
 | 09A | Security, release, and program closure (threat model, security audit, supply chain, documentation) | Complete |
+| 10 | Final corrective closure (read-only recovery suppression, exact execution outcomes, feature boundary cleanup, self-update hardening, backup/restore hardening, documentation reconciliation) | Complete |
 
 ## Commit Evidence
 
@@ -117,6 +122,8 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 - 0o600 file permissions, 0o700 directory permissions
 - Atomic writes with validate_target
 - Transaction journals with UUID filenames
+- Restore path validation rejects entries escaping the config directory (Phase 10)
+- Self-update tar extraction rejects absolute paths, parent traversal, symlinks, hard links (Phase 10)
 
 ### Cryptographic Review
 - OWASP-compliant Argon2id parameters
@@ -133,14 +140,12 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 ## Known Non-Blocking Limitations
 
 1. **CRC32 integrity**: Detects accidental corruption but does not authenticate against a malicious local actor. This is by design — the threat model assumes local-only access.
-2. **Restore path traversal**: Manifest `entry.path` in backup archives is not canonicalized. A crafted backup could write outside the target directory. Mitigated by: backup is a local operation, user controls backup source.
-3. **Self-update symlink extraction**: `tar -xf` follows symlinks by default. A malicious archive could contain symlink entries. Mitigated by: SHA-256 checksum verification of the archive, HTTPS-only download.
-4. **No mutual TLS**: Authentication is API-key-based via bearer token. No client certificate authentication.
-5. **No SBOM generation**: Software bill of materials not yet generated.
-6. **No build provenance attestation**: Not yet implemented.
-7. **Argon2id at OWASP minimum**: 16 MiB memory cost. Higher security could use 64 MiB+.
-8. **No AAD in encryption**: Ciphertext not bound to context. Acceptable for current use.
-9. **No ciphertext format versioning**: Format implicitly versioned by fixed salt/nonce sizes.
+2. **No mutual TLS**: Authentication is API-key-based via bearer token. No client certificate authentication.
+3. **No SBOM generation**: Software bill of materials not yet generated.
+4. **No build provenance attestation**: Not yet implemented.
+5. **Argon2id at OWASP minimum**: 16 MiB memory cost. Higher security could use 64 MiB+.
+6. **No AAD in encryption**: Ciphertext not bound to context. Acceptable for current use.
+7. **No ciphertext format versioning**: Format implicitly versioned by fixed salt/nonce sizes.
 
 ## Exit Criteria Verification
 
@@ -149,7 +154,7 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | Final threat model reflects shipped architecture | Yes — docs/THREAT_MODEL.md |
 | Secrets absent from unauthorized surfaces | Yes — audit documented in docs/SECURITY_AUDIT.md, sentinel tests cover backup dirs, log files, doctor/status JSON, pending/lock files |
 | Process and timeout boundaries truthful and platform-tested | Yes — worker/executor documented and tested |
-| Filesystem/archive/update paths hardened | Yes — documented gaps are non-blocking (see Known Limitations) |
+| Filesystem/archive/update paths hardened | Yes — restore path validation (Phase 10), self-update safe extraction (Phase 10) |
 | Protocol/crypto implementation has explicit limits and evidence | Yes — documented in architecture/encryption.md and architecture/sync.md |
 | Non-execution canaries pass | Yes — 16 canary tests covering get, list, status, validate, backup, search, library, restore --dry-run, sync run |
 | Supply-chain/advisory/license policies pass | Yes — cargo-deny configured, CI job audits all 3 workspace members, docs/SUPPLY_CHAIN_POLICY.md |
@@ -157,5 +162,5 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 | Package/install/upgrade evidence committed | Partial — cargo package --workspace passes; no cross-platform install/upgrade matrix executed. Legacy format migration fixtures exist but version-to-version upgrade fixtures are not present |
 | Release-mode tests pass | Yes — cargo test --release --workspace added to CI |
 | Documentation reconciled | Yes — README, SECURITY.md, AGENTS.md, architecture docs updated |
-| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — this document (corrected) |
+| plans/snip-it-correctness-program-closure-status.md records real evidence | Yes — this document (Phase 10 complete) |
 | No daemon, resident service, plugin runtime, workflow engine, remote execution, or second binary introduced | Yes — verified |

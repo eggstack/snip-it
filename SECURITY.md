@@ -128,8 +128,9 @@ for verifying the target snippet.
 
 Standalone self-update packages (direct download, not Homebrew or
 crates.io) include a SHA-256 checksum file. The updater verifies the
-checksum of the downloaded archive before extraction. If the checksum
-does not match, the update is refused and the error is logged.
+checksum of the downloaded archive before extraction. Archive entries
+are validated: absolute paths, parent-directory traversal, symlinks,
+and hard links are rejected. HTTPS-only downloads prevent MITM attacks.
 
 ### Sync Encryption
 
@@ -199,12 +200,6 @@ when the keychain is unavailable.
   authenticate against a malicious local actor. A local attacker with
   filesystem access can tamper with files without triggering integrity
   failures.
-- **Restore from crafted backup archives** may be subject to path
-  traversal if the archive contains entries with `../` components.
-  This is a documented gap; restore only archives you trust.
-- **Self-update archive extraction** follows symlinks. A crafted
-  archive could use symlinks to write outside the target directory.
-  This is a documented gap.
 - **No mutual TLS / client certificate authentication.** The sync
   protocol authenticates via API key bearer tokens only. Clients
   without a valid API key are rejected, but additional client

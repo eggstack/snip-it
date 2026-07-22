@@ -206,8 +206,8 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 
 | Gap | Severity | Description |
 |---|---|---|
-| Restore path traversal | Medium | `entry.path` in backup manifest is not canonicalized before joining with config dir during restore. A crafted backup could contain path entries like `../../etc/passwd` in `entry.path`. Mitigation: manifests are SHA-256 verified and users control their own backup sources. (`src/commands/restore_cmd.rs:232-237`) |
-| Self-update tar symlink following | Low | `tar -xf` follows symlinks by default in archive extraction. A malicious release archive could contain symlinks pointing outside the work directory. Mitigation: releases are checksum-verified, and the extracted binary is explicitly checked to exist as a regular file before installation. (`src/update.rs:388-420`) |
+| Restore path traversal | **Mitigated (Phase 10)** | `restore_cmd.rs` now validates that restored files resolve within the config directory. Path entries like `../../etc/passwd` in a crafted backup are rejected. |
+| Self-update archive extraction | **Mitigated (Phase 10)** | Self-update uses Rust's `tar` crate with validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
 | Pending lock temp file | Low | The pending lock temp file does not use `O_EXCL` explicitly. Mitigation: UUID-based naming makes collision astronomically unlikely, and the file is written atomically. |
 
 ---
@@ -425,6 +425,7 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 | Property | Detail | Source |
 |---|---|---|
 | Checksum verification | All files verified against manifest SHA-256 before mutation | `src/commands/restore_cmd.rs:230-260` |
+| Path validation | Entries that resolve outside the config directory are rejected | `src/commands/restore_cmd.rs` |
 | Pre-restore backup | Created automatically for `Replace` mode | `src/commands/restore_cmd.rs:313-317` |
 | Merge logic | TOML-level merge by snippet ID; newer `updated_at` wins | `src/commands/restore_cmd.rs:152-197` |
 | Sync config handling | Merge mode preserves local `sync.toml` (with real API key); Replace mode restores but warns about redacted key | `src/commands/restore_cmd.rs:356-375` |
@@ -434,7 +435,7 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 
 | Gap | Severity | Description | Mitigation |
 |---|---|---|---|
-| Manifest path traversal | Medium | `entry.path` in backup manifest is joined with backup dir without canonicalization. A crafted backup could contain `../../` paths in the `path` field. | Users control their own backup sources. Checksum verification ensures manifest integrity. The restore code joins paths with `backup.join(&entry.path)` which can traverse, but the backup directory is user-selected. |
+| Manifest path traversal | **Mitigated (Phase 10)** | `entry.path` in backup manifest is joined with backup dir. A crafted backup could contain `../../` paths in the `path` field. | Path validation in `restore_cmd.rs` now rejects entries that resolve outside the config directory. Checksum verification ensures manifest integrity. |
 | No encryption of backups | Low | Backup files are stored in plaintext on disk. | Backups are local files under user control. Secrets (API keys) are redacted by default. |
 
 ---
@@ -455,11 +456,11 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 | Property | Detail | Source |
 |---|---|---|
 | Download URL | HTTPS only (GitHub API + release assets) | `src/update.rs:21-22` |
-| Checksum verification | SHA-256 hash compared against `SHA256SUMS` manifest from same release | `src/update.rs:361-382` |
-| Archive extraction | `tar -xf` to temp directory | `src/update.rs:388-420` |
-| Binary replacement | Atomic `fs::rename` with permission preservation | `src/update.rs:423-438` |
-| Temp directory | PID + timestamp-named in executable's parent dir | `src/update.rs:335-351` |
-| Cleanup | `fs::remove_dir_all(work_dir)` on success | `src/update.rs:437` |
+| Checksum verification | SHA-256 hash compared against `SHA256SUMS` manifest from same release | `src/update.rs:368-389` |
+| Archive extraction | Rust `tar` crate with entry validation (rejects absolute paths, parent traversal, symlinks, hard links) | `src/update.rs:413-479` |
+| Binary replacement | Atomic `fs::rename` with permission preservation | `src/update.rs:502-518` |
+| Temp directory | UUID-based in executable's parent dir (`UUID`) | `src/update.rs:349-358` |
+| Cleanup | `fs::remove_dir_all(work_dir)` on success | `src/update.rs:516` |
 
 ### J.3 Cargo Update Security
 
@@ -480,7 +481,7 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 
 | Gap | Severity | Description | Mitigation |
 |---|---|---|---|
-| Tar symlink following | Low | `tar -xf` follows symlinks by default. A malicious archive could contain symlinks pointing outside the work directory. | Releases are SHA-256 checksum-verified. The extracted binary is checked to exist as a file before installation (`src/update.rs:319-325`). The work directory is under the executable's parent dir with a unique PID-timestamp name. |
+| Tar symlink following | **Mitigated (Phase 10)** | `tar -xf` followed symlinks by default in earlier versions. A malicious archive could contain symlinks pointing outside the work directory. | Self-update now uses Rust's `tar` crate with entry validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
 | Concurrent worker/update | Low | If an auto-sync worker is running when self-update replaces the binary, the worker continues running the old binary until it exits. | By design — the detached worker is fire-and-forget and holds no resources that the new binary needs. The worker will exit normally and the next cycle will use the new binary. |
 | Checksum manifest trust | Low | The `SHA256SUMS` file is fetched from the same release as the archive. A compromised release could ship matching checksums. | GitHub release signing and the user's trust in the repository provide the root of trust. This is standard practice for GitHub-distributed binaries. |
 
@@ -505,8 +506,6 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 
 | Gap | Risk Level | Rationale |
 |---|---|---|
-| Restore manifest path traversal | Medium | User controls backup source; checksum verification ensures manifest integrity |
-| Tar symlink following in self-update | Low | Checksum-verified releases; extracted binary existence checked |
 | No backup encryption | Low | Local files under user control; API keys redacted by default |
 | No ciphertext format versioning | Low | Single version; format changes managed at application layer |
 | No AAD in AES-GCM | Low | All authenticated data is within the ciphertext; AAD not needed |

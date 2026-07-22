@@ -117,7 +117,11 @@ fn handle_command_result(
     if result.success() {
         crate::ProcessResult::Done("Executed".to_string())
     } else {
-        crate::ProcessResult::Done(format!("Executed with exit code: {result}"))
+        let code = result.code();
+        crate::ProcessResult::Failed {
+            exit_code: code,
+            message: format!("Executed with exit code: {result}"),
+        }
     }
 }
 
@@ -232,7 +236,7 @@ pub fn run(
     sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
-    let _outcome = run_snippet_selection(
+    let outcome = run_snippet_selection(
         filter,
         library,
         do_sync,
@@ -240,6 +244,9 @@ pub fn run(
         runtime,
         |snippet, copy_flag| process_snippet(snippet, copy_flag.is_some()),
     )?;
+    if let crate::SelectionOutcome::ExecutionFailed { exit_code } = outcome {
+        std::process::exit(exit_code.unwrap_or(8));
+    }
     Ok(())
 }
 
@@ -250,7 +257,9 @@ pub fn run_exact(
     _runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
     let result = process_snippet(snippet, false)?;
-    if let crate::ProcessResult::Done(_) = result {}
+    if let crate::ProcessResult::Failed { exit_code, .. } = result {
+        std::process::exit(exit_code.unwrap_or(8));
+    }
     if do_sync {
         crate::auto_sync::notify_mutation(
             crate::auto_sync::MutationKind::SnippetRun,

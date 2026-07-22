@@ -286,6 +286,7 @@ where
 
     let mut selected_and_processed = false;
     let mut cancelled = false;
+    let mut failed_exit_code: Option<Option<i32>> = None;
     loop {
         let (snippet_data, original_indices) = get_snippet_data(&snippets);
         let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
@@ -367,6 +368,11 @@ where
                             selected_and_processed = true;
                             break;
                         }
+                        crate::ProcessResult::Failed { exit_code, .. } => {
+                            selected_and_processed = true;
+                            failed_exit_code = Some(exit_code);
+                            break;
+                        }
                     }
                 }
             }
@@ -414,6 +420,8 @@ where
     }
     if cancelled {
         Ok(crate::SelectionOutcome::Cancelled)
+    } else if let Some(exit_code) = failed_exit_code {
+        Ok(crate::SelectionOutcome::ExecutionFailed { exit_code })
     } else {
         Ok(crate::SelectionOutcome::Selected)
     }

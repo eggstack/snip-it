@@ -10,8 +10,6 @@
 //! startup. The lock prevents concurrent transactions from corrupting shared
 //! state.
 
-#![allow(dead_code)]
-
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
 use std::fs;

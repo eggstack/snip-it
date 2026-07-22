@@ -14,7 +14,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 const REPOSITORY: &str = "eggstack/snip-it";
 const CRATES_API_URL: &str = "https://crates.io/api/v1/crates/{crate}";
@@ -243,8 +243,22 @@ impl GitHubRelease {
 }
 
 fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
+    let mut args = vec![
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--user-agent",
+        "snip-it-update",
+    ];
+    if url.starts_with("https://") {
+        args.extend(["--proto", "=https", "--tlsv1.2"]);
+    } else if url.starts_with("http://") {
+        eprintln!("warning: fetching from insecure HTTP URL (test override): {url}");
+    }
+    args.push(url);
     let output = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--location", "--user-agent", "snip-it-update", url])
+        .args(&args)
         .output()
         .map_err(|e| format!("could not run curl: {e}. Install curl or update manually from https://github.com/{REPOSITORY}/releases"))?;
     if !output.status.success() {
@@ -333,18 +347,11 @@ fn update_from_github(
 }
 
 fn temporary_directory(preferred_parent: Option<&Path>) -> Result<PathBuf, String> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("system clock is invalid: {e}"))?
-        .as_nanos();
     let parent = preferred_parent
         .filter(|path| path.is_dir())
         .map(Path::to_path_buf)
         .unwrap_or_else(std::env::temp_dir);
-    let path = parent.join(format!(
-        ".snip-it-update-{}-{timestamp}",
-        std::process::id()
-    ));
+    let path = parent.join(format!(".snip-it-update-{}", Uuid::new_v4()));
     fs::create_dir(&path)
         .map_err(|e| format!("could not create update directory {}: {e}", path.display()))?;
     Ok(path)
@@ -386,33 +393,105 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
-    let status = Command::new("tar")
-        .args(["-xf"])
-        .arg(archive)
-        .args(["-C"])
-        .arg(destination)
+    let file_name = archive.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+        extract_tar_gz(archive, destination)
+    } else if file_name.ends_with(".zip") {
+        #[cfg(windows)]
+        {
+            extract_zip(archive, destination)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(format!("unsupported archive format: {}", archive.display()))
+        }
+    } else {
+        Err(format!("unsupported archive format: {}", archive.display()))
+    }
+}
+
+fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive)
+        .map_err(|e| format!("could not open {}: {e}", archive.display()))?;
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+    archive.set_overwrite(false);
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("could not read tar entries: {e}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("could not read tar entry: {e}"))?;
+        let entry_path = entry
+            .path()
+            .map_err(|e| format!("invalid tar entry path: {e}"))?;
+        validate_tar_entry(&entry_path, &entry)?;
+        entry
+            .unpack_in(destination)
+            .map_err(|e| format!("could not extract tar entry: {e}"))?;
+    }
+    Ok(())
+}
+
+fn validate_tar_entry(
+    path: &std::path::Path,
+    entry: &tar::Entry<'_, impl std::io::Read>,
+) -> Result<(), String> {
+    let components: Vec<_> = path.components().collect();
+    for component in &components {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!(
+                    "rejecting absolute path in archive: {}",
+                    path.display()
+                ));
+            }
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "rejecting parent traversal in archive: {}",
+                    path.display()
+                ));
+            }
+            _ => {}
+        }
+    }
+    let file_type = entry.header().entry_type();
+    match file_type {
+        tar::EntryType::Regular | tar::EntryType::Continuous => {}
+        tar::EntryType::Symlink => {
+            return Err(format!("rejecting symlink in archive: {}", path.display()));
+        }
+        tar::EntryType::Link => {
+            return Err(format!(
+                "rejecting hard link in archive: {}",
+                path.display()
+            ));
+        }
+        tar::EntryType::Directory => {}
+        _ => {
+            return Err(format!(
+                "rejecting unexpected entry type {:?} in archive: {}",
+                file_type,
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn extract_zip(archive: &Path, destination: &Path) -> Result<(), String> {
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            powershell_quote(archive),
+            powershell_quote(destination)
+        ))
         .status()
-        .map_err(|e| format!("could not run tar: {e}"))?;
+        .map_err(|e| format!("could not run PowerShell: {e}"))?;
     if status.success() {
         return Ok(());
     }
-
-    #[cfg(windows)]
-    {
-        let status = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command"])
-            .arg(format!(
-                "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-                powershell_quote(archive),
-                powershell_quote(destination)
-            ))
-            .status()
-            .map_err(|e| format!("could not run PowerShell: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-    }
-
     Err(format!(
         "could not extract release archive {}",
         archive.display()

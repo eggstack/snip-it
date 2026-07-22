@@ -297,7 +297,7 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | A release binary is replaced with a malicious version, or its checksum is tampered. |
 | **Attack vector** | Compromised GitHub account, CI pipeline, or CDN; MITM on download. |
-| **Mitigations** | SHA-256 checksum verification of downloaded binaries during self-update. Checksum file validation. Package managers (Homebrew, cargo) perform their own signature verification. |
+| **Mitigations** | SHA-256 checksum verification of downloaded binaries during self-update. Checksum file validation. Package managers (Homebrew, cargo) perform their own signature verification. Tar extraction rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories prevent collision. |
 | **Residual risk** | Low. SHA-256 provides strong integrity verification. If both the binary and checksum are compromised in the same release, detection requires manual review of release artifacts. |
 | **User responsibility** | Verify release signatures where available. Use official installation channels. |
 | **Tests / evidence** | Self-update verification logic in `src/update.rs`. |

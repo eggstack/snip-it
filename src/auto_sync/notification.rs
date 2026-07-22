@@ -169,12 +169,53 @@ pub enum SubcommandTag {
     AutoSyncExecute,
 }
 
+/// Semantic startup recovery policy for each CLI subcommand.
+///
+/// Determines whether startup recovery, worker spawn, and network access
+/// are permitted for a given command. Read-only and configuration commands
+/// are suppressed to avoid unnecessary side effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupRecoveryPolicy {
+    /// Allow startup recovery (default for mutation commands).
+    Allow,
+    /// Read-only commands: no recovery, no worker spawn, no network.
+    SuppressReadOnly,
+    /// Commands that manage sync themselves (sync, cron, register).
+    SuppressExplicitSync,
+    /// Internal worker/executor subprocesses.
+    SuppressInternal,
+    /// Config/setup commands (doctor, validate, keybindings, shell init).
+    SuppressConfiguration,
+}
+
+impl StartupRecoveryPolicy {
+    /// Returns true if startup recovery should be attempted for this policy.
+    pub fn allows_recovery(self) -> bool {
+        matches!(self, StartupRecoveryPolicy::Allow)
+    }
+}
+
 /// Returns true if the given command should attempt auto-sync recovery
 /// at startup. Commands that are themselves about to sync, modify sync
 /// policy, or are internal worker/executor subcommands should NOT
 /// trigger recovery.
 pub fn should_attempt_auto_sync_recovery(tag: Option<SubcommandTag>) -> bool {
     matches!(tag, None | Some(SubcommandTag::Mutation))
+}
+
+/// Returns true if the given startup recovery policy permits auto-sync
+/// recovery at startup. Only [`StartupRecoveryPolicy::Allow`] triggers
+/// recovery.
+pub fn should_attempt_auto_sync_recovery_for_policy(policy: Option<StartupRecoveryPolicy>) -> bool {
+    match policy {
+        None | Some(StartupRecoveryPolicy::Allow) => true,
+        Some(
+            StartupRecoveryPolicy::SuppressReadOnly
+            | StartupRecoveryPolicy::SuppressExplicitSync
+            | StartupRecoveryPolicy::SuppressInternal
+            | StartupRecoveryPolicy::SuppressConfiguration,
+        ) => false,
+    }
 }
 
 pub fn startup_recover_pending() {
@@ -350,6 +391,71 @@ mod tests {
     fn test_subcommand_tag_debug() {
         let debug = format!("{:?}", SubcommandTag::AutoSyncWorker);
         assert_eq!(debug, "AutoSyncWorker");
+    }
+
+    #[test]
+    fn test_startup_recovery_policy_allows_recovery() {
+        assert!(StartupRecoveryPolicy::Allow.allows_recovery());
+    }
+
+    #[test]
+    fn test_startup_recovery_policy_suppress_read_only_blocks() {
+        assert!(!StartupRecoveryPolicy::SuppressReadOnly.allows_recovery());
+    }
+
+    #[test]
+    fn test_startup_recovery_policy_suppress_explicit_sync_blocks() {
+        assert!(!StartupRecoveryPolicy::SuppressExplicitSync.allows_recovery());
+    }
+
+    #[test]
+    fn test_startup_recovery_policy_suppress_internal_blocks() {
+        assert!(!StartupRecoveryPolicy::SuppressInternal.allows_recovery());
+    }
+
+    #[test]
+    fn test_startup_recovery_policy_suppress_configuration_blocks() {
+        assert!(!StartupRecoveryPolicy::SuppressConfiguration.allows_recovery());
+    }
+
+    #[test]
+    fn test_recovery_for_policy_none_returns_true() {
+        assert!(should_attempt_auto_sync_recovery_for_policy(None));
+    }
+
+    #[test]
+    fn test_recovery_for_policy_allow_returns_true() {
+        assert!(should_attempt_auto_sync_recovery_for_policy(Some(
+            StartupRecoveryPolicy::Allow
+        )));
+    }
+
+    #[test]
+    fn test_recovery_for_policy_suppress_read_only_returns_false() {
+        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
+            StartupRecoveryPolicy::SuppressReadOnly
+        )));
+    }
+
+    #[test]
+    fn test_recovery_for_policy_suppress_explicit_sync_returns_false() {
+        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
+            StartupRecoveryPolicy::SuppressExplicitSync
+        )));
+    }
+
+    #[test]
+    fn test_recovery_for_policy_suppress_internal_returns_false() {
+        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
+            StartupRecoveryPolicy::SuppressInternal
+        )));
+    }
+
+    #[test]
+    fn test_recovery_for_policy_suppress_configuration_returns_false() {
+        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
+            StartupRecoveryPolicy::SuppressConfiguration
+        )));
     }
 
     #[test]

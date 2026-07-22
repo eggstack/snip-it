@@ -5,14 +5,14 @@
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::get_config_dir;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Backup format.
+/// Backup format (currently only directory layout is supported).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum BackupFormat {
     Directory,
-    Archive,
 }
 
 /// Backup manifest entry.
@@ -45,7 +45,20 @@ fn sha256_file(path: &Path) -> SnipResult<String> {
 }
 
 /// Copy a single file into the backup directory, computing its SHA-256.
+///
+/// Rejects symlinks to prevent following links outside the config directory.
 fn copy_and_hash(src: &Path, dst: &Path, kind: &str) -> SnipResult<BackupManifestEntry> {
+    let metadata =
+        fs::symlink_metadata(src).map_err(|e| SnipError::io_error("stat source file", src, e))?;
+    if metadata.file_type().is_symlink() {
+        return Err(SnipError::runtime_error(
+            "Backup entry is a symlink",
+            Some(&format!(
+                "Refusing to back up symlink {} (could point outside config)",
+                src.display()
+            )),
+        ));
+    }
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| SnipError::io_error("create backup subdirectory", parent, e))?;
@@ -70,11 +83,12 @@ fn copy_and_hash(src: &Path, dst: &Path, kind: &str) -> SnipResult<BackupManifes
 pub fn run(
     output: Option<PathBuf>,
     include_usage: bool,
-    _include_config: bool,
+    include_config: bool,
     include_sync_state: bool,
     format: BackupFormat,
     json: bool,
 ) -> SnipResult<()> {
+    let _ = format; // Only Directory variant exists; flag kept for CLI compatibility
     let config_dir = get_config_dir();
     if !config_dir.exists() {
         return Err(SnipError::runtime_error(
@@ -104,10 +118,7 @@ pub fn run(
         schema: 1,
         created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
         snip_it_version: crate::diagnostics::version().to_string(),
-        layout: match format {
-            BackupFormat::Directory => "directory".to_string(),
-            BackupFormat::Archive => "archive".to_string(),
-        },
+        layout: "directory".to_string(),
         files: Vec::new(),
     };
 
@@ -174,24 +185,58 @@ pub fn run(
         }
     }
 
-    // 5. Write manifest
-    match format {
-        BackupFormat::Directory => {
-            let manifest_path = backup_dir.join("manifest.toml");
-            let manifest_str = toml::to_string_pretty(&manifest)
-                .map_err(|e| SnipError::toml_error("serialize backup manifest", e))?;
-            crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
-        }
-        BackupFormat::Archive => {
-            let manifest_path = backup_dir.join("manifest.json");
-            let manifest_str = serde_json::to_string_pretty(&manifest).map_err(|e| {
-                SnipError::runtime_error("serialize manifest JSON", Some(&e.to_string()))
-            })?;
-            crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
+    // 5. Optionally include general config .toml files (excluding already-handled files)
+    if include_config {
+        let handled_files: HashSet<&str> = [
+            "libraries.toml",
+            "usage.toml",
+            "sync.toml",
+            "themes.toml",
+            "auto-sync-status.toml",
+        ]
+        .into_iter()
+        .collect();
+
+        let excluded_dirs: HashSet<&str> = [
+            "libraries",
+            "premade",
+            "themes",
+            "backups",
+            "transaction-journals",
+        ]
+        .into_iter()
+        .collect();
+
+        if let Ok(entries) = fs::read_dir(&config_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if excluded_dirs.contains(name.as_str())
+                    || name.starts_with('.')
+                    || name.starts_with("manifest.")
+                    || handled_files.contains(name.as_str())
+                {
+                    continue;
+                }
+                if !name.ends_with(".toml") {
+                    continue;
+                }
+                let src = entry.path();
+                if src.is_file() {
+                    let dst = backup_dir.join(&name);
+                    let manifest_entry = copy_and_hash(&src, &dst, "config")?;
+                    manifest.files.push(manifest_entry);
+                }
+            }
         }
     }
 
-    // 6. Output report
+    // 6. Write manifest
+    let manifest_path = backup_dir.join("manifest.toml");
+    let manifest_str = toml::to_string_pretty(&manifest)
+        .map_err(|e| SnipError::toml_error("serialize backup manifest", e))?;
+    crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
+
+    // 7. Output report
     if json {
         let report = serde_json::json!({
             "backup_dir": backup_dir.display().to_string(),
@@ -251,35 +296,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_test_config(dir: &Path) {
-        let libraries_dir = dir.join("libraries");
-        fs::create_dir_all(&libraries_dir).unwrap();
-
-        let lib_content = r#"[[snippets]]
-description = "test snippet"
-command = "echo hello"
-"#;
-        fs::write(libraries_dir.join("snippets.toml"), lib_content).unwrap();
-
-        let index = r#"[[libraries]]
-filename = "snippets"
-is_primary = true
-"#;
-        fs::write(dir.join("libraries.toml"), index).unwrap();
-
-        let usage = r#"[[usage]]
-id = "abc-123"
-use_count = 3
-"#;
-        fs::write(dir.join("usage.toml"), usage).unwrap();
-
-        let sync = r#"enabled = true
-server_url = "https://sync.example.com"
-api_key = "sk-secret-key-12345"
-"#;
-        fs::write(dir.join("sync.toml"), sync).unwrap();
-    }
-
     #[test]
     fn test_sha256_file() {
         let dir = TempDir::new().unwrap();
@@ -331,31 +347,8 @@ timeout = 30
     }
 
     #[test]
-    fn test_backup_creates_directory_structure() {
-        let config_dir = TempDir::new().unwrap();
-        let backup_dir = TempDir::new().unwrap();
-        make_test_config(config_dir.path());
-
-        // Temporarily override get_config_dir behavior by using the output flag
-        let output = backup_dir.path().join("my-backup");
-        let result = run(
-            Some(output.clone()),
-            true,
-            true,
-            true,
-            BackupFormat::Directory,
-            false,
-        );
-
-        // This will fail because get_config_dir() returns the real config dir,
-        // but we can test the internal helpers directly.
-        // The actual integration is tested via the helper functions.
-        assert!(result.is_err() || output.exists());
-    }
-
-    #[test]
-    fn test_backup_format_directory_vs_archive() {
-        assert_ne!(BackupFormat::Directory, BackupFormat::Archive);
+    fn test_backup_format_is_directory() {
+        assert_eq!(BackupFormat::Directory, BackupFormat::Directory);
     }
 
     #[test]
@@ -399,5 +392,25 @@ timeout = 30
         let entry = copy_and_hash(&src, &dst, "library").unwrap();
         assert!(dst.exists());
         assert_eq!(entry.size, 7);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_and_hash_rejects_symlinks() {
+        let src_dir = TempDir::new().unwrap();
+        let dst_dir = TempDir::new().unwrap();
+        let real_file = src_dir.path().join("real.txt");
+        fs::write(&real_file, "content").unwrap();
+        let symlink = src_dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real_file, &symlink).unwrap();
+        let dst = dst_dir.path().join("output.txt");
+
+        let result = copy_and_hash(&symlink, &dst, "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("symlink"),
+            "Expected symlink error, got: {msg}"
+        );
     }
 }

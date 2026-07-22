@@ -101,6 +101,8 @@ unicode-width = "0.2"
 lzma-rs = "0.3"
 shell-words = "1.1"
 tempfile = "3.10"
+tar = "0.4"
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -109,6 +111,9 @@ snip-proto = { version = "0.1.0", path = "snip-proto" }
 snip-sync = { version = "0.1.1", path = "snip-sync", features = ["test-helpers"] }
 portable-pty = "0.9"
 libc = "0.2"
+crc32fast = "1.4"
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+keyring = "3"
 
 [profile.release]
 lto = true
@@ -121,10 +126,4 @@ members = ["snip-proto", "snip-sync"]
 resolver = "2"
 
 [features]
-default = ["tui", "clipboard", "sync", "self-update", "bundled-themes"]
-tui = []
-clipboard = []
-sync = []
-self-update = []
-bundled-themes = []
 test-support = []

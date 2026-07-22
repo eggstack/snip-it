@@ -84,6 +84,12 @@ pub fn run(
             }
             Ok(CommandOutcome::Cancelled)
         }
+        (SelectionOutcome::ExecutionFailed { .. }, _, _) => {
+            Err(crate::error::SnipError::runtime_error(
+                "Internal contract error",
+                Some("select command should never produce an execution failure"),
+            ))
+        }
         (SelectionOutcome::Selected, false, Some(command)) => {
             if let Some(path) = output_file {
                 if path.is_symlink() {

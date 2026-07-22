@@ -116,6 +116,72 @@ pub fn run_edit_output(
     Ok(())
 }
 
+/// Edits the output/notes field of a snippet identified by stable ID.
+///
+/// Unlike `run_edit_output` which searches by description/command text,
+/// this function uses the snippet's unique ID for precise targeting.
+/// This is the correct mutation path for exact selectors (`--id`,
+/// `--description-exact`, `--command-exact`) to avoid identity loss
+/// when multiple snippets share similar descriptions.
+pub fn run_edit_output_by_id(
+    library: Option<String>,
+    snippet_id: &str,
+    new_output: Option<String>,
+) -> SnipResult<()> {
+    use crate::commands::get_library_path;
+    use crate::library::{load_library, save_library};
+
+    let lib_path = match get_library_path(library.clone())? {
+        Some(p) => p,
+        None => {
+            eprintln!("No library found. Create one with 'snp library create <name>'");
+            return Err(crate::error::SnipError::runtime_error(
+                "Library not found",
+                Some("No library available"),
+            ));
+        }
+    };
+
+    let mut snippets = load_library(&lib_path)?;
+
+    let matching_idx = snippets
+        .snippets
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.deleted)
+        .find(|(_, s)| s.id == snippet_id)
+        .map(|(i, _)| i);
+
+    let idx = match matching_idx {
+        Some(i) => i,
+        None => {
+            return Err(crate::error::SnipError::runtime_error(
+                "Snippet not found",
+                Some(&format!(
+                    "No snippet with ID '{snippet_id}' found in library"
+                )),
+            ));
+        }
+    };
+
+    let snippet = &mut snippets.snippets[idx];
+    snippet.output = new_output.unwrap_or_default();
+    let now = chrono::Utc::now().timestamp();
+    snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
+    let desc = snippet.description.clone();
+    let is_empty = snippet.output.is_empty();
+
+    save_library(&lib_path, &snippets)?;
+
+    if is_empty {
+        eprintln!("Cleared output for snippet: {desc}");
+    } else {
+        eprintln!("Updated output for snippet: {desc}");
+    }
+
+    Ok(())
+}
+
 fn has_directory_component(editor: &str) -> bool {
     editor.contains('/') || (cfg!(windows) && editor.contains('\\')) || editor.starts_with('.')
 }

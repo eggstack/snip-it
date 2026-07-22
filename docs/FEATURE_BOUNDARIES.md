@@ -3,7 +3,9 @@
 ## Current Feature Definitions
 
 ### snip-it (root crate)
-**No feature gates defined.** All functionality is unconditionally compiled.
+Empty feature labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) were removed in Phase 10
+because they did not gate any dependencies and were misleading. `test-support` is retained for test
+infrastructure. All functionality is unconditionally compiled — the binary is monolithic.
 
 ### snip-sync
 ```toml
@@ -96,7 +98,10 @@ libc = "0.2"
 
 ## Potential Issues
 
-1. **No `[features]` table in snip-it Cargo.toml**: Adding feature gates requires restructuring which dependencies are unconditional vs conditional. The sync crate alone accounts for ~15 direct dependencies.
+1. **Empty feature labels removed (Phase 10)**: The previous `[features]` table contained empty labels
+   that did not gate any dependencies. These were removed as misleading. Real feature gates could be
+   added in the future if library consumers need to exclude subsystems, but the binary crate has no
+   need for optional compilation.
 
 2. **`tokio` is unconditional**: Even non-async features (TUI, clipboard) pull tokio. A feature gate for `async-runtime` could help, but `tokio` is so pervasive that gating it is impractical.
 

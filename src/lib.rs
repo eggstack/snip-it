@@ -69,6 +69,13 @@ pub enum ProcessResult {
     Continue,
     /// A snippet command was selected; contains the expanded command string.
     Done(String),
+    /// Child process exited with a nonzero exit code.
+    Failed {
+        /// The child process exit code, if available.
+        exit_code: Option<i32>,
+        /// Human-readable description of the failure.
+        message: String,
+    },
 }
 
 /// Top-level outcome returned by command implementations for exit-code mapping.
@@ -91,4 +98,9 @@ pub enum SelectionOutcome {
     Selected,
     /// The user cancelled the primary selector (q, Esc, Ctrl-C).
     Cancelled,
+    /// The snippet command was selected but child execution failed.
+    ExecutionFailed {
+        /// The child process exit code, if available.
+        exit_code: Option<i32>,
+    },
 }

@@ -16,9 +16,10 @@ pub mod test_events;
 pub mod worker;
 
 pub use notification::{
-    AutoSyncNotificationResult, MutationContext, SubcommandTag, clear_pending_after_explicit_sync,
-    notify_local_mutation, notify_mutation, observe_pending_generation,
-    should_attempt_auto_sync_recovery, startup_recover_pending,
+    AutoSyncNotificationResult, MutationContext, StartupRecoveryPolicy, SubcommandTag,
+    clear_pending_after_explicit_sync, notify_local_mutation, notify_mutation,
+    observe_pending_generation, should_attempt_auto_sync_recovery,
+    should_attempt_auto_sync_recovery_for_policy, startup_recover_pending,
 };
 pub use pending::{ConditionalClearResult, PendingSnapshot, PendingState};
 pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin, RetryDisposition};

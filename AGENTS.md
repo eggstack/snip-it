@@ -159,6 +159,15 @@ Multi-file operations should use `transaction.rs` for crash-safe coordination. T
 ### Migration schema versioning
 Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.
 
+### Read-only commands suppress startup recovery
+`StartupRecoveryPolicy` in `src/auto_sync/notification.rs` classifies commands into five policies: `Allow` (mutation commands), `SuppressReadOnly` (list, search, get, status, validate, etc.), `SuppressExplicitSync` (sync, cron, register), `SuppressInternal` (worker/executor subprocesses), and `SuppressConfiguration` (doctor, keybindings, shell init). Only `Allow` triggers startup recovery — read-only commands never spawn workers or access the network.
+
+### Feature labels are removed (binary is monolithic)
+The `[features]` table in `Cargo.toml` previously contained empty labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) that did not gate any dependencies. These were removed in Phase 10 as misleading. The binary is monolithic — all functionality is unconditionally compiled. Only `test-support` remains for test infrastructure.
+
+### Self-update uses safe extraction
+Self-update (`src/update.rs`) validates tar archive entries before extraction: rejects absolute paths, parent-directory traversal, symlinks, and hard links. Uses Rust's `tar` crate instead of shelling out to `tar -xf`. Archives are downloaded over HTTPS only. UUID-based temp directories prevent collision.
+
 ## Key Architecture Notes
 
 ### Auto-Sync (two-process-per-cycle)
@@ -171,7 +180,7 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 - Executor timeout (30s default) is independent of debounce; configurable via `sync_timeout` in `AutoSyncPolicy`
 - `max_delay` separate from `debounce` — bounded latency prevents starvation
 - `schedule_sync()` is the sole scheduling authority; replaces per-mutation spawn paths
-- Startup recovery always schedules workers for valid pending work regardless of age
+- Startup recovery always schedules workers for valid pending work regardless of age; `StartupRecoveryPolicy` suppresses recovery for read-only, sync, internal, and configuration commands
 - Failure classification is typed (`FailureClass` enum, 11 variants) with variant-based classification via `SyncFailureKind` (no string matching for sync errors)
 - Typed policy loading distinguishes `NotConfigured` (no sync account) from config failure
 - Status is persisted in `auto-sync-status.toml` with CRC32 integrity (not DefaultHasher), secret redaction, and config fingerprint
@@ -366,8 +375,6 @@ The `docs/` directory now includes security-focused reference documents:
 ### Known Limitations
 
 - CRC32 detects accidental corruption but does not authenticate against a malicious local actor
-- Restore from crafted backup archives may be subject to path traversal (hardening documented in SECURITY_AUDIT.md)
-- Self-update archive extraction follows symlinks (hardening documented in SECURITY_AUDIT.md)
 - No mutual TLS / client certificate authentication
 
 ## Architecture Documentation

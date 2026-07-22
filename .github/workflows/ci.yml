@@ -269,7 +269,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: ["", "tui", "sync", "test-support"]
+        features: ["", "test-support"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

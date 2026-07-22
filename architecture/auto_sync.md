@@ -63,7 +63,7 @@ The auto-sync subsystem lives under `src/auto_sync/` as a directory module:
 - `worker.rs` — `run`, `execute_sync`, `startup_recover`, `WorkerOutcome`, `SpawnResult`, `Clock` trait for deterministic testing
 - `status.rs` — `AutoSyncStatus` (durable status persistence with CRC32 integrity over behavior-driving fields), `record_success()`, `record_failure()`, `compute_config_fingerprint()`, `release_deferral_on_config_change()`, secret redaction
 - `schedule.rs` — `schedule_sync()` (centralized scheduling decision), `ScheduleDecision` enum, `Caller` enum, worker storm prevention
-- `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`, `SubcommandTag`, `should_attempt_auto_sync_recovery`
+- `notification.rs` — `notify_mutation`, `notify_local_mutation`, `clear_pending_after_explicit_sync`, `startup_recover_pending`, `MutationContext`, `AutoSyncNotificationResult`, `derive_state_dir`, `SubcommandTag`, `StartupRecoveryPolicy`, `should_attempt_auto_sync_recovery`, `should_attempt_auto_sync_recovery_for_policy`
 - `mod.rs` — pub re-exports + `paths::{state_dir, pending_marker, pending_txn_lock, worker_lock, execution_lock, status_file}` helpers used by `snp doctor`
 
 ## Key Types
@@ -202,6 +202,30 @@ pub enum SubcommandTag {
 ```
 
 Used by `should_attempt_auto_sync_recovery` to classify commands at startup. Only `Mutation` (and `None`) commands attempt auto-sync recovery; `Sync`, `Cron`, `Register`, and internal subprocess tags suppress it.
+
+### StartupRecoveryPolicy (Phase 10)
+
+```rust
+pub enum StartupRecoveryPolicy {
+    Allow,
+    SuppressReadOnly,
+    SuppressExplicitSync,
+    SuppressInternal,
+    SuppressConfiguration,
+}
+```
+
+Semantic startup recovery policy for each CLI subcommand. Determines whether startup recovery, worker spawn, and network access are permitted. Only `Allow` (mutation commands) triggers startup recovery. The other variants suppress recovery to avoid unnecessary side effects:
+
+| Policy | Commands | Recovery | Worker Spawn | Network |
+|--------|----------|----------|--------------|---------|
+| `Allow` | `new`, `edit`, `import`, `delete`, `library create/delete` | Yes | Yes | Yes |
+| `SuppressReadOnly` | `list`, `search`, `get`, `status`, `validate` | No | No | No |
+| `SuppressExplicitSync` | `sync`, `cron`, `register` | No | No | Allowed (by command) |
+| `SuppressInternal` | `auto-sync-worker`, `auto-sync-execute` | No | No | Allowed (by command) |
+| `SuppressConfiguration` | `doctor`, `keybindings`, `shell init` | No | No | No |
+
+This prevents read-only commands from spawning background workers or accessing the network unexpectedly.
 
 ## Trigger Matrix
 
@@ -659,7 +683,7 @@ Diagnostics emitted:
 18. **Release 5F:** All sync operations share one `SyncExecutionLock`; no concurrent sync is possible.
 19. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
 20. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
-21. **Release 5F:** Startup recovery suppressed for sync-related commands (`sync`, `cron`, `register`, internal subprocesses).
+21. **Release 5F / Phase 10:** Startup recovery suppressed for sync-related commands (`sync`, `cron`, `register`, internal subprocesses) and extended to read-only and configuration commands via `StartupRecoveryPolicy`.
 22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`.
 23. **Phase 01:** Disabled-policy worker exits with `NothingToDo` *before* touching pending state.
 24. **Phase 01:** Executor subprocess never references the execution lock; the worker owns it for the entire cycle.
@@ -670,6 +694,7 @@ Diagnostics emitted:
 29. **Phase 03:** Status write failure must never clear pending — a write failure leaves the existing status file intact and does not affect the pending marker.
 30. **Phase 03:** Backoff is persisted across CLI process restarts via `auto-sync-status.toml` — deferred disposition survives process death and system reboot.
 31. **Phase 03:** New mutations do not spawn per-mutation workers — debounce + centralized `schedule_sync()` decision prevent worker storms.
+32. **Phase 10:** Read-only, sync, internal, and configuration commands suppress startup recovery via `StartupRecoveryPolicy` — only mutation commands trigger worker spawn at startup.
 
 ## Status Snapshot (Phase 04A)
 

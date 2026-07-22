@@ -2,6 +2,8 @@
 //!
 //! `snp restore` command — restore from a backup snapshot.
 
+use crate::auto_sync::notification::notify_mutation;
+use crate::auto_sync::policy::{MutationKind, MutationOrigin};
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::get_config_dir;
 use sha2::{Digest, Sha256};
@@ -79,6 +81,117 @@ fn load_manifest(backup_dir: &Path) -> SnipResult<BackupManifest> {
             backup_dir.display()
         )),
     ))
+}
+
+/// Validate a backup-relative path to prevent path traversal attacks.
+///
+/// Returns the validated relative `PathBuf` on success. Rejects:
+/// - Empty paths
+/// - Absolute paths (Unix `/` or Windows drive letter `C:\`)
+/// - `..` components (traversal)
+/// - NUL bytes
+/// - For library kind: requires `.toml` extension, rejects path separators (flat filename only)
+/// - For index/usage/sync_config: allows only the exact expected filename
+fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
+    if path.is_empty() {
+        return Err(SnipError::runtime_error(
+            "Empty backup path",
+            Some(&format!("kind={kind}")),
+        ));
+    }
+
+    if path.contains('\0') {
+        return Err(SnipError::runtime_error(
+            "NUL byte in backup path",
+            Some(&format!("path={path}")),
+        ));
+    }
+
+    // Reject absolute paths
+    if path.starts_with('/') {
+        return Err(SnipError::runtime_error(
+            "Absolute path in backup manifest",
+            Some(&format!("path={path}")),
+        ));
+    }
+    // Reject Windows drive letter paths (C:\, D:\, etc.)
+    if path.len() >= 3
+        && path.as_bytes()[0].is_ascii_alphabetic()
+        && path.as_bytes()[1] == b':'
+        && (path.as_bytes()[2] == b'/' || path.as_bytes()[2] == b'\\')
+    {
+        return Err(SnipError::runtime_error(
+            "Absolute path in backup manifest",
+            Some(&format!("path={path}")),
+        ));
+    }
+
+    let pb = PathBuf::from(path);
+    for component in pb.components() {
+        use std::path::Component;
+        match component {
+            Component::ParentDir => {
+                return Err(SnipError::runtime_error(
+                    "Path traversal in backup manifest",
+                    Some(&format!("path={path}")),
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(SnipError::runtime_error(
+                    "Absolute path in backup manifest",
+                    Some(&format!("path={path}")),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    match kind {
+        "library" => {
+            // Must be a flat filename (no separators) with .toml extension
+            if path.contains('/') || path.contains('\\') {
+                return Err(SnipError::runtime_error(
+                    "Library path must be a flat filename",
+                    Some(&format!("path={path}")),
+                ));
+            }
+            if !path.ends_with(".toml") {
+                return Err(SnipError::runtime_error(
+                    "Library path must have .toml extension",
+                    Some(&format!("path={path}")),
+                ));
+            }
+        }
+        "index" => {
+            if path != "libraries.toml" {
+                return Err(SnipError::runtime_error(
+                    "Index path must be libraries.toml",
+                    Some(&format!("path={path}")),
+                ));
+            }
+        }
+        "usage" => {
+            if path != "usage.toml" {
+                return Err(SnipError::runtime_error(
+                    "Usage path must be usage.toml",
+                    Some(&format!("path={path}")),
+                ));
+            }
+        }
+        "sync_config" => {
+            if path != "sync.toml" {
+                return Err(SnipError::runtime_error(
+                    "Sync config path must be sync.toml",
+                    Some(&format!("path={path}")),
+                ));
+            }
+        }
+        _ => {
+            // For unknown kinds, allow relative paths but reject traversal (already checked above)
+        }
+    }
+
+    Ok(pb)
 }
 
 /// Create a pre-restore backup of the current config.
@@ -226,7 +339,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // 1. Load and validate manifest
     let manifest = load_manifest(&backup)?;
 
-    // 2. Verify checksums
+    // 2. Validate all paths in manifest (path traversal prevention)
+    for entry in &manifest.files {
+        validate_backup_path(&entry.path, &entry.kind)?;
+    }
+
+    // 3. Verify checksums
     for entry in &manifest.files {
         // Resolve path relative to backup directory
         let file_path =
@@ -268,7 +386,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         pre_restore_backup: None,
     };
 
-    // 3. Dry run: display planned actions
+    // 4. Dry run: display planned actions (no writes, no transaction)
     if mode == RestoreMode::DryRun {
         if json {
             let dry_report = serde_json::json!({
@@ -309,28 +427,78 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         return Ok(());
     }
 
-    // 4. For replace mode, create pre-restore backup
+    // 5. Acquire transaction lock and begin transaction for write modes
+    let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+    let _lock = crate::transaction::acquire_transaction_lock(&state_dir)?;
+
+    // Collect affected files for the transaction
+    let mut affected_files: Vec<PathBuf> = Vec::new();
+    for entry in &manifest.files {
+        let dst = match entry.kind.as_str() {
+            "library" => {
+                let name = Path::new(&entry.path)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                config_dir.join("libraries").join(format!("{name}.toml"))
+            }
+            "index" => config_dir.join("libraries.toml"),
+            "usage" => config_dir.join("usage.toml"),
+            "sync_config" => config_dir.join("sync.toml"),
+            _ => config_dir.join(&entry.path),
+        };
+        affected_files.push(dst);
+    }
+
+    let journal = crate::transaction::begin_transaction(&state_dir, "restore", &affected_files)?;
+
+    // Create pre-restore backups for affected files
+    let backup_dir_base = state_dir.join("backups");
+    fs::create_dir_all(&backup_dir_base).map_err(|e| {
+        SnipError::io_error("create transaction backup dir", backup_dir_base.clone(), e)
+    })?;
+
+    // Build the journal with backup paths for rollback
+    let mut journal_with_backups = journal.clone();
+    for (i, staged) in journal_with_backups.staged_files.iter_mut().enumerate() {
+        if staged.original_path.exists() {
+            let backup_path = backup_dir_base.join(format!("{i}.bak"));
+            fs::copy(&staged.original_path, &backup_path).map_err(|e| {
+                SnipError::io_error(
+                    "create pre-restore backup for transaction",
+                    backup_path.clone(),
+                    e,
+                )
+            })?;
+            staged.backup_path = Some(backup_path);
+        }
+    }
+
+    // 6. For replace mode, create pre-restore backup of config
     if mode == RestoreMode::Replace
         && let Some(backup_path) = create_pre_restore_backup(&config_dir)?
     {
         report.pre_restore_backup = Some(backup_path.display().to_string());
     }
 
-    // 5. Ensure libraries directory exists
+    // 7. Ensure libraries directory exists
     let libraries_dir = config_dir.join("libraries");
     fs::create_dir_all(&libraries_dir)
         .map_err(|e| SnipError::io_error("create libraries directory", libraries_dir.clone(), e))?;
 
-    // 6. Restore library files
+    // 8. Restore library files
     for entry in &manifest.files {
         if entry.kind == "library" {
             let src = backup.join("libraries").join(&entry.path);
-            let library_name = entry.path.strip_suffix(".toml").unwrap_or(&entry.path);
-            restore_library_file(&src, &libraries_dir, library_name, mode, &mut report)?;
+            let library_name = Path::new(&entry.path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
         }
     }
 
-    // 7. Restore libraries.toml index
+    // 9. Restore libraries.toml index
     if let Some(index_entry) = manifest.files.iter().find(|f| f.kind == "index") {
         let src = backup.join(&index_entry.path);
         let dst = config_dir.join("libraries.toml");
@@ -341,7 +509,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
-    // 8. Restore usage.toml if present
+    // 10. Restore usage.toml if present
     if let Some(usage_entry) = manifest.files.iter().find(|f| f.kind == "usage") {
         let src = backup.join(&usage_entry.path);
         let dst = config_dir.join("usage.toml");
@@ -352,7 +520,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
-    // 9. Restore sync.toml if present (preserve local API key if exists)
+    // 11. Restore sync.toml if present (preserve local API key if exists)
     if let Some(sync_entry) = manifest.files.iter().find(|f| f.kind == "sync_config") {
         let src = backup.join(&sync_entry.path);
         let dst = config_dir.join("sync.toml");
@@ -374,7 +542,15 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
-    // 10. Output report
+    // 12. Commit transaction
+    crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
+
+    // 13. Record pending sync generation if restore changed syncable data
+    if report.files_restored > 0 {
+        let _ = notify_mutation(MutationKind::Import, MutationOrigin::User);
+    }
+
+    // 14. Output report
     if json {
         let report_json = serde_json::to_string_pretty(&report).map_err(|e| {
             SnipError::runtime_error("serialize restore report", Some(&e.to_string()))
@@ -548,11 +724,14 @@ is_primary = true
 
     #[test]
     fn test_dry_run_does_not_modify_config() {
-        let _config_dir = TempDir::new().unwrap();
-        let backup_dir = create_test_backup(dir());
-        // Dry run should not error or modify anything
-        let _result = run(backup_dir, RestoreMode::DryRun, false);
-        // May error if config dir doesn't exist, but dry run itself shouldn't write
+        let tmp = TempDir::new().unwrap();
+        let backup_dir = create_test_backup(tmp.path());
+        let result = run(backup_dir, RestoreMode::DryRun, false);
+        assert!(
+            result.is_ok(),
+            "dry run should not fail: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -581,11 +760,6 @@ is_primary = true
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("Merge"));
         assert!(json.contains("deploy"));
-    }
-
-    fn dir() -> &'static Path {
-        // Helper for tests that need a valid path
-        Path::new("/tmp")
     }
 
     /// Full backup→restore roundtrip: create backup, verify checksums,
@@ -812,5 +986,181 @@ is_primary = true
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("No manifest found"));
+    }
+
+    // === Path validation tests (Workstream C) ===
+
+    #[test]
+    fn test_validate_rejects_empty_path() {
+        let result = validate_backup_path("", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Empty"));
+    }
+
+    #[test]
+    fn test_validate_rejects_absolute_unix_path() {
+        let result = validate_backup_path("/etc/passwd", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Absolute"));
+    }
+
+    #[test]
+    fn test_validate_rejects_absolute_windows_path() {
+        let result = validate_backup_path("C:\\Windows\\System32\\config", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Absolute"));
+    }
+
+    #[test]
+    fn test_validate_rejects_traversal() {
+        let result = validate_backup_path("../outside.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("traversal") || msg.contains("ParentDir"));
+    }
+
+    #[test]
+    fn test_validate_rejects_nul_byte() {
+        let result = validate_backup_path("test\0.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("NUL"));
+    }
+
+    #[test]
+    fn test_validate_accepts_normal_library() {
+        let result = validate_backup_path("test.toml", "library");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PathBuf::from("test.toml"));
+    }
+
+    #[test]
+    fn test_validate_rejects_subdir_for_library() {
+        let result = validate_backup_path("subdir/test.toml", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("flat filename"));
+    }
+
+    #[test]
+    fn test_validate_accepts_index_path() {
+        let result = validate_backup_path("libraries.toml", "index");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_wrong_index_path() {
+        let result = validate_backup_path("wrong-name.toml", "index");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be libraries.toml"));
+    }
+
+    #[test]
+    fn test_validate_accepts_usage_path() {
+        let result = validate_backup_path("usage.toml", "usage");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_wrong_usage_path() {
+        let result = validate_backup_path("my-usage.toml", "usage");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be usage.toml"));
+    }
+
+    #[test]
+    fn test_validate_accepts_sync_config_path() {
+        let result = validate_backup_path("sync.toml", "sync_config");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_wrong_sync_config_path() {
+        let result = validate_backup_path("sync-v2.toml", "sync_config");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be sync.toml"));
+    }
+
+    #[test]
+    fn test_validate_rejects_library_without_extension() {
+        let result = validate_backup_path("test", "library");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains(".toml extension"));
+    }
+
+    // === Transaction dry-run test (Workstream D) ===
+
+    #[test]
+    fn test_dry_run_performs_zero_writes() {
+        let tmp = TempDir::new().unwrap();
+        let backup_dir = tmp.path().join("dry-backup");
+        let libraries_dir = backup_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).unwrap();
+
+        let lib_content = r#"[[snippets]]
+id = "dry-id"
+description = "dry snippet"
+command = "echo dry"
+"#;
+        fs::write(libraries_dir.join("test.toml"), lib_content).unwrap();
+
+        let index = r#"[[libraries]]
+filename = "test"
+is_primary = true
+"#;
+        fs::write(backup_dir.join("libraries.toml"), index).unwrap();
+
+        let lib_hash = sha256_hex(fs::read(libraries_dir.join("test.toml")).unwrap());
+        let index_hash = sha256_hex(fs::read(backup_dir.join("libraries.toml")).unwrap());
+
+        let manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 1700000000000,
+            snip_it_version: "1.0.0".to_string(),
+            layout: "directory".to_string(),
+            files: vec![
+                BackupManifestEntry {
+                    path: "test.toml".to_string(),
+                    kind: "library".to_string(),
+                    size: lib_content.len() as u64,
+                    sha256: lib_hash,
+                },
+                BackupManifestEntry {
+                    path: "libraries.toml".to_string(),
+                    kind: "index".to_string(),
+                    size: index.len() as u64,
+                    sha256: index_hash,
+                },
+            ],
+        };
+        fs::write(
+            backup_dir.join("manifest.toml"),
+            toml::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let result = run(backup_dir, RestoreMode::DryRun, false);
+        assert!(result.is_ok());
+        // Dry run should not create any transaction journals
+        let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+        let journals = crate::transaction::check_interrupted_transactions(&state_dir).unwrap();
+        assert!(
+            journals.is_empty(),
+            "dry run must not create transaction journals"
+        );
+    }
+
+    fn sha256_hex(bytes: Vec<u8>) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let result = hasher.finalize();
+        result.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
