@@ -3,7 +3,6 @@ name: CI
 
 # Action pinning policy: all actions are pinned to full commit SHAs.
 # Dependabot is configured to auto-update weekly.
-name: CI
 
 "on":
   push:
