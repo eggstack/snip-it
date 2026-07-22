@@ -382,6 +382,16 @@ The worker spawns a child process (`snp auto-sync-execute`) instead of running s
 4. **Direction correctness:** The executor resolves the effective sync direction via `effective_sync_direction()`, which applies CLI flag overrides (`--push-only`, `--pull-only`) to the config setting. Detached sync uses the configured direction (no CLI override); foreground sync accepts explicit CLI overrides.
 5. **Standardized exit codes:** The executor exits with codes from `ExecutorExitCode` (0=success, 2=not configured, 3=auth, 4=network/timeout, 5=conflict, 6=local persistence, 7=internal).
 
+### Security Properties (Phase 09A)
+
+- Worker uses current_exe() for re-exec, passes only --state-dir (no secrets in argv)
+- Worker calls setsid() on Unix for full terminal detachment
+- Executor loads API key from keychain inside child process, not from parent
+- Worker-to-executor timeout: SIGTERM → 2s grace → SIGKILL
+- Executor creates no descendants during sync (gRPC client only)
+- Lock nonce prevents PID-reuse theft
+- Status messages sanitized: Bearer tokens, api_key patterns, URL credentials redacted
+
 ## Retry and Backoff
 
 The detached worker uses a **one-attempt-per-lifecycle** model: each worker invocation performs a single sync attempt, spawning an executor subprocess and supervising it with a timeout. However, failure outcomes are persisted as durable backoff state via `auto-sync-status.toml`, allowing the *next* scheduling decision to defer retry based on an exponential backoff schedule.

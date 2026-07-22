@@ -104,6 +104,18 @@ pub enum CryptoError {
 - Invalid base64, truncated payload
 - Tampered ciphertext/nonce/salt all detected
 
+## Security Audit (Phase 09A)
+
+- Argon2id V0x13, 16 MiB memory, 3 iterations, 4 parallelism, 32-byte output — meets OWASP minimum recommendations
+- Random 16-byte salt per encryption via OsRng (CSPRNG) — no salt reuse
+- Random 12-byte nonce per encryption via OsRng — birthday bound ~2^48 encryptions
+- AES-256-GCM with 16-byte authentication tag — tampering detected
+- No associated data (AAD) — ciphertext not bound to context (acceptable for current use)
+- Key cache: session-local, SHA-256 cache keys, 10K entry cap, half eviction with zeroize
+- DerivedKey: Zeroize + ZeroizeOnDrop, explicit drop(std::mem::take(&mut key)) after use
+- SyncSettings::drop() zeroizes API key; manual Debug impl prints [REDACTED]
+- Test vectors: round-trip, wrong key, tampered ciphertext/nonce/salt, empty/Unicode/large payloads
+
 ## Key Files
 
 - `src/encryption.rs` — Core encrypt/decrypt, key derivation, payload format, key cache

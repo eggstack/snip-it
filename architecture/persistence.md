@@ -514,6 +514,17 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 
 ---
 
+## Security Properties (Phase 09A)
+
+- All sensitive files created with 0o600 permissions
+- Config directory created with 0o700 permissions
+- Lock files use O_EXCL (create_new) for atomic acquisition
+- Lock ownership verified via nonce (pid-nanos-seq) to prevent PID reuse theft
+- Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
+- Transaction journals use UUID-based filenames and O_EXCL locks
+- Backup checksums: SHA-256 per file, verified before restore
+- Backup redaction: API keys stripped from sync.toml copies
+
 ## Key Files
 
 | File | Subject |

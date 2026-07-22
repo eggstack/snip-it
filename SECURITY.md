@@ -9,9 +9,68 @@
 | 1.1.x   | :white_check_mark: |
 | < 1.1   | :x:                |
 
+## Threat Model
+
+The full threat model is documented in
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). It covers asset
+classification, trust boundaries, attacker capabilities, and
+residual risk for the snp CLI, snip-sync server, and sync protocol.
+
+## Security Architecture
+
+### Snippet Execution
+
+Only `snp run` invokes a shell to execute a snippet's command field.
+All other commands — `snp list`, `snp search`, `snp clip`, `snp edit`,
+`snp sync`, `snp import`, `snp validate`, `snp backup`, `snp restore`,
+`snp repair`, `snp doctor`, `snp status`, `snp register`, `snp premade` —
+treat the command field as opaque data and never execute it.
+
+### Encryption
+
+Snippets are encrypted client-side before leaving the machine.
+
+- **Algorithm:** AES-256-GCM (authenticated encryption with
+  associated data).
+- **Key derivation:** Argon2id with 16 MiB memory cost, 3 iterations,
+  and 4 degrees of parallelism (OWASP-recommended parameters). The
+  encryption key is derived from the API key and a per-payload random
+  salt.
+
+### Credential Storage
+
+API keys are stored in the OS keychain (macOS Keychain, GNOME Keyring,
+Windows Credential Manager) by default. Plaintext storage in
+`sync.toml` is gated behind the `SNP_ALLOW_PLAINTEXT_API_KEY`
+environment variable. A runtime warning is emitted when the plaintext
+fallback is active.
+
+### File Permissions
+
+On Unix, `snp` creates its config directory with mode `0o700` and
+writes config, library, premade-library, and sync files with mode
+`0o600`. These limits protect local snippet data and the API key
+when the keychain is unavailable.
+
+### Process Isolation
+
+The auto-sync worker and executor run as detached processes. The
+executor is spawned as a separate process so that the worker's
+`SyncExecutionLock` is held for the duration of the sync cycle without
+blocking the parent CLI. No secrets are placed in process arguments;
+they are passed through file descriptors or environment variables only.
+
+### Supply Chain
+
+- `cargo-deny` checks for known security advisories and license
+  compliance on every CI run.
+- Locked `Cargo.lock` files ensure reproducible builds and prevent
+  silent dependency version changes.
+
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in snp, please report it responsibly:
+If you discover a security vulnerability in snp, please report it
+responsibly.
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
@@ -27,7 +86,8 @@ Include the following in your report:
 
 - **Acknowledgment:** Within 48 hours
 - **Initial assessment:** Within 1 week
-- **Fix or mitigation:** Critical issues within 2 weeks, others within 30 days
+- **Fix or mitigation:** Critical issues within 2 weeks, others within
+  30 days
 
 ## Security Considerations
 
@@ -37,6 +97,39 @@ Snippet commands are executed as-is via your shell. **Only add snippets
 you trust.** Avoid storing snippets that contain secrets (passwords,
 tokens, API keys) in plaintext TOML files; snippets are not encrypted
 at rest.
+
+### Non-Execution Guarantee
+
+Only `snp run` invokes a shell. The following commands never execute
+snippets:
+
+- `snp get`
+- `snp list`
+- `snp search`
+- `snp select`
+- `snp clip`
+- `snp sync`
+- `snp import`
+- `snp validate`
+- `snp backup`
+- `snp restore --dry-run`
+- `snp repair --dry-run`
+- `snp doctor`
+- `snp status`
+- `snp register`
+- `snp premade`
+
+When using exact selectors (`--id`, `--description-exact`,
+`--command-exact`), `snp run` bypasses the TUI and executes directly.
+This is a deterministic path for automation; the caller is responsible
+for verifying the target snippet.
+
+### Self-Update Verification
+
+Standalone self-update packages (direct download, not Homebrew or
+crates.io) include a SHA-256 checksum file. The updater verifies the
+checksum of the downloaded archive before extraction. If the checksum
+does not match, the update is refused and the error is logged.
 
 ### Sync Encryption
 
@@ -99,6 +192,28 @@ On Unix, `snp` creates its config directory with mode `0o700` and
 writes config, library, premade-library, and sync files with mode
 `0o600`. These limits help protect local snippet data and the API key
 when the keychain is unavailable.
+
+## Known Limitations
+
+- **CRC32 integrity checks** detect accidental corruption but do not
+  authenticate against a malicious local actor. A local attacker with
+  filesystem access can tamper with files without triggering integrity
+  failures.
+- **Restore from crafted backup archives** may be subject to path
+  traversal if the archive contains entries with `../` components.
+  This is a documented gap; restore only archives you trust.
+- **Self-update archive extraction** follows symlinks. A crafted
+  archive could use symlinks to write outside the target directory.
+  This is a documented gap.
+- **No mutual TLS / client certificate authentication.** The sync
+  protocol authenticates via API key bearer tokens only. Clients
+  without a valid API key are rejected, but additional client
+  certificate verification is not currently supported.
+
+## Security Audit
+
+For detailed audit findings and the methodology used, refer to
+[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md).
 
 ## Scope
 

@@ -186,6 +186,19 @@ allowed_origins = "https://example.com"
 
 All values can be overridden via environment variables.
 
+---
+
+## Security Properties (Phase 09A)
+
+- API keys stored as Argon2id hashes (16 MiB, 3 iterations, 4 parallelism)
+- API key lookup: 8-char prefix for indexed lookup, Argon2id verification
+- Plaintext key migration at startup for legacy databases
+- Rate limiting: 120 requests/minute per API key, in-memory with optional SQLite persistence
+- gRPC max message size: 4 MiB configurable
+- Snippet field length limits enforced server-side
+- Server generic error messages — no internal details exposed to clients
+- Metrics endpoint: HTTP basic auth with constant-time comparison
+
 ## Key Files
 
 - `snip-sync/src/main.rs` — Server entry, gRPC/HTTP setup, config loading

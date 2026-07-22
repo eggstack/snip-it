@@ -187,6 +187,7 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 - `SnipError` enum in `src/error.rs`, `SnipResult<T> = Result<T, SnipError>`
 - IO errors auto-convert via `From<io::Error>`
 - `CryptoError` auto-converts via `From<CryptoError>`
+- `SnipError` never carries credentials or API keys — error variants contain only operation names, paths, and upstream error messages
 
 ### Async (Tokio)
 - Global `RUNTIME: LazyLock<Runtime>` created lazily on first access
@@ -337,6 +338,37 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 cargo test --workspace --all-features
 ```
+
+## Phase 09A: Security, Release, and Program Closure
+
+Phase 09A completes the correctness program through threat-model review, secret and process audit, filesystem and protocol hardening, supply-chain and package verification, cross-platform release gates, and committed closure record.
+
+### Security Documentation
+
+The `docs/` directory now includes security-focused reference documents:
+
+| Document | Subject |
+|----------|---------|
+| `docs/THREAT_MODEL.md` | Threat model with trust boundaries, threat actors, and per-threat mitigations |
+| `docs/SECURITY_AUDIT.md` | Comprehensive audit of secrets, process spawning, filesystem, sync, crypto, execution safety, backup/restore, and self-update |
+| `docs/SUPPLY_CHAIN_POLICY.md` | Dependency, license, and supply-chain policy |
+| `docs/FUZZING_AND_PROPERTY_TESTS.md` | Fuzz and property test inventory and required targets |
+
+### Security Posture Summary
+
+- **Non-execution guarantee**: Only `snp run` invokes a shell. All other commands treat snippet commands as opaque data.
+- **Credential isolation**: API keys stored in OS keychain (preferred) or gated plaintext fallback. Zeroized on drop, redacted in Debug output.
+- **Encryption**: AES-256-GCM with Argon2id (16 MiB, 3 iterations, 4 parallelism). Random salt and nonce per encryption.
+- **Process boundaries**: Worker detached via setsid(). No secrets in argv. Executor is regular child with timeout + SIGTERM/SIGKILL.
+- **Filesystem hardening**: O_EXCL lock creation, nonce-based ownership, atomic writes, 0o600/0o700 permissions.
+- **Supply chain**: cargo-deny for advisories/licenses, locked builds, deny unknown registries.
+
+### Known Limitations
+
+- CRC32 detects accidental corruption but does not authenticate against a malicious local actor
+- Restore from crafted backup archives may be subject to path traversal (hardening documented in SECURITY_AUDIT.md)
+- Self-update archive extraction follows symlinks (hardening documented in SECURITY_AUDIT.md)
+- No mutual TLS / client certificate authentication
 
 ## Architecture Documentation
 

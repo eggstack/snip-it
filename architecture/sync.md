@@ -88,6 +88,15 @@ Merged snippets sorted by `updated_at` descending.
 - **Payload**: `EncryptedPayload { salt, nonce, ciphertext }`
 - `encrypt_snippet()` / `decrypt_snippet()` in `sync.rs`
 
+### Transport Security
+
+- **TLS required**: Client requires HTTPS for non-loopback server URLs
+- **Loopback exception**: `SNIP_SYNC_ALLOW_HTTP=true` permits plaintext HTTP for local development only
+- **Certificate validation**: System native roots via webpki-roots, hostname verification via domain_name()
+- **API key transport**: Bearer token in gRPC `authorization` metadata (over TLS), NOT in request body
+- **Size limits**: 4 MiB gRPC max message, 10K snippets max, per-field length limits (command: 1024, description: 1024, tags: 50, tag length: 100)
+- **Server error sanitization**: Generic "Internal error" messages, detailed errors logged server-side only
+
 ## Protocol Buffers (`snip-proto/`)
 
 Defines `SnippetSync` service:
