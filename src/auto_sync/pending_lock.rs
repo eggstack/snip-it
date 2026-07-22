@@ -161,7 +161,7 @@ fn process_alive(pid: u32) -> bool {
         if ok == 0 {
             return true;
         }
-        exit_code == STILL_ACTIVE
+        exit_code == STILL_ACTIVE as u32
     }
 }
 

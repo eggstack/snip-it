@@ -248,6 +248,40 @@ impl LibraryManager {
         })
     }
 
+    /// Creates a `LibraryManager` rooted at the given config directory.
+    ///
+    /// This is useful for tests that need an isolated config dir without
+    /// mutating process-wide environment variables.
+    #[cfg(test)]
+    pub fn with_config_dir(config_dir: PathBuf) -> SnipResult<Self> {
+        let libraries_dir = config_dir.join("libraries");
+        let premade_dir = config_dir.join("premade");
+        let config_path = config_dir.join("libraries.toml");
+
+        let config = if config_path.exists() {
+            let content = cached_read_toml(&config_path)?;
+            let content = fix_invalid_toml_escapes(&content);
+            match toml::from_str(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    let backup = config_path.with_extension("toml.corrupt");
+                    let _ = fs::copy(&config_path, &backup);
+                    tracing::warn!(error = %e, "Failed to parse config, using defaults");
+                    LibraryConfig::default()
+                }
+            }
+        } else {
+            LibraryConfig::default()
+        };
+
+        Ok(Self {
+            config_dir,
+            libraries_dir,
+            premade_dir,
+            config,
+        })
+    }
+
     /// Returns the default path to the legacy single-file snippets TOML.
     pub fn get_default_snippets_path() -> PathBuf {
         get_snippets_path()

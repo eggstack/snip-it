@@ -963,21 +963,15 @@ mod tests {
         meta.is_primary = true;
         write_libraries_toml(tmp.path(), &[meta.clone()]);
 
-        let orig_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        // SAFETY: Sequential test, no parallel env mutation.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xfg")) };
-        std::fs::create_dir_all(tmp.path().join("xfg/snp")).unwrap();
+        let config_dir = tmp.path().join("xfg/snp");
+        std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::copy(
             tmp.path().join("libraries.toml"),
-            tmp.path().join("xfg/snp/libraries.toml"),
+            config_dir.join("libraries.toml"),
         )
         .unwrap();
-        let mgr = LibraryManager::new().unwrap();
-        if let Some(v) = orig_xdg {
-            unsafe { std::env::set_var("XDG_CONFIG_HOME", v) };
-        } else {
-            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        }
+
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
 
         let mut report = ValidationReport::new(false);
         validate_index(&mut report, &mgr, false);
@@ -993,20 +987,13 @@ mod tests {
     #[test]
     fn test_validate_index_orphan_file() {
         let tmp = TempDir::new().unwrap();
-        let xfg = tmp.path().join("xfg/snp");
-        let libs_dir = xfg.join("libraries");
+        let config_dir = tmp.path().join("xfg/snp");
+        let libs_dir = config_dir.join("libraries");
         std::fs::create_dir_all(&libs_dir).unwrap();
         std::fs::write(libs_dir.join("orphan.toml"), "snippets = []\n").unwrap();
-        write_libraries_toml(&xfg, &[]);
+        write_libraries_toml(&config_dir, &[]);
 
-        let orig_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xfg")) };
-        let mgr = LibraryManager::new().unwrap();
-        if let Some(v) = orig_xdg {
-            unsafe { std::env::set_var("XDG_CONFIG_HOME", v) };
-        } else {
-            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        }
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
 
         let mut report = ValidationReport::new(false);
         validate_index(&mut report, &mgr, false);
@@ -1023,19 +1010,12 @@ mod tests {
     #[test]
     fn test_validate_no_primary() {
         let tmp = TempDir::new().unwrap();
-        let xfg = tmp.path().join("xfg/snp");
-        let libs_dir = xfg.join("libraries");
+        let config_dir = tmp.path().join("xfg/snp");
+        let libs_dir = config_dir.join("libraries");
         std::fs::create_dir_all(&libs_dir).unwrap();
-        write_libraries_toml(&xfg, &[LibraryMeta::new("lib1")]);
+        write_libraries_toml(&config_dir, &[LibraryMeta::new("lib1")]);
 
-        let orig_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xfg")) };
-        let mgr = LibraryManager::new().unwrap();
-        if let Some(v) = orig_xdg {
-            unsafe { std::env::set_var("XDG_CONFIG_HOME", v) };
-        } else {
-            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        }
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
 
         let mut report = ValidationReport::new(false);
         validate_index(&mut report, &mgr, false);

@@ -311,6 +311,7 @@ fn test_run_not_found_returns_exit_3() {
 }
 
 #[test]
+#[ignore] // Requires a display server (no clipboard on headless CI)
 fn test_clip_by_id_succeeds() {
     let (_tmp, config_dir) = setup_test_env();
     create_exact_test_library(&config_dir);
