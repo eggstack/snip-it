@@ -1,10 +1,7 @@
 ---
 name: CI
 
-# Action pinning policy: GitHub-blessed actions (checkout, upload-artifact,
-# download-artifact) are pinned to full commit SHAs. Third-party actions
-# (dtolnay/rust-toolchain, Swatinem/rust-cache, EmbarkStudios/cargo-deny-action,
-# codecov/codecov-action) use version tags with comments noting the version.
+# Action pinning policy: all actions are pinned to full commit SHAs.
 # Dependabot is configured to auto-update weekly.
 name: CI
 
@@ -56,7 +53,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run clippy
@@ -73,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -106,7 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run tests in release mode
@@ -122,7 +119,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -161,7 +158,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@1.94
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build MSRV
@@ -177,7 +174,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install cargo-llvm-cov
@@ -185,7 +182,7 @@ jobs:
       - name: Run coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload to Codecov
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67ab3f9f9f64e0e # v5.4.3
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
         with:
           files: lcov.info
           fail_ci_if_error: false
@@ -204,7 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build snip-proto to regenerate code
@@ -217,7 +214,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: EmbarkStudios/cargo-deny-action@098c688dc738ef6b6f10a5b41e7e26a45f80c073 # v2.0.2
+      - uses: EmbarkStudios/cargo-deny-action@f87fcad0e65efa7cbdec993036c394fa9be14262 # v2.0.2
         with:
           command: check
       - name: Audit snip-sync dependencies
@@ -238,7 +235,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run snip-sync tests
@@ -264,7 +261,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run architecture tests
@@ -280,7 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Check with features
@@ -293,7 +290,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Deterministic E2E
@@ -326,7 +323,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@295be5a51d26b7e0d3a3d29e2f1166ef288f8f91 # v2.4.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Package all crates
