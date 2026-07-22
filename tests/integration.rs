@@ -1120,6 +1120,9 @@ fn test_edit_without_config_exits_nonzero() {
     let mut cmd = snp_in(&config_dir);
     cmd.args(["edit"]);
     cmd.stdin(std::process::Stdio::null());
+    // Override EDITOR so that if snp finds a snippet and tries to open an
+    // editor, it exits immediately instead of hanging on stdin.
+    cmd.env("EDITOR", "true");
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);

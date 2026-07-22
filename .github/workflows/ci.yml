@@ -213,16 +213,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: EmbarkStudios/cargo-deny-action@f87fcad0e65efa7cbdec993036c394fa9be14262 # v2.0.2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
       - name: Audit snip-sync dependencies
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
           manifest-path: snip-sync/Cargo.toml
       - name: Audit snip-proto dependencies
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
           manifest-path: snip-proto/Cargo.toml
@@ -280,7 +280,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Check with features
-        run: cargo check --no-default-features --features ${{ matrix.features }}
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo check --no-default-features --features ${{ matrix.features }}
+          else
+            cargo check --no-default-features
+          fi
 
   lifecycle:
     name: Lifecycle Tests
