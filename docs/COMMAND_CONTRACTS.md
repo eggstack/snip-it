@@ -1,6 +1,6 @@
 # Command Contracts
 
-> Phase 08A — Workstream A
+> Phase 10 — Workstream A (corrective closure)
 > Single source of truth for every CLI command's behavioral contract.
 
 ---

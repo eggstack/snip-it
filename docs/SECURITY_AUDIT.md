@@ -1,4 +1,4 @@
-# Security Audit — Phase 09A
+# Security Audit — Phase 10
 
 **Date:** 2026-07-22
 **Scope:** snp client, snip-sync server (transport), auto-sync subsystem, encryption, backup/restore, self-update

@@ -278,3 +278,66 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Check with features
         run: cargo check --no-default-features --features ${{ matrix.features }}
+
+  lifecycle:
+    name: Lifecycle Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Deterministic E2E
+        run: cargo test --test deterministic_e2e --features test-support
+      - name: Process lifecycle
+        run: cargo test --test process_lifecycle --features test-support
+      - name: Debounce matrix
+        run: cargo test --test debounce_matrix --features test-support
+      - name: Mutual exclusion
+        run: cargo test --test mutual_exclusion --features test-support
+      - name: Restore security
+        run: cargo test --test restore_security
+      - name: Restore transactions
+        run: cargo test --test restore_transactions
+      - name: Backup contracts
+        run: cargo test --test backup_contracts
+      - name: Execution outcomes
+        run: cargo test --test execution_outcomes
+      - name: Update archive security
+        run: cargo test --test update_archive_security
+      - name: Read-only no recovery
+        run: cargo test --test readonly_no_recovery
+
+  package-build:
+    name: Package Build (from unpacked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Package all crates
+        run: |
+          cargo package -p snip-proto --allow-dirty
+          cargo package -p snip-sync --allow-dirty
+          cargo package -p snip-it --allow-dirty
+      - name: Unpack and build snip-it from package
+        run: |
+          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
+          UNPACK_DIR=$(mktemp -d)
+          unzip -o "$CRATE_FILE" -d "$UNPACK_DIR"
+          cd "$UNPACK_DIR"/snip-it-*
+          cargo build --release
+      - name: Smoke test installed binary
+        run: |
+          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
+          UNPACK_DIR=$(mktemp -d)
+          unzip -o "$CRATE_FILE" -d "$UNPACK_DIR"
+          cd "$UNPACK_DIR"/snip-it-*
+          cargo install --path . --locked
+          snp --version
+          snp --help > /dev/null

@@ -1,6 +1,6 @@
 # Exit Codes
 
-> Phase 08A — Workstream F extension
+> Phase 10 — Workstream F extension (corrective closure)
 > Stable public CLI exit codes for `snp`.
 
 ---
@@ -58,6 +58,18 @@ pub enum CliOutcome {
 Exit codes used by the auto-sync worker (`snp auto-sync-worker`) and executor (`snp auto-sync-execute`) subprocesses are internal. They are not part of the public CLI contract and may change without notice.
 
 Worker/executor codes are defined in `src/auto_sync/executor.rs` as `ExecutorExitCode` and mapped by the worker's exit-code translation layer.
+
+## Child Exit Code Propagation
+
+When `snp run` or exact `run` executes a child snippet process:
+
+1. If the child exits with a valid exit code (0–255), that code is propagated directly as the CLI exit code.
+2. If the child is killed by a signal (Unix), exit code 8 (`EXECUTION_FAILED`) is used.
+3. If the child process cannot be spawned, exit code 8 is used.
+4. If the child times out (via `SNP_COMMAND_TIMEOUT`), exit code 8 is used.
+5. Successful execution (child exit 0) records usage metadata; failed execution does not.
+
+This ensures scripts can distinguish between `snp` infrastructure failures (exit 1) and snippet execution failures (exit = child code or 8).
 
 ## Exit-Code Mapping in `main.rs`
 
