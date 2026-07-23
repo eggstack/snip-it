@@ -45,9 +45,25 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        uses: arduino/setup-protoc@v3
-        with:
-          version: '25.1'
+        shell: pwsh
+        run: |
+          $protocVersion = "25.1"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $extractDir = "$env:TEMP\protoc"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
+              break
+            } catch {
+              if ($i -eq 3) { throw }
+              Start-Sleep -Seconds 5
+            }
+          }
+          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+          $binDir = "$extractDir\bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          protoc --version
       - name: Run workspace tests (debug)
         run: cargo test --workspace --all-features
       - name: Run workspace tests (release)
@@ -69,9 +85,25 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        uses: arduino/setup-protoc@v3
-        with:
-          version: '25.1'
+        shell: pwsh
+        run: |
+          $protocVersion = "25.1"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $extractDir = "$env:TEMP\protoc"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
+              break
+            } catch {
+              if ($i -eq 3) { throw }
+              Start-Sleep -Seconds 5
+            }
+          }
+          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+          $binDir = "$extractDir\bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          protoc --version
       - name: Phase 05A deterministic E2E
         run: cargo test --test deterministic_e2e --features test-support
       - name: Phase 05A failure class contracts
@@ -105,9 +137,25 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        uses: arduino/setup-protoc@v3
-        with:
-          version: '25.1'
+        shell: pwsh
+        run: |
+          $protocVersion = "25.1"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $extractDir = "$env:TEMP\protoc"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
+              break
+            } catch {
+              if ($i -eq 3) { throw }
+              Start-Sleep -Seconds 5
+            }
+          }
+          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+          $binDir = "$extractDir\bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          protoc --version
       - name: Transaction crash recovery
         run: cargo test --test transaction_crash_recovery --features test-support
       - name: Restore security
@@ -143,9 +191,25 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        uses: arduino/setup-protoc@v3
-        with:
-          version: '25.1'
+        shell: pwsh
+        run: |
+          $protocVersion = "25.1"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $extractDir = "$env:TEMP\protoc"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
+              break
+            } catch {
+              if ($i -eq 3) { throw }
+              Start-Sleep -Seconds 5
+            }
+          }
+          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+          $binDir = "$extractDir\bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          protoc --version
       - name: Update archive security
         run: cargo test --test update_archive_security --features test-support
 
@@ -207,9 +271,25 @@ jobs:
         run: brew install protobuf
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        uses: arduino/setup-protoc@v3
-        with:
-          version: '25.1'
+        shell: pwsh
+        run: |
+          $protocVersion = "25.1"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $extractDir = "$env:TEMP\protoc"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
+              break
+            } catch {
+              if ($i -eq 3) { throw }
+              Start-Sleep -Seconds 5
+            }
+          }
+          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+          $binDir = "$extractDir\bin"
+          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          protoc --version
       - name: Package and install
         run: |
           cargo package -p snip-it --locked --allow-dirty

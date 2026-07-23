@@ -14,6 +14,7 @@ fn test_worker_nothing_to_do_without_pending() {
     assert_eq!(outcome, WorkerOutcome::NothingToDo);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_terminate_child_reap() {
     let mut child = std::process::Command::new("sleep")
@@ -27,6 +28,7 @@ fn test_terminate_child_reap() {
     assert!(!status.success());
 }
 
+#[cfg(unix)]
 #[test]
 fn test_force_kill_child_reap() {
     let mut child = std::process::Command::new("sleep")
@@ -80,6 +82,7 @@ fn test_child_timeout_returns_none() {
         }
     };
     assert!(result.is_none());
+    #[cfg(unix)]
     unsafe {
         libc::kill(child.id() as i32, libc::SIGKILL);
     }
@@ -130,6 +133,7 @@ fn test_executor_exit_code_all_values_roundtrip() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_executor_exit_code_signal_death_maps_to_internal() {
     let mut child = std::process::Command::new("sleep")
