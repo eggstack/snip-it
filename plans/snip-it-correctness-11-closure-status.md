@@ -11,7 +11,7 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 
 ## Test Evidence
 
-- **Total tests**: 2220 passed, 0 failed, 8 ignored (47 suites)
+- **Total tests**: 2231 passed, 0 failed, 8 ignored (47 suites)
 - **Clippy**: clean (no warnings)
 - **Fmt**: clean (no diffs)
 - **Update archive security tests**: 31 passed (17 tar/URL + 14 ZIP crafted)
@@ -20,11 +20,12 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 
 | Suite | Tests | Status |
 |-------|-------|--------|
-| transaction_crash_recovery | 22 | All pass |
+| transaction_crash_recovery | 26 | All pass (4 new: wrong nonce, malformed lock, dry-run artifacts, rollback no-pending) |
 | backup_snapshot_concurrency | 17 | All pass |
-| manifest_contracts | 25 | All pass |
-| execution_outcomes | 22 | All pass (3 new: timeout, spawn, no-leak) |
+| manifest_contracts | 30 | All pass (5 new: drive-relative, UNC, duplicate IDs, unknown kind replace mode) |
+| execution_outcomes | 25 | All pass (3 new: signal termination, duplicate descriptions, duplicate IDs) |
 | deterministic_e2e | 13 | All pass (device_id fix applied) |
+| readonly_no_recovery | 30 | All pass (strengthened: pending marker G, status S0, no worker, no generation change) |
 
 ### Modified Test Suites
 
@@ -60,13 +61,14 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 - `src/transaction.rs` — rollback_transaction: durably advances progress, restartable
 - `src/transaction.rs` — check_interrupted_transactions: detects BackupsDurable, Committing, RollingBack
 - `src/transaction.rs` — TransactionState::is_interruptible() method
-- `tests/transaction_crash_recovery.rs` — 22 tests for interrupted detection, lock metadata, stale reclaim
+- `tests/transaction_crash_recovery.rs` — 26 tests for interrupted detection, lock metadata, stale reclaim, dry-run artifacts, rollback no-pending
 
 ### Workstream E — Transaction lock ownership
 - `src/transaction.rs` — TransactionLockInfo: schema_version, pid, nonce, created_at_unix_ms, operation
 - `src/transaction.rs` — acquire_transaction_lock: writes TOML lock record, stale detection via PID liveness
 - `src/transaction.rs` — TransactionLock::drop: nonce-verified removal
 - `src/transaction.rs` — is_process_alive: Unix (libc::kill signal 0), Windows (GetExitCodeProcess)
+- `tests/transaction_crash_recovery.rs` — wrong nonce cannot remove lock, malformed lock not deleted
 
 ### Workstream F — Coherent backup generation
 - `src/library.rs` — LibraryConfig.generation field, bump_generation() on mutations
@@ -78,16 +80,18 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 ### Workstream G — Typed manifest and restore contracts
 - `src/commands/backup_cmd.rs` — BackupEntryKind enum (Library, Index, Usage, SyncConfig)
 - `src/commands/backup_cmd.rs` — BackupRelativePath validation (traversal, reserved names, control chars)
+- `src/commands/backup_cmd.rs` — Removed `--include-config` flag and `config` manifest entries (no safe round-trip exists)
 - `src/commands/restore_cmd.rs` — Schema version validation (reject 0 and future)
 - `src/commands/restore_cmd.rs` — Duplicate destination detection
-- `tests/manifest_contracts.rs` — 15 tests for schema, kinds, paths, duplicates, collisions
+- `src/commands/restore_cmd.rs` — Unknown entry kind now errors instead of writing to arbitrary path
+- `tests/manifest_contracts.rs` — 30 tests for schema, kinds, paths, duplicates, collisions, Windows paths, duplicate snippet IDs
 
 ### Workstream H — Execution outcome semantics
 - `src/lib.rs` — CommandOutcome::ExecutionFailed { child_code }
 - `src/commands/run_cmd.rs` — run/run_exact return CommandOutcome (no direct process::exit)
 - `src/commands/run_cmd.rs` — Timeout/spawn failures mapped to ProcessResult::Failed { exit_code: None }
 - `src/main.rs` — ExecutionFailed mapped to exit code child_code.unwrap_or(8)
-- `tests/execution_outcomes.rs` — 3 new tests: real timeout (code 8), invalid shell (code 8), no raw leak
+- `tests/execution_outcomes.rs` — 25 tests including signal termination (Unix), duplicate descriptions/IDs
 
 ### Workstream I — Update extraction hardening
 - `src/update.rs` — ZIP crate for native extraction with entry validation (cross-platform, no PowerShell)
@@ -130,11 +134,17 @@ The deterministic_e2e headline test passes in isolation (13/13 pass) but occasio
 | Closure status file exists | ✅ Complete |
 | Operation-aware recovery classification | ✅ Complete |
 | Headline E2E requires real server effect | ✅ Complete — snippet device_id stamped from sync settings, server count=1 |
+| No-op executor mode fails headline E2E | ✅ Complete — test_noop_executor_leaves_server_count_at_zero |
+| Read-only tests: pending marker G unchanged | ✅ Complete — run_read_only_command_and_verify helper |
+| Read-only tests: status S0 unchanged | ✅ Complete — run_read_only_command_and_verify helper |
+| Read-only tests: no worker/executor events | ✅ Complete — assert_no_worker_spawned |
 | Transaction crash-completeness | ✅ Complete (enriched states, durable progress) |
-| Transaction lock ownership | ✅ Complete (PID/nonce/TOML, stale detection) |
+| Transaction lock ownership | ✅ Complete (PID/nonce/TOML, stale detection, nonce-verified removal) |
 | Coherent backup generation | ✅ Complete (generation counter, atomic staging) |
-| Typed manifest contracts | ✅ Complete (enum, validation, duplicates) |
-| Execution outcome semantics | ✅ Complete (timeout/spawn → code 8) |
+| Typed manifest contracts | ✅ Complete (enum, validation, duplicates, Windows paths) |
+| General config round-trip | ✅ Complete — `--include-config` removed, unknown kinds error |
+| Duplicate snippet IDs | ✅ Complete — tested in manifest_contracts.rs |
+| Execution outcome semantics | ✅ Complete (timeout/spawn/signal → code 8) |
 | Update extraction hardening | ✅ Complete (ZIP, tar bounds, URL validation) |
 | CI/package evidence | ✅ Workflow defined, local checks pass |
 | Documentation reconciled | ✅ Updated (persistence, auto_sync, AGENTS) |

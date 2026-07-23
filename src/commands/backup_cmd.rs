@@ -5,7 +5,6 @@
 use crate::error::{SnipError, SnipResult};
 use crate::utils::config::get_config_dir;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -328,7 +327,6 @@ pub struct BackupManifest {
 pub fn run(
     output: Option<PathBuf>,
     include_usage: bool,
-    include_config: bool,
     include_sync_state: bool,
     format: BackupFormat,
     json: bool,
@@ -411,51 +409,6 @@ pub fn run(
         }
     } else {
         None
-    };
-    let config_snapshot: Vec<(PathBuf, String, Vec<u8>)> = if include_config {
-        let handled_files: HashSet<&str> = [
-            "libraries.toml",
-            "usage.toml",
-            "sync.toml",
-            "themes.toml",
-            "auto-sync-status.toml",
-        ]
-        .into_iter()
-        .collect();
-        let excluded_dirs: HashSet<&str> = [
-            "libraries",
-            "premade",
-            "themes",
-            "backups",
-            "transaction-journals",
-        ]
-        .into_iter()
-        .collect();
-        let mut result = Vec::new();
-        if let Ok(entries) = fs::read_dir(&config_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if excluded_dirs.contains(name.as_str())
-                    || name.starts_with('.')
-                    || name.starts_with("manifest.")
-                    || handled_files.contains(name.as_str())
-                {
-                    continue;
-                }
-                if !name.ends_with(".toml") {
-                    continue;
-                }
-                let src = entry.path();
-                if src.is_file() {
-                    validate_canonical_containment(&src, &canonical_config, &name)?;
-                    let bytes = read_for_snapshot(&src, &name)?;
-                    result.push((src, name, bytes));
-                }
-            }
-        }
-        result
-    } else {
-        Vec::new()
     };
     let generation_after = read_library_generation(&config_dir)?;
     if generation_before != generation_after {
@@ -541,16 +494,6 @@ pub fn run(
             "sync_config".to_string(),
             redacted_bytes,
         ));
-    }
-    for (_src, name, bytes) in &config_snapshot {
-        let sha = sha256_hex(bytes);
-        manifest.files.push(BackupManifestEntry {
-            path: name.clone(),
-            kind: "config".to_string(),
-            size: bytes.len() as u64,
-            sha256: sha,
-        });
-        backup_files.push((name.clone(), "config".to_string(), bytes.clone()));
     }
     manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
     let file_refs: Vec<(&str, &str, &[u8])> = backup_files

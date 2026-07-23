@@ -554,7 +554,15 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             "index" => config_dir.join("libraries.toml"),
             "usage" => config_dir.join("usage.toml"),
             "sync_config" => config_dir.join("sync.toml"),
-            _ => config_dir.join(&entry.path),
+            other => {
+                return Err(SnipError::runtime_error(
+                    "Unknown manifest entry kind",
+                    Some(&format!(
+                        "Kind '{other}' for path '{}' is not a recognized restore target",
+                        entry.path
+                    )),
+                ));
+            }
         };
         affected_files.push(dst);
     }

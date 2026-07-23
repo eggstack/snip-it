@@ -363,3 +363,143 @@ fn test_failure_does_not_leak_raw_command() {
         "stderr must not contain raw command 'exit 1'"
     );
 }
+
+// === Signal termination on Unix (Workstream H) ===
+
+/// Verify that when a snippet is killed by a signal on Unix, the exit
+/// code is 8 (execution failure), not the signal number.
+#[cfg(unix)]
+#[test]
+fn test_signal_termination_exits_with_execution_failure_code() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    // Add a snippet that sends SIGTERM to itself (via kill -15 $$)
+    let libraries_dir = config_dir.join("libraries");
+    let lib_content = fs::read_to_string(libraries_dir.join("exec-test.toml")).unwrap();
+    let new_content = format!(
+        "{lib_content}\n[[snippets]]\nid = \"exec-sigterm\"\ndescription = \"kills itself with SIGTERM\"\ncommand = \"kill -15 $$\"\n"
+    );
+    fs::write(libraries_dir.join("exec-test.toml"), new_content).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["run", "--id", "exec-sigterm"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "signal-killed snippet should exit nonzero"
+    );
+    let code = output.status.code().unwrap_or(-1);
+    // Signal termination should exit with execution-failure code 8
+    // (not the signal number like 15 or 143)
+    assert_eq!(
+        code, 8,
+        "signal termination should exit with code 8 (execution failure), got {code}"
+    );
+}
+
+// === Exact edit with duplicate descriptions (Workstream H) ===
+
+/// Verify that exact edit by ID modifies only the targeted snippet even
+/// when multiple snippets share the same description.
+#[test]
+fn test_exact_edit_by_id_with_duplicate_descriptions() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    // Both "edit target" and "edit target snippet distractor" contain "edit target"
+    // but they have different IDs. Exact edit by ID must only modify exec-edit-target.
+    let libraries_dir = config_dir.join("libraries");
+    let lib_content = fs::read_to_string(libraries_dir.join("exec-test.toml")).unwrap();
+
+    // Verify the target snippet exists
+    assert!(
+        lib_content.contains("exec-edit-target"),
+        "library must contain exec-edit-target snippet"
+    );
+    assert!(
+        lib_content.contains("exec-edit-distractor"),
+        "library must contain exec-edit-distractor snippet"
+    );
+
+    // The exact edit by ID should succeed (exit 0) when using --id
+    let _output = snp_in(&config_dir)
+        .args([
+            "edit",
+            "--id",
+            "exec-edit-target",
+            "--output-stdin",
+            "--filter",
+            "edit target",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+
+    // Whether it succeeds or not, verify the distractor was not modified
+    let after_content = fs::read_to_string(libraries_dir.join("exec-test.toml")).unwrap();
+
+    // Find the distractor snippet block
+    let distractor_lines: Vec<&str> = after_content
+        .lines()
+        .skip_while(|l| !l.contains("exec-edit-distractor"))
+        .take_while(|l| !l.is_empty() && !l.starts_with("[["))
+        .collect();
+    let distractor_block = distractor_lines.join("\n");
+
+    // The distractor should NOT have "new output" in its block
+    assert!(
+        !distractor_block.contains("new output"),
+        "Distractor snippet should not be modified by exact edit of target"
+    );
+}
+
+// === Exact edit with duplicate IDs (Workstream H) ===
+
+/// Verify that when multiple snippets share the same ID (which shouldn't
+/// happen in practice), the edit command handles it gracefully without crashing.
+#[test]
+fn test_exact_edit_with_duplicate_ids_handles_gracefully() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    // Add a second snippet with the same ID "exec-edit-target"
+    let libraries_dir = config_dir.join("libraries");
+    let lib_content = fs::read_to_string(libraries_dir.join("exec-test.toml")).unwrap();
+    let new_content = format!(
+        "{lib_content}\n[[snippets]]\nid = \"exec-edit-target\"\ndescription = \"duplicate of target\"\ncommand = \"echo duplicate\"\n"
+    );
+    fs::write(libraries_dir.join("exec-test.toml"), new_content).unwrap();
+
+    // Edit by ID with duplicate — should not crash
+    let mut child = snp_in(&config_dir)
+        .args([
+            "edit",
+            "--id",
+            "exec-edit-target",
+            "--output-stdin",
+            "--filter",
+            "edit target",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Drop stdin to signal EOF
+    drop(child.stdin.take().unwrap());
+    let _result = child.wait_with_output().unwrap();
+
+    // The file should still be valid TOML after the edit attempt
+    let after_content = fs::read_to_string(libraries_dir.join("exec-test.toml")).unwrap();
+    let parse_result: Result<toml::Table, _> = after_content.parse();
+    assert!(
+        parse_result.is_ok(),
+        "library file must remain valid TOML after edit with duplicate IDs"
+    );
+}

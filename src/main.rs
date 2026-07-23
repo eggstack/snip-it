@@ -392,9 +392,7 @@ enum Commands {
         /// Include usage metadata in backup
         #[arg(long)]
         include_usage: bool,
-        /// Include general config files in backup (themes, etc.)
-        #[arg(long)]
-        include_config: bool,
+
         /// Include sync.toml in backup (API key redacted)
         #[arg(long)]
         include_sync_state: bool,
@@ -1132,19 +1130,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Backup {
             output,
             include_usage,
-            include_config,
             include_sync_state,
             format,
             json,
         }) => {
-            commands::backup_cmd::run(
-                output,
-                include_usage,
-                include_config,
-                include_sync_state,
-                format,
-                json,
-            )?;
+            commands::backup_cmd::run(output, include_usage, include_sync_state, format, json)?;
         }
         Some(Commands::Restore { backup, mode, json }) => {
             commands::restore_cmd::run(backup, mode, json)?;
