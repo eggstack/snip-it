@@ -339,8 +339,14 @@ auto_sync = false
     let state_dir = config_dir.join(".transaction");
     fs::create_dir_all(&state_dir).unwrap();
 
-    // Create a lock file to simulate an active transaction
-    fs::write(state_dir.join("transaction.lock"), "held").unwrap();
+    // Create a lock file to simulate an active transaction.
+    // Must be valid TOML matching TransactionLockInfo; a malformed lock
+    // is treated as stale and reclaimed by acquire_transaction_lock.
+    let lock_info = format!(
+        "schema_version = 1\npid = {}\nnonce = \"test-nonce\"\ncreated_at_unix_ms = 0\noperation = \"test\"\n",
+        std::process::id()
+    );
+    fs::write(state_dir.join("transaction.lock"), &lock_info).unwrap();
 
     let backup_dir = make_backup(tmp.path());
 
