@@ -31,6 +31,7 @@ jobs:
 
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -62,6 +63,7 @@ jobs:
           }
           Expand-Archive -Path $zip -DestinationPath $extractDir -Force
           $binDir = "$extractDir\bin"
+          $env:PATH = "$binDir;$env:PATH"
           echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           protoc --version
       - name: Run workspace tests (debug)
@@ -71,6 +73,7 @@ jobs:
 
   lifecycle:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -102,6 +105,7 @@ jobs:
           }
           Expand-Archive -Path $zip -DestinationPath $extractDir -Force
           $binDir = "$extractDir\bin"
+          $env:PATH = "$binDir;$env:PATH"
           echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           protoc --version
       - name: Phase 05A deterministic E2E
@@ -123,6 +127,7 @@ jobs:
 
   crash_recovery:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -154,6 +159,7 @@ jobs:
           }
           Expand-Archive -Path $zip -DestinationPath $extractDir -Force
           $binDir = "$extractDir\bin"
+          $env:PATH = "$binDir;$env:PATH"
           echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           protoc --version
       - name: Transaction crash recovery
@@ -177,6 +183,7 @@ jobs:
 
   update_security:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -208,6 +215,7 @@ jobs:
           }
           Expand-Archive -Path $zip -DestinationPath $extractDir -Force
           $binDir = "$extractDir\bin"
+          $env:PATH = "$binDir;$env:PATH"
           echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           protoc --version
       - name: Update archive security
@@ -257,6 +265,7 @@ jobs:
 
   package_smoke:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -288,6 +297,7 @@ jobs:
           }
           Expand-Archive -Path $zip -DestinationPath $extractDir -Force
           $binDir = "$extractDir\bin"
+          $env:PATH = "$binDir;$env:PATH"
           echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           protoc --version
       - name: Package and install
