@@ -352,6 +352,11 @@ fn serialize_api_key<S: serde::Serializer>(
     if api_key == KEYCHAIN_MARKER {
         return serializer.serialize_str(KEYCHAIN_MARKER);
     }
+    // Test-only credential file: skip keychain, write plaintext directly.
+    // This ensures the credential file and sync.toml stay in sync.
+    if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
+        return serializer.serialize_str(api_key);
+    }
     // Server URL is not available during serialization, so we use the default user
     match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
@@ -380,6 +385,30 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
 ) -> Result<String, D::Error> {
     let raw: String = Deserialize::deserialize(deserializer)?;
     if raw == KEYCHAIN_MARKER {
+        // Test-only credential file: read the actual key from the file.
+        // This bypasses the keychain entirely, ensuring deterministic
+        // credential availability for parent, worker, and executor.
+        if let Some(cred_path) = std::env::var_os("SNP_TEST_CREDENTIAL_FILE") {
+            match std::fs::read_to_string(&cred_path) {
+                Ok(key) => {
+                    let key = key.trim().to_string();
+                    if !key.is_empty() {
+                        return Ok(key);
+                    }
+                    tracing::warn!(
+                        "SNP_TEST_CREDENTIAL_FILE exists but is empty: {}",
+                        cred_path.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read SNP_TEST_CREDENTIAL_FILE {}: {}",
+                        cred_path.display(),
+                        e
+                    );
+                }
+            }
+        }
         if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
             tracing::warn!(
                 "sync.toml stores API key as `@keychain` marker but plaintext mode is enabled; \
@@ -431,6 +460,11 @@ fn migrate_plaintext_api_key<FStore, FSave>(
     FSave: FnOnce(&SyncSettings) -> SnipResult<()>,
 {
     if settings.api_key.is_empty() || settings.api_key == KEYCHAIN_MARKER {
+        return;
+    }
+    // Skip migration when using test credential file — the file is the
+    // authoritative source and migrating to keychain would overwrite it.
+    if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return;
     }
 

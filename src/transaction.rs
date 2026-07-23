@@ -12,8 +12,22 @@
 
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Action intended for a staged file within a transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StagedAction {
+    /// File existed before the transaction; will be replaced.
+    Replace,
+    /// File did not exist; will be created.
+    Create,
+    /// File existed and will be deleted.
+    Delete,
+    /// No change needed (identical content in merge mode).
+    NoOp,
+}
 
 /// Transaction state persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,6 +55,22 @@ pub struct StagedFile {
     pub staged_path: PathBuf,
     /// SHA-256 hex digest of the staged content for integrity verification.
     pub sha256: String,
+    /// Whether the original file existed before the transaction.
+    #[serde(default)]
+    pub existed_before: bool,
+    /// Intended action for this file.
+    #[serde(default = "default_action")]
+    pub action: StagedAction,
+    /// SHA-256 hex digest of the original file content (empty if did not exist).
+    #[serde(default)]
+    pub original_hash: String,
+    /// SHA-256 hex digest of the new file content (empty if deleting).
+    #[serde(default)]
+    pub new_hash: String,
+}
+
+fn default_action() -> StagedAction {
+    StagedAction::Replace
 }
 
 /// State machine for a transaction.
@@ -48,38 +78,129 @@ pub struct StagedFile {
 pub enum TransactionState {
     /// Transaction is prepared; backups taken, staged files ready.
     Prepared,
+    /// All backup files are durably written to disk.
+    BackupsDurable,
+    /// Live replacement is in progress; tracks which file index is next.
+    Committing {
+        /// Index of the next file to replace atomically.
+        next_index: usize,
+    },
     /// Transaction has been committed; staged files are in place.
     Committed,
+    /// Rollback is in progress; tracks which file index is being restored.
+    RollingBack {
+        /// Index of the next backup to restore.
+        next_index: usize,
+    },
     /// Transaction was rolled back; backups restored.
     RolledBack,
     /// Transaction failed with an error message.
     Failed(String),
 }
 
+impl TransactionState {
+    /// Returns true if this state represents an interrupted (non-terminal) transaction.
+    ///
+    /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`, and
+    /// `RollingBack`. Terminal states (`Committed`, `RolledBack`, `Failed`) are
+    /// not interruptible.
+    pub fn is_interruptible(&self) -> bool {
+        matches!(
+            self,
+            TransactionState::Prepared
+                | TransactionState::BackupsDurable
+                | TransactionState::Committing { .. }
+                | TransactionState::RollingBack { .. }
+        )
+    }
+}
+
+/// Transaction lock record persisted inside the lock file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionLockInfo {
+    /// Schema version for forward compatibility.
+    pub schema_version: u32,
+    /// Process ID of the lock owner.
+    pub pid: u32,
+    /// Random nonce to prevent PID-reuse lock theft.
+    pub nonce: String,
+    /// Unix timestamp (ms) when the lock was created.
+    pub created_at_unix_ms: i64,
+    /// Human-readable operation name.
+    pub operation: String,
+}
+
 /// Transaction lock guard.
 ///
 /// Holds an exclusive lock on the transaction directory. Automatically
-/// releases the lock when dropped.
+/// releases the lock when dropped. The lock record contains PID and nonce
+/// for ownership verification and stale-lock detection.
 #[derive(Debug)]
 pub struct TransactionLock {
     lock_path: PathBuf,
+    info: TransactionLockInfo,
 }
 
 impl Drop for TransactionLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.lock_path);
+        // Only remove if we still own the lock (verify nonce).
+        if let Ok(content) = fs::read_to_string(&self.lock_path)
+            && let Ok(existing) = toml::from_str::<TransactionLockInfo>(&content)
+            && existing.nonce == self.info.nonce
+        {
+            let _ = fs::remove_file(&self.lock_path);
+        }
+    }
+}
+
+/// Check whether a process with the given PID is alive.
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // Signal 0 checks existence without sending a signal.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn is_process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let success = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        success != 0 && exit_code == STILL_ACTIVE
     }
 }
 
 /// Acquire a local mutation transaction lock.
 ///
 /// Uses an atomic file-create to ensure only one transaction can proceed
-/// at a time. Returns an error if the lock is already held.
-pub fn acquire_transaction_lock(state_dir: &Path) -> SnipResult<TransactionLock> {
+/// at a time. If an existing lock is found, checks whether the owner is
+/// alive. Dead owners are reclaimed. Returns an error if the lock is held
+/// by a live process.
+pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult<TransactionLock> {
     fs::create_dir_all(state_dir)
         .map_err(|e| SnipError::io_error("create state directory", state_dir, e))?;
 
     let lock_path = state_dir.join("transaction.lock");
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let pid = std::process::id();
+
+    let info = TransactionLockInfo {
+        schema_version: 1,
+        pid,
+        nonce: nonce.clone(),
+        created_at_unix_ms: now_ms,
+        operation: operation.to_string(),
+    };
 
     // Atomic lock acquisition: create_new fails if the file already exists.
     match fs::OpenOptions::new()
@@ -87,13 +208,69 @@ pub fn acquire_transaction_lock(state_dir: &Path) -> SnipResult<TransactionLock>
         .create_new(true)
         .open(&lock_path)
     {
-        Ok(_file) => Ok(TransactionLock { lock_path }),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(SnipError::runtime_error(
-            "Transaction lock held",
-            Some(
-                "Another transaction is in progress. Wait for it to complete or remove the lock file manually.",
-            ),
-        )),
+        Ok(_file) => {
+            // Write lock record
+            let content = toml::to_string_pretty(&info)
+                .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
+            fs::write(&lock_path, &content)
+                .map_err(|e| SnipError::io_error("write lock record", lock_path.clone(), e))?;
+            Ok(TransactionLock { lock_path, info })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Lock exists — check if owner is alive.
+            let content = fs::read_to_string(&lock_path)
+                .map_err(|e| SnipError::io_error("read existing lock", lock_path.clone(), e))?;
+            match toml::from_str::<TransactionLockInfo>(&content) {
+                Ok(existing) if is_process_alive(existing.pid) => Err(SnipError::runtime_error(
+                    "Transaction lock held",
+                    Some(&format!(
+                        "Another transaction ({}) is in progress (PID {}). Wait for it to complete.",
+                        existing.operation, existing.pid
+                    )),
+                )),
+                Ok(existing) => {
+                    // Dead owner — reclaim.
+                    tracing::info!(
+                        pid = existing.pid,
+                        operation = %existing.operation,
+                        "Reclaiming stale transaction lock (owner process is dead)"
+                    );
+                    fs::remove_file(&lock_path).map_err(|e| {
+                        SnipError::io_error("remove stale lock", lock_path.clone(), e)
+                    })?;
+                    // Retry acquisition.
+                    fs::write(
+                        &lock_path,
+                        toml::to_string_pretty(&info)
+                            .map_err(|e| SnipError::toml_error("serialize lock info", e))?,
+                    )
+                    .map_err(|e| {
+                        SnipError::io_error("write lock record after reclaim", lock_path.clone(), e)
+                    })?;
+                    Ok(TransactionLock { lock_path, info })
+                }
+                Err(_) => {
+                    // Malformed lock — treat as stale and reclaim.
+                    tracing::warn!("Malformed transaction lock record, reclaiming");
+                    fs::remove_file(&lock_path).map_err(|e| {
+                        SnipError::io_error("remove malformed lock", lock_path.clone(), e)
+                    })?;
+                    fs::write(
+                        &lock_path,
+                        toml::to_string_pretty(&info)
+                            .map_err(|e| SnipError::toml_error("serialize lock info", e))?,
+                    )
+                    .map_err(|e| {
+                        SnipError::io_error(
+                            "write lock record after malformed reclaim",
+                            lock_path.clone(),
+                            e,
+                        )
+                    })?;
+                    Ok(TransactionLock { lock_path, info })
+                }
+            }
+        }
         Err(e) => Err(SnipError::io_error(
             "acquire transaction lock",
             lock_path,
@@ -116,29 +293,100 @@ pub fn begin_transaction(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    let journal = TransactionJournal {
-        id: uuid::Uuid::new_v4().to_string(),
-        operation: operation.to_string(),
-        created_at_unix_ms: now_ms,
-        staged_files: affected_files
-            .iter()
-            .map(|p| StagedFile {
+    let staged_files = affected_files
+        .iter()
+        .map(|p| {
+            let existed = p.exists();
+            let original_hash = if existed {
+                fs::read(p)
+                    .map(|bytes| {
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(&bytes);
+                        hasher
+                            .finalize()
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            StagedFile {
                 original_path: p.clone(),
                 backup_path: None,
                 staged_path: p.clone(),
                 sha256: String::new(),
-            })
-            .collect(),
+                existed_before: existed,
+                action: if existed {
+                    StagedAction::Replace
+                } else {
+                    StagedAction::Create
+                },
+                original_hash,
+                new_hash: String::new(),
+            }
+        })
+        .collect();
+
+    let journal = TransactionJournal {
+        id: uuid::Uuid::new_v4().to_string(),
+        operation: operation.to_string(),
+        created_at_unix_ms: now_ms,
+        staged_files,
         state: TransactionState::Prepared,
     };
 
-    let journal_path = journal_path(state_dir, &journal.id);
+    let jpath = journal_path(state_dir, &journal.id);
     let content = toml::to_string_pretty(&journal)
         .map_err(|e| SnipError::toml_error("serialize transaction journal", e))?;
 
-    crate::utils::atomic::write_private_atomic(&journal_path, &content, "txn")?;
+    crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")?;
 
     Ok(journal)
+}
+
+/// Persist a state transition for the journal atomically.
+fn persist_journal(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
+    let jpath = journal_path(state_dir, &journal.id);
+    let content = toml::to_string_pretty(journal)
+        .map_err(|e| SnipError::toml_error("serialize transaction journal", e))?;
+    crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")
+}
+
+/// Advance the journal to `BackupsDurable`.
+///
+/// Call after all backup files have been durably written to disk, before
+/// any live replacement begins.
+#[allow(dead_code)]
+pub fn advance_to_backups_durable(
+    state_dir: &Path,
+    journal: &mut TransactionJournal,
+) -> SnipResult<()> {
+    journal.state = TransactionState::BackupsDurable;
+    persist_journal(state_dir, journal)
+}
+
+/// Advance the journal to `Committing { next_index }`.
+#[allow(dead_code)]
+pub fn advance_to_committing(
+    state_dir: &Path,
+    journal: &mut TransactionJournal,
+    next_index: usize,
+) -> SnipResult<()> {
+    journal.state = TransactionState::Committing { next_index };
+    persist_journal(state_dir, journal)
+}
+
+/// Advance the journal to `RollingBack { next_index }`.
+#[allow(dead_code)]
+pub fn advance_to_rolling_back(
+    state_dir: &Path,
+    journal: &mut TransactionJournal,
+    next_index: usize,
+) -> SnipResult<()> {
+    journal.state = TransactionState::RollingBack { next_index };
+    persist_journal(state_dir, journal)
 }
 
 /// Commit a transaction (atomic multi-file commit).
@@ -150,11 +398,7 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
     let mut committed = journal.clone();
     committed.state = TransactionState::Committed;
 
-    let jpath = journal_path(state_dir, &committed.id);
-    let content = toml::to_string_pretty(&committed)
-        .map_err(|e| SnipError::toml_error("serialize transaction journal", e))?;
-
-    crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")?;
+    persist_journal(state_dir, &committed)?;
 
     // Clean up backup files
     for staged in &committed.staged_files {
@@ -164,6 +408,7 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
     }
 
     // Remove the journal file itself (transaction complete)
+    let jpath = journal_path(state_dir, &committed.id);
     let _ = fs::remove_file(&jpath);
 
     Ok(())
@@ -171,11 +416,23 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
 
 /// Rollback a transaction (restore from backups).
 ///
-/// Restores each staged file from its backup, then marks the journal
-/// as `RolledBack`.
+/// Restores each staged file from its backup in reverse order, durably
+/// advancing rollback progress after each file. The journal is marked
+/// as `RolledBack` on completion. Rollback is restartable: if interrupted,
+/// the next call picks up from the last durably recorded `RollingBack`
+/// index.
 pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
-    // Restore files from backups in reverse order
-    for staged in journal.staged_files.iter().rev() {
+    let mut rb_journal = journal.clone();
+    let start_index = match rb_journal.state {
+        TransactionState::RollingBack { next_index } => next_index,
+        _ => 0,
+    };
+
+    // Restore files from backups in reverse order starting from start_index
+    for (i, staged) in rb_journal.staged_files.iter().enumerate().rev() {
+        if i < start_index {
+            continue;
+        }
         if let Some(ref backup) = staged.backup_path
             && backup.exists()
         {
@@ -183,23 +440,21 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                 SnipError::io_error("restore file from backup", staged.original_path.clone(), e)
             })?;
         }
+        // Durably advance rollback progress
+        rb_journal.state = TransactionState::RollingBack { next_index: i + 1 };
+        persist_journal(state_dir, &rb_journal)?;
     }
 
-    let mut rolled_back = journal.clone();
-    rolled_back.state = TransactionState::RolledBack;
-
-    let jpath = journal_path(state_dir, &rolled_back.id);
-    let content = toml::to_string_pretty(&rolled_back)
-        .map_err(|e| SnipError::toml_error("serialize transaction journal", e))?;
-
-    crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")?;
+    rb_journal.state = TransactionState::RolledBack;
+    persist_journal(state_dir, &rb_journal)?;
 
     // Remove backups and journal
-    for staged in &rolled_back.staged_files {
+    for staged in &rb_journal.staged_files {
         if let Some(ref backup) = staged.backup_path {
             let _ = fs::remove_file(backup);
         }
     }
+    let jpath = journal_path(state_dir, &rb_journal.id);
     let _ = fs::remove_file(&jpath);
 
     Ok(())
@@ -207,8 +462,10 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
 
 /// Check for interrupted transactions on startup.
 ///
-/// Returns any journals in `Prepared` state (neither committed nor rolled back).
-/// These represent operations that were interrupted and need attention.
+/// Returns any journals in a non-terminal state (Prepared, BackupsDurable,
+/// Committing, RollingBack). These represent operations that were interrupted
+/// and need attention. Journals in `Committed`, `RolledBack`, or `Failed`
+/// states are terminal and ignored.
 pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<TransactionJournal>> {
     if !state_dir.exists() {
         return Ok(Vec::new());
@@ -232,7 +489,7 @@ pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<Transa
                 .map_err(|e| SnipError::io_error("read transaction journal", path.clone(), e))?;
 
             match toml::from_str::<TransactionJournal>(&content) {
-                Ok(journal) if journal.state == TransactionState::Prepared => {
+                Ok(journal) if journal.state.is_interruptible() => {
                     interrupted.push(journal);
                 }
                 Ok(_) => {}
@@ -258,14 +515,22 @@ fn journal_path(state_dir: &Path, txn_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
     use tempfile::TempDir;
 
     #[test]
     fn test_acquire_and_release_lock() {
         let dir = TempDir::new().unwrap();
-        let lock = acquire_transaction_lock(dir.path()).unwrap();
+        let lock = acquire_transaction_lock(dir.path(), "test").unwrap();
         let lock_path = lock.lock_path.clone();
         assert!(lock_path.exists());
+        // Lock file contains valid TOML with PID and nonce
+        let content = fs::read_to_string(&lock_path).unwrap();
+        let info: TransactionLockInfo = toml::from_str(&content).unwrap();
+        assert_eq!(info.schema_version, 1);
+        assert_eq!(info.pid, std::process::id());
+        assert!(!info.nonce.is_empty());
+        assert_eq!(info.operation, "test");
         drop(lock);
         assert!(!lock_path.exists());
     }
@@ -273,11 +538,34 @@ mod tests {
     #[test]
     fn test_acquire_lock_conflict() {
         let dir = TempDir::new().unwrap();
-        let _lock1 = acquire_transaction_lock(dir.path()).unwrap();
-        let result = acquire_transaction_lock(dir.path());
+        let _lock1 = acquire_transaction_lock(dir.path(), "op1").unwrap();
+        let result = acquire_transaction_lock(dir.path(), "op2");
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("lock"), "Expected lock error, got: {msg}");
+    }
+
+    #[test]
+    fn test_lock_nonce_prevents_wrong_owner_removal() {
+        let dir = TempDir::new().unwrap();
+        let lock1 = acquire_transaction_lock(dir.path(), "op1").unwrap();
+        let lock_path = lock1.lock_path.clone();
+        // A different nonce cannot remove the lock
+        let fake_info = TransactionLockInfo {
+            schema_version: 1,
+            pid: 99999,
+            nonce: "fake-nonce".to_string(),
+            created_at_unix_ms: 0,
+            operation: "fake".to_string(),
+        };
+        let fake_content = toml::to_string_pretty(&fake_info).unwrap();
+        // Write a different nonce to simulate wrong owner
+        fs::write(&lock_path, &fake_content).unwrap();
+        drop(lock1);
+        // Lock file still exists because nonce didn't match
+        assert!(lock_path.exists());
+        // Clean up manually
+        fs::remove_file(&lock_path).unwrap();
     }
 
     #[test]
@@ -287,18 +575,48 @@ mod tests {
         let file1 = dir.path().join("file1.toml");
         let file2 = dir.path().join("file2.toml");
 
-        let _lock = acquire_transaction_lock(state_dir).unwrap();
+        let _lock = acquire_transaction_lock(state_dir, "test_op").unwrap();
         let journal = begin_transaction(state_dir, "test_op", &[file1, file2]).unwrap();
 
         assert_eq!(journal.operation, "test_op");
         assert_eq!(journal.state, TransactionState::Prepared);
         assert_eq!(journal.staged_files.len(), 2);
+        // Files don't exist yet, so existed_before is false and action is Create
+        assert!(!journal.staged_files[0].existed_before);
+        assert_eq!(journal.staged_files[0].action, StagedAction::Create);
 
         commit_transaction(state_dir, &journal).unwrap();
 
         // Journal file should be removed after commit
         let jpath = journal_path(state_dir, &journal.id);
         assert!(!jpath.exists());
+    }
+
+    #[test]
+    fn test_begin_transaction_populates_existing_file_metadata() {
+        let dir = TempDir::new().unwrap();
+        let state_dir = dir.path();
+        let file1 = dir.path().join("existing.toml");
+        fs::write(&file1, "hello world").unwrap();
+
+        let _lock = acquire_transaction_lock(state_dir, "test").unwrap();
+        let journal = begin_transaction(state_dir, "test", std::slice::from_ref(&file1)).unwrap();
+
+        let sf = &journal.staged_files[0];
+        assert!(sf.existed_before);
+        assert_eq!(sf.action, StagedAction::Replace);
+        assert!(!sf.original_hash.is_empty());
+        assert_eq!(sf.new_hash, "");
+
+        // Verify original_hash matches actual content
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"hello world");
+        let expected: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        assert_eq!(sf.original_hash, expected);
     }
 
     #[test]
@@ -314,7 +632,7 @@ mod tests {
         let backup_path = backup_dir.join("file1.toml.bak");
         fs::copy(&file1, &backup_path).unwrap();
 
-        let _lock = acquire_transaction_lock(state_dir).unwrap();
+        let _lock = acquire_transaction_lock(state_dir, "test_op").unwrap();
         let mut journal =
             begin_transaction(state_dir, "test_op", std::slice::from_ref(&file1)).unwrap();
         journal.staged_files[0].backup_path = Some(backup_path.clone());
@@ -323,6 +641,17 @@ mod tests {
 
         // Backup should be cleaned up
         assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn test_state_is_interruptible() {
+        assert!(TransactionState::Prepared.is_interruptible());
+        assert!(TransactionState::BackupsDurable.is_interruptible());
+        assert!(TransactionState::Committing { next_index: 0 }.is_interruptible());
+        assert!(TransactionState::RollingBack { next_index: 0 }.is_interruptible());
+        assert!(!TransactionState::Committed.is_interruptible());
+        assert!(!TransactionState::RolledBack.is_interruptible());
+        assert!(!TransactionState::Failed("test".into()).is_interruptible());
     }
 
     #[test]

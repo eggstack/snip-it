@@ -27,6 +27,7 @@ pub struct TestEnvironment {
     debounce: u64,
     failure_mode: String,
     child_pids: RefCell<Vec<u32>>,
+    credential_file: Option<PathBuf>,
 }
 
 #[allow(dead_code)]
@@ -46,6 +47,12 @@ impl TestEnvironment {
             self.home_dir.join(".config").to_str().unwrap(),
         );
         cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        // Test credential file: ensures deterministic credential availability
+        // for parent, worker, and executor subprocesses. Bypasses keychain
+        // entirely so the executor uses the real API key, not @keychain.
+        if let Some(ref cred_path) = self.credential_file {
+            cmd.env("SNP_TEST_CREDENTIAL_FILE", cred_path);
+        }
         cmd
     }
 
@@ -215,6 +222,10 @@ impl TestEnvironmentBuilder {
         let device_id = format!("test-device-{}", Uuid::new_v4());
         let api_key = "test-api-key-e2e-05a".to_string();
 
+        // Create test credential file so subprocesses get the real key
+        let credential_path = tmp.path().join("test-credential.txt");
+        fs::write(&credential_path, &api_key)?;
+
         let env = TestEnvironment {
             config_dir: config_dir.clone(),
             state_dir: config_dir,
@@ -225,6 +236,7 @@ impl TestEnvironmentBuilder {
             debounce: self.debounce,
             failure_mode: self.failure_mode,
             child_pids: RefCell::new(Vec::new()),
+            credential_file: Some(credential_path),
             tmp,
         };
 

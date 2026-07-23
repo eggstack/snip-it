@@ -162,7 +162,7 @@ pub struct StagedFile {
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. Automatically released on `Drop`. Unlike the auto-sync worker/execution locks, the transaction lock does not embed PID/nonce — it relies solely on atomic file creation for mutual exclusion. Dead-owner reclaim is not needed because transactions are short-lived and the lock is removed on drop.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, and `operation` fields. On acquisition, if the lock already exists, the system checks PID liveness via `kill -0` (Unix) or `GetExitCodeProcess` (Windows) — dead owners are reclaimed, live owners cause an error. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce matches the guard's nonce, preventing old owners from removing a replacement owner's lock.
 
 ### API
 
@@ -530,7 +530,7 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 - All sensitive files created with 0o600 permissions
 - Config directory created with 0o700 permissions
 - Lock files use O_EXCL (create_new) for atomic acquisition
-- Auto-sync lock ownership verified via nonce (pid-nanos-seq) to prevent PID reuse theft; transaction lock uses simple file-create (no nonce, no PID)
+- Auto-sync lock ownership verified via nonce (pid-nanos-seq) to prevent PID reuse theft; transaction lock also uses nonce + PID liveness check for ownership verification and stale-lock reclaim
 - Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
 - Transaction journals use UUID-based filenames and O_EXCL locks
 - Backup checksums: SHA-256 per file, verified before restore

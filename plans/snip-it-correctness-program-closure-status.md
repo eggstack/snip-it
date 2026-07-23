@@ -3,7 +3,7 @@
 Program status: REOPENED
 Blocking plan: plans/snip-it-correctness-11-verification-and-crash-closure.md
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final: (Phase 11 pending)
+Final: (Phase 11 in progress)
 
 ## Program Summary
 

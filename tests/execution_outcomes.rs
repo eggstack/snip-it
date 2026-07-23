@@ -46,6 +46,11 @@ command = "echo edit-target"
 id = "exec-edit-distractor"
 description = "edit target snippet distractor"
 command = "echo edit-distractor"
+
+[[snippets]]
+id = "exec-sleep"
+description = "sleeps for 60 seconds"
+command = "sleep 60"
 "#,
     )
     .unwrap();
@@ -281,5 +286,80 @@ fn test_run_failure_stderr_does_not_leak_command_content() {
     assert!(
         !stdout.contains("echo edit-target"),
         "stdout must not leak snippet command content"
+    );
+}
+
+// === Real timeout ===
+
+/// Verify that a command exceeding the configured timeout is killed and
+/// exits with the execution-failure code (8).
+#[test]
+fn test_real_timeout_exits_with_execution_failure_code() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.env("SNP_COMMAND_TIMEOUT", "2");
+    let output = cmd.args(["run", "--id", "exec-sleep"]).output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "sleep 60 with 2s timeout should fail"
+    );
+    let code = output.status.code().unwrap_or(-1);
+    // Timeout should exit with execution-failure code 8 (not the child's code)
+    assert_eq!(
+        code, 8,
+        "timeout should exit with code 8 (execution failure), got {code}"
+    );
+}
+
+// === Spawn/shell failure ===
+
+/// Verify that running a snippet with an invalid SHELL exits with the
+/// execution-failure code (8).
+#[test]
+fn test_invalid_shell_exits_with_execution_failure_code() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    let mut cmd = snp_in(&config_dir);
+    cmd.env("SHELL", "/nonexistent/shell/path");
+    let output = cmd.args(["run", "--id", "exec-success"]).output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "run with invalid SHELL should fail"
+    );
+    let code = output.status.code().unwrap_or(-1);
+    // Spawn failure should exit with execution-failure code 8
+    assert_eq!(code, 8, "spawn failure should exit with code 8, got {code}");
+}
+
+// === No raw command content in failure diagnostics ===
+
+/// Verify that when a snippet execution fails, the raw command content
+/// is not leaked in stdout or stderr.
+#[test]
+fn test_failure_does_not_leak_raw_command() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library_with_snippet(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["run", "--id", "exec-fail-exit1"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The command "exit 1" should not appear in stdout
+    assert!(
+        !stdout.contains("exit 1"),
+        "stdout must not contain raw command 'exit 1'"
+    );
+    // stderr may contain error info but not the raw command
+    assert!(
+        !stderr.contains("exit 1"),
+        "stderr must not contain raw command 'exit 1'"
     );
 }

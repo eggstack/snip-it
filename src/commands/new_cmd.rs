@@ -561,7 +561,14 @@ pub fn run(
         load_snippets(&fallback_path)?
     };
 
-    let new_snippet = Snippet::new(description, command, tags)?;
+    let mut new_snippet = Snippet::new(description, command, tags)?;
+    // Stamp the device_id from sync settings so the server can identify the
+    // originating device. Without this the server rejects the snippet during
+    // sync validation ("Device ID is required").
+    let sync_settings = crate::config::get_sync_settings();
+    if !sync_settings.device_id.is_empty() {
+        new_snippet.device_id = sync_settings.device_id.clone();
+    }
     snippets.snippets.push(new_snippet);
 
     if let Some(ref p) = lib_path {

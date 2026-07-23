@@ -211,7 +211,16 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             .stdout(output_file)
             .spawn()
             .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
-        let status = wait_for_command(&mut child, timeout)?;
+        let status = wait_for_command(&mut child, timeout).map_err(|e| {
+            // Timeout or spawn failure: map to ProcessResult::Failed with no exit code.
+            // This ensures the execution-failure exit code (8) is used instead of 1.
+            let msg = e.to_string();
+            if msg.contains("timed out") || msg.contains("timeout") {
+                SnipError::runtime_error("Command timed out", Some(&msg))
+            } else {
+                e
+            }
+        })?;
 
         Ok(handle_command_result(
             &final_command,
@@ -222,7 +231,18 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
     } else {
         let shell = get_shell();
         let timeout = get_timeout(TimeoutPolicy::NoDefault);
-        let status = run_shell_command(&shell, &final_command, timeout)?;
+        let status = match run_shell_command(&shell, &final_command, timeout) {
+            Ok(status) => status,
+            Err(e) => {
+                let msg = e.to_string();
+                // Timeout or spawn/shell failure: return as failed execution
+                // with no child exit code, so the execution-failure code (8) is used.
+                return Ok(crate::ProcessResult::Failed {
+                    exit_code: None,
+                    message: msg,
+                });
+            }
+        };
 
         Ok(handle_command_result(&final_command, status, snippet, None))
     }

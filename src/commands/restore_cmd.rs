@@ -538,7 +538,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
     // 6. Acquire transaction lock and begin transaction for write modes
     let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-    let _lock = crate::transaction::acquire_transaction_lock(&state_dir)?;
+    let _lock = crate::transaction::acquire_transaction_lock(&state_dir, "restore")?;
 
     // Collect affected files for the transaction
     let mut affected_files: Vec<PathBuf> = Vec::new();

@@ -417,6 +417,7 @@ The worker spawns a child process (`snp auto-sync-execute`) instead of running s
 - Executor creates no descendants during sync (gRPC client only)
 - Lock nonce prevents PID-reuse theft
 - Status messages sanitized: Bearer tokens, api_key patterns, URL credentials redacted
+- **`SNP_TEST_CREDENTIAL_FILE`:** In test contexts, the environment variable `SNP_TEST_CREDENTIAL_FILE` points to a file containing the API key. When set, the credential loader bypasses the OS keychain and reads the key directly from this file, providing deterministic credential availability without keychain interaction. This is used by `TestEnvironment` and `RecordingServer` in integration tests.
 
 ## Retry and Backoff
 

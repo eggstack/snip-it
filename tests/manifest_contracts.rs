@@ -1,0 +1,531 @@
+mod support;
+
+use std::fs;
+use support::helpers::*;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// Create a valid backup directory with a library and index, returning (backup_dir, tmp).
+fn create_valid_backup(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+    let backup_dir = tmp.path().join("test-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = r#"[[snippets]]
+id = "test-1"
+description = "test snippet"
+command = "echo test"
+"#;
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let index_content = r#"[[libraries]]
+filename = "default"
+is_primary = true
+"#;
+    fs::write(backup_dir.join("libraries.toml"), index_content).unwrap();
+
+    let lib_sha = sha256_hex(lib_content.as_bytes());
+    let index_sha = sha256_hex(index_content.as_bytes());
+
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = {}
+sha256 = "{lib_sha}"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = {}
+sha256 = "{index_sha}"
+"#,
+        lib_content.len(),
+        index_content.len(),
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    backup_dir
+}
+
+// === 1. Unknown entry kind ===
+
+#[test]
+fn test_rejects_unknown_entry_kind() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "unknown_kind"
+size = 11
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject unknown entry kind"
+    );
+}
+
+// === 2. Schema version zero ===
+
+#[test]
+fn test_rejects_schema_version_zero() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let manifest = r#"schema = 0
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject schema version 0"
+    );
+}
+
+// === 3. Future schema version ===
+
+#[test]
+fn test_rejects_future_schema_version() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let manifest = r#"schema = 999
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject future schema version 999"
+    );
+}
+
+// === 4. Duplicate destination paths ===
+
+#[test]
+fn test_rejects_duplicate_destination_paths() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "placeholder"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject duplicate destination paths"
+    );
+}
+
+// === 5. Empty path ===
+
+#[test]
+fn test_rejects_empty_path() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = ""
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "restore should reject empty path");
+}
+
+// === 6. Absolute path ===
+
+#[test]
+fn test_rejects_absolute_path() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "/etc/passwd"
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject absolute path"
+    );
+}
+
+// === 7. Traversal path ===
+
+#[test]
+fn test_rejects_traversal_path() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "../escape.toml"
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject traversal path"
+    );
+}
+
+// === 8. Windows reserved name ===
+
+#[test]
+fn test_rejects_windows_reserved_name() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "CON.toml"
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject Windows reserved name"
+    );
+}
+
+// === 9. Trailing dot ===
+
+#[test]
+fn test_rejects_trailing_dot() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "file.toml."
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject trailing dot in path"
+    );
+}
+
+// === 10. Trailing space ===
+
+#[test]
+fn test_rejects_trailing_space() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "file.toml "
+kind = "library"
+size = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject trailing space in path"
+    );
+}
+
+// === 11. Control character ===
+
+#[test]
+fn test_rejects_control_character() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    // Write manifest with NUL byte in path via raw bytes
+    let manifest_bytes = b"schema = 1\ncreated_at_unix_ms = 1700000000000\nsnip_it_version = \"1.0.0\"\nlayout = \"directory\"\n\n[[files]]\npath = \"file\x00.toml\"\nkind = \"library\"\nsize = 0\nsha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n";
+    fs::write(backup_dir.join("manifest.toml"), manifest_bytes).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject control character in path"
+    );
+}
+
+// === 12. Valid schema 1 succeeds ===
+
+#[test]
+fn test_valid_schema_1_succeeds() {
+    let (tmp, config_dir) = setup_test_env();
+    let backup_dir = create_valid_backup(&tmp);
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "restore dry-run should succeed for valid manifest: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// === 13. Library must be flat filename ===
+
+#[test]
+fn test_library_must_be_flat_filename() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries").join("subdir");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    fs::write(libraries_dir.join("file.toml"), "content").unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "subdir/file.toml"
+kind = "library"
+size = 7
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject nested library path"
+    );
+}
+
+// === 14. Library must end with .toml ===
+
+#[test]
+fn test_library_must_end_with_toml() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    fs::write(libraries_dir.join("file.txt"), "content").unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "file.txt"
+kind = "library"
+size = 7
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject library without .toml extension"
+    );
+}
+
+// === 15. Index must be libraries.toml ===
+
+#[test]
+fn test_index_must_be_libraries_toml() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "wrong-name.toml"
+kind = "index"
+size = 7
+sha256 = "placeholder"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject index with wrong path"
+    );
+}

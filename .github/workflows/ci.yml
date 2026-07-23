@@ -13,7 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup component add rustfmt
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
@@ -33,19 +35,134 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-features
-      - run: cargo test --release --workspace --all-features
+      - name: Run workspace tests (debug)
+        run: cargo test --workspace --all-features
+      - name: Run workspace tests (release)
+        run: cargo test --release --workspace --all-features
+
+  lifecycle:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Phase 05A deterministic E2E
+        run: cargo test --test deterministic_e2e --features test-support
+      - name: Phase 05A failure class contracts
+        run: cargo test --test failure_class_contracts --features test-support
+      - name: Phase 05A debounce matrix
+        run: cargo test --test debounce_matrix --features test-support
+      - name: Phase 05A sync contracts
+        run: cargo test --test sync_contracts --features test-support
+      - name: Phase 05A mutual exclusion
+        run: cargo test --test mutual_exclusion --features test-support
+      - name: Phase 05A process lifecycle
+        run: cargo test --test process_lifecycle --features test-support
+      - name: Phase 05A local contracts
+        run: cargo test --test local_contracts --features test-support
+      - name: Phase 05A package evidence
+        run: cargo test --test package_evidence --features test-support
+
+  crash_recovery:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Transaction crash recovery
+        run: cargo test --test transaction_crash_recovery --features test-support
+      - name: Restore security
+        run: cargo test --test restore_security --features test-support
+      - name: Restore transactions
+        run: cargo test --test restore_transactions --features test-support
+      - name: Backup contracts
+        run: cargo test --test backup_contracts --features test-support
+      - name: Backup snapshot concurrency
+        run: cargo test --test backup_snapshot_concurrency --features test-support
+      - name: Manifest contracts
+        run: cargo test --test manifest_contracts --features test-support
+      - name: Execution outcomes
+        run: cargo test --test execution_outcomes --features test-support
+      - name: Readonly no recovery
+        run: cargo test --test readonly_no_recovery --features test-support
+      - name: Canary nonexecution
+        run: cargo test --test canary_nonexecution --features test-support
+
+  update_security:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Update archive security
+        run: cargo test --test update_archive_security --features test-support
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Audit snip-it
+        run: cargo deny -p snip-it check
+      - name: Audit snip-proto
+        run: cargo deny -p snip-proto check
+      - name: Audit snip-sync
+        run: cargo deny -p snip-sync check
 
   package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo package -p snip-it --locked --allow-dirty
-      - name: Verify package builds from crate
+      - name: Package snip-proto
+        run: cargo package -p snip-proto --locked --allow-dirty
+      - name: Package snip-sync
+        run: cargo package -p snip-sync --locked --allow-dirty
+      - name: Package snip-it
+        run: cargo package -p snip-it --locked --allow-dirty
+      - name: Verify package builds from unpacked crate
         run: |
           CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
           UNPACK_DIR=$(mktemp -d)
           tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
           cd "$UNPACK_DIR"/snip-it-*
           cargo build --release --locked
+      - name: Verify installed binary works
+        run: |
+          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
+          UNPACK_DIR=$(mktemp -d)
+          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
+          cd "$UNPACK_DIR"/snip-it-*
+          cargo install --path . --locked
+          snp --version
+          snp --help >/dev/null
+
+  package_smoke:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Package and install
+        run: |
+          cargo package -p snip-it --locked --allow-dirty
+          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
+          UNPACK_DIR=$(mktemp -d)
+          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
+          cd "$UNPACK_DIR"/snip-it-*
+          cargo install --path . --locked
+      - name: Smoke test
+        run: |
+          snp --version
+          snp --help >/dev/null
+          snp status 2>/dev/null || true

@@ -20,17 +20,14 @@
 //! - Status-file existence alone is insufficient
 //! - Marker absence alone is insufficient
 //!
-//! ## Keychain migration note
+//! ## Deterministic credential backend
 //!
-//! `SNP_ALLOW_PLAINTEXT_API_KEY=true` must be set on all binary commands
-//! that call `load_sync_settings()`. On systems where the OS keychain is
-//! unavailable, this allows plaintext fallback. On macOS with a working
-//! keychain, `serialize_api_key` succeeds and writes `@keychain` to
-//! sync.toml. The executor subprocess inherits this env var, causing
-//! `deserialize_api_key` to return `@keychain` literally. This is a known
-//! limitation that prevents server-side snippet count verification on
-//! macOS with keychain. The negative and no-op tests verify the sync
-//! machinery independently of server-side state.
+//! `SNP_TEST_CREDENTIAL_FILE` is set on all binary commands. The test
+//! creates a file containing the real API key. `deserialize_api_key` reads
+//! the key from this file when `@keychain` is found, bypassing the OS
+//! keychain entirely. This ensures parent, worker, and executor all use
+//! the same real key regardless of host keychain behavior. Production
+//! builds ignore this env var.
 
 mod support;
 
@@ -81,6 +78,12 @@ fn snp_cmd(config_dir: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_snp"));
     cmd.env("XDG_CONFIG_HOME", config_dir.parent().unwrap());
     cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+    // Test credential file: ensures deterministic credential availability
+    // for worker and executor subprocesses, bypassing the OS keychain.
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    if cred_path.exists() {
+        cmd.env("SNP_TEST_CREDENTIAL_FILE", &cred_path);
+    }
     // Worker/executor subprocesses inherit this and write lifecycle events
     // to <SNP_TEST_EVENTS_DIR>/test-events.jsonl for the EventSink to read.
     cmd.env("SNP_TEST_EVENTS_DIR", config_dir);
@@ -215,11 +218,25 @@ fn test_real_remote_effect_before_pending_clear() {
     let config_dir = &env.config_dir;
     let state_dir = &env.state_dir;
 
+    // Create test credential file for subprocesses
+    // Path must match snp_cmd's lookup: config_dir.parent()/test-credential.txt
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    std::fs::write(&cred_path, &env.api_key).unwrap();
+
     // Register a real client against the server via the binary.
     register_with_binary(config_dir, &server_url);
 
     // Enable auto-sync with 2-second debounce.
     enable_auto_sync(config_dir, 2);
+
+    // Debug: verify sync.toml after setup
+    let sync_path = config_dir.join("sync.toml");
+    let sync_bytes = std::fs::read(&sync_path).unwrap_or_default();
+    eprintln!(
+        "SYNC_TOML after setup: {:?}",
+        String::from_utf8_lossy(&sync_bytes)
+    );
+    eprintln!("CREDENTIAL_FILE exists: {}", cred_path.exists());
 
     // Create the e2e library.
     create_library(config_dir, "e2e");
@@ -263,45 +280,43 @@ fn test_real_remote_effect_before_pending_clear() {
         status_content.is_some(),
         "status file must exist after sync"
     );
-    let status = status_content.unwrap();
+    let status = status_content.as_ref().unwrap();
     assert!(
         status.contains("success"),
         "status must indicate success after sync, got: {status}"
     );
 
     // 8. Verify server-side state changed (R0 → R1).
-    //    The test uses SNP_ALLOW_PLAINTEXT_API_KEY=true so the API key is stored
-    //    in plaintext and the executor authenticates correctly. On macOS with a
-    //    working keychain, sync.toml may contain "@keychain" literally, causing
-    //    the executor to authenticate incorrectly and skip all libraries. The
-    //    no-op regression test independently proves that when the server is
-    //    unreachable, snippet count remains 0.
+    //    The test uses SNP_TEST_CREDENTIAL_FILE so the API key is available
+    //    to the executor subprocess without keychain dependency. The executor
+    //    authenticates with the real key, and the server-side snippet count
+    //    must be exactly 1.
     //
-    //    Phase 11 target: reject count == 0 (requires deterministic credential
-    //    backend). Current: accept count ∈ {0, 1} with diagnostic note.
-    //    A count of 1 proves real server contact; count of 0 on macOS is a
-    //    known keychain integration limitation, not a test bypass.
-    let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
-    assert!(
-        server_count_after == 0 || server_count_after == 1,
-        "server snippet count must be 0 or 1 after sync, got {server_count_after}"
-    );
-    if server_count_after == 0 {
+    //    A count of 0 means the sync did not actually push data to the server,
+    //    which violates the headline proof requirement.
+    //
+    //    Debug: print the full status file and events to diagnose.
+    eprintln!("STATUS FILE: {status}");
+    // Read events early (before the failing assertion)
+    let events = sink.read_all();
+    eprintln!("ALL EVENTS ({}):", events.len());
+    for ev in &events {
         eprintln!(
-            "NOTE: server snippet count is 0 after sync. This occurs on macOS with a working \
-             keychain — the keychain migration causes the executor to authenticate with \
-             @keychain literally. The sync completed (pending cleared, status success) proving \
-             the auto-sync machinery worked. The no-op regression test independently proves the \
-             server is NOT contacted when unreachable. Phase 11 target: implement deterministic \
-             credential backend to eliminate this exception."
+            "  {} {} pid={} detail={:?}",
+            ev.component, ev.event, ev.pid, ev.detail
         );
     }
+    let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count_after, 1,
+        "server snippet count must be exactly 1 after sync (R0=0 -> R1=1), got {server_count_after}. \
+         A count of 0 means the executor did not authenticate or push data — the headline proof fails."
+    );
 
     // 9. Verify exactly one sync attempt occurred.
     //    Events are emitted only when the `test-support` feature is enabled and
     //    SNP_TEST_EVENTS_DIR is set. If events are absent, we rely on the
     //    pending-clear + status-success evidence above.
-    let events = sink.read_all();
     let worker_starts = events
         .iter()
         .filter(|e| e.component == "worker" && e.event == "started")
