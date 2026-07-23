@@ -82,6 +82,10 @@ pub struct Snippet {
 pub struct LibraryConfig {
     #[serde(default)]
     pub libraries: Vec<LibraryMeta>,
+    /// Monotonic generation counter that increments on every mutation.
+    /// Used by backup to verify coherent snapshots.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// Metadata for a single snippet library.
@@ -343,6 +347,7 @@ impl LibraryManager {
         meta.is_primary = true;
         self.config.libraries.push(meta);
 
+        self.bump_generation();
         self.save_config()?;
 
         Ok(())
@@ -419,6 +424,7 @@ snippets = []
         meta.is_primary = is_first;
         self.config.libraries.push(meta);
 
+        self.bump_generation();
         self.save_config()?;
 
         Ok(path)
@@ -469,6 +475,7 @@ snippets = []
             }
         }
 
+        self.bump_generation();
         self.save_config()?;
 
         if path.exists() {
@@ -496,6 +503,7 @@ snippets = []
             lib.is_primary = lib.filename == filename;
         }
 
+        self.bump_generation();
         self.save_config()?;
         Ok(())
     }
@@ -505,6 +513,7 @@ snippets = []
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = library_id.to_string();
 
+            self.bump_generation();
             self.save_config()?;
         }
         Ok(())
@@ -516,6 +525,7 @@ snippets = []
             lib.library_id = server_id.to_string();
             lib.server_id = Some(server_id.to_string());
 
+            self.bump_generation();
             self.save_config()?;
         }
         Ok(())
@@ -527,6 +537,7 @@ snippets = []
             lib.library_id.clear();
             lib.server_id = None;
 
+            self.bump_generation();
             self.save_config()?;
         }
         Ok(())
@@ -551,6 +562,7 @@ snippets = []
 
         self.config.libraries.push(meta);
 
+        self.bump_generation();
         self.save_config()?;
         Ok(())
     }
@@ -560,6 +572,7 @@ snippets = []
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.last_sync = Some(timestamp);
 
+            self.bump_generation();
             self.save_config()?;
         }
         Ok(())
@@ -593,6 +606,7 @@ snippets = []
             existing.library_id = server_id.to_string();
             existing.server_id = Some(server_id.to_string());
 
+            self.bump_generation();
             self.save_config()?;
             return Ok(path);
         }
@@ -605,6 +619,7 @@ snippets = []
 
         self.config.libraries.push(meta);
 
+        self.bump_generation();
         self.save_config()?;
 
         Ok(path)
@@ -667,6 +682,19 @@ snippets = []
         write_library_file(&path, content, filename)?;
 
         Ok(path)
+    }
+
+    /// Returns the current generation counter value.
+    ///
+    /// The generation increments on every mutation and is used by backup
+    /// to verify that the library index and files come from one coherent state.
+    pub fn generation(&self) -> u64 {
+        self.config.generation
+    }
+
+    /// Bump the generation counter before saving.
+    fn bump_generation(&mut self) {
+        self.config.generation = self.config.generation.saturating_add(1);
     }
 
     fn save_config(&mut self) -> SnipResult<()> {
@@ -1292,6 +1320,7 @@ is_primary = true
                     last_sync: None,
                     server_id: None,
                 }],
+                generation: 0,
             },
         };
         mgr.create_library("new").unwrap();

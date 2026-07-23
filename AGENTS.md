@@ -39,6 +39,19 @@ cargo test --test package_evidence
 cargo test --test persistence_unit
 cargo test --test identity_contract
 
+# Run Phase 08A+ lifecycle tests (requires test-support feature)
+cargo test --test deterministic_e2e --features test-support
+cargo test --test process_lifecycle --features test-support
+cargo test --test debounce_matrix --features test-support
+cargo test --test mutual_exclusion --features test-support
+cargo test --test restore_security --features test-support
+cargo test --test restore_transactions --features test-support
+cargo test --test backup_contracts --features test-support
+cargo test --test execution_outcomes --features test-support
+cargo test --test update_archive_security --features test-support
+cargo test --test readonly_no_recovery --features test-support
+cargo test --test canary_nonexecution --features test-support
+
 # Lint (warnings are errors)
 cargo clippy --workspace --all-targets -- -D warnings
 
@@ -51,6 +64,8 @@ cargo fmt  # auto-format
 ```
 
 **Key gotcha:** The main `snip-it` crate is binary-only — `cargo test --lib -p snip-it` does not work. Use `cargo test -p snip-it` (binary + integration tests) or `cargo test --workspace`.
+
+**Key gotcha:** Some test suites (`deterministic_e2e`, `process_lifecycle`, `debounce_matrix`, `mutual_exclusion`, `restore_security`, `restore_transactions`, `backup_contracts`, `execution_outcomes`, `update_archive_security`, `readonly_no_recovery`, `canary_nonexecution`) require `--features test-support` to compile.
 
 ## Toolchain
 
@@ -155,6 +170,9 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk and can be recovered on startup. `commit_transaction` removes the journal; `rollback_transaction` restores from backups.
+
+### Transaction lock (no PID/nonce)
+The transaction lock (`transaction.lock`) is a simple file-create guard using `create_new(true)`. Unlike the auto-sync worker/execution locks which embed PID/nonce for ownership verification and stale detection, the transaction lock relies solely on atomic file creation and is removed on drop. Transactions are short-lived, so dead-owner reclaim is not needed.
 
 ### Migration schema versioning
 Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.
@@ -347,6 +365,22 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 cargo test --workspace --all-features
 ```
+
+## Phase 11: CI Simplification and Documentation
+
+Phase 11 simplifies the CI workflow to a focused set of jobs (fmt, clippy, test, package) and updates documentation to reflect Phase 07A–10 details.
+
+### CI Workflow
+- Replaced comprehensive CI with focused four-job workflow: `fmt`, `clippy`, `test` (matrix), `package`
+- `test` runs both debug and release on ubuntu/macos/windows
+- `package` verifies crate packaging and builds from unpacked source
+
+### Documentation Updates
+- **EXIT_CODES.md**: Added explicit "Execution Failure Exit Code" section documenting the two sub-cases (propagated child code vs fallback code 8)
+- **COMMAND_CONTRACTS.md**: Added "Startup Recovery Classification" section explaining that dry-run commands are classified by command category, not dry-run flag
+- **architecture/auto_sync.md**: Added "Operation-aware classification" note explaining `classify_command()` behavior for dry-run modes
+- **architecture/persistence.md**: Clarified that transaction lock does not use PID/nonce (unlike auto-sync locks)
+- **AGENTS.md**: Added transaction lock gotcha, `--features test-support` build note, and Phase 11 lifecycle test commands
 
 ## Phase 09A: Security, Release, and Program Closure
 

@@ -85,6 +85,11 @@ pub enum CommandOutcome {
     Success,
     /// User cancelled the selection.
     Cancelled,
+    /// Snippet execution failed (child exit, signal, timeout, spawn failure).
+    ExecutionFailed {
+        /// The child process exit code, if available.
+        child_code: Option<i32>,
+    },
 }
 
 /// Internal outcome of the shared snippet-selection TUI loop.

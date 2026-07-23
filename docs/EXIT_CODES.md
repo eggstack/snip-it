@@ -59,6 +59,17 @@ Exit codes used by the auto-sync worker (`snp auto-sync-worker`) and executor (`
 
 Worker/executor codes are defined in `src/auto_sync/executor.rs` as `ExecutorExitCode` and mapped by the worker's exit-code translation layer.
 
+## Execution Failure Exit Code
+
+The `ExecutionFailed` variant in `CliOutcome` has two sub-cases:
+
+| Scenario | Exit code |
+|----------|-----------|
+| Child process exit code available | Propagated directly (0–255) |
+| Child exit code unknown (spawn failure, signal kill, timeout) | 8 (`EXECUTION_FAILED`) |
+
+This ensures scripts can distinguish between `snp` infrastructure failures (exit 1) and snippet execution failures (exit = child code or 8). Execution failures do not record usage metadata.
+
 ## Child Exit Code Propagation
 
 When `snp run` or exact `run` executes a child snippet process:

@@ -704,6 +704,7 @@ mod tests {
     fn write_libraries_toml(dir: &std::path::Path, libs: &[LibraryMeta]) {
         let config = LibraryConfig {
             libraries: libs.to_vec(),
+            generation: 0,
         };
         let content = toml::to_string_pretty(&config).unwrap();
         std::fs::write(dir.join("libraries.toml"), content).unwrap();

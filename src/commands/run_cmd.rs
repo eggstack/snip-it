@@ -235,7 +235,7 @@ pub fn run(
     library: Option<String>,
     sort_opts: Option<crate::sort::SortOptions>,
     runtime: &tokio::runtime::Runtime,
-) -> SnipResult<()> {
+) -> SnipResult<crate::CommandOutcome> {
     let outcome = run_snippet_selection(
         filter,
         library,
@@ -244,10 +244,16 @@ pub fn run(
         runtime,
         |snippet, copy_flag| process_snippet(snippet, copy_flag.is_some()),
     )?;
-    if let crate::SelectionOutcome::ExecutionFailed { exit_code } = outcome {
-        std::process::exit(exit_code.unwrap_or(8));
+    match outcome {
+        crate::SelectionOutcome::ExecutionFailed { exit_code } => {
+            Ok(crate::CommandOutcome::ExecutionFailed {
+                child_code: exit_code,
+            })
+        }
+        // run treats cancellation as exit 0 (per documented contract)
+        crate::SelectionOutcome::Cancelled => Ok(crate::CommandOutcome::Success),
+        crate::SelectionOutcome::Selected => Ok(crate::CommandOutcome::Success),
     }
-    Ok(())
 }
 
 /// Execute a specific snippet directly, bypassing TUI selection.
@@ -255,10 +261,12 @@ pub fn run_exact(
     snippet: &Snippet,
     do_sync: bool,
     _runtime: &tokio::runtime::Runtime,
-) -> SnipResult<()> {
+) -> SnipResult<crate::CommandOutcome> {
     let result = process_snippet(snippet, false)?;
     if let crate::ProcessResult::Failed { exit_code, .. } = result {
-        std::process::exit(exit_code.unwrap_or(8));
+        return Ok(crate::CommandOutcome::ExecutionFailed {
+            child_code: exit_code,
+        });
     }
     if do_sync {
         crate::auto_sync::notify_mutation(
@@ -266,7 +274,7 @@ pub fn run_exact(
             crate::auto_sync::MutationOrigin::User,
         );
     }
-    Ok(())
+    Ok(crate::CommandOutcome::Success)
 }
 
 #[cfg(test)]

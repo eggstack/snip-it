@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::backup_cmd::BackupManifest;
+use super::backup_cmd::{BackupManifest, BackupManifestEntry};
 
 /// Restore mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -101,6 +101,19 @@ const RESERVED_WINDOWS_NAMES: &[&str] = &[
 /// - Reserved Windows device names (CON, PRN, NUL, etc.)
 /// - For library kind: requires `.toml` extension, rejects path separators (flat filename only)
 /// - For index/usage/sync_config: allows only the exact expected filename
+fn resolve_backup_path(backup: &Path, entry: &BackupManifestEntry) -> PathBuf {
+    // Standard top-level entries (index, usage, sync_config) and entries with explicit
+    // libraries/ prefix use path directly. Library/unknown entries without prefix get it.
+    if (entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage")
+        || entry.path.starts_with("libraries/")
+        || entry.path.starts_with("libraries\\")
+    {
+        backup.join(&entry.path)
+    } else {
+        backup.join("libraries").join(&entry.path)
+    }
+}
+
 fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
     if path.is_empty() {
         return Err(SnipError::runtime_error(
@@ -180,14 +193,19 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
 
     match kind {
         "library" => {
-            // Must be a flat filename (no separators) with .toml extension
-            if path.contains('/') || path.contains('\\') {
+            // Allow both flat filename (readonly-test.toml) and libraries/ prefixed
+            // (libraries/readonly-test.toml) since backup uses the prefix format.
+            let basename = path
+                .strip_prefix("libraries/")
+                .or_else(|| path.strip_prefix("libraries\\"))
+                .unwrap_or(path);
+            if basename.contains('/') || basename.contains('\\') {
                 return Err(SnipError::runtime_error(
-                    "Library path must be a flat filename",
+                    "Library path must be a flat filename or libraries/<name>.toml",
                     Some(&format!("path={path}")),
                 ));
             }
-            if !path.ends_with(".toml") {
+            if !basename.ends_with(".toml") {
                 return Err(SnipError::runtime_error(
                     "Library path must have .toml extension",
                     Some(&format!("path={path}")),
@@ -386,12 +404,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // 3. Validate source artifact sizes and types
     const MAX_RESTORE_SOURCE_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB
     for entry in &manifest.files {
-        let file_path =
-            if entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage" {
-                backup.join(&entry.path)
-            } else {
-                backup.join("libraries").join(&entry.path)
-            };
+        let file_path = resolve_backup_path(&backup, entry);
 
         // Verify file exists
         if !file_path.exists() {
@@ -459,12 +472,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // 4. Verify checksums
     for entry in &manifest.files {
         // Resolve path relative to backup directory
-        let file_path =
-            if entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage" {
-                backup.join(&entry.path)
-            } else {
-                backup.join("libraries").join(&entry.path)
-            };
+        let file_path = resolve_backup_path(&backup, entry);
 
         if !verify_checksum(&file_path, &entry.sha256)? {
             return Err(SnipError::runtime_error(
@@ -487,7 +495,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         pre_restore_backup: None,
     };
 
-    // 4. Dry run: display planned actions (no writes, no transaction)
+    // 5. Dry run: display planned actions (no writes, no transaction)
     if mode == RestoreMode::DryRun {
         if json {
             let dry_report = serde_json::json!({
@@ -528,7 +536,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         return Ok(());
     }
 
-    // 5. Acquire transaction lock and begin transaction for write modes
+    // 6. Acquire transaction lock and begin transaction for write modes
     let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
     let _lock = crate::transaction::acquire_transaction_lock(&state_dir)?;
 
@@ -593,7 +601,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         // 8. Restore library files
         for entry in &manifest.files {
             if entry.kind == "library" {
-                let src = backup.join("libraries").join(&entry.path);
+                let src = resolve_backup_path(&backup, entry);
                 let library_name = Path::new(&entry.path)
                     .file_stem()
                     .unwrap_or_default()

@@ -394,6 +394,7 @@ fn test_library_meta_roundtrip() {
                 server_id: None,
             },
         ],
+        generation: 0,
     };
 
     let toml_str = toml::to_string_pretty(&config).unwrap();

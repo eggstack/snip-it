@@ -1,8 +1,9 @@
 # Correctness Program Closure Status
 
-Program status: COMPLETE
-Baseline: 2143f689a2115cc8901eaa933af28e80915e190c
-Final: 2ce79fb (Phase 10 corrective closure)
+Program status: REOPENED
+Blocking plan: plans/snip-it-correctness-11-verification-and-crash-closure.md
+Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
+Final: (Phase 11 pending)
 
 ## Program Summary
 
@@ -145,7 +146,7 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 - Locked builds, Cargo.lock committed
 - No unknown git/registry dependencies
 
-## Release Blockers (from corrective closure plan) — All Resolved
+## Release Blockers (Phase 10) — Resolved
 
 1. **StartupRecoveryPolicy not wired into dispatch** — FIXED: `classify_command` in `src/main.rs:1191-1243` maps every `Commands` variant exhaustively to a `StartupRecoveryPolicy`
 2. **rollback_transaction never called from restore on failure** — FIXED: `restore_cmd.rs:662-670` calls `rollback_transaction` on error
@@ -156,6 +157,21 @@ snip-it (`snp`) is a terminal-first snippet manager for short scripts and comman
 7. **Lifecycle event assertions silently skipped** — FIXED: `--features test-support` is the only feature flag; CI runs lifecycle tests with test-support instrumentation
 8. **HTTP not hard-rejected in self-update** — FIXED: `update.rs:256-259` hard-rejects HTTP URLs
 9. **THREAT_MODEL.md claims signed release assets** — FIXED: THREAT_MODEL.md correctly states "not cryptographically signed"
+
+## Release Blockers (Phase 11) — Open
+
+1. **Dry-run recovery classification** — `classify_command` maps `Restore`, `Import`, `Repair` to `Allow` regardless of dry-run flag
+2. **Headline E2E permits zero server-side effect** — test accepts count=0 due to keychain exception
+3. **Transaction journal not crash-complete** — enriched in-memory journal not durably rewritten before live replacements
+4. **No automatic transaction crash recovery** — interrupted journals detectable but not automatically recovered
+5. **Transaction lock stale forever** — bare `create_new` file with no PID, nonce, or liveness check
+6. **Backup snapshot not serialized with mutations** — sequential reads without coordination
+7. **General config entries not restored** — `kind = "config"` entries emitted but restore ignores them
+8. **Manifest validation permissive** — free-form kind strings, no schema/kind/duplicate rejection
+9. **Execution failure mapping incomplete** — timeout, signal, spawn failures can exit 1 instead of 8
+10. **Windows ZIP extraction not prevalidated** — delegates to PowerShell `Expand-Archive`
+11. **Package CI uses `unzip` for `.crate` files** — `.crate` files are tar/gzip, not ZIP
+12. **Closure evidence stale** — older commit, overstated proofs
 
 ## Known Non-Blocking Limitations
 

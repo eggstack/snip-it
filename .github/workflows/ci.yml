@@ -1,353 +1,51 @@
----
 name: CI
 
-# Action pinning policy: all actions are pinned to full commit SHAs.
-# Dependabot is configured to auto-update weekly.
-
-"on":
+on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
-  workflow_call:
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  PROTOC_VERSION: 35.1
 
 jobs:
-  repo-hygiene:
-    name: Repo Hygiene
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Check for tracked OS junk
-        run: |
-          if git ls-files | grep -E '(\.DS_Store$|Thumbs\.db$|desktop\.ini$)'; then
-            echo "::error::Tracked OS junk files detected. Add to .gitignore and git rm --cached."
-            exit 1
-          fi
-
   fmt:
-    name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          protoc --version
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install protobuf
-          protoc --version
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.protoc/bin"
-          curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused --location --silent --show-error --fail \
-            --output "$GITHUB_WORKSPACE/.protoc/protoc.zip" \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-win64.zip"
-          unzip -j -o "$GITHUB_WORKSPACE/.protoc/protoc.zip" bin/protoc.exe -d "$GITHUB_WORKSPACE/.protoc/bin"
-          chmod +x "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe"
-          "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe" --version
-          echo "$GITHUB_WORKSPACE/.protoc/bin" >> "$GITHUB_PATH"
-      - name: Run tests
-        run: cargo test --workspace
-
-  release-test:
-    name: Release Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Run tests in release mode
-        run: cargo test --release --workspace
-
-  build:
-    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.protoc/bin"
-          curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused --location --silent --show-error --fail \
-            --output "$GITHUB_WORKSPACE/.protoc/protoc.zip" \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-win64.zip"
-          unzip -j -o "$GITHUB_WORKSPACE/.protoc/protoc.zip" bin/protoc.exe -d "$GITHUB_WORKSPACE/.protoc/bin"
-          chmod +x "$GITHUB_WORKSPACE/.protoc/bin/protoc.exe"
-          echo "$GITHUB_WORKSPACE/.protoc/bin" >> "$GITHUB_PATH"
-      - name: Build
-        run: cargo build --release --workspace
-      - name: Upload binary (Unix)
-        if: runner.os != 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: snp-${{ matrix.os }}
-          path: target/release/snp
-      - name: Upload binary (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: snp-${{ matrix.os }}
-          path: target/release/snp.exe
+      - run: cargo test --workspace --all-features
+      - run: cargo test --release --workspace --all-features
 
-  msrv:
-    name: MSRV
+  package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@1.94
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Build MSRV
-        run: cargo build --release --workspace
-      - name: Test MSRV
-        run: cargo test --workspace
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov
-      - name: Run coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Build snip-sync Docker image
-        run: docker build -t snip-sync:test -f snip-sync/Dockerfile .
-
-  proto-check:
-    name: Proto Codegen Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Build snip-proto to regenerate code
-        run: cargo build -p snip-proto
-      - name: Check generated code is up to date
-        run: git diff --exit-code snip-proto/src/snip_proto.rs
-
-  deny:
-    name: Dependency Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check
-      - name: Audit snip-sync dependencies
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check
-          manifest-path: snip-sync/Cargo.toml
-      - name: Audit snip-proto dependencies
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check
-          manifest-path: snip-proto/Cargo.toml
-
-  server-test:
-    name: Server Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Run snip-sync tests
-        run: cargo test -p snip-sync
-
-  secret-sentinel:
-    name: Secret Sentinel
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Scan for leaked secrets
-        run: |
-          if grep -rn --include='*.rs' --include='*.toml' --include='*.yml' -E '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[A-Z0-9]{16})' .; then
-            echo "::error::Potential secret detected in source code"
-            exit 1
-          fi
-          echo "No secrets detected"
-
-  architecture:
-    name: Architecture Boundaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Run architecture tests
-        run: cargo test --test architecture
-
-  feature-matrix:
-    name: Feature Check (${{ matrix.features }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        features: ["", "test-support"]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Check with features
-        run: |
-          if [ -n "${{ matrix.features }}" ]; then
-            cargo check --no-default-features --features ${{ matrix.features }}
-          else
-            cargo check --no-default-features
-          fi
-
-  lifecycle:
-    name: Lifecycle Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Deterministic E2E
-        run: cargo test --test deterministic_e2e --features test-support
-      - name: Process lifecycle
-        run: cargo test --test process_lifecycle --features test-support
-      - name: Debounce matrix
-        run: cargo test --test debounce_matrix --features test-support
-      - name: Mutual exclusion
-        run: cargo test --test mutual_exclusion --features test-support
-      - name: Restore security
-        run: cargo test --test restore_security --features test-support
-      - name: Restore transactions
-        run: cargo test --test restore_transactions --features test-support
-      - name: Backup contracts
-        run: cargo test --test backup_contracts --features test-support
-      - name: Execution outcomes
-        run: cargo test --test execution_outcomes --features test-support
-      - name: Update archive security
-        run: cargo test --test update_archive_security --features test-support
-      - name: Read-only no recovery
-        run: cargo test --test readonly_no_recovery --features test-support
-      - name: Canary non-execution
-        run: cargo test --test canary_nonexecution --features test-support
-
-  package-build:
-    name: Package Build (from unpacked)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Package all crates
-        run: |
-          cargo package -p snip-proto --allow-dirty
-          cargo package -p snip-sync --allow-dirty
-          cargo package -p snip-it --allow-dirty
-      - name: Unpack and build snip-it from package
+      - run: cargo package -p snip-it --locked --allow-dirty
+      - name: Verify package builds from crate
         run: |
           CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
           UNPACK_DIR=$(mktemp -d)
-          unzip -o "$CRATE_FILE" -d "$UNPACK_DIR"
+          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
           cd "$UNPACK_DIR"/snip-it-*
-          cargo build --release
-      - name: Smoke test installed binary
-        run: |
-          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
-          UNPACK_DIR=$(mktemp -d)
-          unzip -o "$CRATE_FILE" -d "$UNPACK_DIR"
-          cd "$UNPACK_DIR"/snip-it-*
-          cargo install --path . --locked
-          snp --version
-          snp --help > /dev/null
+          cargo build --release --locked

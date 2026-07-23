@@ -201,6 +201,110 @@ fn read_for_snapshot(path: &Path, label: &str) -> SnipResult<Vec<u8>> {
     fs::read(path).map_err(|e| SnipError::io_error(&format!("read {label} for snapshot"), path, e))
 }
 
+/// Compute the SHA-256 hex digest of a byte slice.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// Read the library generation from `libraries.toml` if it exists.
+fn read_library_generation(config_dir: &Path) -> SnipResult<u64> {
+    let libraries_toml = config_dir.join("libraries.toml");
+    if !libraries_toml.exists() {
+        return Ok(0);
+    }
+    let content = fs::read_to_string(&libraries_toml).map_err(|e| {
+        SnipError::io_error(
+            "read libraries index for generation",
+            libraries_toml.clone(),
+            e,
+        )
+    })?;
+    let config: crate::library::LibraryConfig = toml::from_str(&content)
+        .map_err(|e| SnipError::toml_error("parse libraries index for generation", e))?;
+    Ok(config.generation)
+}
+
+/// Validate that a path is canonically contained under a root directory.
+fn validate_canonical_containment(path: &Path, root: &Path, label: &str) -> SnipResult<PathBuf> {
+    let canonical_root = root.canonicalize().map_err(|e| {
+        SnipError::io_error(&format!("canonicalize {label} root"), root.to_path_buf(), e)
+    })?;
+    let canonical_path = path.canonicalize().map_err(|e| {
+        SnipError::io_error(&format!("canonicalize {label} path"), path.to_path_buf(), e)
+    })?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(SnipError::runtime_error(
+            "Backup source escapes config root",
+            Some(&format!(
+                "{} ({}) is not under config root ({})",
+                label,
+                canonical_path.display(),
+                canonical_root.display(),
+            )),
+        ));
+    }
+    Ok(canonical_path)
+}
+
+/// Validate that a byte slice is valid TOML.
+fn validate_toml_content(bytes: &[u8], label: &str) -> SnipResult<()> {
+    let content = std::str::from_utf8(bytes).map_err(|e| {
+        SnipError::runtime_error(&format!("{label} is not valid UTF-8"), Some(&e.to_string()))
+    })?;
+    let _: toml::Value = toml::from_str(content).map_err(|e| {
+        SnipError::runtime_error(&format!("{label} is not valid TOML"), Some(&e.to_string()))
+    })?;
+    Ok(())
+}
+
+/// Write backup content to a staging directory, then atomically rename to the
+/// final path. On failure the staging directory is removed.
+fn atomic_write_backup(
+    staging_dir: &Path,
+    final_dir: &Path,
+    files: &[(&str, &str, &[u8])],
+    manifest: &BackupManifest,
+) -> SnipResult<()> {
+    fs::create_dir_all(staging_dir).map_err(|e| {
+        SnipError::io_error("create staging directory", staging_dir.to_path_buf(), e)
+    })?;
+    let result = (|| -> SnipResult<()> {
+        for (rel_path, _kind, bytes) in files {
+            let dst = staging_dir.join(rel_path);
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    SnipError::io_error("create staging subdirectory", parent.to_path_buf(), e)
+                })?;
+            }
+            fs::write(&dst, bytes)
+                .map_err(|e| SnipError::io_error("write to staging", dst.clone(), e))?;
+        }
+        let manifest_path = staging_dir.join("manifest.toml");
+        let manifest_str = toml::to_string_pretty(manifest)
+            .map_err(|e| SnipError::toml_error("serialize backup manifest", e))?;
+        crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
+        if let Some(parent) = final_dir.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                SnipError::io_error("create backup parent directory", parent.to_path_buf(), e)
+            })?;
+        }
+        fs::rename(staging_dir, final_dir).map_err(|e| {
+            SnipError::io_error("atomic rename staging to final", final_dir.to_path_buf(), e)
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(staging_dir);
+    }
+    result
+}
+
 /// Backup manifest entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BackupManifestEntry {
@@ -229,7 +333,7 @@ pub fn run(
     format: BackupFormat,
     json: bool,
 ) -> SnipResult<()> {
-    let _ = format; // Only Directory variant exists; flag kept for CLI compatibility
+    let _ = format;
     let config_dir = get_config_dir();
     if !config_dir.exists() {
         return Err(SnipError::runtime_error(
@@ -237,24 +341,23 @@ pub fn run(
             Some(&format!("Expected config at {}", config_dir.display())),
         ));
     }
-
+    let canonical_config = config_dir
+        .canonicalize()
+        .map_err(|e| SnipError::io_error("canonicalize config directory", config_dir.clone(), e))?;
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-    let backup_dir = match output {
-        Some(ref path) => {
-            fs::create_dir_all(path).map_err(|e| {
-                SnipError::io_error("create backup output directory", path.clone(), e)
-            })?;
-            path.clone()
-        }
-        None => {
-            let default_base = config_dir.join("backups").join(&timestamp);
-            fs::create_dir_all(&default_base).map_err(|e| {
-                SnipError::io_error("create backup directory", default_base.clone(), e)
-            })?;
-            default_base
-        }
+    let final_backup_dir = match output {
+        Some(ref path) => path.clone(),
+        None => config_dir.join("backups").join(&timestamp),
     };
-
+    let staging_dir = final_backup_dir.with_extension(format!(
+        "{}.staging.{}",
+        final_backup_dir
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or(""),
+        uuid::Uuid::new_v4()
+    ));
+    let generation_before = read_library_generation(&config_dir)?;
     let mut manifest = BackupManifest {
         schema: 1,
         created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
@@ -262,13 +365,7 @@ pub fn run(
         layout: "directory".to_string(),
         files: Vec::new(),
     };
-
-    // Take a consistent in-memory snapshot of all source files before copying.
-    // This prevents a concurrent mutation from producing an inconsistent backup
-    // (e.g., index referencing a snippet that was deleted mid-copy).
     let mut snapshot: Vec<(PathBuf, String, Vec<u8>)> = Vec::new();
-
-    // 1. Snapshot all library files
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
         let entries: Vec<_> = fs::read_dir(&libraries_dir)
@@ -279,35 +376,32 @@ pub fn run(
                 name.ends_with(".toml") && !name.starts_with('.')
             })
             .collect();
-
         for entry in &entries {
             let file_name = entry.file_name().to_string_lossy().to_string();
             let src = entry.path();
+            validate_canonical_containment(&src, &canonical_config, "library file")?;
             let bytes = read_for_snapshot(&src, "library")?;
             snapshot.push((src, file_name, bytes));
         }
     }
-
-    // 2. Snapshot libraries.toml index
     let libraries_toml = config_dir.join("libraries.toml");
     if libraries_toml.exists() {
+        validate_canonical_containment(&libraries_toml, &canonical_config, "libraries index")?;
         let bytes = read_for_snapshot(&libraries_toml, "libraries index")?;
         snapshot.push((libraries_toml, "libraries.toml".to_string(), bytes));
     }
-
-    // 3. Snapshot usage.toml if requested
     if include_usage {
         let usage_path = config_dir.join("usage.toml");
         if usage_path.exists() {
+            validate_canonical_containment(&usage_path, &canonical_config, "usage")?;
             let bytes = read_for_snapshot(&usage_path, "usage")?;
             snapshot.push((usage_path, "usage.toml".to_string(), bytes));
         }
     }
-
-    // 4. Snapshot sync.toml if requested (for redaction)
     let sync_snapshot = if include_sync_state {
         let sync_path = config_dir.join("sync.toml");
         if sync_path.exists() {
+            validate_canonical_containment(&sync_path, &canonical_config, "sync config")?;
             let content = fs::read_to_string(&sync_path).map_err(|e| {
                 SnipError::io_error("read sync config for snapshot", sync_path.clone(), e)
             })?;
@@ -318,8 +412,6 @@ pub fn run(
     } else {
         None
     };
-
-    // 5. Snapshot general config files if requested
     let config_snapshot: Vec<(PathBuf, String, Vec<u8>)> = if include_config {
         let handled_files: HashSet<&str> = [
             "libraries.toml",
@@ -330,7 +422,6 @@ pub fn run(
         ]
         .into_iter()
         .collect();
-
         let excluded_dirs: HashSet<&str> = [
             "libraries",
             "premade",
@@ -340,7 +431,6 @@ pub fn run(
         ]
         .into_iter()
         .collect();
-
         let mut result = Vec::new();
         if let Ok(entries) = fs::read_dir(&config_dir) {
             for entry in entries.filter_map(|e| e.ok()) {
@@ -357,6 +447,7 @@ pub fn run(
                 }
                 let src = entry.path();
                 if src.is_file() {
+                    validate_canonical_containment(&src, &canonical_config, &name)?;
                     let bytes = read_for_snapshot(&src, &name)?;
                     result.push((src, name, bytes));
                 }
@@ -366,141 +457,110 @@ pub fn run(
     } else {
         Vec::new()
     };
-
-    // === Write from snapshot to backup directory ===
-
-    // 1. Write library files from snapshot
+    let generation_after = read_library_generation(&config_dir)?;
+    if generation_before != generation_after {
+        return Err(SnipError::runtime_error(
+            "Library generation changed during snapshot",
+            Some(&format!(
+                "generation before: {generation_before}, after: {generation_after}. \
+                 A concurrent mutation occurred; retry the backup."
+            )),
+        ));
+    }
+    for (_src, name, bytes) in &snapshot {
+        if _src.extension().is_some_and(|e| e == "toml")
+            && _src.parent().is_some_and(|p| p == libraries_dir)
+        {
+            validate_toml_content(bytes, &format!("library file '{name}'"))?;
+        }
+    }
+    for (_src, name, bytes) in &snapshot {
+        if name == "libraries.toml" {
+            validate_toml_content(bytes, "libraries index 'libraries.toml'")?;
+        }
+    }
+    let mut backup_files: Vec<(String, String, Vec<u8>)> = Vec::new();
     for (_src, file_name, bytes) in &snapshot {
         if _src.extension().is_some_and(|e| e == "toml")
             && _src.parent().is_some_and(|p| p == libraries_dir)
         {
-            let dst = backup_dir.join("libraries").join(file_name);
-            if let Some(parent) = dst.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| SnipError::io_error("create backup subdirectory", parent, e))?;
-            }
-            fs::write(&dst, bytes)
-                .map_err(|e| SnipError::io_error("write library to backup", dst.clone(), e))?;
-            let sha = {
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect()
-            };
+            let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
-                path: file_name.clone(),
+                path: format!("libraries/{file_name}"),
                 kind: "library".to_string(),
                 size: bytes.len() as u64,
                 sha256: sha,
             });
+            backup_files.push((
+                format!("libraries/{file_name}"),
+                "library".to_string(),
+                bytes.clone(),
+            ));
         }
     }
-
-    // 2. Write index from snapshot
     for (_src, name, bytes) in &snapshot {
         if name == "libraries.toml" {
-            let dst = backup_dir.join("libraries.toml");
-            fs::write(&dst, bytes)
-                .map_err(|e| SnipError::io_error("write index to backup", dst.clone(), e))?;
-            let sha = {
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect()
-            };
+            let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
                 path: "libraries.toml".to_string(),
                 kind: "index".to_string(),
                 size: bytes.len() as u64,
                 sha256: sha,
             });
+            backup_files.push((
+                "libraries.toml".to_string(),
+                "index".to_string(),
+                bytes.clone(),
+            ));
         }
     }
-
-    // 3. Write usage from snapshot
     for (_src, name, bytes) in &snapshot {
         if name == "usage.toml" {
-            let dst = backup_dir.join("usage.toml");
-            fs::write(&dst, bytes)
-                .map_err(|e| SnipError::io_error("write usage to backup", dst.clone(), e))?;
-            let sha = {
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect()
-            };
+            let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
                 path: "usage.toml".to_string(),
                 kind: "usage".to_string(),
                 size: bytes.len() as u64,
                 sha256: sha,
             });
+            backup_files.push(("usage.toml".to_string(), "usage".to_string(), bytes.clone()));
         }
     }
-
-    // 4. Write redacted sync.toml if snapshotted
     if let Some(content) = sync_snapshot {
         let redacted = redact_sync_config(&content)?;
-        let dst = backup_dir.join("sync.toml");
-        crate::utils::atomic::write_private_atomic(&dst, &redacted, "sync")?;
-        let sha = {
-            let mut hasher = Sha256::new();
-            hasher.update(redacted.as_bytes());
-            hasher
-                .finalize()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect()
-        };
+        let redacted_bytes = redacted.into_bytes();
+        let sha = sha256_hex(&redacted_bytes);
         manifest.files.push(BackupManifestEntry {
             path: "sync.toml".to_string(),
             kind: "sync_config".to_string(),
-            size: redacted.len() as u64,
+            size: redacted_bytes.len() as u64,
             sha256: sha,
         });
+        backup_files.push((
+            "sync.toml".to_string(),
+            "sync_config".to_string(),
+            redacted_bytes,
+        ));
     }
-
-    // 5. Write config files from snapshot
     for (_src, name, bytes) in &config_snapshot {
-        let dst = backup_dir.join(name);
-        fs::write(&dst, bytes)
-            .map_err(|e| SnipError::io_error("write config to backup", dst.clone(), e))?;
-        let sha = {
-            let mut hasher = Sha256::new();
-            hasher.update(bytes);
-            hasher
-                .finalize()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect()
-        };
+        let sha = sha256_hex(bytes);
         manifest.files.push(BackupManifestEntry {
             path: name.clone(),
             kind: "config".to_string(),
             size: bytes.len() as u64,
             sha256: sha,
         });
+        backup_files.push((name.clone(), "config".to_string(), bytes.clone()));
     }
-
-    // 6. Write manifest
-    let manifest_path = backup_dir.join("manifest.toml");
-    let manifest_str = toml::to_string_pretty(&manifest)
-        .map_err(|e| SnipError::toml_error("serialize backup manifest", e))?;
-    crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
-
-    // 7. Output report
+    manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
+    let file_refs: Vec<(&str, &str, &[u8])> = backup_files
+        .iter()
+        .map(|(path, kind, bytes)| (path.as_str(), kind.as_str(), bytes.as_slice()))
+        .collect();
+    atomic_write_backup(&staging_dir, &final_backup_dir, &file_refs, &manifest)?;
     if json {
         let report = serde_json::json!({
-            "backup_dir": backup_dir.display().to_string(),
+            "backup_dir": final_backup_dir.display().to_string(),
             "schema": manifest.schema,
             "version": manifest.snip_it_version,
             "file_count": manifest.files.len(),
@@ -512,7 +572,7 @@ pub fn run(
                 .map_err(|e| SnipError::runtime_error("serialize report", Some(&e.to_string())))?
         );
     } else {
-        eprintln!("Backup created: {}", backup_dir.display());
+        eprintln!("Backup created: {}", final_backup_dir.display());
         eprintln!("  Schema: {}", manifest.schema);
         eprintln!("  Version: {}", manifest.snip_it_version);
         eprintln!("  Files: {}", manifest.files.len());
@@ -528,7 +588,6 @@ pub fn run(
             );
         }
     }
-
     Ok(())
 }
 
@@ -652,5 +711,180 @@ timeout = 30
         let result = read_for_snapshot(&file, "test");
         assert!(result.is_ok(), "should accept regular file");
         assert_eq!(result.unwrap(), b"content");
+    }
+
+    #[test]
+    fn test_sha256_hex_deterministic() {
+        let a = sha256_hex(b"hello world");
+        let b = sha256_hex(b"hello world");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn test_validate_toml_content_valid() {
+        assert!(validate_toml_content(b"key = \"value\"", "test").is_ok());
+        assert!(validate_toml_content(b"[[snippets]]\nid = \"x\"", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_toml_content_invalid() {
+        let result = validate_toml_content(b"{{{{invalid", "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not valid TOML"), "Expected TOML error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_toml_content_not_utf8() {
+        let result = validate_toml_content(&[0xFF, 0xFE], "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("UTF-8"), "Expected UTF-8 error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_canonical_containment_inside() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let child = root.join("child.toml");
+        fs::write(&child, "data").unwrap();
+        assert!(validate_canonical_containment(&child, root, "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_canonical_containment_rejects_traversal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("subdir");
+        fs::create_dir(&root).unwrap();
+        let file = dir.path().join("escape.toml");
+        fs::write(&file, "data").unwrap();
+        let result = validate_canonical_containment(&file, &root, "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("escapes config root"),
+            "Expected containment error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_deterministic_manifest_ordering() {
+        let mut manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 0,
+            snip_it_version: "test".to_string(),
+            layout: "directory".to_string(),
+            files: vec![
+                BackupManifestEntry {
+                    path: "zebra.toml".to_string(),
+                    kind: "library".to_string(),
+                    size: 1,
+                    sha256: "a".to_string(),
+                },
+                BackupManifestEntry {
+                    path: "alpha.toml".to_string(),
+                    kind: "library".to_string(),
+                    size: 2,
+                    sha256: "b".to_string(),
+                },
+                BackupManifestEntry {
+                    path: "libraries.toml".to_string(),
+                    kind: "index".to_string(),
+                    size: 3,
+                    sha256: "c".to_string(),
+                },
+            ],
+        };
+        manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(manifest.files[0].path, "alpha.toml");
+        assert_eq!(manifest.files[1].path, "libraries.toml");
+        assert_eq!(manifest.files[2].path, "zebra.toml");
+    }
+
+    #[test]
+    fn test_read_library_generation_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let generation = read_library_generation(dir.path()).unwrap();
+        assert_eq!(generation, 0);
+    }
+
+    #[test]
+    fn test_read_library_generation_with_file() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("libraries.toml");
+        fs::write(
+            &config_path,
+            "generation = 42\n[[libraries]]\nfilename = \"test\"\n",
+        )
+        .unwrap();
+        let generation = read_library_generation(dir.path()).unwrap();
+        assert_eq!(generation, 42);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_backup_creates_all_files() {
+        let staging = TempDir::new().unwrap();
+        let final_dir = TempDir::new().unwrap();
+        let backup_path = final_dir.path().join("backup");
+        let files = [
+            (
+                "libraries/a.toml".to_string(),
+                "library".to_string(),
+                b"lib a".to_vec(),
+            ),
+            (
+                "libraries/b.toml".to_string(),
+                "library".to_string(),
+                b"lib b".to_vec(),
+            ),
+        ];
+        let file_refs: Vec<(&str, &str, &[u8])> = files
+            .iter()
+            .map(|(p, k, b)| (p.as_str(), k.as_str(), b.as_slice()))
+            .collect();
+        let manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 0,
+            snip_it_version: "test".to_string(),
+            layout: "directory".to_string(),
+            files: vec![],
+        };
+        atomic_write_backup(staging.path(), &backup_path, &file_refs, &manifest).unwrap();
+        assert!(backup_path.join("libraries/a.toml").exists());
+        assert!(backup_path.join("libraries/b.toml").exists());
+        assert!(backup_path.join("manifest.toml").exists());
+        assert_eq!(
+            fs::read(backup_path.join("libraries/a.toml")).unwrap(),
+            b"lib a"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_backup_failure_cleans_staging() {
+        let staging = TempDir::new().unwrap();
+        let staging_path = staging.path().join("attempt");
+        let final_dir = PathBuf::from("/nonexistent_root/impossible/backup");
+        let files = [(
+            "file.txt".to_string(),
+            "config".to_string(),
+            b"data".to_vec(),
+        )];
+        let file_refs: Vec<(&str, &str, &[u8])> = files
+            .iter()
+            .map(|(p, k, b)| (p.as_str(), k.as_str(), b.as_slice()))
+            .collect();
+        let manifest = BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 0,
+            snip_it_version: "test".to_string(),
+            layout: "directory".to_string(),
+            files: vec![],
+        };
+        let result = atomic_write_backup(&staging_path, &final_dir, &file_refs, &manifest);
+        assert!(result.is_err());
+        assert!(!staging_path.exists());
     }
 }

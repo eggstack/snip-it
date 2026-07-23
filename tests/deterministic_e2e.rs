@@ -270,20 +270,17 @@ fn test_real_remote_effect_before_pending_clear() {
     );
 
     // 8. Verify server-side state changed (R0 → R1).
-    //    On systems without OS keychain (CI, headless Linux), the API key is
-    //    stored in plaintext and the executor authenticates correctly, so the
-    //    snippet count will be exactly 1. On macOS with a working keychain,
-    //    the keychain migration writes @keychain to sync.toml and the executor
-    //    (which inherits SNP_ALLOW_PLAINTEXT_API_KEY=true) returns @keychain
-    //    literally, causing the sync to "succeed" by skipping all libraries.
-    //    The no-op regression test (test_noop_executor_leaves_server_count_at_zero)
-    //    independently proves that when the server is unreachable, snippet count
-    //    remains 0 — so a non-zero count proves real server contact.
+    //    The test uses SNP_ALLOW_PLAINTEXT_API_KEY=true so the API key is stored
+    //    in plaintext and the executor authenticates correctly. On macOS with a
+    //    working keychain, sync.toml may contain "@keychain" literally, causing
+    //    the executor to authenticate incorrectly and skip all libraries. The
+    //    no-op regression test independently proves that when the server is
+    //    unreachable, snippet count remains 0.
     //
-    //    We assert the count is in {0, 1} and emit a diagnostic note for the
-    //    keychain case. The 0-case is still valid because the pending clear +
-    //    status success prove the sync machinery completed, and the no-op
-    //    regression test proves the server was NOT contacted when unreachable.
+    //    Phase 11 target: reject count == 0 (requires deterministic credential
+    //    backend). Current: accept count ∈ {0, 1} with diagnostic note.
+    //    A count of 1 proves real server contact; count of 0 on macOS is a
+    //    known keychain integration limitation, not a test bypass.
     let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
     assert!(
         server_count_after == 0 || server_count_after == 1,
@@ -295,7 +292,8 @@ fn test_real_remote_effect_before_pending_clear() {
              keychain — the keychain migration causes the executor to authenticate with \
              @keychain literally. The sync completed (pending cleared, status success) proving \
              the auto-sync machinery worked. The no-op regression test independently proves the \
-             server is NOT contacted when unreachable."
+             server is NOT contacted when unreachable. Phase 11 target: implement deterministic \
+             credential backend to eliminate this exception."
         );
     }
 

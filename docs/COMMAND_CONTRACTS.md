@@ -61,11 +61,17 @@
 | 8 | Execution failure | Snippet execution (child process) failed |
 | 9 | Conflict/refused | Destructive action refused or generation changed |
 
+## Startup Recovery Classification
+
+Commands are classified by `StartupRecoveryPolicy` at startup. Only mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger auto-sync recovery. Read-only commands (`list`, `search`, `get`, `status`, `validate`, `backup`, `select`) suppress recovery. Explicit sync commands (`sync`, `cron`, `register`) and internal subprocesses also suppress recovery.
+
+Dry-run commands are classified based on their command category, not the dry-run flag. `restore` and `import` are classified as `Allow` (mutation) because the command itself is a mutation command; dry-run mode prevents local mutation but the recovery policy applies to the command class, not the mode.
+
 ## Notes
 
 - **TUI commands** (`run`, `clip`, `search`, `select`) render directly to the terminal via crossterm raw mode — they bypass stdout/stderr for the interactive portion.
 - **`list` default format** writes colored table output to stdout (includes ANSI escapes — not pipe-safe without `--json` or `--csv`).
 - **`edit --output`** is non-interactive; it writes the output field to stdout. The `--output-stdin` variant reads from stdin.
-- **`--json`** and `--csv` flags conflict with each other (enforced by clap).
+- **`--json`** and **`--csv`** flags conflict with each other (enforced by clap).
 - **`ExecutionFailed`** exit code: if the child process had a valid exit code, that code is propagated; otherwise exit code 8 is used.
 - **`PersistenceFailed`** maps to exit code 1 (general error) — no dedicated public exit code for persistence failures.

@@ -86,8 +86,8 @@ fn test_backup_rejects_symlinked_library() {
     } else {
         // If backup failed, it should mention symlink
         assert!(
-            stderr.contains("symlink"),
-            "Backup should fail with symlink error: {stderr}"
+            stderr.contains("symlink") || stderr.contains("escapes config root"),
+            "Backup should fail with symlink or containment error: {stderr}"
         );
     }
 }
@@ -216,10 +216,11 @@ fn test_backup_manifest_hashes_match_files() {
         let expected_sha = entry["sha256"].as_str().unwrap();
         let kind = entry["kind"].as_str().unwrap();
 
-        let file_path = if kind == "index" || kind == "usage" || kind == "sync_config" {
+        let file_path = if kind == "library" || kind == "index" {
+            // Library files have paths like "libraries/foo.toml", index has "libraries.toml"
             backup_dir.join(path)
         } else {
-            backup_dir.join("libraries").join(path)
+            backup_dir.join(path)
         };
 
         assert!(

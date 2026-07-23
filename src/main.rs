@@ -639,7 +639,7 @@ enum ShellIntegration {
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
-            commands::run_cmd::run(None, false, None, None, &RUNTIME)?;
+            return commands::run_cmd::run(None, false, None, None, &RUNTIME);
         }
         Some(Commands::Version) => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
@@ -734,8 +734,16 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 let result = snip_it::selector::resolve_selector(&selector)?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
-                        commands::run_cmd::run_exact(&m.snippet, sync, &RUNTIME)?;
-                        snip_it::outcome::CliOutcome::Success
+                        let outcome = commands::run_cmd::run_exact(&m.snippet, sync, &RUNTIME)?;
+                        match outcome {
+                            CommandOutcome::ExecutionFailed { child_code } => {
+                                std::process::exit(child_code.unwrap_or(8));
+                            }
+                            CommandOutcome::Cancelled => {
+                                return Ok(CommandOutcome::Cancelled);
+                            }
+                            _ => snip_it::outcome::CliOutcome::Success,
+                        }
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
                         for identity in &identities {
@@ -760,7 +768,17 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     mode: sort,
                     favorites_first,
                 };
-                commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
+                let outcome =
+                    commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
+                match outcome {
+                    CommandOutcome::ExecutionFailed { child_code } => {
+                        std::process::exit(child_code.unwrap_or(8));
+                    }
+                    CommandOutcome::Cancelled => {
+                        return Ok(CommandOutcome::Cancelled);
+                    }
+                    _ => {}
+                }
             }
         }
         Some(Commands::Clip {
@@ -1224,6 +1242,16 @@ fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
         | Commands::Shell { .. }
         | Commands::Keybindings => StartupRecoveryPolicy::SuppressConfiguration,
 
+        // Dry-run / read-only modes of otherwise-mutating commands
+        Commands::Restore {
+            mode: commands::restore_cmd::RestoreMode::DryRun,
+            ..
+        }
+        | Commands::Import {
+            command: ImportSubcommands::Pet { dry_run: true, .. },
+        }
+        | Commands::Repair { dry_run: true, .. } => StartupRecoveryPolicy::SuppressReadOnly,
+
         // Mutation commands: allow recovery
         Commands::New { .. }
         | Commands::Run { .. }
@@ -1261,6 +1289,10 @@ fn main() {
         Ok(CommandOutcome::Cancelled) => {
             log_shutdown_info();
             std::process::exit(4);
+        }
+        Ok(CommandOutcome::ExecutionFailed { child_code }) => {
+            log_shutdown_info();
+            std::process::exit(child_code.unwrap_or(8));
         }
         Ok(_) => {}
         Err(e) => {

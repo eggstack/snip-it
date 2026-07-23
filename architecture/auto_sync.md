@@ -215,7 +215,9 @@ pub enum StartupRecoveryPolicy {
 }
 ```
 
-Semantic startup recovery policy for each CLI subcommand. Determines whether startup recovery, worker spawn, and network access are permitted. Only `Allow` (mutation commands) triggers startup recovery. The other variants suppress recovery to avoid unnecessary side effects:
+Semantic startup recovery policy for each CLI subcommand. Determines whether startup recovery, worker spawn, and network access are permitted. Only `Allow` (mutation commands) triggers startup recovery. The other variants suppress recovery to avoid unnecessary side effects.
+
+**Operation-aware classification:** The `classify_command()` function in `main.rs` assigns policies based on the command category, not the dry-run flag. A `restore --dry-run` is classified as `Allow` (mutation) because the command itself is a mutation command; the dry-run mode prevents local mutation but the recovery policy is determined by the command class. This is intentional — startup recovery schedules a worker for *pending* work, not for the current command's effect.
 
 | Policy | Commands | Recovery | Worker Spawn | Network |
 |--------|----------|----------|--------------|---------|
