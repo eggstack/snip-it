@@ -153,7 +153,7 @@ fn process_alive(pid: u32) -> bool {
         };
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            return true;
+            return false;
         }
         let mut exit_code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut exit_code);
