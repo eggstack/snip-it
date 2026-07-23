@@ -169,7 +169,7 @@ fn is_process_alive(pid: u32) -> bool {
     const STILL_ACTIVE: u32 = 259;
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle == 0 {
+        if handle.is_null() {
             return false;
         }
         let mut exit_code: u32 = 0;

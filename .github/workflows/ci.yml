@@ -25,7 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -36,7 +37,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.1'
       - name: Run workspace tests (debug)
         run: cargo test --workspace --all-features
       - name: Run workspace tests (release)
@@ -50,7 +61,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.1'
       - name: Phase 05A deterministic E2E
         run: cargo test --test deterministic_e2e --features test-support
       - name: Phase 05A failure class contracts
@@ -76,7 +97,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.1'
       - name: Transaction crash recovery
         run: cargo test --test transaction_crash_recovery --features test-support
       - name: Restore security
@@ -104,7 +135,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.1'
       - name: Update archive security
         run: cargo test --test update_archive_security --features test-support
 
@@ -113,22 +154,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
-      - name: Audit snip-it
-        run: cargo deny -p snip-it check
-      - name: Audit snip-proto
-        run: cargo deny -p snip-proto check
-      - name: Audit snip-sync
-        run: cargo deny -p snip-sync check
+      - name: Audit workspace
+        run: cargo deny check
 
   package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Package snip-proto
         run: cargo package -p snip-proto --locked --allow-dirty
       - name: Package snip-sync
@@ -160,7 +199,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.1'
       - name: Package and install
         run: |
           cargo package -p snip-it --locked --allow-dirty
