@@ -266,7 +266,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
 
 /// Collect repair candidates from interrupted transactions.
 fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
-    let state_dir = crate::auto_sync::notification::derive_state_dir();
+    let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
     let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
 
     for journal in &interrupted {

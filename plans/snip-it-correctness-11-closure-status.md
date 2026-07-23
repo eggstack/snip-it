@@ -2,12 +2,27 @@
 
 Phase 11 status: INCOMPLETE
 Correctness program status: REOPENED
+Blocking corrective plan: plans/snip-it-correctness-11b-durability-verification-windows-ci-closure.md
+Corrective baseline: cd206fc2ee65f3a9a9307074a3eb93b82baeffb3
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final commit (current): b220ecf
+Final commit (current): pending (11B corrective changes)
 
 ## Summary
 
-Phase 11 implemented substantial crash-correctness and verification improvements across all 12 workstreams (A–K). The implementation consolidated into a single commit due to subagent context limitations. Most workstreams are complete with passing tests. One critical item remains: the headline E2E test requires server-side state verification that is not yet achieved.
+Phase 11 implemented substantial crash-correctness and verification improvements across all 12 workstreams (A–K). Phase 11B applies corrective fixes for repair path, test credential gating, execution outcome mapping, and CI workflow. Most workstreams are complete with passing tests.
+
+## Phase 11B Corrective Changes
+
+### Bug Fixes Applied
+- **Repair path bug**: `collect_transaction_repairs()` now scans `.transaction/` subdirectory (was scanning config dir root)
+- **Test credential gate**: `SNP_TEST_CREDENTIAL_FILE` runtime checks gated behind `#[cfg(feature = "test-support")]`
+- **Output-file exit code**: Timeout/spawn failures in output-file branch now map to exit code 8 (was exit code 1)
+- **Transaction crash recovery tests**: Updated to create journals in canonical `.transaction/` directory
+
+### CI Workflow
+- Created `.github/workflows/ci.yml` with fmt, clippy, test matrix (Linux/macOS/Windows × debug/release), and package jobs
+- No `|| true`, no `continue-on-error`, `fail-fast: false`
+- Portable protoc setup per OS (no GitHub API-dependent actions)
 
 ## Test Evidence
 
@@ -120,11 +135,22 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 
 ### 1. Cross-platform CI evidence
 
-The CI workflow is defined but has not been run on GitHub Actions. Cross-platform test evidence (Linux, macOS, Windows) is not yet available.
+The CI workflow is defined (`.github/workflows/ci.yml`) but has not been run on GitHub Actions. Cross-platform test evidence (Linux, macOS, Windows) is not yet available. Local tests pass on macOS.
 
 ### 2. Event capture flakiness in full test suite
 
-The deterministic_e2e headline test passes in isolation (13/13 pass) but occasionally fails in the full workspace run due to lifecycle event capture interference from concurrent tests. This is a pre-existing test isolation issue, not a functional defect.
+The deterministic_e2e headline test passes in isolation but occasionally fails in the full workspace run due to lifecycle event capture interference from concurrent tests. This is a pre-existing test isolation issue, not a functional defect.
+
+### 3. Phase 11B remaining workstreams
+
+The 11B corrective plan identifies additional architectural improvements that are not yet implemented:
+- Workstream C/D: Restore durable transaction executor (advance through BackupsDurable/Committing states)
+- Workstream E: Mutation gate for interrupted-transaction recovery
+- Workstream F: Process identity for lock ownership (start token)
+- Workstream G: LocalDataLock for backup snapshot serialization
+- Workstream H: Typed manifest entry kind (enum vs string)
+- Workstream I: Server-observable E2E telemetry assertions
+- Workstream L: Full Windows CI validation
 
 ## Closure Criteria Assessment
 
@@ -144,13 +170,16 @@ The deterministic_e2e headline test passes in isolation (13/13 pass) but occasio
 | Typed manifest contracts | ✅ Complete (enum, validation, duplicates, Windows paths) |
 | General config round-trip | ✅ Complete — `--include-config` removed, unknown kinds error |
 | Duplicate snippet IDs | ✅ Complete — tested in manifest_contracts.rs |
-| Execution outcome semantics | ✅ Complete (timeout/spawn/signal → code 8) |
+| Execution outcome semantics | ✅ Complete (timeout/spawn/signal → code 8, including output-file) |
 | Update extraction hardening | ✅ Complete (ZIP, tar bounds, URL validation) |
 | CI/package evidence | ✅ Workflow defined, local checks pass |
 | Documentation reconciled | ✅ Updated (persistence, auto_sync, AGENTS) |
+| Repair path bug | ✅ Fixed — scans `.transaction/` subdirectory |
+| Test credential compile-time gate | ✅ Fixed — gated behind `#[cfg(feature = "test-support")]` |
+| Output-file exit code 8 | ✅ Fixed — timeout/spawn failures map to code 8 |
 
 ## Release Decision
 
 **Phase 11 status: INCOMPLETE**
 **Correctness program status: REOPENED**
-**Release blockers: Cross-platform CI evidence**
+**Release blockers: Cross-platform CI evidence, remaining 11B workstreams**

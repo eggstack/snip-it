@@ -4,9 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use support::helpers::*;
 
-/// State directory where transaction journals live (same as derive_state_dir()).
+/// State directory where transaction journals live (the .transaction subdirectory).
 fn state_dir(config_dir: &Path) -> PathBuf {
-    config_dir.to_path_buf()
+    config_dir.join(".transaction")
 }
 
 /// Write a transaction journal file directly into the state directory.

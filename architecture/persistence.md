@@ -176,14 +176,15 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 
 ### Crash Recovery
 
-`check_interrupted_transactions()` scans the state directory for `txn-*.toml` files in `Prepared` state. These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
+`check_interrupted_transactions()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `RollingBack`). These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
 
 ### Journal Lifecycle
 
-1. `begin_transaction` writes journal via `write_private_atomic`
-2. Caller performs staged file operations (with backups)
-3. `commit_transaction` marks `Committed`, cleans up backups, removes journal
-4. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan
+1. `begin_transaction` writes journal via `write_private_atomic` in `Prepared` state
+2. Caller creates durable backups and advances to `BackupsDurable`
+3. Caller performs live replacements, advancing through `Committing { next_index }` per file
+4. `commit_transaction` marks `Committed`, cleans up backups, removes journal
+5. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan in any interruptible state
 
 ---
 

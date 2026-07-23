@@ -169,7 +169,7 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 `atomic_replace` supports four durability classes: DurableUserData (fsync file + fsync parent), SensitiveConfig (fsync parent only, 0o600 perms, symlink rejection), RecoverableMetadata (fsync parent only), EphemeralCoordination (no fsync). Use `AtomicWriteOptions::for_durability()` for correct defaults.
 
 ### Transaction journals
-Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk and can be recovered on startup. `commit_transaction` removes the journal; `rollback_transaction` restores from backups.
+Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
 
 ### Transaction lock (PID/nonce)
 The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, and `operation` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce matches the lock's own nonce. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. Transactions are short-lived, so contention is rare.
@@ -182,6 +182,12 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 
 ### Feature labels are removed (binary is monolithic)
 The `[features]` table in `Cargo.toml` previously contained empty labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) that did not gate any dependencies. These were removed in Phase 10 as misleading. The binary is monolithic — all functionality is unconditionally compiled. Only `test-support` remains for test infrastructure.
+
+### Test credential compile-time gate
+`SNP_TEST_CREDENTIAL_FILE` environment variable behavior is gated behind `#[cfg(feature = "test-support")]` in `src/config.rs`. Production builds ignore this variable entirely — the keychain path is always used. Tests use it for deterministic credential availability across parent, worker, and executor subprocesses.
+
+### Output-file execution exit code
+When a snippet has an `output` field (output-file mode), timeout and spawn failures map to exit code `8` (execution failure), not generic exit code `1`. This is consistent with the normal execution path.
 
 ### Self-update uses safe extraction
 Self-update (`src/update.rs`) validates tar archive entries before extraction: rejects absolute paths, parent-directory traversal, symlinks, and hard links. Uses Rust's `tar` crate instead of shelling out to `tar -xf`. Archives are downloaded over HTTPS only. UUID-based temp directories prevent collision.

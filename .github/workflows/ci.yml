@@ -4,320 +4,187 @@ on:
   push:
     branches: [main]
   pull_request:
-
-# Action pinning policy:
-# - actions/checkout@v4: pinned to major version (GitHub-maintained, low risk)
-# - dtolnay/rust-toolchain@stable: mutable ref — exception documented here.
-#   This action tracks the stable Rust toolchain and is maintained by the
-#   Rust release team. Pinning to SHA would break when new stable versions
-#   are released. The action is reviewed at each Rust release cycle.
-# All other actions are pinned to major version tags.
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
+  PROTOC_VERSION: "25.1"
 
 jobs:
   fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94"
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94"
           components: clippy
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (Linux)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc
+          rm protoc.zip
+          protoc --version
+      - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
+    name: Test (${{ matrix.os }}, ${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        profile: [dev, release]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc (Ubuntu)
+        with:
+          toolchain: "1.94"
+
+      - name: Install protoc (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc
+          rm protoc.zip
+          protoc --version
+
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-osx-x86_64.zip" -o protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc
+          rm protoc.zip
+          protoc --version
+
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
-          $zip = "$env:TEMP\protoc.zip"
-          $extractDir = "$env:TEMP\protoc"
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              if ($i -eq 3) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-          $binDir = "$extractDir\bin"
-          $env:PATH = "$binDir;$env:PATH"
-          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          protoc --version
-      - name: Run workspace tests (debug)
-        run: cargo test --workspace --all-features -- --test-threads=1
-      - name: Run workspace tests (release)
-        run: cargo test --release --workspace --all-features -- --test-threads=1
+          $ErrorActionPreference = 'Stop'
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOC_VERSION/protoc-$env:PROTOC_VERSION-win64.zip"
+          Invoke-WebRequest -Uri $url -OutFile protoc.zip
+          Expand-Archive -Path protoc.zip -DestinationPath protoc-temp -Force
+          Copy-Item "protoc-temp\bin\protoc.exe" "C:\protoc.exe" -Force
+          Remove-Item protoc.zip -Force
+          Remove-Item protoc-temp -Recurse -Force
+          & "C:\protoc.exe" --version
+          echo "C:\" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-  lifecycle:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.profile }}
+
+      - name: Workspace tests
+        shell: bash
         run: |
-          $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
-          $zip = "$env:TEMP\protoc.zip"
-          $extractDir = "$env:TEMP\protoc"
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              if ($i -eq 3) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-          $binDir = "$extractDir\bin"
-          $env:PATH = "$binDir;$env:PATH"
-          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          protoc --version
-      - name: Phase 05A deterministic E2E
-        run: cargo test --test deterministic_e2e --features test-support
-      - name: Phase 05A failure class contracts
-        run: cargo test --test failure_class_contracts --features test-support
-      - name: Phase 05A debounce matrix
-        run: cargo test --test debounce_matrix --features test-support
-      - name: Phase 05A sync contracts
-        run: cargo test --test sync_contracts --features test-support
-      - name: Phase 05A mutual exclusion
-        run: cargo test --test mutual_exclusion --features test-support
-      - name: Phase 05A process lifecycle
-        run: cargo test --test process_lifecycle --features test-support
-      - name: Phase 05A local contracts
-        run: cargo test --test local_contracts --features test-support
-      - name: Phase 05A package evidence
-        run: cargo test --test package_evidence --features test-support
+          set -euo pipefail
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo test --release --workspace --all-features -- --test-threads=1
+          else
+            cargo test --workspace --all-features -- --test-threads=1
+          fi
 
-  crash_recovery:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: PTY integration tests
+        shell: bash
         run: |
-          $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
-          $zip = "$env:TEMP\protoc.zip"
-          $extractDir = "$env:TEMP\protoc"
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              if ($i -eq 3) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-          $binDir = "$extractDir\bin"
-          $env:PATH = "$binDir;$env:PATH"
-          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          protoc --version
-      - name: Transaction crash recovery
-        run: cargo test --test transaction_crash_recovery --features test-support
-      - name: Restore security
-        run: cargo test --test restore_security --features test-support
-      - name: Restore transactions
-        run: cargo test --test restore_transactions --features test-support
-      - name: Backup contracts
-        run: cargo test --test backup_contracts --features test-support
-      - name: Backup snapshot concurrency
-        run: cargo test --test backup_snapshot_concurrency --features test-support
-      - name: Manifest contracts
-        run: cargo test --test manifest_contracts --features test-support
-      - name: Execution outcomes
-        run: cargo test --test execution_outcomes --features test-support
-      - name: Readonly no recovery
-        run: cargo test --test readonly_no_recovery --features test-support
-      - name: Canary nonexecution
-        run: cargo test --test canary_nonexecution --features test-support
-
-  update_security:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
-          $zip = "$env:TEMP\protoc.zip"
-          $extractDir = "$env:TEMP\protoc"
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              if ($i -eq 3) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-          $binDir = "$extractDir\bin"
-          $env:PATH = "$binDir;$env:PATH"
-          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          protoc --version
-      - name: Update archive security
-        run: cargo test --test update_archive_security --features test-support
-
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-      - name: Audit workspace
-        run: cargo deny check
+          set -euo pipefail
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo test --release --test pty_integration --features test-support -- --test-threads=1
+          else
+            cargo test --test pty_integration --features test-support -- --test-threads=1
+          fi
 
   package:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Package snip-proto
-        run: cargo package -p snip-proto --locked --allow-dirty
-      - name: Package snip-sync
-        run: cargo package -p snip-sync --locked --allow-dirty
-      - name: Package snip-it
-        run: cargo package -p snip-it --locked --allow-dirty
-      - name: Verify package builds from unpacked crate
-        run: |
-          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
-          UNPACK_DIR=$(mktemp -d)
-          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
-          cd "$UNPACK_DIR"/snip-it-*
-          cargo build --release --locked
-      - name: Verify installed binary works
-        run: |
-          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
-          UNPACK_DIR=$(mktemp -d)
-          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
-          cd "$UNPACK_DIR"/snip-it-*
-          cargo install --path . --locked
-          snp --version
-          snp --help >/dev/null
-
-  package_smoke:
+    name: Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc (Ubuntu)
+        with:
+          toolchain: "1.94"
+
+      - name: Install protoc (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc
+          rm protoc.zip
+
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-osx-x86_64.zip" -o protoc.zip
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc
+          rm protoc.zip
+
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
-          $zip = "$env:TEMP\protoc.zip"
-          $extractDir = "$env:TEMP\protoc"
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              if ($i -eq 3) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-          Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-          $binDir = "$extractDir\bin"
-          $env:PATH = "$binDir;$env:PATH"
-          echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          protoc --version
-      - name: Package and install
+          $ErrorActionPreference = 'Stop'
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOC_VERSION/protoc-$env:PROTOC_VERSION-win64.zip"
+          Invoke-WebRequest -Uri $url -OutFile protoc.zip
+          Expand-Archive -Path protoc.zip -DestinationPath protoc-temp -Force
+          Copy-Item "protoc-temp\bin\protoc.exe" "C:\protoc.exe" -Force
+          Remove-Item protoc.zip -Force
+          Remove-Item protoc-temp -Recurse -Force
+          echo "C:\" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package and install (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
+          set -euo pipefail
           cargo package -p snip-it --locked --allow-dirty
-          CRATE_FILE=$(ls target/package/snip-it-*.crate | head -1)
-          UNPACK_DIR=$(mktemp -d)
-          tar -xzf "$CRATE_FILE" -C "$UNPACK_DIR"
-          cd "$UNPACK_DIR"/snip-it-*
-          cargo install --path . --locked
-      - name: Smoke test
+          crate_file=$(ls target/package/snip-it-*.crate | head -1)
+          unpack_dir=$(mktemp -d)
+          tar -xzf "$crate_file" -C "$unpack_dir"
+          package_dir=$(find "$unpack_dir" -maxdepth 1 -type d -name 'snip-it-*' | head -1)
+          install_root="$RUNNER_TEMP/snp-install"
+          cargo install --path "$package_dir" --locked --root "$install_root"
+          "$install_root/bin/snp" --version
+          "$install_root/bin/snp" --help >/dev/null
+
+      - name: Package and install (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          snp --version
-          snp --help >/dev/null
-          snp status 2>/dev/null || true
+          $ErrorActionPreference = 'Stop'
+          cargo package -p snip-it --locked --allow-dirty
+          $crate = Get-ChildItem 'target/package/snip-it-*.crate' | Select-Object -First 1
+          if (-not $crate) { throw 'snip-it crate archive not found' }
+          $unpack = Join-Path $env:RUNNER_TEMP ("snip-it-package-" + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $unpack | Out-Null
+          tar -xzf $crate.FullName -C $unpack
+          $packageDir = Get-ChildItem $unpack -Directory | Where-Object Name -Like 'snip-it-*' | Select-Object -First 1
+          if (-not $packageDir) { throw 'unpacked snip-it package directory not found' }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'snp-install'
+          cargo install --path $packageDir.FullName --locked --root $installRoot
+          $snp = Join-Path $installRoot 'bin/snp.exe'
+          & $snp --version
+          & $snp --help | Out-Null

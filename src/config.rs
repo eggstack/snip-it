@@ -354,6 +354,7 @@ fn serialize_api_key<S: serde::Serializer>(
     }
     // Test-only credential file: skip keychain, write plaintext directly.
     // This ensures the credential file and sync.toml stay in sync.
+    #[cfg(feature = "test-support")]
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return serializer.serialize_str(api_key);
     }
@@ -388,6 +389,7 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
         // Test-only credential file: read the actual key from the file.
         // This bypasses the keychain entirely, ensuring deterministic
         // credential availability for parent, worker, and executor.
+        #[cfg(feature = "test-support")]
         if let Some(cred_path) = std::env::var_os("SNP_TEST_CREDENTIAL_FILE") {
             match std::fs::read_to_string(&cred_path) {
                 Ok(key) => {
@@ -464,6 +466,7 @@ fn migrate_plaintext_api_key<FStore, FSave>(
     }
     // Skip migration when using test credential file — the file is the
     // authoritative source and migrating to keychain would overwrite it.
+    #[cfg(feature = "test-support")]
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return;
     }
