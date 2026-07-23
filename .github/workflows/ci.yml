@@ -48,7 +48,7 @@ jobs:
         shell: pwsh
         run: |
           $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
           $zip = "$env:TEMP\protoc.zip"
           $extractDir = "$env:TEMP\protoc"
           for ($i = 1; $i -le 3; $i++) {
@@ -88,7 +88,7 @@ jobs:
         shell: pwsh
         run: |
           $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
           $zip = "$env:TEMP\protoc.zip"
           $extractDir = "$env:TEMP\protoc"
           for ($i = 1; $i -le 3; $i++) {
@@ -140,7 +140,7 @@ jobs:
         shell: pwsh
         run: |
           $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
           $zip = "$env:TEMP\protoc.zip"
           $extractDir = "$env:TEMP\protoc"
           for ($i = 1; $i -le 3; $i++) {
@@ -194,7 +194,7 @@ jobs:
         shell: pwsh
         run: |
           $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
           $zip = "$env:TEMP\protoc.zip"
           $extractDir = "$env:TEMP\protoc"
           for ($i = 1; $i -le 3; $i++) {
@@ -274,7 +274,7 @@ jobs:
         shell: pwsh
         run: |
           $protocVersion = "25.1"
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win-x86_64.zip"
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/protoc-${protocVersion}-win64.zip"
           $zip = "$env:TEMP\protoc.zip"
           $extractDir = "$env:TEMP\protoc"
           for ($i = 1; $i -le 3; $i++) {
