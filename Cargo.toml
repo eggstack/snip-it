@@ -93,7 +93,7 @@ base64 = "0.22"
 
 regex = "1.11"
 zeroize = { version = "1", features = ["derive"] }
-keyring = "3"
+keyring = "4"
 crc32fast = "1.4"
 sha2 = "0.11"
 time = ">=0.3.36, <0.4"
@@ -114,7 +114,7 @@ portable-pty = "0.9"
 libc = "0.2"
 crc32fast = "1.4"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
-keyring = "3"
+keyring = "4"
 
 [profile.release]
 lto = true
