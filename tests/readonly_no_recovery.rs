@@ -296,6 +296,11 @@ fn test_restore_dry_run_does_not_trigger_recovery() {
         .unwrap();
     assert!(output.status.success());
 
+    // Capture pending marker before command
+    let state_dir = config_dir.join(".auto-sync");
+    let pending_path = state_dir.join("pending");
+    let pending_before = fs::read_to_string(&pending_path).ok();
+
     let output = snp_in(&config_dir)
         .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
         .output()
@@ -303,6 +308,163 @@ fn test_restore_dry_run_does_not_trigger_recovery() {
     assert!(
         output.status.success(),
         "restore --dry-run should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify pending marker unchanged
+    let pending_after = fs::read_to_string(&pending_path).ok();
+    assert_eq!(
+        pending_before, pending_after,
+        "pending marker must not change during restore --dry-run"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === import pet --dry-run ===
+
+#[test]
+fn test_import_dry_run_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    // Create a minimal Pet import file
+    let pet_file = _tmp.path().join("test-pet.toml");
+    fs::write(
+        &pet_file,
+        r#"name = "test-pet"
+[[snippets]]
+description = "imported snippet"
+command = "echo imported"
+"#,
+    )
+    .unwrap();
+
+    let _output = snp_in(&config_dir)
+        .args(["import", "pet", pet_file.to_str().unwrap(), "--dry-run"])
+        .output()
+        .unwrap();
+    // import --dry-run may fail if pet format is wrong, but should not spawn worker
+    // Just verify no worker was spawned regardless of exit code
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === repair --dry-run ===
+
+#[test]
+fn test_repair_dry_run_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let _output = snp_in(&config_dir)
+        .args(["repair", "--dry-run"])
+        .output()
+        .unwrap();
+    // repair --dry-run should not spawn a worker
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === sync run --dry-run ===
+
+#[test]
+fn test_sync_run_dry_run_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let _output = snp_in(&config_dir)
+        .args(["sync", "run", "--dry-run"])
+        .output()
+        .unwrap();
+    // sync run --dry-run manages its own sync behavior, not generic startup recovery
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === completions ===
+
+#[test]
+fn test_completions_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["completions", "bash"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "completions should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === shell init ===
+
+#[test]
+fn test_shell_init_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["shell", "init", "bash"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "shell init should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+// === help ===
+
+#[test]
+fn test_help_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let output = snp_in(&config_dir).args(["--help"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "--help should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_no_worker_spawned(&config_dir);
+}
+
+#[test]
+fn test_subcommand_help_does_not_trigger_recovery() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_library(&config_dir);
+    setup_auto_sync_config(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["status", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "status --help should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

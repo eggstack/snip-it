@@ -243,21 +243,22 @@ impl GitHubRelease {
 }
 
 fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err(format!(
+            "insecure or unsupported URL scheme rejected (production update requires HTTPS): {url}"
+        ));
+    }
     let mut args = vec![
         "--fail",
         "--silent",
         "--show-error",
         "--location",
+        "--proto",
+        "=https",
+        "--tlsv1.2",
         "--user-agent",
         "snip-it-update",
     ];
-    if url.starts_with("https://") {
-        args.extend(["--proto", "=https", "--tlsv1.2"]);
-    } else if url.starts_with("http://") {
-        return Err(format!(
-            "insecure HTTP URL rejected (production update requires HTTPS): {url}"
-        ));
-    }
     args.push(url);
     let output = Command::new("curl")
         .args(&args)
@@ -399,18 +400,18 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
     if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
         extract_tar_gz(archive, destination)
     } else if file_name.ends_with(".zip") {
-        #[cfg(windows)]
-        {
-            extract_zip(archive, destination)
-        }
-        #[cfg(not(windows))]
-        {
-            Err(format!("unsupported archive format: {}", archive.display()))
-        }
+        extract_zip(archive, destination)
     } else {
         Err(format!("unsupported archive format: {}", archive.display()))
     }
 }
+
+const MAX_TAR_ENTRIES: usize = 1000;
+const MAX_ENTRY_UNCOMPRESSED_SIZE: u64 = 100 * 1024 * 1024; // 100 MiB
+const MAX_TOTAL_UNCOMPRESSED_SIZE: u64 = 500 * 1024 * 1024; // 500 MiB
+const MAX_ZIP_ENTRIES: usize = 1000;
+const MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE: u64 = 100 * 1024 * 1024; // 100 MiB
+const MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE: u64 = 500 * 1024 * 1024; // 500 MiB
 
 fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
     let file = fs::File::open(archive)
@@ -421,12 +422,33 @@ fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
     let entries = archive
         .entries()
         .map_err(|e| format!("could not read tar entries: {e}"))?;
+    let mut entry_count: usize = 0;
+    let mut total_uncompressed: u64 = 0;
     for entry in entries {
         let mut entry = entry.map_err(|e| format!("could not read tar entry: {e}"))?;
         let entry_path = entry
             .path()
             .map_err(|e| format!("invalid tar entry path: {e}"))?;
         validate_tar_entry(&entry_path, &entry)?;
+        entry_count += 1;
+        if entry_count > MAX_TAR_ENTRIES {
+            return Err(format!(
+                "tar archive exceeds maximum entry count of {MAX_TAR_ENTRIES}"
+            ));
+        }
+        let size = entry.size();
+        total_uncompressed += size;
+        if size > MAX_ENTRY_UNCOMPRESSED_SIZE {
+            return Err(format!(
+                "tar entry {} exceeds maximum uncompressed size of {MAX_ENTRY_UNCOMPRESSED_SIZE} bytes",
+                entry_path.display()
+            ));
+        }
+        if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_SIZE {
+            return Err(format!(
+                "tar archive exceeds maximum total uncompressed size of {MAX_TOTAL_UNCOMPRESSED_SIZE} bytes"
+            ));
+        }
         entry
             .unpack_in(destination)
             .map_err(|e| format!("could not extract tar entry: {e}"))?;
@@ -480,24 +502,102 @@ fn validate_tar_entry(
     Ok(())
 }
 
-#[cfg(windows)]
 fn extract_zip(archive: &Path, destination: &Path) -> Result<(), String> {
-    let status = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command"])
-        .arg(format!(
-            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-            powershell_quote(archive),
-            powershell_quote(destination)
-        ))
-        .status()
-        .map_err(|e| format!("could not run PowerShell: {e}"))?;
-    if status.success() {
-        return Ok(());
+    let file = fs::File::open(archive)
+        .map_err(|e| format!("could not open {}: {e}", archive.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("could not read zip archive: {e}"))?;
+
+    let mut entry_count: usize = 0;
+    let mut total_uncompressed: u64 = 0;
+
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("could not read zip entry: {e}"))?;
+        let entry_path = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("rejecting malicious zip entry path: {:?}", entry.name()))?;
+
+        validate_zip_entry_path(&entry_path)?;
+
+        if entry.is_symlink() {
+            return Err(format!(
+                "rejecting symlink in zip archive: {}",
+                entry.name()
+            ));
+        }
+
+        entry_count += 1;
+        if entry_count > MAX_ZIP_ENTRIES {
+            return Err(format!(
+                "zip archive exceeds maximum entry count of {MAX_ZIP_ENTRIES}"
+            ));
+        }
+
+        let size = entry.size();
+        total_uncompressed += size;
+        if size > MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE {
+            return Err(format!(
+                "zip entry {} exceeds maximum uncompressed size of {MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE} bytes",
+                entry.name()
+            ));
+        }
+        if total_uncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE {
+            return Err(format!(
+                "zip archive exceeds maximum total uncompressed size of {MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE} bytes"
+            ));
+        }
     }
-    Err(format!(
-        "could not extract release archive {}",
-        archive.display()
-    ))
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("could not read zip entry: {e}"))?;
+        let entry_path = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("rejecting malicious zip entry path: {:?}", entry.name()))?;
+
+        let out_path = destination.join(&entry_path);
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("could not create directory {}: {e}", out_path.display()))?;
+        } else if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("could not create directory {}: {e}", parent.display()))?;
+            let mut out_file = fs::File::create(&out_path)
+                .map_err(|e| format!("could not create file {}: {e}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .map_err(|e| format!("could not write file {}: {e}", out_path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_zip_entry_path(path: &std::path::Path) -> Result<(), String> {
+    let components: Vec<_> = path.components().collect();
+    for component in &components {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!(
+                    "rejecting absolute path in zip archive: {}",
+                    path.display()
+                ));
+            }
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "rejecting parent traversal in zip archive: {}",
+                    path.display()
+                ));
+            }
+            _ => {}
+        }
+    }
+    if components.is_empty() {
+        return Err("empty path in zip archive".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]

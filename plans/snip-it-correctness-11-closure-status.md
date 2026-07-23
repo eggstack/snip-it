@@ -3,7 +3,7 @@
 Phase 11 status: INCOMPLETE
 Correctness program status: REOPENED
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final commit (current): 155c973
+Final commit (current): b220ecf
 
 ## Summary
 
@@ -11,9 +11,10 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 
 ## Test Evidence
 
-- **Total tests**: 1345 passed, 0 failed, 6 ignored (45 suites)
+- **Total tests**: 2220 passed, 0 failed, 8 ignored (47 suites)
 - **Clippy**: clean (no warnings)
 - **Fmt**: clean (no diffs)
+- **Update archive security tests**: 31 passed (17 tar/URL + 14 ZIP crafted)
 
 ### New Test Suites (Phase 11)
 
@@ -89,20 +90,27 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 - `tests/execution_outcomes.rs` — 3 new tests: real timeout (code 8), invalid shell (code 8), no raw leak
 
 ### Workstream I — Update extraction hardening
-- `src/update.rs` — ZIP crate for native extraction with entry validation
+- `src/update.rs` — ZIP crate for native extraction with entry validation (cross-platform, no PowerShell)
 - `src/update.rs` — Tar bounds: 1000 entries, 100MB/entry, 500MB total
-- `src/update.rs` — URL validation rejects all non-HTTPS schemes
-- `tests/update_archive_security.rs` — 17 unit tests for tar/URL/ZIP validation
+- `src/update.rs` — ZIP bounds: 1000 entries, 100MB/entry, 500MB total
+- `src/update.rs` — URL validation rejects all non-HTTPS schemes (not just http://)
+- `src/update.rs` — validate_zip_entry_path for traversal/absolute rejection
+- `tests/update_archive_security.rs` — 31 tests for tar/URL/ZIP validation (including crafted ZIP archives)
 
 ### Workstream J — CI workflow
-- `.github/workflows/ci.yml` — Complete CI: fmt, clippy, test matrix, lifecycle, crash recovery, update security, deny, package, package smoke
+- `.github/workflows/ci.yml` — Complete CI: fmt, clippy, test matrix (with --test-threads=1), lifecycle, crash recovery, update security, deny, package, package smoke
+- `.github/workflows/ci.yml` — fail-fast: false on all matrix strategies
+- `.github/workflows/ci.yml` — OS-conditional protoc installation (apt/brew/PowerShell)
+- `.github/workflows/ci.yml` — Action pinning policy documented (dtolnay/rust-toolchain exception noted)
 
 ### Workstream K — Documentation
 - `architecture/persistence.md` — Updated transaction lock section (PID/nonce/TOML)
 - `architecture/auto_sync.md` — Added SNP_TEST_CREDENTIAL_FILE documentation
-- `AGENTS.md` — Added Phase 11 test commands, transaction lock gotcha
+- `AGENTS.md` — Fixed transaction lock gotcha (PID/nonce/TOML, not bare file-create guard)
+- `AGENTS.md` — Added Phase 11 test commands
 - `docs/EXIT_CODES.md` — Verified execution failure exit code coverage
 - `docs/COMMAND_CONTRACTS.md` — Verified startup recovery classification
+- `.github/workflows/ci.yml` — Added action pinning policy documentation
 
 ## Remaining Issues
 

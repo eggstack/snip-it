@@ -171,8 +171,8 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk and can be recovered on startup. `commit_transaction` removes the journal; `rollback_transaction` restores from backups.
 
-### Transaction lock (no PID/nonce)
-The transaction lock (`transaction.lock`) is a simple file-create guard using `create_new(true)`. Unlike the auto-sync worker/execution locks which embed PID/nonce for ownership verification and stale detection, the transaction lock relies solely on atomic file creation and is removed on drop. Transactions are short-lived, so dead-owner reclaim is not needed.
+### Transaction lock (PID/nonce)
+The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, and `operation` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce matches the lock's own nonce. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. Transactions are short-lived, so contention is rare.
 
 ### Migration schema versioning
 Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.
