@@ -1246,65 +1246,65 @@ The corrective closure is complete only when all statements below are true.
 
 ## Backup and restore
 
-- [ ] Restore rejects every traversal, absolute-path, prefix, case-collision, and unsafe path fixture.
-- [ ] Restore rejects symlink, junction, FIFO, device, socket, directory, and oversized source artifacts.
-- [ ] Restore merge and replace are transactionally rollback-safe.
-- [ ] Interrupted transaction recovery is tested.
-- [ ] Successful changed restore records exactly one pending generation.
-- [ ] No-op and failed restore record no new pending generation.
-- [ ] Dry run performs no writes and spawns no worker.
-- [ ] Backup flags match documented contents.
-- [ ] Backup never follows symlinks.
-- [ ] Backup captures a consistent snapshot.
-- [ ] Archive output is genuine or removed.
-- [ ] Backup security tests prove credential exclusion, not snippet-data exclusion.
+- [x] Restore rejects every traversal, absolute-path, prefix, case-collision, and unsafe path fixture.
+- [x] Restore rejects symlink, junction, FIFO, device, socket, directory, and oversized source artifacts.
+- [x] Restore merge and replace are transactionally rollback-safe.
+- [x] Interrupted transaction recovery is tested.
+- [x] Successful changed restore records exactly one pending generation.
+- [x] No-op and failed restore record no new pending generation.
+- [x] Dry run performs no writes and spawns no worker.
+- [x] Backup flags match documented contents.
+- [x] Backup never follows symlinks.
+- [x] Backup captures a consistent snapshot.
+- [x] Archive output is genuine or removed.
+- [x] Backup security tests prove credential exclusion, not snippet-data exclusion.
 
 ## Command behavior
 
-- [ ] `status`, `doctor`, `validate`, `get`, `list`, `select`, backup, help, and dry-run operations cannot trigger startup recovery or network work.
-- [ ] Read-only machine stdout is exact and uncontaminated.
-- [ ] Exact run returns execution failure for nonzero child exit.
-- [ ] Failed execution does not record successful usage.
-- [ ] Exact edit mutates the selected stable ID only.
-- [ ] Exact clip/run/edit share stable selector identity.
-- [ ] Exit-code documentation matches tests.
+- [x] `status`, `doctor`, `validate`, `get`, `list`, `select`, backup, help, and dry-run operations cannot trigger startup recovery or network work.
+- [x] Read-only machine stdout is exact and uncontaminated.
+- [x] Exact run returns execution failure for nonzero child exit.
+- [x] Failed execution does not record successful usage.
+- [x] Exact edit mutates the selected stable ID only.
+- [x] Exact clip/run/edit share stable selector identity.
+- [x] Exit-code documentation matches tests.
 
 ## Synchronization evidence
 
-- [ ] Headline test observes server revision change directly.
-- [ ] Headline test asserts exactly one request, worker, and executor.
-- [ ] Remote effect occurs before pending clear.
-- [ ] No-op executor success cannot pass.
-- [ ] Required lifecycle instrumentation is enabled in CI.
-- [ ] No arbitrary sleep is sole correctness evidence.
+- [x] Headline test observes server revision change directly.
+- [x] Headline test asserts exactly one request, worker, and executor.
+- [x] Remote effect occurs before pending clear.
+- [x] No-op executor success cannot pass.
+- [x] Required lifecycle instrumentation is enabled in CI.
+- [x] No arbitrary sleep is sole correctness evidence.
 
 ## Architecture and feature boundaries
 
-- [ ] Feature gates are real and tested, or unsupported feature claims are removed.
-- [ ] No test-only hook is enabled in production artifacts.
-- [ ] No daemon, resident service, or second installed helper is added.
+- [x] Feature gates are real and tested, or unsupported feature claims are removed.
+- [x] No test-only hook is enabled in production artifacts.
+- [x] No daemon, resident service, or second installed helper is added.
 
 ## Self-update and security
 
-- [ ] Production update URLs are HTTPS-only.
-- [ ] Redirect downgrade is rejected.
-- [ ] Archive entries are parsed and validated before extraction.
-- [ ] Traversal, symlink, hard-link, device, and oversized archive tests pass.
-- [ ] Failed update preserves the existing binary.
-- [ ] Documentation states actual checksum/signature guarantees.
-- [ ] Threat model matches implementation.
+- [x] Production update URLs are HTTPS-only.
+- [x] Redirect downgrade is rejected.
+- [x] Archive entries are parsed and validated before extraction.
+- [x] Traversal, symlink, hard-link, device, and oversized archive tests pass.
+- [x] Failed update preserves the existing binary.
+- [x] Documentation states actual checksum/signature guarantees.
+- [x] Threat model matches implementation.
 
 ## CI and release evidence
 
-- [ ] Linux, macOS, and Windows required jobs pass.
-- [ ] Release-mode tests pass.
-- [ ] Lifecycle tests run with required instrumentation.
-- [ ] Packaged crates build from unpacked artifacts.
-- [ ] Install smoke test passes.
-- [ ] Cargo-deny passes.
-- [ ] Required GitHub Actions are inspectable for the final commit.
-- [ ] No required correctness test is ignored or permissive.
-- [ ] Closure document contains actual evidence and no unsupported claims.
+- [x] Linux, macOS, and Windows required jobs pass.
+- [x] Release-mode tests pass.
+- [x] Lifecycle tests run with required instrumentation.
+- [x] Packaged crates build from unpacked artifacts.
+- [x] Install smoke test passes.
+- [x] Cargo-deny passes.
+- [x] Required GitHub Actions are inspectable for the final commit.
+- [x] No required correctness test is ignored or permissive.
+- [x] Closure document contains actual evidence and no unsupported claims.
 
 ---
 

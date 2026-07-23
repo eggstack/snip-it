@@ -313,22 +313,19 @@ fn test_real_remote_effect_before_pending_clear() {
         .filter(|e| e.component == "executor" && e.event == "started")
         .count();
 
-    if !events.is_empty() {
-        // With test-support instrumentation active, assert exact counts.
-        assert_eq!(
-            worker_starts, 1,
-            "exactly 1 worker must have started for a single mutation, got {worker_starts}"
-        );
-        assert_eq!(
-            executor_starts, 1,
-            "exactly 1 executor must have started for a single mutation, got {executor_starts}"
-        );
-    } else {
-        eprintln!(
-            "NOTE: lifecycle events unavailable (test-support feature not enabled or \
-             SNP_TEST_EVENTS_DIR not set). Relying on pending-clear + status-success evidence."
-        );
-    }
+    assert!(
+        !events.is_empty(),
+        "lifecycle events must be present — test-support feature must be enabled and \
+         SNP_TEST_EVENTS_DIR must be set; found 0 events"
+    );
+    assert_eq!(
+        worker_starts, 1,
+        "exactly 1 worker must have started for a single mutation, got {worker_starts}"
+    );
+    assert_eq!(
+        executor_starts, 1,
+        "exactly 1 executor must have started for a single mutation, got {executor_starts}"
+    );
 
     // 10. Final invariant: pending is clear AND local mutation exists.
     assert!(

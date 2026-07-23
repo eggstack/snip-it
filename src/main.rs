@@ -392,10 +392,10 @@ enum Commands {
         /// Include usage metadata in backup
         #[arg(long)]
         include_usage: bool,
-        /// Include sync.toml config in backup (API key redacted)
+        /// Include general config files in backup (themes, etc.)
         #[arg(long)]
         include_config: bool,
-        /// Include sync state in backup
+        /// Include sync.toml in backup (API key redacted)
         #[arg(long)]
         include_sync_state: bool,
         /// Backup format

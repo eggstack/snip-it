@@ -197,39 +197,39 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | **Migration owner** | `logging.rs` |
 | **Sync relevance** | Not synced |
 
-### 11. Backup Manifests/Archives
+### 11. Backup Snapshots
 
 | Property | Value |
 |----------|-------|
-| **Canonical path** | `~/.config/snp/backups/<name>.tar.gz` (planned Phase 07A) |
-| **Owner module** | New: `src/backup.rs` (Phase 07A) |
-| **Schema** | TOML manifest + archive |
+| **Canonical path** | `~/.config/snp/backups/<timestamp>/` (directory) |
+| **Owner module** | `src/commands/backup_cmd.rs` |
+| **Schema** | `manifest.toml` + `libraries/*.toml` + optional `usage.toml` + optional `sync.toml` + optional general config |
 | **User-editable** | No (tool-generated) |
-| **Secret classification** | None (excludes secrets) |
+| **Secret classification** | None (API keys redacted, secrets excluded by default) |
 | **Durability class** | DurableUserData |
 | **Max size** | ~100MB |
-| **Atomicity method** | Atomic write of archive |
+| **Atomicity method** | Directory created atomically; in-memory snapshot prevents inconsistent writes |
 | **Permissions** | `0o600` on Unix |
-| **Corruption handling** | Checksum verification |
-| **Unknown-field policy** | Version-gated |
+| **Corruption handling** | SHA-256 checksums in manifest verify each file |
+| **Unknown-field policy** | Version-gated manifest |
 | **Backup inclusion** | No (is a backup) |
 | **Migration owner** | Phase 07A |
 | **Sync relevance** | Not synced |
 
-### 12. Transaction Journals (Planned Phase 07A)
+### 12. Transaction Journals
 
 | Property | Value |
 |----------|-------|
-| **Canonical path** | `~/.config/snp/transaction-journals/<id>.journal` |
-| **Owner module** | New: `src/transaction.rs` (Phase 07A) |
-| **Schema** | TOML manifest of staged operations |
+| **Canonical path** | `~/.config/snp/transaction-journals/<uuid>.journal` |
+| **Owner module** | `src/transaction.rs` |
+| **Schema** | TOML manifest of staged operations (source, destination, backup, hash, action) |
 | **User-editable** | No |
 | **Secret classification** | None |
 | **Durability class** | EphemeralCoordination |
 | **Max size** | ~10KB |
 | **Atomicity method** | Atomic write |
 | **Permissions** | `0o600` on Unix |
-| **Corruption handling** | Refuse automatic recovery |
+| **Corruption handling** | Recovery on startup: prepared journals are rolled back |
 | **Unknown-field policy** | Strict |
 | **Backup inclusion** | No |
 | **Migration owner** | Phase 07A |
@@ -303,7 +303,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 
 1. All durable writes already use `write_private_atomic` (temp file + rename with `0o600`)
 2. No `fs::write` or truncate-in-place for user data
-3. Backup is timestamped and capped at 10 per library
+3. Backup is timestamped directory with in-memory snapshot for consistency
 4. API key uses keychain integration; plaintext fallback in sync.toml is protected by `0o600`
-5. No symlink/device/FIFO rejection in current atomic primitive (add in Phase 07A)
-6. No `sync_all()` or `fsync()` on rename (Phase 07A enhancement)
+5. Atomic writes reject symlinks, FIFOs, sockets, block/char devices via `validate_target`
+6. `atomic_replace` supports `DurableUserData` with `sync_all` on file and best-effort parent dir fsync
