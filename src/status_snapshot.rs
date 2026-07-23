@@ -867,15 +867,16 @@ mod tests {
     #[test]
     fn test_dead_execution_lock() {
         let dir = make_empty_state_dir();
+        let dead_pid = u32::MAX / 2;
         let contents = ExecutionLockContents {
-            pid: 1,
+            pid: dead_pid,
             started_at_unix_ms: 1000,
             nonce: "dead".to_string(),
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(execution_lock_path(dir.path()), serialized).unwrap();
         let view = inspect_execution_lock(dir.path());
-        assert!(matches!(view, ProcessStateView::DeadStale { pid: 1 }));
+        assert!(matches!(view, ProcessStateView::DeadStale { pid } if pid == dead_pid));
     }
 
     #[test]
@@ -921,15 +922,16 @@ mod tests {
     #[test]
     fn test_worker_lock_dead() {
         let dir = make_empty_state_dir();
+        let dead_pid = u32::MAX / 2;
         let contents = WorkerLockContents {
-            pid: 1,
+            pid: dead_pid,
             started_at_unix_ms: 2000,
             nonce: "dead".to_string(),
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(lock_path(dir.path()), serialized).unwrap();
         let view = inspect_worker_lock(dir.path());
-        assert!(matches!(view, ProcessStateView::DeadStale { pid: 1 }));
+        assert!(matches!(view, ProcessStateView::DeadStale { pid } if pid == dead_pid));
     }
 
     #[test]
