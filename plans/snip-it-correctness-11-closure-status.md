@@ -3,7 +3,7 @@
 Phase 11 status: INCOMPLETE
 Correctness program status: REOPENED
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final commit (current): pending
+Final commit (current): 155c973
 
 ## Summary
 
@@ -45,7 +45,10 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 - `src/config.rs` — deserialize_api_key: read from SNP_TEST_CREDENTIAL_FILE when @keychain found
 - `src/config.rs` — migrate_plaintext_api_key: skip migration when SNP_TEST_CREDENTIAL_FILE set
 - `tests/support/environment.rs` — TestEnvironment creates credential file, sets SNP_TEST_CREDENTIAL_FILE
-- `tests/deterministic_e2e.rs` — snp_cmd sets SNP_TESTCredentialFile, headline test rejects count=0
+- `tests/deterministic_e2e.rs` — snp_cmd sets SNP_TEST_CREDENTIAL_FILE, headline test requires count=1
+
+### Workstream C fix — Snippet device_id stamping
+- `src/commands/new_cmd.rs` — Stamp device_id from sync settings on new snippets so server validation accepts them
 
 ### Workstream D — Transaction crash-completeness
 - `src/transaction.rs` — TransactionState: added BackupsDurable, Committing{next_index}, RollingBack{next_index}
