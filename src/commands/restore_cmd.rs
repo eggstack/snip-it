@@ -590,6 +590,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // backup paths needed for rollback.
     crate::transaction::advance_to_backups_durable(&state_dir, &mut journal_with_backups)?;
 
+    // Persist initial Committing state (0 completed positions) before any
+    // live writes begin. Progress is persisted AFTER each verified write,
+    // so a crash never causes recovery to skip a destination that may not
+    // have been written.
+    crate::transaction::advance_to_committing(&state_dir, &mut journal_with_backups, 0)?;
+
     // Execute the restore within a transaction boundary; roll back on any failure.
     let restore_result: SnipResult<()> = (|| {
         // 6. For replace mode, create pre-restore backup of config
@@ -606,16 +612,10 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         })?;
 
         // 8. Restore files with per-file durable commit progress.
-        // Each file is restored atomically; progress is persisted after
-        // each write so that a crash mid-restore can be recovered.
-        for (file_idx, entry) in manifest.files.iter().enumerate() {
-            // Advance to Committing before each live write.
-            crate::transaction::advance_to_committing(
-                &state_dir,
-                &mut journal_with_backups,
-                file_idx,
-            )?;
-
+        // Each file is restored atomically; progress is persisted AFTER
+        // the write and verification so that a crash mid-restore can be
+        // recovered without skipping a destination.
+        for (position, entry) in manifest.files.iter().enumerate() {
             match entry.kind {
                 BackupEntryKind::Library => {
                     let src = resolve_backup_path(&backup, entry);
@@ -672,6 +672,15 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                     }
                 }
             }
+
+            // Persist progress AFTER the write and verification.
+            // next_commit_position = position + 1 means positions 0..=position
+            // have been completed and verified.
+            crate::transaction::advance_to_committing(
+                &state_dir,
+                &mut journal_with_backups,
+                position + 1,
+            )?;
         }
 
         Ok(())
@@ -688,12 +697,50 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         return restore_result;
     }
 
-    // 12. Commit transaction
-    crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
-
-    // 13. Record pending sync generation if restore changed syncable data
+    // 12. Commit-to-pending finalization: use CommittedLocal state to
+    // eliminate the crash window between committed local content and
+    // durable pending intent.
     if report.files_restored > 0 {
+        // Record pending generation (writes the pending marker atomically).
+        let pending_state = crate::auto_sync::pending::record_pending_mutation(
+            &state_dir,
+            crate::auto_sync::pending::PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::Import,
+            },
+        ).map_err(|e| SnipError::runtime_error(
+            "record pending mutation",
+            Some(&format!("Failed to record pending sync intent: {e}")),
+        ))?;
+
+        let generation = pending_state.generation;
+
+        // Persist CommittedLocal with pending_recorded: false.
+        // A crash here is recoverable: the pending marker was already written
+        // by record_pending_mutation above.
+        crate::transaction::advance_to_committed_local(
+            &state_dir,
+            &mut journal_with_backups,
+            generation,
+            false,
+        )?;
+
+        // Persist CommittedLocal with pending_recorded: true.
+        // This confirms the pending marker is durably written.
+        crate::transaction::advance_to_committed_local(
+            &state_dir,
+            &mut journal_with_backups,
+            generation,
+            true,
+        )?;
+
+        // Clean up: remove journal and backups.
+        crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
+
+        // Schedule worker after durable pending intent.
         let _ = notify_mutation(MutationKind::Import, MutationOrigin::User);
+    } else {
+        // No files restored — just commit the transaction.
+        crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
     }
 
     // 14. Output report

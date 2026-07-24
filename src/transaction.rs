@@ -204,17 +204,32 @@ pub enum TransactionState {
     Prepared,
     /// All backup files are durably written to disk.
     BackupsDurable,
-    /// Live replacement is in progress; tracks which file index is next.
+    /// Live replacement is in progress; tracks completed positions.
+    ///
+    /// `next_commit_position == N` means positions `0..N` have already been
+    /// installed and verified; position `N` is next.
     Committing {
-        /// Index of the next file to replace atomically.
-        next_index: usize,
+        /// Number of completed and verified file installations.
+        next_commit_position: usize,
+    },
+    /// All destinations installed and verified; pending sync intent is
+    /// being durably recorded. `pending_recorded` tracks whether the
+    /// pending marker has been durably written.
+    CommittedLocal {
+        /// The pending generation to record.
+        pending_generation: u64,
+        /// Whether the pending marker has been durably written.
+        pending_recorded: bool,
     },
     /// Transaction has been committed; staged files are in place.
     Committed,
-    /// Rollback is in progress; tracks which file index is being restored.
+    /// Rollback is in progress; tracks rollback-order position.
+    ///
+    /// `next_rollback_position == N` means positions `0..N` in the
+    /// rollback order have been restored and verified.
     RollingBack {
-        /// Index of the next backup to restore.
-        next_index: usize,
+        /// Number of completed rollback actions in rollback order.
+        next_rollback_position: usize,
     },
     /// Transaction was rolled back; backups restored.
     RolledBack,
@@ -225,15 +240,16 @@ pub enum TransactionState {
 impl TransactionState {
     /// Returns true if this state represents an interrupted (non-terminal) transaction.
     ///
-    /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`, and
-    /// `RollingBack`. Terminal states (`Committed`, `RolledBack`, `Failed`) are
-    /// not interruptible.
+    /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`,
+    /// `CommittedLocal`, and `RollingBack`. Terminal states (`Committed`,
+    /// `RolledBack`, `Failed`) are not interruptible.
     pub fn is_interruptible(&self) -> bool {
         matches!(
             self,
             TransactionState::Prepared
                 | TransactionState::BackupsDurable
                 | TransactionState::Committing { .. }
+                | TransactionState::CommittedLocal { .. }
                 | TransactionState::RollingBack { .. }
         )
     }
@@ -525,24 +541,48 @@ pub fn advance_to_backups_durable(
     persist_journal(state_dir, journal)
 }
 
-/// Advance the journal to `Committing { next_index }`.
+/// Advance the journal to `Committing { next_commit_position }`.
+///
+/// `next_commit_position` represents completed work: positions `0..N`
+/// have been installed and verified; position `N` is next.
 pub fn advance_to_committing(
     state_dir: &Path,
     journal: &mut TransactionJournal,
-    next_index: usize,
+    next_commit_position: usize,
 ) -> SnipResult<()> {
-    journal.state = TransactionState::Committing { next_index };
+    journal.state = TransactionState::Committing { next_commit_position };
     persist_journal(state_dir, journal)
 }
 
-/// Advance the journal to `RollingBack { next_index }`.
+/// Advance the journal to `RollingBack { next_rollback_position }`.
+///
+/// `next_rollback_position` represents completed rollback actions in
+/// rollback order: positions `0..N` have been restored and verified.
 #[allow(dead_code)]
 pub fn advance_to_rolling_back(
     state_dir: &Path,
     journal: &mut TransactionJournal,
-    next_index: usize,
+    next_rollback_position: usize,
 ) -> SnipResult<()> {
-    journal.state = TransactionState::RollingBack { next_index };
+    journal.state = TransactionState::RollingBack { next_rollback_position };
+    persist_journal(state_dir, journal)
+}
+
+/// Advance the journal to `CommittedLocal` finalization state.
+///
+/// This is persisted after all destinations are installed and verified,
+/// before the pending sync intent is durably recorded. `pending_recorded`
+/// tracks whether the pending marker has been written.
+pub fn advance_to_committed_local(
+    state_dir: &Path,
+    journal: &mut TransactionJournal,
+    pending_generation: u64,
+    pending_recorded: bool,
+) -> SnipResult<()> {
+    journal.state = TransactionState::CommittedLocal {
+        pending_generation,
+        pending_recorded,
+    };
     persist_journal(state_dir, journal)
 }
 
@@ -573,24 +613,37 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
 
 /// Rollback a transaction (restore from backups).
 ///
-/// Restores each staged file from its backup in reverse order using atomic
-/// persistence, durably advancing rollback progress after each file. Newly
-/// created files (action=Create, existed_before=false) are removed rather
-/// than overwritten. The journal is marked as `RolledBack` on completion.
+/// Restores each staged file from its backup in rollback order (reverse of
+/// file order) using atomic persistence, durably advancing rollback progress
+/// after each file. Newly created files (action=Create, existed_before=false)
+/// are removed rather than overwritten. The journal is marked as `RolledBack`
+/// on completion.
+///
 /// Rollback is restartable: if interrupted, the next call picks up from
-/// the last durably recorded `RollingBack` index.
+/// the last durably recorded `next_rollback_position` in rollback order.
+///
+/// After each action, the result is verified: SHA-256 must equal
+/// `original_hash`, or the destination must be absent when
+/// `existed_before == false`.
 pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
     let mut rb_journal = journal.clone();
-    let start_index = match rb_journal.state {
-        TransactionState::RollingBack { next_index } => next_index,
+    let start_position = match rb_journal.state {
+        TransactionState::RollingBack { next_rollback_position } => next_rollback_position,
         _ => 0,
     };
 
-    // Restore files from backups in reverse order starting from start_index
-    for (i, staged) in rb_journal.staged_files.iter().enumerate().rev() {
-        if i < start_index {
-            continue;
-        }
+    // Rollback order is the reverse of file order.
+    // Position 0 = last file, position 1 = second-to-last, etc.
+    let rollback_order: Vec<usize> = (0..rb_journal.staged_files.len()).rev().collect();
+
+    for position in start_position..rollback_order.len() {
+        let file_index = rollback_order[position];
+        let staged = &rb_journal.staged_files[file_index];
+
+        // Advance to RollingBack before the action so a crash during
+        // rollback is recoverable.
+        rb_journal.state = TransactionState::RollingBack { next_rollback_position: position };
+        persist_journal(state_dir, &rb_journal)?;
 
         match staged.action {
             StagedAction::Create if !staged.existed_before => {
@@ -604,8 +657,18 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                         )
                     })?;
                 }
+                // Verify absence
+                if staged.original_path.exists() {
+                    return Err(SnipError::runtime_error(
+                        "Rollback verification failed",
+                        Some(&format!(
+                            "File {} should be absent after rollback but still exists",
+                            staged.original_path.display()
+                        )),
+                    ));
+                }
             }
-            StagedAction::Delete | StagedAction::Replace => {
+            StagedAction::Delete | StagedAction::Replace | StagedAction::NoOp | StagedAction::Create => {
                 // Restore from backup using atomic persistence.
                 if let Some(ref backup) = staged.backup_path
                     && backup.exists()
@@ -617,27 +680,39 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                         crate::utils::atomic::Durability::DurableUserData,
                     );
                     crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
-                }
-            }
-            StagedAction::NoOp | StagedAction::Create => {
-                // NoOp: nothing to do. Create with existed_before=true:
-                // restore from backup (same as Replace).
-                if let Some(ref backup) = staged.backup_path
-                    && backup.exists()
-                {
-                    let bytes = fs::read(backup).map_err(|e| {
-                        SnipError::io_error("read backup for rollback", backup.clone(), e)
-                    })?;
-                    let opts = crate::utils::atomic::AtomicWriteOptions::for_durability(
-                        crate::utils::atomic::Durability::DurableUserData,
-                    );
-                    crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
+
+                    // Verify hash matches original
+                    if !staged.original_hash.is_empty() {
+                        let actual = sha256_hex(&bytes);
+                        if actual != staged.original_hash {
+                            return Err(SnipError::runtime_error(
+                                "Rollback verification failed",
+                                Some(&format!(
+                                    "File {} hash mismatch after rollback: expected {}, got {}",
+                                    staged.original_path.display(),
+                                    &staged.original_hash[..16.min(staged.original_hash.len())],
+                                    &actual[..16]
+                                )),
+                            ));
+                        }
+                    }
+                } else if !staged.existed_before {
+                    // No backup and file didn't exist before — verify absence
+                    if staged.original_path.exists() {
+                        return Err(SnipError::runtime_error(
+                            "Rollback verification failed",
+                            Some(&format!(
+                                "File {} should be absent after rollback but still exists",
+                                staged.original_path.display()
+                            )),
+                        ));
+                    }
                 }
             }
         }
 
-        // Durably advance rollback progress
-        rb_journal.state = TransactionState::RollingBack { next_index: i + 1 };
+        // Durably advance rollback progress (completed position + 1)
+        rb_journal.state = TransactionState::RollingBack { next_rollback_position: position + 1 };
         persist_journal(state_dir, &rb_journal)?;
     }
 
@@ -654,6 +729,17 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
     let _ = fs::remove_file(&jpath);
 
     Ok(())
+}
+
+/// Compute the SHA-256 hex digest of a byte slice.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 /// Check for interrupted transactions and refuse or auto-recover.
@@ -677,6 +763,57 @@ pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult
 
     if interrupted.len() == 1 {
         let journal = &interrupted[0];
+
+        // Handle CommittedLocal finalization state: clean up without rollback.
+        if let TransactionState::CommittedLocal {
+            pending_generation,
+            pending_recorded,
+        } = journal.state
+        {
+            tracing::info!(
+                txn_id = %journal.id,
+                generation = pending_generation,
+                pending_recorded,
+                "Finalizing CommittedLocal transaction"
+            );
+
+            // If pending was not recorded, check if the pending marker
+            // already exists for this generation. If not, the sync may
+            // have already completed — just clean up.
+            if !pending_recorded {
+                let pending_path = crate::auto_sync::pending::pending_path(state_dir);
+                let marker_exists = match crate::auto_sync::pending::read_state(&pending_path) {
+                    Ok(state) => state.generation == pending_generation,
+                    Err(_) => false,
+                };
+                if !marker_exists {
+                    tracing::info!(
+                        generation = pending_generation,
+                        "Pending marker for generation already absent or changed; \
+                         sync may have completed"
+                    );
+                }
+                // Persist pending_recorded: true to mark finalization complete.
+                let mut finalized = journal.clone();
+                finalized.state = TransactionState::CommittedLocal {
+                    pending_generation,
+                    pending_recorded: true,
+                };
+                persist_journal(state_dir, &finalized)?;
+            }
+
+            // Clean up: remove journal and backups.
+            for staged in &journal.staged_files {
+                if let Some(ref backup) = staged.backup_path {
+                    let _ = fs::remove_file(backup);
+                }
+            }
+            let jpath = journal_path(state_dir, &journal.id);
+            let _ = fs::remove_file(&jpath);
+
+            return Ok(());
+        }
+
         tracing::info!(
             txn_id = %journal.id,
             operation = %journal.operation,

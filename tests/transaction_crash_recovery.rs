@@ -53,7 +53,7 @@ operation = "test_op"
 created_at_unix_ms = 1000000
 
 [state]
-Committing = {{ next_index = 0 }}
+Committing = {{ next_commit_position = 0 }}
 
 [[staged_files]]
 original_path = "/tmp/fake.toml"
@@ -71,7 +71,7 @@ operation = "test_op"
 created_at_unix_ms = 1000000
 
 [state]
-RollingBack = {{ next_index = 1 }}
+RollingBack = {{ next_rollback_position = 1 }}
 
 [[staged_files]]
 original_path = "/tmp/fake.toml"
