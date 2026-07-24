@@ -788,6 +788,16 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
 /// sequences like `\t` as literal two-character pairs). The helper remains
 /// available for callers that hand-write TOML and need the same conversion.
 pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
+    // Check for interrupted transactions before any mutation.
+    // This prevents new writes from proceeding over an unresolved restore.
+    let state_dir = crate::local_data::derive_local_data_state_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(&state_dir)?;
+
+    // Acquire the local-data lock to serialize against backup snapshot capture.
+    // This ensures backup sees either the complete before-state or complete
+    // after-state, never a mixed state.
+    let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
+
     if let Err(e) = backup_library(path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
     }

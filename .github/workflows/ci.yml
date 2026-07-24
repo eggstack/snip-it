@@ -93,6 +93,7 @@ jobs:
 
       - name: Workspace tests
         shell: bash
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           if [ "${{ matrix.profile }}" = "release" ]; then
@@ -103,6 +104,7 @@ jobs:
 
       - name: PTY integration tests
         shell: bash
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           if [ "${{ matrix.profile }}" = "release" ]; then

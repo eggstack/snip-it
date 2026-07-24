@@ -365,20 +365,22 @@ fn test_stale_lock_owner_dead_reclaimed() {
     fs::create_dir_all(&state).unwrap();
     let lock_path = state.join("transaction.lock");
 
-    // PID 1 is always dead on any OS (init/systemd).
-    // Write a stale lock, then verify that snp repair does not crash.
-    // Actual reclaim happens inside acquire_transaction_lock when a
-    // transaction-bearing command tries to acquire the lock.
-    fs::write(
-        &lock_path,
-        r#"schema_version = 1
-pid = 1
-nonce = "stale-nonce"
-created_at_unix_ms = 1000000
-operation = "stale_op"
-"#,
-    )
-    .unwrap();
+    // Spawn a child process, capture its PID, then terminate and wait for it.
+    // The resulting PID is guaranteed dead on all platforms.
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_snp"))
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn child");
+    let child_pid = child.id();
+    let _ = child.wait_with_output().expect("failed to wait for child");
+
+    // Write a stale lock with the dead child's PID.
+    let lock_content = format!(
+        "schema_version = 1\npid = {child_pid}\nnonce = \"stale-nonce\"\ncreated_at_unix_ms = 1000000\noperation = \"stale_op\"\nstart_token = \"dead-child\"\n"
+    );
+    fs::write(&lock_path, &lock_content).unwrap();
     assert!(lock_path.exists(), "stale lock must exist before repair");
 
     // snp repair must not crash when a stale lock is present
@@ -397,8 +399,8 @@ operation = "stale_op"
     let parsed: toml::Value = toml::from_str(&after).unwrap();
     assert_eq!(
         parsed["pid"].as_integer(),
-        Some(1),
-        "stale lock PID=1 should persist until acquire_transaction_lock reclaims it"
+        Some(child_pid as i64),
+        "stale lock PID should match the dead child"
     );
     assert_eq!(
         parsed["nonce"].as_str(),

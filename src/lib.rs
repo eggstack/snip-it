@@ -28,6 +28,7 @@ pub(crate) mod clipboard;
 pub(crate) mod diagnostics;
 pub(crate) mod encryption;
 pub(crate) mod library;
+pub(crate) mod local_data;
 pub(crate) mod migration;
 pub(crate) mod output;
 pub mod proto;

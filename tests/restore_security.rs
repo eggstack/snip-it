@@ -574,11 +574,10 @@ sha256 = "{sha}"
         .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
         .output()
         .unwrap();
-    // Dry run with unknown kind should still work (unknown kinds use the raw path)
-    // but the important thing is it doesn't crash
+    // Unknown kinds must be rejected during manifest parsing (typed enum).
     assert!(
-        output.status.success(),
-        "Dry run with unknown kind should not crash: {}",
+        !output.status.success(),
+        "Dry run with unknown kind should fail: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

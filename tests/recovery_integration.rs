@@ -5,7 +5,23 @@ use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 fn snp_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_snp"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_snp"));
+    cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+    cmd
+}
+
+/// Get a PID that is guaranteed dead on all platforms.
+/// Spawns a short-lived child process and returns its PID after wait.
+fn dead_pid() -> u32 {
+    let child = Command::new(env!("CARGO_BIN_EXE_snp"))
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn child");
+    let pid = child.id();
+    let _ = child.wait_with_output();
+    pid
 }
 
 fn setup_test_env() -> (TempDir, PathBuf) {
@@ -433,9 +449,10 @@ fn test_sync_repair_dry_run_stale_lock() {
     write_sync_toml(&config_dir, true);
 
     let lock_path = config_dir.join("auto-sync-execution.lock");
+    let pid = dead_pid();
     fs::write(
         &lock_path,
-        "pid = 1\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n",
+        format!("pid = {pid}\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n"),
     )
     .unwrap();
 
@@ -457,9 +474,10 @@ fn test_sync_repair_apply_removes_stale_lock() {
     write_sync_toml(&config_dir, true);
 
     let lock_path = config_dir.join("auto-sync-execution.lock");
+    let pid = dead_pid();
     fs::write(
         &lock_path,
-        "pid = 1\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n",
+        format!("pid = {pid}\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n"),
     )
     .unwrap();
 
@@ -483,9 +501,10 @@ fn test_sync_repair_dry_run_does_not_modify_files() {
     write_sync_toml(&config_dir, true);
 
     let lock_path = config_dir.join("auto-sync-execution.lock");
+    let pid = dead_pid();
     fs::write(
         &lock_path,
-        "pid = 1\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n",
+        format!("pid = {pid}\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n"),
     )
     .unwrap();
     let before = fs::read_to_string(&lock_path).unwrap();

@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::backup_cmd::{BackupManifest, BackupManifestEntry};
+use super::backup_cmd::{BackupEntryKind, BackupManifest, BackupManifestEntry};
 
 /// Restore mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -104,8 +104,10 @@ const RESERVED_WINDOWS_NAMES: &[&str] = &[
 fn resolve_backup_path(backup: &Path, entry: &BackupManifestEntry) -> PathBuf {
     // Standard top-level entries (index, usage, sync_config) and entries with explicit
     // libraries/ prefix use path directly. Library/unknown entries without prefix get it.
-    if (entry.kind == "index" || entry.kind == "sync_config" || entry.kind == "usage")
-        || entry.path.starts_with("libraries/")
+    if matches!(
+        entry.kind,
+        BackupEntryKind::Index | BackupEntryKind::SyncConfig | BackupEntryKind::Usage
+    ) || entry.path.starts_with("libraries/")
         || entry.path.starts_with("libraries\\")
     {
         backup.join(&entry.path)
@@ -114,7 +116,7 @@ fn resolve_backup_path(backup: &Path, entry: &BackupManifestEntry) -> PathBuf {
     }
 }
 
-fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
+fn validate_backup_path(path: &str, kind: BackupEntryKind) -> SnipResult<PathBuf> {
     if path.is_empty() {
         return Err(SnipError::runtime_error(
             "Empty backup path",
@@ -192,7 +194,7 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
     }
 
     match kind {
-        "library" => {
+        BackupEntryKind::Library => {
             // Allow both flat filename (readonly-test.toml) and libraries/ prefixed
             // (libraries/readonly-test.toml) since backup uses the prefix format.
             let basename = path
@@ -212,7 +214,7 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
                 ));
             }
         }
-        "index" => {
+        BackupEntryKind::Index => {
             if path != "libraries.toml" {
                 return Err(SnipError::runtime_error(
                     "Index path must be libraries.toml",
@@ -220,7 +222,7 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
                 ));
             }
         }
-        "usage" => {
+        BackupEntryKind::Usage => {
             if path != "usage.toml" {
                 return Err(SnipError::runtime_error(
                     "Usage path must be usage.toml",
@@ -228,16 +230,13 @@ fn validate_backup_path(path: &str, kind: &str) -> SnipResult<PathBuf> {
                 ));
             }
         }
-        "sync_config" => {
+        BackupEntryKind::SyncConfig => {
             if path != "sync.toml" {
                 return Err(SnipError::runtime_error(
                     "Sync config path must be sync.toml",
                     Some(&format!("path={path}")),
                 ));
             }
-        }
-        _ => {
-            // For unknown kinds, allow relative paths but reject traversal (already checked above)
         }
     }
 
@@ -398,7 +397,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
     // 2. Validate all paths in manifest (path traversal prevention)
     for entry in &manifest.files {
-        validate_backup_path(&entry.path, &entry.kind)?;
+        validate_backup_path(&entry.path, entry.kind)?;
     }
 
     // 3. Validate source artifact sizes and types
@@ -543,26 +542,17 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // Collect affected files for the transaction
     let mut affected_files: Vec<PathBuf> = Vec::new();
     for entry in &manifest.files {
-        let dst = match entry.kind.as_str() {
-            "library" => {
+        let dst = match entry.kind {
+            BackupEntryKind::Library => {
                 let name = Path::new(&entry.path)
                     .file_stem()
                     .unwrap_or_default()
                     .to_string_lossy();
                 config_dir.join("libraries").join(format!("{name}.toml"))
             }
-            "index" => config_dir.join("libraries.toml"),
-            "usage" => config_dir.join("usage.toml"),
-            "sync_config" => config_dir.join("sync.toml"),
-            other => {
-                return Err(SnipError::runtime_error(
-                    "Unknown manifest entry kind",
-                    Some(&format!(
-                        "Kind '{other}' for path '{}' is not a recognized restore target",
-                        entry.path
-                    )),
-                ));
-            }
+            BackupEntryKind::Index => config_dir.join("libraries.toml"),
+            BackupEntryKind::Usage => config_dir.join("usage.toml"),
+            BackupEntryKind::SyncConfig => config_dir.join("sync.toml"),
         };
         affected_files.push(dst);
     }
@@ -591,6 +581,11 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
+    // Persist BackupsDurable state before any live writes.
+    // A crash after this point is recoverable: the journal contains all
+    // backup paths needed for rollback.
+    crate::transaction::advance_to_backups_durable(&state_dir, &mut journal_with_backups)?;
+
     // Execute the restore within a transaction boundary; roll back on any failure.
     let restore_result: SnipResult<()> = (|| {
         // 6. For replace mode, create pre-restore backup of config
@@ -606,69 +601,72 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             SnipError::io_error("create libraries directory", libraries_dir.clone(), e)
         })?;
 
-        // 8. Restore library files
-        for entry in &manifest.files {
-            if entry.kind == "library" {
-                let src = resolve_backup_path(&backup, entry);
-                let library_name = Path::new(&entry.path)
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
-            }
-        }
+        // 8. Restore files with per-file durable commit progress.
+        // Each file is restored atomically; progress is persisted after
+        // each write so that a crash mid-restore can be recovered.
+        for (file_idx, entry) in manifest.files.iter().enumerate() {
+            // Advance to Committing before each live write.
+            crate::transaction::advance_to_committing(
+                &state_dir,
+                &mut journal_with_backups,
+                file_idx,
+            )?;
 
-        // 9. Restore libraries.toml index
-        if let Some(index_entry) = manifest.files.iter().find(|f| f.kind == "index") {
-            let src = backup.join(&index_entry.path);
-            let dst = config_dir.join("libraries.toml");
-            if mode == RestoreMode::Replace || !dst.exists() {
-                let bytes = fs::read(&src).map_err(|e| {
-                    SnipError::io_error("read index file for restore", src.clone(), e)
-                })?;
-                let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
-                atomic_replace(&dst, &bytes, &opts)?;
-                report.files_restored += 1;
-            }
-        }
-
-        // 10. Restore usage.toml if present
-        if let Some(usage_entry) = manifest.files.iter().find(|f| f.kind == "usage") {
-            let src = backup.join(&usage_entry.path);
-            let dst = config_dir.join("usage.toml");
-            if mode == RestoreMode::Replace || !dst.exists() {
-                let bytes = fs::read(&src).map_err(|e| {
-                    SnipError::io_error("read usage file for restore", src.clone(), e)
-                })?;
-                let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
-                atomic_replace(&dst, &bytes, &opts)?;
-                report.files_restored += 1;
-            }
-        }
-
-        // 11. Restore sync.toml if present (preserve local API key if exists)
-        if let Some(sync_entry) = manifest.files.iter().find(|f| f.kind == "sync_config") {
-            let src = backup.join(&sync_entry.path);
-            let dst = config_dir.join("sync.toml");
-            if dst.exists() && mode == RestoreMode::Merge {
-                // In merge mode, don't overwrite local sync config (has real API key)
-                report
-                    .skipped
-                    .push("sync.toml (local config preserved)".to_string());
-            } else if mode == RestoreMode::Replace || !dst.exists() {
-                // For replace, restore but warn about redacted key
-                let bytes = fs::read(&src).map_err(|e| {
-                    SnipError::io_error("read sync config for restore", src.clone(), e)
-                })?;
-                let opts = AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
-                atomic_replace(&dst, &bytes, &opts)?;
-                report.conflicts.push(RestoreConflict {
-                    library: "sync".to_string(),
-                    kind: "redacted_key".to_string(),
-                    detail: "API key was redacted in backup; re-enter with 'snp register'"
-                        .to_string(),
-                });
-                report.files_restored += 1;
+            match entry.kind {
+                BackupEntryKind::Library => {
+                    let src = resolve_backup_path(&backup, entry);
+                    let library_name = Path::new(&entry.path)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
+                }
+                BackupEntryKind::Index => {
+                    let src = backup.join(&entry.path);
+                    let dst = config_dir.join("libraries.toml");
+                    if mode == RestoreMode::Replace || !dst.exists() {
+                        let bytes = fs::read(&src).map_err(|e| {
+                            SnipError::io_error("read index file for restore", src.clone(), e)
+                        })?;
+                        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                        atomic_replace(&dst, &bytes, &opts)?;
+                        report.files_restored += 1;
+                    }
+                }
+                BackupEntryKind::Usage => {
+                    let src = backup.join(&entry.path);
+                    let dst = config_dir.join("usage.toml");
+                    if mode == RestoreMode::Replace || !dst.exists() {
+                        let bytes = fs::read(&src).map_err(|e| {
+                            SnipError::io_error("read usage file for restore", src.clone(), e)
+                        })?;
+                        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                        atomic_replace(&dst, &bytes, &opts)?;
+                        report.files_restored += 1;
+                    }
+                }
+                BackupEntryKind::SyncConfig => {
+                    let src = backup.join(&entry.path);
+                    let dst = config_dir.join("sync.toml");
+                    if dst.exists() && mode == RestoreMode::Merge {
+                        report
+                            .skipped
+                            .push("sync.toml (local config preserved)".to_string());
+                    } else if mode == RestoreMode::Replace || !dst.exists() {
+                        let bytes = fs::read(&src).map_err(|e| {
+                            SnipError::io_error("read sync config for restore", src.clone(), e)
+                        })?;
+                        let opts = AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
+                        atomic_replace(&dst, &bytes, &opts)?;
+                        report.conflicts.push(RestoreConflict {
+                            library: "sync".to_string(),
+                            kind: "redacted_key".to_string(),
+                            detail: "API key was redacted in backup; re-enter with 'snp register'"
+                                .to_string(),
+                        });
+                        report.files_restored += 1;
+                    }
+                }
             }
         }
 
@@ -725,7 +723,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backup_cmd::BackupManifestEntry;
+    use super::super::backup_cmd::{BackupEntryKind, BackupManifestEntry};
     use super::*;
     use tempfile::TempDir;
 
@@ -776,15 +774,15 @@ is_primary = true
             files: vec![
                 BackupManifestEntry {
                     path: "test.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: lib_content.len() as u64,
-                    sha256: lib_hash,
+                    sha256: lib_hash.clone(),
                 },
                 BackupManifestEntry {
                     path: "libraries.toml".to_string(),
-                    kind: "index".to_string(),
+                    kind: BackupEntryKind::Index,
                     size: index.len() as u64,
-                    sha256: index_hash,
+                    sha256: index_hash.clone(),
                 },
             ],
         };
@@ -963,13 +961,13 @@ is_primary = true
             files: vec![
                 BackupManifestEntry {
                     path: "work.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: lib_content.len() as u64,
                     sha256: lib_hash.clone(),
                 },
                 BackupManifestEntry {
                     path: "libraries.toml".to_string(),
-                    kind: "index".to_string(),
+                    kind: BackupEntryKind::Index,
                     size: index.len() as u64,
                     sha256: index_hash.clone(),
                 },
@@ -1000,7 +998,7 @@ is_primary = true
 
         // 6. Verify all checksums pass via verify_checksum
         for entry in &loaded.files {
-            let file_path = if entry.kind == "index" {
+            let file_path = if entry.kind == BackupEntryKind::Index {
                 backup_dir.join(&entry.path)
             } else {
                 backup_dir.join("libraries").join(&entry.path)
@@ -1070,15 +1068,15 @@ is_primary = true
             files: vec![
                 BackupManifestEntry {
                     path: "test.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: lib_content.len() as u64,
-                    sha256: lib_hash,
+                    sha256: lib_hash.clone(),
                 },
                 BackupManifestEntry {
                     path: "libraries.toml".to_string(),
-                    kind: "index".to_string(),
+                    kind: BackupEntryKind::Index,
                     size: index.len() as u64,
-                    sha256: index_hash,
+                    sha256: index_hash.clone(),
                 },
             ],
         };
@@ -1090,7 +1088,7 @@ is_primary = true
 
         // Verify checksums are valid before restore
         for entry in &manifest.files {
-            let file_path = if entry.kind == "index" {
+            let file_path = if entry.kind == BackupEntryKind::Index {
                 backup_dir.join(&entry.path)
             } else {
                 backup_dir.join("libraries").join(&entry.path)
@@ -1136,7 +1134,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_empty_path() {
-        let result = validate_backup_path("", "library");
+        let result = validate_backup_path("", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Empty"));
@@ -1144,7 +1142,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_absolute_unix_path() {
-        let result = validate_backup_path("/etc/passwd", "library");
+        let result = validate_backup_path("/etc/passwd", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Absolute"));
@@ -1152,7 +1150,8 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_absolute_windows_path() {
-        let result = validate_backup_path("C:\\Windows\\System32\\config", "library");
+        let result =
+            validate_backup_path("C:\\Windows\\System32\\config", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Absolute"));
@@ -1160,7 +1159,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_traversal() {
-        let result = validate_backup_path("../outside.toml", "library");
+        let result = validate_backup_path("../outside.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("traversal") || msg.contains("ParentDir"));
@@ -1168,7 +1167,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_nul_byte() {
-        let result = validate_backup_path("test\0.toml", "library");
+        let result = validate_backup_path("test\0.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("NUL"));
@@ -1176,14 +1175,14 @@ is_primary = true
 
     #[test]
     fn test_validate_accepts_normal_library() {
-        let result = validate_backup_path("test.toml", "library");
+        let result = validate_backup_path("test.toml", BackupEntryKind::Library);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PathBuf::from("test.toml"));
     }
 
     #[test]
     fn test_validate_rejects_subdir_for_library() {
-        let result = validate_backup_path("subdir/test.toml", "library");
+        let result = validate_backup_path("subdir/test.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("flat filename"));
@@ -1191,13 +1190,13 @@ is_primary = true
 
     #[test]
     fn test_validate_accepts_index_path() {
-        let result = validate_backup_path("libraries.toml", "index");
+        let result = validate_backup_path("libraries.toml", BackupEntryKind::Index);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_rejects_wrong_index_path() {
-        let result = validate_backup_path("wrong-name.toml", "index");
+        let result = validate_backup_path("wrong-name.toml", BackupEntryKind::Index);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("must be libraries.toml"));
@@ -1205,13 +1204,13 @@ is_primary = true
 
     #[test]
     fn test_validate_accepts_usage_path() {
-        let result = validate_backup_path("usage.toml", "usage");
+        let result = validate_backup_path("usage.toml", BackupEntryKind::Usage);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_rejects_wrong_usage_path() {
-        let result = validate_backup_path("my-usage.toml", "usage");
+        let result = validate_backup_path("my-usage.toml", BackupEntryKind::Usage);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("must be usage.toml"));
@@ -1219,13 +1218,13 @@ is_primary = true
 
     #[test]
     fn test_validate_accepts_sync_config_path() {
-        let result = validate_backup_path("sync.toml", "sync_config");
+        let result = validate_backup_path("sync.toml", BackupEntryKind::SyncConfig);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_rejects_wrong_sync_config_path() {
-        let result = validate_backup_path("sync-v2.toml", "sync_config");
+        let result = validate_backup_path("sync-v2.toml", BackupEntryKind::SyncConfig);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("must be sync.toml"));
@@ -1233,7 +1232,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_library_without_extension() {
-        let result = validate_backup_path("test", "library");
+        let result = validate_backup_path("test", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains(".toml extension"));
@@ -1241,7 +1240,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_unc_path() {
-        let result = validate_backup_path("\\\\server\\share\\file.toml", "library");
+        let result = validate_backup_path("\\\\server\\share\\file.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("UNC"));
@@ -1249,7 +1248,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_unc_path_forward_slash() {
-        let result = validate_backup_path("//server/share/file.toml", "library");
+        let result = validate_backup_path("//server/share/file.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -1260,7 +1259,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_reserved_windows_name_con() {
-        let result = validate_backup_path("CON.toml", "library");
+        let result = validate_backup_path("CON.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Reserved Windows device name"));
@@ -1268,7 +1267,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_reserved_windows_name_nul() {
-        let result = validate_backup_path("NUL.toml", "library");
+        let result = validate_backup_path("NUL.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Reserved Windows device name"));
@@ -1276,7 +1275,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_reserved_windows_name_lpt1() {
-        let result = validate_backup_path("LPT1.toml", "library");
+        let result = validate_backup_path("LPT1.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Reserved Windows device name"));
@@ -1284,7 +1283,7 @@ is_primary = true
 
     #[test]
     fn test_validate_rejects_reserved_windows_name_case_insensitive() {
-        let result = validate_backup_path("con.toml", "library");
+        let result = validate_backup_path("con.toml", BackupEntryKind::Library);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Reserved Windows device name"));
@@ -1293,7 +1292,7 @@ is_primary = true
     #[test]
     fn test_validate_accepts_normal_name_similar_to_reserved() {
         // "console.toml" should be fine — only exact "CON" stem is rejected
-        let result = validate_backup_path("console.toml", "library");
+        let result = validate_backup_path("console.toml", BackupEntryKind::Library);
         assert!(result.is_ok());
     }
 
@@ -1330,15 +1329,15 @@ is_primary = true
             files: vec![
                 BackupManifestEntry {
                     path: "test.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: lib_content.len() as u64,
-                    sha256: lib_hash,
+                    sha256: lib_hash.clone(),
                 },
                 BackupManifestEntry {
                     path: "libraries.toml".to_string(),
-                    kind: "index".to_string(),
+                    kind: BackupEntryKind::Index,
                     size: index.len() as u64,
-                    sha256: index_hash,
+                    sha256: index_hash.clone(),
                 },
             ],
         };

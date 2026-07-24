@@ -306,6 +306,27 @@ fn test_real_remote_effect_before_pending_clear() {
             ev.component, ev.event, ev.pid, ev.detail
         );
     }
+
+    // 8a. Verify device identity is configured (not empty/default).
+    //     The register command assigns a device_id from the server.
+    let sync_content = fs::read_to_string(config_dir.join("sync.toml")).unwrap_or_default();
+    assert!(
+        sync_content.contains("device_id")
+            && sync_content.lines().any(|l| {
+                l.trim().starts_with("device_id")
+                    && l.contains('=')
+                    && !l
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .trim()
+                        .trim_matches('"')
+                        .is_empty()
+            }),
+        "sync.toml must contain a non-empty device_id after registration"
+    );
+
+    // 8b. Verify server-side state changed (R0 → R1).
     let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
     assert_eq!(
         server_count_after, 1,

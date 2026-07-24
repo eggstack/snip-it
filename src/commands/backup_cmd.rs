@@ -24,15 +24,13 @@ pub enum BackupEntryKind {
     SyncConfig,
 }
 
-impl BackupEntryKind {
-    /// Parse a kind string into a typed variant.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "library" => Some(Self::Library),
-            "index" => Some(Self::Index),
-            "usage" => Some(Self::Usage),
-            "sync_config" => Some(Self::SyncConfig),
-            _ => None,
+impl std::fmt::Display for BackupEntryKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Library => write!(f, "library"),
+            Self::Index => write!(f, "index"),
+            Self::Usage => write!(f, "usage"),
+            Self::SyncConfig => write!(f, "sync_config"),
         }
     }
 }
@@ -305,10 +303,13 @@ fn atomic_write_backup(
 }
 
 /// Backup manifest entry.
+///
+/// Unknown kinds are rejected during deserialization — a manifest with an
+/// unrecognized kind is invalid and will not be accepted for restore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BackupManifestEntry {
     pub path: String,
-    pub kind: String,
+    pub kind: BackupEntryKind,
     pub size: u64,
     pub sha256: String,
 }
@@ -355,6 +356,12 @@ pub fn run(
             .unwrap_or(""),
         uuid::Uuid::new_v4()
     ));
+
+    // Acquire the local-data lock for the duration of snapshot capture.
+    // This ensures the backup captures either the complete before-state or
+    // complete after-state of all local data, never a mixed state.
+    let state_dir = crate::local_data::derive_local_data_state_dir();
+    let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
     let generation_before = read_library_generation(&config_dir)?;
     let mut manifest = BackupManifest {
         schema: 1,
@@ -440,13 +447,13 @@ pub fn run(
             let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
                 path: format!("libraries/{file_name}"),
-                kind: "library".to_string(),
+                kind: BackupEntryKind::Library,
                 size: bytes.len() as u64,
                 sha256: sha,
             });
             backup_files.push((
                 format!("libraries/{file_name}"),
-                "library".to_string(),
+                BackupEntryKind::Library.to_string(),
                 bytes.clone(),
             ));
         }
@@ -456,13 +463,13 @@ pub fn run(
             let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
                 path: "libraries.toml".to_string(),
-                kind: "index".to_string(),
+                kind: BackupEntryKind::Index,
                 size: bytes.len() as u64,
                 sha256: sha,
             });
             backup_files.push((
                 "libraries.toml".to_string(),
-                "index".to_string(),
+                BackupEntryKind::Index.to_string(),
                 bytes.clone(),
             ));
         }
@@ -472,11 +479,15 @@ pub fn run(
             let sha = sha256_hex(bytes);
             manifest.files.push(BackupManifestEntry {
                 path: "usage.toml".to_string(),
-                kind: "usage".to_string(),
+                kind: BackupEntryKind::Usage,
                 size: bytes.len() as u64,
                 sha256: sha,
             });
-            backup_files.push(("usage.toml".to_string(), "usage".to_string(), bytes.clone()));
+            backup_files.push((
+                "usage.toml".to_string(),
+                BackupEntryKind::Usage.to_string(),
+                bytes.clone(),
+            ));
         }
     }
     if let Some(content) = sync_snapshot {
@@ -485,13 +496,13 @@ pub fn run(
         let sha = sha256_hex(&redacted_bytes);
         manifest.files.push(BackupManifestEntry {
             path: "sync.toml".to_string(),
-            kind: "sync_config".to_string(),
+            kind: BackupEntryKind::SyncConfig,
             size: redacted_bytes.len() as u64,
             sha256: sha,
         });
         backup_files.push((
             "sync.toml".to_string(),
-            "sync_config".to_string(),
+            BackupEntryKind::SyncConfig.to_string(),
             redacted_bytes,
         ));
     }
@@ -597,7 +608,7 @@ timeout = 30
             layout: "directory".to_string(),
             files: vec![BackupManifestEntry {
                 path: "lib.toml".to_string(),
-                kind: "library".to_string(),
+                kind: BackupEntryKind::Library,
                 size: 100,
                 sha256: "abc123".to_string(),
             }],
@@ -607,7 +618,7 @@ timeout = 30
         let restored: BackupManifest = toml::from_str(&toml_str).unwrap();
         assert_eq!(restored.schema, 1);
         assert_eq!(restored.files.len(), 1);
-        assert_eq!(restored.files[0].kind, "library");
+        assert_eq!(restored.files[0].kind, BackupEntryKind::Library);
 
         let json_str = serde_json::to_string(&manifest).unwrap();
         let restored_json: BackupManifest = serde_json::from_str(&json_str).unwrap();
@@ -721,19 +732,19 @@ timeout = 30
             files: vec![
                 BackupManifestEntry {
                     path: "zebra.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: 1,
                     sha256: "a".to_string(),
                 },
                 BackupManifestEntry {
                     path: "alpha.toml".to_string(),
-                    kind: "library".to_string(),
+                    kind: BackupEntryKind::Library,
                     size: 2,
                     sha256: "b".to_string(),
                 },
                 BackupManifestEntry {
                     path: "libraries.toml".to_string(),
-                    kind: "index".to_string(),
+                    kind: BackupEntryKind::Index,
                     size: 3,
                     sha256: "c".to_string(),
                 },

@@ -171,8 +171,17 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
 
-### Transaction lock (PID/nonce)
-The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, and `operation` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce matches the lock's own nonce. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. Transactions are short-lived, so contention is rare.
+### Transaction lock (PID/nonce/start_token)
+The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
+
+### Local-data lock (backup snapshot coordination)
+`LocalDataLock` (`src/local_data.rs`) is a short-lived exclusive file lock in the `.transaction` directory that serializes backup snapshot capture against all local TOML mutations. Backup acquires the lock during file enumeration and byte capture; `save_library` acquires it during writes. This ensures backup captures either the complete before-state or complete after-state, never a mixed state. The lock retries with exponential backoff (up to 30s) when contended.
+
+### Mutation gate (interrupted-transaction recovery)
+`gate_mutation_on_interrupted_transactions()` (`src/transaction.rs`) must be called before any local mutating operation begins its write phase. Policy: if no interrupted journals exist, proceed; if exactly one complete journal exists, attempt automatic rollback; if multiple or incomplete journals exist, refuse mutation and direct the user to `snp repair`. This prevents new writes from proceeding over an unresolved restore.
+
+### Durable transaction executor
+Restore uses the full transaction state machine: `Prepared` → `BackupsDurable` (after backup creation, before any live writes) → `Committing{next_index}` (per-file, with progress persisted after each atomic write) → `Committed`. Rollback uses atomic persistence (`atomic_replace` with `DurableUserData`) instead of `fs::copy`, and removes newly created files. Both commit and rollback are restartable from the last durable progress point.
 
 ### Migration schema versioning
 Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.

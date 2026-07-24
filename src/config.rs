@@ -358,6 +358,10 @@ fn serialize_api_key<S: serde::Serializer>(
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return serializer.serialize_str(api_key);
     }
+    // Plaintext mode: skip keychain entirely (prevents D-Bus hang on headless CI).
+    if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
+        return serializer.serialize_str(api_key);
+    }
     // Server URL is not available during serialization, so we use the default user
     match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
@@ -468,6 +472,10 @@ fn migrate_plaintext_api_key<FStore, FSave>(
     // authoritative source and migrating to keychain would overwrite it.
     #[cfg(feature = "test-support")]
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
+        return;
+    }
+    // Plaintext mode: skip keychain migration (prevents D-Bus hang on headless CI).
+    if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
         return;
     }
 

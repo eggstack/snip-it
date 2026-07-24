@@ -10,7 +10,9 @@ pub mod helpers {
     use tempfile::TempDir;
 
     pub fn snp_cmd() -> Command {
-        Command::new(env!("CARGO_BIN_EXE_snp"))
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_snp"));
+        cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        cmd
     }
 
     #[allow(dead_code)]

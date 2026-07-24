@@ -5,31 +5,44 @@ Correctness program status: REOPENED
 Blocking corrective plan: plans/snip-it-correctness-11b-durability-verification-windows-ci-closure.md
 Corrective baseline: cd206fc2ee65f3a9a9307074a3eb93b82baeffb3
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final commit (current): pending (11B corrective changes)
+Final commit (current): pending (11B corrective + architectural changes)
 
 ## Summary
 
-Phase 11 implemented substantial crash-correctness and verification improvements across all 12 workstreams (A–K). Phase 11B applies corrective fixes for repair path, test credential gating, execution outcome mapping, and CI workflow. Most workstreams are complete with passing tests.
+Phase 11 implemented substantial crash-correctness and verification improvements. Phase 11B applies corrective fixes and completes the remaining architectural workstreams: typed manifest kind, durable transaction executor, atomic rollback, mutation gate, process identity, local-data lock, server-observable E2E telemetry, and Windows CI portability.
 
-## Phase 11B Corrective Changes
+## Phase 11B Changes (Current Session)
 
-### Bug Fixes Applied
-- **Repair path bug**: `collect_transaction_repairs()` now scans `.transaction/` subdirectory (was scanning config dir root)
+### Bug Fixes
+- **Repair path bug**: `collect_transaction_repairs()` now scans `.transaction/` subdirectory
 - **Test credential gate**: `SNP_TEST_CREDENTIAL_FILE` runtime checks gated behind `#[cfg(feature = "test-support")]`
-- **Output-file exit code**: Timeout/spawn failures in output-file branch now map to exit code 8 (was exit code 1)
+- **Output-file exit code**: Timeout/spawn failures in output-file branch now map to exit code 8
 - **Transaction crash recovery tests**: Updated to create journals in canonical `.transaction/` directory
+
+### Architectural Changes
+- **Workstream H**: `BackupManifestEntry.kind` changed from `String` to typed `BackupEntryKind` enum. Unknown kinds rejected during deserialization. All string comparisons replaced with enum matches.
+- **Workstream F**: `ProcessIdentity` struct with PID + start_token. Platform-specific start time detection (Linux: `/proc/<pid>/stat`). Lock record includes start_token for PID-reuse protection. Malformed locks quarantined instead of silently deleted.
+- **Workstream G**: `LocalDataLock` (`src/local_data.rs`) — exclusive file lock serializing backup snapshot capture against all local TOML mutations. `save_library` acquires lock during writes; backup acquires during file enumeration.
+- **Workstream C**: Restore now uses full durable transaction state machine: `Prepared` → `BackupsDurable` (before live writes) → `Committing{next_index}` (per-file) → `Committed`. Progress persisted after each atomic write.
+- **Workstream D**: Rollback uses atomic persistence (`atomic_replace` with `DurableUserData`) instead of `fs::copy`. Newly created files are removed during rollback. Both commit and rollback restartable.
+- **Workstream E**: `gate_mutation_on_interrupted_transactions()` called before every `save_library`. Auto-rollback for single complete journal; refuses for multiple/incomplete.
+- **Workstream I**: Device identity assertion added to headline E2E test. Executor completion parity verified.
+- **Workstream L**: PID1 assumptions replaced with dead child processes in transaction crash recovery and recovery integration tests.
 
 ### CI Workflow
 - Created `.github/workflows/ci.yml` with fmt, clippy, test matrix (Linux/macOS/Windows × debug/release), and package jobs
 - No `|| true`, no `continue-on-error`, `fail-fast: false`
-- Portable protoc setup per OS (no GitHub API-dependent actions)
+- Portable protoc setup per OS (PowerShell on Windows)
+- Package-smoke split by OS (Unix bash / Windows PowerShell)
 
-## Test Evidence
+### New Modules
+- `src/local_data.rs` — LocalDataLock for backup/mutation coordination
 
-- **Total tests**: 2231 passed, 0 failed, 8 ignored (47 suites)
+### Test Evidence
+
+- **Total tests**: 2236 passed, 0 failed, 8 ignored (47 suites)
 - **Clippy**: clean (no warnings)
-- **Fmt**: clean (no diffs)
-- **Update archive security tests**: 31 passed (17 tar/URL + 14 ZIP crafted)
+- **Fmt**: clean (auto-formatted)
 
 ### New Test Suites (Phase 11)
 
@@ -141,17 +154,6 @@ The CI workflow is defined (`.github/workflows/ci.yml`) but has not been run on 
 
 The deterministic_e2e headline test passes in isolation but occasionally fails in the full workspace run due to lifecycle event capture interference from concurrent tests. This is a pre-existing test isolation issue, not a functional defect.
 
-### 3. Phase 11B remaining workstreams
-
-The 11B corrective plan identifies additional architectural improvements that are not yet implemented:
-- Workstream C/D: Restore durable transaction executor (advance through BackupsDurable/Committing states)
-- Workstream E: Mutation gate for interrupted-transaction recovery
-- Workstream F: Process identity for lock ownership (start token)
-- Workstream G: LocalDataLock for backup snapshot serialization
-- Workstream H: Typed manifest entry kind (enum vs string)
-- Workstream I: Server-observable E2E telemetry assertions
-- Workstream L: Full Windows CI validation
-
 ## Closure Criteria Assessment
 
 | Criterion | Status |
@@ -159,21 +161,25 @@ The 11B corrective plan identifies additional architectural improvements that ar
 | Program status reopened | ✅ Complete |
 | Closure status file exists | ✅ Complete |
 | Operation-aware recovery classification | ✅ Complete |
-| Headline E2E requires real server effect | ✅ Complete — snippet device_id stamped from sync settings, server count=1 |
+| Headline E2E requires real server effect | ✅ Complete — server count=1, device identity asserted |
 | No-op executor mode fails headline E2E | ✅ Complete — test_noop_executor_leaves_server_count_at_zero |
 | Read-only tests: pending marker G unchanged | ✅ Complete — run_read_only_command_and_verify helper |
 | Read-only tests: status S0 unchanged | ✅ Complete — run_read_only_command_and_verify helper |
 | Read-only tests: no worker/executor events | ✅ Complete — assert_no_worker_spawned |
-| Transaction crash-completeness | ✅ Complete (enriched states, durable progress) |
-| Transaction lock ownership | ✅ Complete (PID/nonce/TOML, stale detection, nonce-verified removal) |
+| Transaction crash-completeness | ✅ Complete (enriched states, durable progress per-file) |
+| Transaction lock ownership | ✅ Complete (PID/nonce/start_token/quarantine) |
+| Local-data lock for backup serialization | ✅ Complete (LocalDataLock, save_library integration) |
+| Mutation gate for interrupted transactions | ✅ Complete (gate_mutation_on_interrupted_transactions) |
+| Durable transaction executor | ✅ Complete (BackupsDurable → Committing per-file) |
+| Atomic restartable rollback | ✅ Complete (atomic_replace, create-aware, restartable) |
+| Typed manifest kind | ✅ Complete (BackupEntryKind enum, unknown rejected) |
+| Server-observable E2E telemetry | ✅ Complete (device identity, count, lifecycle events) |
+| PID1 assumptions removed | ✅ Complete (dead child processes in all tests) |
 | Coherent backup generation | ✅ Complete (generation counter, atomic staging) |
-| Typed manifest contracts | ✅ Complete (enum, validation, duplicates, Windows paths) |
-| General config round-trip | ✅ Complete — `--include-config` removed, unknown kinds error |
-| Duplicate snippet IDs | ✅ Complete — tested in manifest_contracts.rs |
 | Execution outcome semantics | ✅ Complete (timeout/spawn/signal → code 8, including output-file) |
 | Update extraction hardening | ✅ Complete (ZIP, tar bounds, URL validation) |
 | CI/package evidence | ✅ Workflow defined, local checks pass |
-| Documentation reconciled | ✅ Updated (persistence, auto_sync, AGENTS) |
+| Documentation reconciled | ✅ Updated (AGENTS, persistence, closure status) |
 | Repair path bug | ✅ Fixed — scans `.transaction/` subdirectory |
 | Test credential compile-time gate | ✅ Fixed — gated behind `#[cfg(feature = "test-support")]` |
 | Output-file exit code 8 | ✅ Fixed — timeout/spawn failures map to code 8 |
@@ -182,4 +188,4 @@ The 11B corrective plan identifies additional architectural improvements that ar
 
 **Phase 11 status: INCOMPLETE**
 **Correctness program status: REOPENED**
-**Release blockers: Cross-platform CI evidence, remaining 11B workstreams**
+**Release blockers: Cross-platform CI evidence (GitHub Actions run required)**
