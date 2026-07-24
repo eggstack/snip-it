@@ -175,9 +175,13 @@ pub struct StagedFile {
     pub original_path: PathBuf,
     /// Backup of the original file, if created.
     pub backup_path: Option<PathBuf>,
-    /// The new/staged replacement path (may be the same as original_path).
+    /// The new/staged replacement path. This may be the same as
+    /// `original_path` when the caller writes directly to the destination
+    /// using atomic_replace. When a separate durable staging file is used,
+    /// this points to the staged content that will be atomically moved.
     pub staged_path: PathBuf,
     /// SHA-256 hex digest of the staged content for integrity verification.
+    /// Populated when the staged content is written to a durable location.
     pub sha256: String,
     /// Whether the original file existed before the transaction.
     #[serde(default)]
@@ -191,6 +195,12 @@ pub struct StagedFile {
     /// SHA-256 hex digest of the new file content (empty if deleting).
     #[serde(default)]
     pub new_hash: String,
+    /// Optional separate durable staging path. When set, the new content
+    /// is written here first and atomically moved to `original_path` during
+    /// commit. This decouples staged content from the live destination,
+    /// ensuring the journal always references a complete, durable copy.
+    #[serde(default)]
+    pub durable_staged_path: Option<PathBuf>,
 }
 
 fn default_action() -> StagedAction {
@@ -500,6 +510,7 @@ pub fn begin_transaction(
                 },
                 original_hash,
                 new_hash: String::new(),
+                durable_staged_path: None,
             }
         })
         .collect();
@@ -1042,8 +1053,13 @@ mod tests {
     fn test_state_is_interruptible() {
         assert!(TransactionState::Prepared.is_interruptible());
         assert!(TransactionState::BackupsDurable.is_interruptible());
-        assert!(TransactionState::Committing { next_index: 0 }.is_interruptible());
-        assert!(TransactionState::RollingBack { next_index: 0 }.is_interruptible());
+        assert!(TransactionState::Committing { next_commit_position: 0 }.is_interruptible());
+        assert!(TransactionState::RollingBack { next_rollback_position: 0 }.is_interruptible());
+        assert!(TransactionState::CommittedLocal {
+            pending_generation: 0,
+            pending_recorded: false
+        }
+        .is_interruptible());
         assert!(!TransactionState::Committed.is_interruptible());
         assert!(!TransactionState::RolledBack.is_interruptible());
         assert!(!TransactionState::Failed("test".into()).is_interruptible());
