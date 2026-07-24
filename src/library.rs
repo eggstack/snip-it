@@ -798,6 +798,24 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     // after-state, never a mixed state.
     let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
 
+    save_library_internal(path, snippets, &_local_lock)?;
+
+    Ok(())
+}
+
+/// Internal library save that skips the mutation gate and lock acquisition.
+///
+/// This is valid only when the caller already holds the local-data lock
+/// (via `guard`) and is operating within an active transaction or has
+/// already passed the mutation gate. Restore uses this to avoid
+/// self-recovery: once restore has persisted `Committing`, the global
+/// gate would see the caller's own journal as interrupted and roll it
+/// back while restore continues.
+pub fn save_library_internal(
+    path: &Path,
+    snippets: &Snippets,
+    _guard: &crate::local_data::LocalDataLock,
+) -> SnipResult<()> {
     if let Err(e) = backup_library(path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
     }

@@ -293,6 +293,7 @@ fn restore_library_file(
     library_name: &str,
     mode: RestoreMode,
     report: &mut RestoreReport,
+    local_guard: &crate::local_data::LocalDataLock,
 ) -> SnipResult<()> {
     let dst = config_libraries_dir.join(format!("{}.toml", library_name));
 
@@ -358,7 +359,7 @@ fn restore_library_file(
             }
         }
 
-        crate::library::save_library(&dst, &merged)?;
+        crate::library::save_library_internal(&dst, &merged, local_guard)?;
     } else {
         // Replace or first-time create
         if dst.exists() {
@@ -535,8 +536,11 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         return Ok(());
     }
 
-    // 6. Acquire transaction lock and begin transaction for write modes
+    // 6. Gate against foreign interrupted transactions, then acquire locks.
+    //    Lock hierarchy: LocalDataLock -> TransactionLock -> destination writes.
     let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+    crate::transaction::gate_mutation_on_interrupted_transactions(&state_dir)?;
+    let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
     let _lock = crate::transaction::acquire_transaction_lock(&state_dir, "restore")?;
 
     // Collect affected files for the transaction
@@ -619,7 +623,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                         .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report)?;
+                    restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report, &_local_lock)?;
                 }
                 BackupEntryKind::Index => {
                     let src = backup.join(&entry.path);

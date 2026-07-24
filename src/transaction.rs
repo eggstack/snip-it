@@ -379,18 +379,18 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                         continue;
                     }
                     Some(observed) => {
-                        // Owner is alive. Compare observed start token with
-                        // the recorded start token. If they match (including
-                        // both None on platforms without start-time detection),
-                        // the lock is genuinely held — refuse.
-                        //
-                        // If they differ, the PID has been reused — reclaim.
-                        //
-                        // When start tokens cannot be observed (None on both
-                        // sides), we treat the lock as live and refuse,
-                        // per the conservative policy: "identity unavailable"
-                        // is NOT "stale."
-                        if observed.start_token == existing.start_token {
+                        // Owner is alive. Refuse if we cannot verify ownership
+                        // (conservative policy — "identity unavailable" is NOT
+                        // "stale"):
+                        // - existing.start_token is None (old lock without token)
+                        // - observed.start_token is None (can't observe identity)
+                        // - start tokens match (same process)
+                        // Only reclaim when both tokens are present and differ
+                        // (PID reuse).
+                        if existing.start_token.is_none()
+                            || observed.start_token.is_none()
+                            || observed.start_token == existing.start_token
+                        {
                             return Err(SnipError::runtime_error(
                                 "Transaction lock held",
                                 Some(&format!(

@@ -17,8 +17,10 @@
 //!   enumeration and byte capture. Release before writing the backup output.
 //! - **Snippet mutations**: Acquire the lock for the duration of the write
 //!   (save_library, atomic_replace, etc.).
-//! - **Library/import/restore**: Already serialized by the transaction lock;
-//!   the local-data lock is not required for these paths.
+//! - **Library/import/restore**: Acquire the lock across the complete logical
+//!   mutation, including preparation revalidation, commit, and pending
+//!   finalization. Internal save functions that skip the gate are valid only
+//!   while the caller holds this lock.
 
 use crate::error::{SnipError, SnipResult};
 use crate::transaction::ProcessIdentity;
@@ -148,11 +150,16 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                         continue;
                     }
                     Some(observed) => {
-                        // Owner is alive. Compare observed start token with
-                        // the recorded start token. If they match (including
-                        // both None on platforms without start-time detection),
-                        // the lock is genuinely held — wait and retry.
-                        if observed.start_token == existing.start_token {
+                        // Owner is alive. Refuse if we cannot verify ownership
+                        // (conservative policy):
+                        // - existing.start_token is None (old lock without token)
+                        // - observed.start_token is None (can't observe identity)
+                        // - start tokens match (same process)
+                        // Only reclaim when both tokens are present and differ.
+                        if existing.start_token.is_none()
+                            || observed.start_token.is_none()
+                            || observed.start_token == existing.start_token
+                        {
                             if std::time::Instant::now() >= deadline {
                                 return Err(SnipError::runtime_error(
                                     "Local data lock held",
