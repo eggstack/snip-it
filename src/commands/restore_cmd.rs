@@ -53,6 +53,31 @@ fn verify_checksum(file_path: &Path, expected_sha: &str) -> SnipResult<bool> {
     Ok(actual == expected_sha)
 }
 
+/// Validate that a library TOML file does not contain duplicate snippet IDs.
+///
+/// This is a domain contract: each snippet must have a unique ID within a
+/// library. Duplicate IDs would cause ambiguous selection and unpredictable
+/// behavior.
+fn validate_library_no_duplicate_ids(file_path: &Path, content: &str) -> SnipResult<()> {
+    let snippets: crate::library::Snippets = toml::from_str(content)
+        .map_err(|e| SnipError::toml_error("parse library for duplicate ID check", e))?;
+
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for snippet in &snippets.snippets {
+        if !seen.insert(&snippet.id) {
+            return Err(SnipError::runtime_error(
+                "Duplicate snippet ID in library",
+                Some(&format!(
+                    "Library {} contains duplicate snippet ID '{}'. Each snippet must have a unique ID.",
+                    file_path.display(),
+                    snippet.id
+                )),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Load and validate the backup manifest from a backup directory.
 fn load_manifest(backup_dir: &Path) -> SnipResult<BackupManifest> {
     // Try manifest.toml first, then manifest.json
@@ -466,6 +491,16 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                     meta.len()
                 )),
             ));
+        }
+
+        // For library entries: validate content for duplicate snippet IDs
+        // (domain contract — must be enforced before hashing and writing)
+        if entry.kind == BackupEntryKind::Library {
+            let file_path = resolve_backup_path(&backup, entry);
+            let content = fs::read_to_string(&file_path).map_err(|e| {
+                SnipError::io_error("read library for duplicate ID validation", file_path.clone(), e)
+            })?;
+            validate_library_no_duplicate_ids(&file_path, &content)?;
         }
     }
 

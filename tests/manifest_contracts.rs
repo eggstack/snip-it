@@ -711,18 +711,17 @@ sha256 = "{index_hash}"
         .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
         .output()
         .unwrap();
-    // The restore should either reject duplicate IDs or handle them gracefully
-    // (e.g., keep only the last one). The key invariant: no ambiguous state.
+    // Restore must reject duplicate snippet IDs with a clear error message.
+    // This is a domain contract: each snippet must have a unique ID.
+    assert!(
+        !output.status.success(),
+        "restore should reject duplicate snippet IDs"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        assert!(
-            stderr.contains("duplicate")
-                || stderr.contains("already")
-                || stderr.contains("conflict"),
-            "Should reject or handle duplicate IDs with clear message, got: {stderr}"
-        );
-    }
-    // Either way, the restore must not crash
+    assert!(
+        stderr.contains("Duplicate snippet ID"),
+        "Should reject duplicate IDs with clear message, got: {stderr}"
+    );
 }
 
 // === 20. Restore rejects unknown entry kind in write mode ===
