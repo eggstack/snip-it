@@ -31,13 +31,10 @@ jobs:
         with:
           toolchain: "1.94"
           components: clippy
-      - name: Install protoc (Linux)
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local bin/protoc
-          rm protoc.zip
-          protoc --version
+      - name: Install protoc
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -55,47 +52,24 @@ jobs:
         with:
           toolchain: "1.94"
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local bin/protoc
-          rm protoc.zip
-          protoc --version
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-osx-x86_64.zip" -o protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local bin/protoc
-          rm protoc.zip
-          protoc --version
+      - name: Install protoc (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOC_VERSION/protoc-$env:PROTOC_VERSION-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile protoc.zip
-          Expand-Archive -Path protoc.zip -DestinationPath protoc-temp -Force
-          Copy-Item "protoc-temp\bin\protoc.exe" "C:\protoc.exe" -Force
-          Remove-Item protoc.zip -Force
-          Remove-Item protoc-temp -Recurse -Force
-          & "C:\protoc.exe" --version
-          echo "C:\" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}-${{ matrix.profile }}
 
       - name: Workspace tests
-        shell: bash
         timeout-minutes: 45
         run: |
-          set -euo pipefail
           if [ "${{ matrix.profile }}" = "release" ]; then
             cargo test --release --workspace --all-features -- --test-threads=1
           else
@@ -103,15 +77,64 @@ jobs:
           fi
 
       - name: PTY integration tests
-        shell: bash
+        if: runner.os != 'Windows'
         timeout-minutes: 15
         run: |
-          set -euo pipefail
           if [ "${{ matrix.profile }}" = "release" ]; then
             cargo test --release --test pty_integration --features test-support -- --test-threads=1
           else
             cargo test --test pty_integration --features test-support -- --test-threads=1
           fi
+
+  # Focused release-blocking test suites on all platforms.
+  # These run single-threaded to avoid PTY and lock contention.
+  release-blocking-tests:
+    name: Release-blocking (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+
+      - name: Install protoc (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-blocking
+
+      - name: Transaction crash recovery
+        run: cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
+
+      - name: Restore transactions
+        run: cargo test --test restore_transactions --features test-support -- --test-threads=1
+
+      - name: Backup snapshot concurrency
+        run: cargo test --test backup_contracts --features test-support -- --test-threads=1
+
+      - name: Execution outcomes
+        run: cargo test --test execution_outcomes --features test-support -- --test-threads=1
+
+      - name: Deterministic E2E
+        if: runner.os != 'Windows'
+        run: cargo test --test deterministic_e2e --features test-support -- --test-threads=1
+
+      - name: Sync contracts
+        if: runner.os != 'Windows'
+        run: cargo test --test sync_contracts --features test-support -- --test-threads=1
 
   package:
     name: Package (${{ matrix.os }})
@@ -126,40 +149,21 @@ jobs:
         with:
           toolchain: "1.94"
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -o protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local bin/protoc
-          rm protoc.zip
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-osx-x86_64.zip" -o protoc.zip
-          sudo unzip -o protoc.zip -d /usr/local bin/protoc
-          rm protoc.zip
+      - name: Install protoc (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOC_VERSION/protoc-$env:PROTOC_VERSION-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile protoc.zip
-          Expand-Archive -Path protoc.zip -DestinationPath protoc-temp -Force
-          Copy-Item "protoc-temp\bin\protoc.exe" "C:\protoc.exe" -Force
-          Remove-Item protoc.zip -Force
-          Remove-Item protoc-temp -Recurse -Force
-          echo "C:\" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Package and install (Unix)
         if: runner.os != 'Windows'
-        shell: bash
         run: |
           set -euo pipefail
           cargo package -p snip-it --locked --allow-dirty
