@@ -324,12 +324,16 @@ fn test_invalid_shell_exits_with_execution_failure_code() {
     setup_library_with_snippet(&config_dir);
 
     let mut cmd = snp_in(&config_dir);
+    // Set the platform-appropriate shell env var to a nonexistent path.
+    #[cfg(windows)]
+    cmd.env("COMSPEC", "/nonexistent/shell/path");
+    #[cfg(not(windows))]
     cmd.env("SHELL", "/nonexistent/shell/path");
     let output = cmd.args(["run", "--id", "exec-success"]).output().unwrap();
 
     assert!(
         !output.status.success(),
-        "run with invalid SHELL should fail"
+        "run with invalid shell should fail"
     );
     let code = output.status.code().unwrap_or(-1);
     // Spawn failure should exit with execution-failure code 8

@@ -382,8 +382,22 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Lock exists — read and classify the owner.
-                let content = fs::read_to_string(&lock_path)
-                    .map_err(|e| SnipError::io_error("read existing lock", lock_path.clone(), e))?;
+                // Handle TOCTOU: another writer may have removed the lock
+                // between create_new failing and read_to_string.
+                let content = match fs::read_to_string(&lock_path) {
+                    Ok(c) => c,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Lock was removed by another writer — loop back and retry.
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(SnipError::io_error(
+                            "read existing lock",
+                            lock_path.clone(),
+                            e,
+                        ));
+                    }
+                };
                 let existing: TransactionLockInfo = match toml::from_str(&content) {
                     Ok(info) => info,
                     Err(_) => {
