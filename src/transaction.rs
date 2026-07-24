@@ -30,6 +30,30 @@ pub struct ProcessIdentity {
     pub start_token: Option<String>,
 }
 
+impl ProcessIdentity {
+    /// Get the current process identity with start-time token.
+    pub fn current() -> ProcessIdentity {
+        current_process_identity()
+    }
+
+    /// Observe the identity of the process identified by `pid`.
+    ///
+    /// Returns `Some(identity)` if the process is alive (with start token
+    /// when observable), or `None` if the process is dead or cannot be
+    /// queried. A live PID whose start identity cannot be observed still
+    /// returns `Some` with `start_token: None` — callers must treat this
+    /// conservatively as a live owner.
+    pub fn observe(pid: u32) -> Option<ProcessIdentity> {
+        if !is_process_alive(pid) {
+            return None;
+        }
+        Some(ProcessIdentity {
+            pid,
+            start_token: get_process_start_token(pid),
+        })
+    }
+}
+
 /// Get the current process identity with start-time token.
 pub fn current_process_identity() -> ProcessIdentity {
     ProcessIdentity {
@@ -41,8 +65,9 @@ pub fn current_process_identity() -> ProcessIdentity {
 /// Get a start-time token for the given PID.
 ///
 /// On Linux, reads the process start time from `/proc/<pid>/stat` (field 22,
-/// in clock ticks since boot). On other platforms, returns `None` — callers
-/// must handle this by relying on PID liveness only.
+/// in clock ticks since boot). On macOS, uses `sysctl` with `KERN_PROC_PID`.
+/// On Windows, uses `GetProcessTimes`. Returns `None` if the start identity
+/// cannot be determined.
 #[cfg(target_os = "linux")]
 fn get_process_start_token(pid: u32) -> Option<String> {
     let stat_path = format!("/proc/{pid}/stat");
@@ -58,14 +83,61 @@ fn get_process_start_token(pid: u32) -> Option<String> {
     }
 }
 
-/// Get a start-time token for the given PID (non-Linux fallback).
-///
-/// Returns `None` — on macOS and Windows, PID liveness via `kill(pid, 0)`
-/// or `GetExitCodeProcess` is the primary ownership check. The nonce
-/// already prevents stale-lock theft from processes with the same PID.
-#[cfg(not(target_os = "linux"))]
-fn get_process_start_token(_pid: u32) -> Option<String> {
-    None
+#[cfg(target_os = "macos")]
+fn get_process_start_token(pid: u32) -> Option<String> {
+    use libc::{c_int, proc_bsdinfo, proc_pidinfo, PROC_PIDTBSDINFO};
+
+    let mut info: proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as c_int,
+            PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut _,
+            std::mem::size_of::<proc_bsdinfo>() as i32,
+        )
+    };
+
+    if ret <= 0 {
+        return None;
+    }
+
+    // pbi_start_tvsec and pbi_start_tvusec give the process start time
+    Some(format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec))
+}
+
+#[cfg(windows)]
+fn get_process_start_token(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut creation_time: FILETIME = std::mem::zeroed();
+        let mut exit_time: FILETIME = std::mem::zeroed();
+        let mut kernel_time: FILETIME = std::mem::zeroed();
+        let mut user_time: FILETIME = std::mem::zeroed();
+        let success = GetProcessTimes(
+            handle,
+            &mut creation_time,
+            &mut exit_time,
+            &mut kernel_time,
+            &mut user_time,
+        );
+        CloseHandle(handle);
+        if success == 0 {
+            return None;
+        }
+        // FILETIME is in 100-nanosecond intervals since January 1, 1601 (UTC)
+        let creation = ((creation_time.dwHighDateTime as u64) << 32)
+            | (creation_time.dwLowDateTime as u64);
+        Some(creation.to_string())
+    }
 }
 
 /// Action intended for a staged file within a transaction.
@@ -200,10 +272,12 @@ pub struct TransactionLock {
 
 impl Drop for TransactionLock {
     fn drop(&mut self) {
-        // Only remove if we still own the lock (verify nonce and start token).
+        // Only remove if we still own the lock. Verify nonce, PID, and
+        // start token (when present) to prevent removal by a wrong owner.
         if let Ok(content) = fs::read_to_string(&self.lock_path)
             && let Ok(existing) = toml::from_str::<TransactionLockInfo>(&content)
             && existing.nonce == self.info.nonce
+            && existing.pid == self.info.pid
             && existing.start_token == self.info.start_token
         {
             let _ = fs::remove_file(&self.lock_path);
@@ -240,9 +314,10 @@ fn is_process_alive(pid: u32) -> bool {
 /// Acquire a local mutation transaction lock.
 ///
 /// Uses an atomic file-create to ensure only one transaction can proceed
-/// at a time. If an existing lock is found, checks whether the owner is
-/// alive. Dead owners are reclaimed. Returns an error if the lock is held
-/// by a live process.
+/// at a time. If an existing lock is found, observes the process identified
+/// by the lock record's PID. Dead or reused owners are quarantined and
+/// the acquisition loop retries with `create_new(true)`. Returns an error
+/// if the lock is held by a live process.
 pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult<TransactionLock> {
     fs::create_dir_all(state_dir)
         .map_err(|e| SnipError::io_error("create state directory", state_dir, e))?;
@@ -261,79 +336,90 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
         start_token: identity.start_token.clone(),
     };
 
-    // Atomic lock acquisition: create_new fails if the file already exists.
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(_file) => {
-            // Write lock record
-            let content = toml::to_string_pretty(&info)
-                .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
-            fs::write(&lock_path, &content)
-                .map_err(|e| SnipError::io_error("write lock record", lock_path.clone(), e))?;
-            Ok(TransactionLock { lock_path, info })
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Lock exists — check if owner is alive.
-            let content = fs::read_to_string(&lock_path)
-                .map_err(|e| SnipError::io_error("read existing lock", lock_path.clone(), e))?;
-            match toml::from_str::<TransactionLockInfo>(&content) {
-                Ok(existing) => {
-                    // Check PID liveness first.
-                    if is_process_alive(existing.pid) {
-                        // PID is alive. If we have start tokens on both sides,
-                        // verify they match to detect PID reuse.
-                        if let (Some(old_token), Some(new_token)) =
-                            (&existing.start_token, &info.start_token)
-                            && old_token != new_token
-                        {
-                            // PID reused with different start time — reclaim.
-                            tracing::info!(
-                                pid = existing.pid,
-                                old_token = %old_token,
-                                new_token = %new_token,
-                                "Transaction lock owner PID reused (start token mismatch), reclaiming"
-                            );
-                            quarantine_stale_lock(&lock_path)?;
-                            // Retry acquisition.
-                            return acquire_transaction_lock_after_reclaim(&lock_path, &info);
-                        }
-                        // Same PID, same start token (or no token) — contention.
-                        Err(SnipError::runtime_error(
-                            "Transaction lock held",
-                            Some(&format!(
-                                "Another transaction ({}) is in progress (PID {}). Wait for it to complete.",
-                                existing.operation, existing.pid
-                            )),
-                        ))
-                    } else {
-                        // Dead owner — reclaim.
+    // Single acquisition loop: create_new, then classify existing owner.
+    loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_file) => {
+                // Write lock record
+                let content = toml::to_string_pretty(&info)
+                    .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
+                fs::write(&lock_path, &content)
+                    .map_err(|e| SnipError::io_error("write lock record", lock_path.clone(), e))?;
+                return Ok(TransactionLock { lock_path, info });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Lock exists — read and classify the owner.
+                let content = fs::read_to_string(&lock_path)
+                    .map_err(|e| SnipError::io_error("read existing lock", lock_path.clone(), e))?;
+                let existing: TransactionLockInfo = match toml::from_str(&content) {
+                    Ok(info) => info,
+                    Err(_) => {
+                        // Malformed lock — quarantine, then loop back to create_new.
+                        tracing::warn!("Malformed transaction lock record, quarantining");
+                        quarantine_stale_lock(&lock_path)?;
+                        continue;
+                    }
+                };
+
+                // Observe the process identified by the existing lock record.
+                // This queries existing.pid — NOT the current process.
+                match ProcessIdentity::observe(existing.pid) {
+                    None => {
+                        // Owner process is dead — reclaim.
                         tracing::info!(
                             pid = existing.pid,
                             operation = %existing.operation,
                             "Reclaiming stale transaction lock (owner process is dead)"
                         );
                         quarantine_stale_lock(&lock_path)?;
-                        // Retry acquisition.
-                        acquire_transaction_lock_after_reclaim(&lock_path, &info)
+                        continue;
+                    }
+                    Some(observed) => {
+                        // Owner is alive. Compare observed start token with
+                        // the recorded start token. If they match (including
+                        // both None on platforms without start-time detection),
+                        // the lock is genuinely held — refuse.
+                        //
+                        // If they differ, the PID has been reused — reclaim.
+                        //
+                        // When start tokens cannot be observed (None on both
+                        // sides), we treat the lock as live and refuse,
+                        // per the conservative policy: "identity unavailable"
+                        // is NOT "stale."
+                        if observed.start_token == existing.start_token {
+                            return Err(SnipError::runtime_error(
+                                "Transaction lock held",
+                                Some(&format!(
+                                    "Another transaction ({}) is in progress (PID {}). Wait for it to complete.",
+                                    existing.operation, existing.pid
+                                )),
+                            ));
+                        }
+                        // PID reuse detected — observed start token differs
+                        // from recorded start token.
+                        tracing::info!(
+                            pid = existing.pid,
+                            observed_token = ?observed.start_token,
+                            recorded_token = ?existing.start_token,
+                            "Transaction lock owner PID reused (start token mismatch), reclaiming"
+                        );
+                        quarantine_stale_lock(&lock_path)?;
+                        continue;
                     }
                 }
-                Err(_) => {
-                    // Malformed lock — quarantine, not silently delete.
-                    tracing::warn!("Malformed transaction lock record, quarantining");
-                    quarantine_stale_lock(&lock_path)?;
-                    // Retry acquisition.
-                    acquire_transaction_lock_after_reclaim(&lock_path, &info)
-                }
+            }
+            Err(e) => {
+                return Err(SnipError::io_error(
+                    "acquire transaction lock",
+                    lock_path,
+                    e,
+                ));
             }
         }
-        Err(e) => Err(SnipError::io_error(
-            "acquire transaction lock",
-            lock_path,
-            e,
-        )),
     }
 }
 
@@ -350,26 +436,6 @@ fn quarantine_stale_lock(lock_path: &Path) -> SnipResult<PathBuf> {
     fs::rename(lock_path, &quarantine_path)
         .map_err(|e| SnipError::io_error("quarantine stale lock", quarantine_path.clone(), e))?;
     Ok(quarantine_path)
-}
-
-/// Write a new lock record after reclaiming a stale or malformed lock.
-fn acquire_transaction_lock_after_reclaim(
-    lock_path: &Path,
-    info: &TransactionLockInfo,
-) -> SnipResult<TransactionLock> {
-    let content = toml::to_string_pretty(info)
-        .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
-    fs::write(lock_path, &content).map_err(|e| {
-        SnipError::io_error(
-            "write lock record after reclaim",
-            lock_path.to_path_buf(),
-            e,
-        )
-    })?;
-    Ok(TransactionLock {
-        lock_path: lock_path.to_path_buf(),
-        info: info.clone(),
-    })
 }
 
 /// Begin a new transaction.
