@@ -109,29 +109,41 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut backoff = std::time::Duration::from_millis(10);
 
+    // Pre-serialize the lock record to avoid the empty-file window
+    // between file creation and content write.
+    let content = toml::to_string_pretty(&info)
+        .map_err(|e| SnipError::toml_error("serialize local-data lock info", e))?;
+
+    // Write the lock record to a temp file in the same directory, then
+    // atomically hard-link it to the lock path. hard_link fails with
+    // AlreadyExists iff the lock path already exists. This eliminates
+    // the race where a reader sees an empty lock file during creation.
+    let temp_path = lock_path.with_file_name(format!("local-data.lock.tmp.{}", nonce));
+
     loop {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(_file) => {
-                // Write lock record
-                let content = toml::to_string_pretty(&info)
-                    .map_err(|e| SnipError::toml_error("serialize local-data lock info", e))?;
-                fs::write(&lock_path, &content).map_err(|e| {
-                    SnipError::io_error("write local-data lock record", lock_path.clone(), e)
-                })?;
+        // Clean up any stale temp from a prior iteration
+        let _ = fs::remove_file(&temp_path);
+        if let Err(e) = fs::write(&temp_path, &content) {
+            return Err(SnipError::io_error(
+                "write local-data lock temp file",
+                temp_path,
+                e,
+            ));
+        }
+        match fs::hard_link(&temp_path, &lock_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&temp_path);
                 return Ok(LocalDataLock { lock_path, info });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Lock exists — read and classify the owner.
+                let _ = fs::remove_file(&temp_path);
                 // Handle TOCTOU: another writer may have removed the lock
-                // between create_new failing and read_to_string.
+                // between hard_link failing and read_to_string.
                 let content = match fs::read_to_string(&lock_path) {
                     Ok(c) => c,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // Lock was removed by another writer — loop back and retry.
+                        // Lock was removed — loop back and retry.
                         continue;
                     }
                     Err(e) => {
@@ -146,7 +158,12 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 let existing: LocalDataLockInfo = match toml::from_str(&content) {
                     Ok(info) => info,
                     Err(_) => {
-                        // Malformed lock — quarantine, then loop back to create_new.
+                        // Malformed lock — quarantine, then loop back.
+                        // NOTE: We quarantine here too, but this path is
+                        // only reached for genuinely corrupt lock files
+                        // (e.g., from a crash). The atomic hard_link above
+                        // prevents readers from ever seeing an empty file
+                        // during normal lock creation.
                         tracing::warn!("Malformed local-data lock record, quarantining");
                         quarantine_local_data_lock(&lock_path)?;
                         continue;
@@ -196,7 +213,12 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 }
             }
             Err(e) => {
-                return Err(SnipError::io_error("acquire local data lock", lock_path, e));
+                let _ = fs::remove_file(&temp_path);
+                return Err(SnipError::io_error(
+                    "hard-link local-data lock temp to target",
+                    lock_path,
+                    e,
+                ));
             }
         }
     }
