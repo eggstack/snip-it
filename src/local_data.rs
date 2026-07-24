@@ -134,19 +134,23 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 let _ = file.sync_all();
                 return Ok(LocalDataLock { lock_path, info });
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists
+            Err(e)
+                if e.kind() == std::io::ErrorKind::AlreadyExists
                 // On Windows, a just-deleted file can briefly return
                 // PermissionDenied when in a pending-delete state.
                 // Treat it the same as AlreadyExists.
-                || e.kind() == std::io::ErrorKind::PermissionDenied => {
+                || e.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
                 // Lock exists — read and classify the owner.
                 // Handle TOCTOU: another writer may have removed the lock
                 // between create_new failing and read_to_string.
                 let content = match fs::read_to_string(&lock_path) {
                     Ok(c) => c,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::NotFound
                         // On Windows, a pending-delete file may be unreadable.
-                        || e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                    {
                         // Lock was removed by another writer — loop back and retry.
                         continue;
                     }
