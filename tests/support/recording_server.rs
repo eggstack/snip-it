@@ -65,6 +65,7 @@ pub struct RecordingServer {
     captured_auth_header: Arc<Mutex<Option<String>>>,
     failure_mode: Arc<Mutex<FailureMode>>,
     request_count: Arc<Mutex<usize>>,
+    db: Arc<snip_sync::db::Database>,
 }
 
 #[allow(dead_code)]
@@ -72,6 +73,7 @@ impl RecordingServer {
     /// Starts a new recording server on a random port.
     pub async fn start() -> Self {
         let service = build_test_service().await;
+        let db = service.db.clone();
         let captured_auth_header = service.captured_auth_header.clone();
         let (addr, server_task, _captured) = start_test_server(service).await;
 
@@ -82,6 +84,7 @@ impl RecordingServer {
             captured_auth_header,
             failure_mode: Arc::new(Mutex::new(FailureMode::None)),
             request_count: Arc::new(Mutex::new(0)),
+            db,
         }
     }
 
@@ -93,6 +96,16 @@ impl RecordingServer {
     /// Returns the server's socket address.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Access the server's database for state inspection.
+    pub fn db(&self) -> &Arc<snip_sync::db::Database> {
+        &self.db
+    }
+
+    /// Access the server task handle for abort.
+    pub fn server_task(&self) -> &tokio::task::JoinHandle<()> {
+        &self.server_task
     }
 
     /// Returns all captured events.

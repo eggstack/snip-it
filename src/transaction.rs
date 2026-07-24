@@ -85,7 +85,7 @@ fn get_process_start_token(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn get_process_start_token(pid: u32) -> Option<String> {
-    use libc::{c_int, proc_bsdinfo, proc_pidinfo, PROC_PIDTBSDINFO};
+    use libc::{PROC_PIDTBSDINFO, c_int, proc_bsdinfo, proc_pidinfo};
 
     let mut info: proc_bsdinfo = unsafe { std::mem::zeroed() };
     let ret = unsafe {
@@ -103,7 +103,10 @@ fn get_process_start_token(pid: u32) -> Option<String> {
     }
 
     // pbi_start_tvsec and pbi_start_tvusec give the process start time
-    Some(format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec))
+    Some(format!(
+        "{}.{:06}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
 }
 
 #[cfg(windows)]
@@ -134,8 +137,8 @@ fn get_process_start_token(pid: u32) -> Option<String> {
             return None;
         }
         // FILETIME is in 100-nanosecond intervals since January 1, 1601 (UTC)
-        let creation = ((creation_time.dwHighDateTime as u64) << 32)
-            | (creation_time.dwLowDateTime as u64);
+        let creation =
+            ((creation_time.dwHighDateTime as u64) << 32) | (creation_time.dwLowDateTime as u64);
         Some(creation.to_string())
     }
 }
@@ -561,7 +564,9 @@ pub fn advance_to_committing(
     journal: &mut TransactionJournal,
     next_commit_position: usize,
 ) -> SnipResult<()> {
-    journal.state = TransactionState::Committing { next_commit_position };
+    journal.state = TransactionState::Committing {
+        next_commit_position,
+    };
     persist_journal(state_dir, journal)
 }
 
@@ -575,7 +580,9 @@ pub fn advance_to_rolling_back(
     journal: &mut TransactionJournal,
     next_rollback_position: usize,
 ) -> SnipResult<()> {
-    journal.state = TransactionState::RollingBack { next_rollback_position };
+    journal.state = TransactionState::RollingBack {
+        next_rollback_position,
+    };
     persist_journal(state_dir, journal)
 }
 
@@ -639,7 +646,9 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
 pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
     let mut rb_journal = journal.clone();
     let start_position = match rb_journal.state {
-        TransactionState::RollingBack { next_rollback_position } => next_rollback_position,
+        TransactionState::RollingBack {
+            next_rollback_position,
+        } => next_rollback_position,
         _ => 0,
     };
 
@@ -647,13 +656,14 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
     // Position 0 = last file, position 1 = second-to-last, etc.
     let rollback_order: Vec<usize> = (0..rb_journal.staged_files.len()).rev().collect();
 
-    for position in start_position..rollback_order.len() {
-        let file_index = rollback_order[position];
+    for (position, &file_index) in rollback_order.iter().enumerate().skip(start_position) {
         let staged = &rb_journal.staged_files[file_index];
 
         // Advance to RollingBack before the action so a crash during
         // rollback is recoverable.
-        rb_journal.state = TransactionState::RollingBack { next_rollback_position: position };
+        rb_journal.state = TransactionState::RollingBack {
+            next_rollback_position: position,
+        };
         persist_journal(state_dir, &rb_journal)?;
 
         match staged.action {
@@ -679,7 +689,10 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                     ));
                 }
             }
-            StagedAction::Delete | StagedAction::Replace | StagedAction::NoOp | StagedAction::Create => {
+            StagedAction::Delete
+            | StagedAction::Replace
+            | StagedAction::NoOp
+            | StagedAction::Create => {
                 // Restore from backup using atomic persistence.
                 if let Some(ref backup) = staged.backup_path
                     && backup.exists()
@@ -723,7 +736,9 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
         }
 
         // Durably advance rollback progress (completed position + 1)
-        rb_journal.state = TransactionState::RollingBack { next_rollback_position: position + 1 };
+        rb_journal.state = TransactionState::RollingBack {
+            next_rollback_position: position + 1,
+        };
         persist_journal(state_dir, &rb_journal)?;
     }
 
@@ -1053,13 +1068,25 @@ mod tests {
     fn test_state_is_interruptible() {
         assert!(TransactionState::Prepared.is_interruptible());
         assert!(TransactionState::BackupsDurable.is_interruptible());
-        assert!(TransactionState::Committing { next_commit_position: 0 }.is_interruptible());
-        assert!(TransactionState::RollingBack { next_rollback_position: 0 }.is_interruptible());
-        assert!(TransactionState::CommittedLocal {
-            pending_generation: 0,
-            pending_recorded: false
-        }
-        .is_interruptible());
+        assert!(
+            TransactionState::Committing {
+                next_commit_position: 0
+            }
+            .is_interruptible()
+        );
+        assert!(
+            TransactionState::RollingBack {
+                next_rollback_position: 0
+            }
+            .is_interruptible()
+        );
+        assert!(
+            TransactionState::CommittedLocal {
+                pending_generation: 0,
+                pending_recorded: false
+            }
+            .is_interruptible()
+        );
         assert!(!TransactionState::Committed.is_interruptible());
         assert!(!TransactionState::RolledBack.is_interruptible());
         assert!(!TransactionState::Failed("test".into()).is_interruptible());

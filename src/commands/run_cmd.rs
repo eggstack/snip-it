@@ -210,12 +210,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         // Use unified spawn_and_wait_execution so spawn failures map to
         // ProcessResult::Failed { exit_code: None } (exit code 8), not
         // generic SnipError (exit code 1).
-        let result = spawn_and_wait_execution(
-            &shell,
-            &final_command,
-            timeout,
-            Some(output_file),
-        );
+        let result = spawn_and_wait_execution(&shell, &final_command, timeout, Some(output_file));
 
         // Record audit/usage on success
         if result.is_done() {

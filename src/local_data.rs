@@ -119,14 +119,16 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 // Write lock record
                 let content = toml::to_string_pretty(&info)
                     .map_err(|e| SnipError::toml_error("serialize local-data lock info", e))?;
-                fs::write(&lock_path, &content)
-                    .map_err(|e| SnipError::io_error("write local-data lock record", lock_path.clone(), e))?;
+                fs::write(&lock_path, &content).map_err(|e| {
+                    SnipError::io_error("write local-data lock record", lock_path.clone(), e)
+                })?;
                 return Ok(LocalDataLock { lock_path, info });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Lock exists — read and classify the owner.
-                let content = fs::read_to_string(&lock_path)
-                    .map_err(|e| SnipError::io_error("read existing local-data lock", lock_path.clone(), e))?;
+                let content = fs::read_to_string(&lock_path).map_err(|e| {
+                    SnipError::io_error("read existing local-data lock", lock_path.clone(), e)
+                })?;
 
                 let existing: LocalDataLockInfo = match toml::from_str(&content) {
                     Ok(info) => info,
@@ -181,11 +183,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 }
             }
             Err(e) => {
-                return Err(SnipError::io_error(
-                    "acquire local data lock",
-                    lock_path,
-                    e,
-                ));
+                return Err(SnipError::io_error("acquire local data lock", lock_path, e));
             }
         }
     }
@@ -198,8 +196,13 @@ fn quarantine_local_data_lock(lock_path: &Path) -> SnipResult<PathBuf> {
         .parent()
         .unwrap_or(lock_path)
         .join(&quarantine_name);
-    fs::rename(lock_path, &quarantine_path)
-        .map_err(|e| SnipError::io_error("quarantine stale local-data lock", quarantine_path.clone(), e))?;
+    fs::rename(lock_path, &quarantine_path).map_err(|e| {
+        SnipError::io_error(
+            "quarantine stale local-data lock",
+            quarantine_path.clone(),
+            e,
+        )
+    })?;
     Ok(quarantine_path)
 }
 

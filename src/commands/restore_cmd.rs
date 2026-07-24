@@ -498,7 +498,11 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         if entry.kind == BackupEntryKind::Library {
             let file_path = resolve_backup_path(&backup, entry);
             let content = fs::read_to_string(&file_path).map_err(|e| {
-                SnipError::io_error("read library for duplicate ID validation", file_path.clone(), e)
+                SnipError::io_error(
+                    "read library for duplicate ID validation",
+                    file_path.clone(),
+                    e,
+                )
             })?;
             validate_library_no_duplicate_ids(&file_path, &content)?;
         }
@@ -658,7 +662,14 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                         .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    restore_library_file(&src, &libraries_dir, &library_name, mode, &mut report, &_local_lock)?;
+                    restore_library_file(
+                        &src,
+                        &libraries_dir,
+                        &library_name,
+                        mode,
+                        &mut report,
+                        &_local_lock,
+                    )?;
                 }
                 BackupEntryKind::Index => {
                     let src = backup.join(&entry.path);
@@ -742,10 +753,13 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             crate::auto_sync::pending::PendingSnapshot::Mutation {
                 kind: crate::auto_sync::policy::MutationKind::Import,
             },
-        ).map_err(|e| SnipError::runtime_error(
-            "record pending mutation",
-            Some(&format!("Failed to record pending sync intent: {e}")),
-        ))?;
+        )
+        .map_err(|e| {
+            SnipError::runtime_error(
+                "record pending mutation",
+                Some(&format!("Failed to record pending sync intent: {e}")),
+            )
+        })?;
 
         let generation = pending_state.generation;
 

@@ -103,7 +103,7 @@ src/auto_sync/policy.rs  Expanded FailureClass (11 variants), RetryDisposition, 
 src/ui/                   TUI (ratatui + crossterm), theme system, syntax highlighting, variable prompts
 src/utils/                Config paths, TOML helpers, variable parsing, shell keywords, temp files, atomic writes
 src/utils/atomic.rs         Atomic file-write helpers (write_private_atomic, atomic_replace with durability classes)
-src/library.rs            Snippet/library data structures and TOML persistence
+src/library.rs            Snippet/library data structures and TOML persistence (save_library acquires gate+lock; save_library_internal skips gate+lock for internal transaction use)
 src/sync.rs               gRPC client for snip-sync server
 src/sync_commands.rs      Sync orchestration and merge logic
 src/encryption.rs         AES-256-GCM + Argon2id end-to-end encryption
@@ -172,16 +172,24 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
 
 ### Transaction lock (PID/nonce/start_token)
-The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
+The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. On macOS, `proc_pidinfo` with `PROC_PIDTBSDINFO` is used for process start time. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
+
+**Phase 11C fix**: Lock ownership verification now uses `ProcessIdentity::observe(existing.pid)` to compare the observed owner's start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse.
 
 ### Local-data lock (backup snapshot coordination)
 `LocalDataLock` (`src/local_data.rs`) is a short-lived exclusive file lock in the `.transaction` directory that serializes backup snapshot capture against all local TOML mutations. Backup acquires the lock during file enumeration and byte capture; `save_library` acquires it during writes. This ensures backup captures either the complete before-state or complete after-state, never a mixed state. The lock retries with exponential backoff (up to 30s) when contended.
 
+**Phase 11C fix**: `LocalDataLock` now uses the `OwnedFileLock` primitive with ownership record (`LocalDataLockInfo`) and stale recovery. The lock record contains `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, and `start_token` fields. Dead-owner reclaim uses `ProcessIdentity::observe(pid)`.
+
 ### Mutation gate (interrupted-transaction recovery)
 `gate_mutation_on_interrupted_transactions()` (`src/transaction.rs`) must be called before any local mutating operation begins its write phase. Policy: if no interrupted journals exist, proceed; if exactly one complete journal exists, attempt automatic rollback; if multiple or incomplete journals exist, refuse mutation and direct the user to `snp repair`. This prevents new writes from proceeding over an unresolved restore.
 
+**Phase 11C fix**: The gate now handles `CommittedLocal` state, which represents a transaction that has committed locally but has not yet recorded the pending sync intent. Recovery from `CommittedLocal` completes the pending intent recording.
+
 ### Durable transaction executor
-Restore uses the full transaction state machine: `Prepared` → `BackupsDurable` (after backup creation, before any live writes) → `Committing{next_index}` (per-file, with progress persisted after each atomic write) → `Committed`. Rollback uses atomic persistence (`atomic_replace` with `DurableUserData`) instead of `fs::copy`, and removes newly created files. Both commit and rollback are restartable from the last durable progress point.
+Restore uses the full transaction state machine: `Prepared` → `BackupsDurable` (after backup creation, before any live writes) → `Committing{next_commit_position}` (per-file, with progress persisted only after each verified atomic write) → `CommittedLocal{pending_generation, pending_recorded}` (pending sync intent recorded) → `Committed`. Rollback uses `RollingBack{next_rollback_position}` with rollback-order coordinates and atomic persistence (`atomic_replace` with `DurableUserData`) instead of `fs::copy`, and removes newly created files. Both commit and rollback are restartable from the last durable progress point.
+
+**Phase 11C fix**: Commit progress (`next_commit_position`) is now persisted only after a destination has been atomically installed and verified, not before. The `CommittedLocal` state eliminates the crash window between durable restore commit and pending-sync intent recording.
 
 ### Migration schema versioning
 Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.

@@ -476,6 +476,94 @@ fn test_noop_executor_leaves_server_count_at_zero() {
     server_task.abort();
 }
 
+// ── Executor contact proof: executor must reach the server ─────────
+
+/// Proves that the executor actually contacts the server during a sync
+/// cycle. Uses a real in-process server with database inspection to
+/// verify that the executor's sync operation produced a server-side
+/// state effect, ruling out a no-op executor that exits 0 without
+/// syncing.
+///
+/// This complements test_real_remote_effect_before_pending_clear by
+/// focusing on the executor's network behavior: the server-side snippet
+/// count must change from 0 to 1, proving the executor authenticated
+/// and pushed data.
+#[test]
+fn test_executor_must_contact_server() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    // 1. Start isolated real protocol server.
+    let (server_url, server_task, db) = rt.block_on(async {
+        let service = build_test_service().await;
+        let db = service.db.clone();
+        let (addr, task, _captured) = start_test_server(service).await;
+        (format!("http://{addr}"), task, db)
+    });
+
+    // 2. Set up isolated test environment.
+    let env = TestEnvironment::builder()
+        .with_server_url(&server_url)
+        .with_debounce(2)
+        .build()
+        .unwrap();
+    let config_dir = &env.config_dir;
+
+    // Create test credential file for subprocesses
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    std::fs::write(&cred_path, &env.api_key).unwrap();
+
+    // Register a real client against the server via the binary.
+    register_with_binary(config_dir, &server_url);
+
+    // Enable auto-sync with 2-second debounce.
+    enable_auto_sync(config_dir, 2);
+
+    // Create the e2e library.
+    create_library(config_dir, "e2e");
+
+    // 3. Record pre-mutation server state (R0 = 0).
+    let server_count_before = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count_before, 0,
+        "server must start with 0 snippets (R0)"
+    );
+
+    // 4. Perform a real local mutation through the snp binary.
+    new_snippet(config_dir, "executor-contact-proof");
+
+    // 5. Wait for the worker+executor to complete the sync cycle.
+    let marker = pending_marker(config_dir);
+    let cleared = wait_until_cleared(&marker, Duration::from_secs(30));
+    assert!(
+        cleared,
+        "pending marker must be cleared after successful sync"
+    );
+
+    // 6. Verify server-side state changed (R0 → R1).
+    //    The server snippet count must be exactly 1, proving the executor
+    //    authenticated, contacted the server, and pushed the snippet.
+    //    A no-op executor that exits 0 without syncing would leave this
+    //    count at 0, causing the assertion to fail.
+    let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count_after, 1,
+        "server snippet count must be exactly 1 after sync (R0=0 -> R1=1), got {server_count_after}. \
+         A no-op executor that exits 0 without contacting the server would leave this count at 0."
+    );
+
+    // 7. Verify the snippet was actually pushed by checking the server
+    //    has exactly 1 snippet (the count check in step 6 already proves
+    //    the executor contacted the server; this is a redundant safety
+    //    check on the non-deleted count).
+    let snippet_count = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        snippet_count, 1,
+        "server must contain exactly 1 non-deleted snippet after sync"
+    );
+
+    server_task.abort();
+}
+
 // ── Helper to create a standalone test env ─────────────────────────
 
 fn setup_test_env_helper() -> (tempfile::TempDir, std::path::PathBuf) {

@@ -70,6 +70,10 @@ The `ExecutionFailed` variant in `CliOutcome` has two sub-cases:
 
 This ensures scripts can distinguish between `snp` infrastructure failures (exit 1) and snippet execution failures (exit = child code or 8). Execution failures do not record usage metadata.
 
+### Phase 11C: Unified Execution Helper
+
+`spawn_and_wait_execution(shell, command, timeout, stdout_file)` in `src/commands/run_cmd.rs` is the unified execution helper used by both the output-file and ordinary execution branches. It returns `ProcessResult::Failed { exit_code: None }` for spawn failures, timeouts, and signal kills, which maps to exit code 8. This eliminates the previous inconsistency where the output-file branch could return `SnipError` through `?` and reach exit code 1.
+
 ## Child Exit Code Propagation
 
 When `snp run` or exact `run` executes a child snippet process:

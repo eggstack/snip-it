@@ -70,3 +70,19 @@ During the plan review session, the following discrepancies were corrected:
 - Unit tests (lib): ~950
 - Integration tests: ~870
 - Phase 07A-specific: ~55 (persistence_unit, identity_contract, validate_cmd, backup_cmd, restore_cmd, repair_cmd, transaction, migration)
+
+### Session Notes (2026-07-24) - Phase 11C Implementation
+
+#### Phase 11C Completed Workstreams
+- **Workstream A**: Updated closure status to accurately reflect open work. Commit 72708f5.
+- **Workstream B**: `OwnedFileLock` primitive with `ProcessIdentity::observe(pid)`. Lock reclaim uses `create_new(true)` loop. Commit 9311220.
+- **Workstream C**: Lock hierarchy `LocalDataLock → TransactionLock → writes`. `save_library_internal()` skips gate+lock for internal use. Restore acquires LocalDataLock before TransactionLock. Commit fae5ba6.
+- **Workstream D**: `StagedFile` has `durable_staged_path` field. Complete journal with hashes before live writes. Commit 345b000.
+- **Workstream E**: `Committing{next_commit_position}` persists progress only after verified writes. `CommittedLocal{pending_generation, pending_recorded}` eliminates commit-to-pending crash window. Commit b0cdc92.
+- **Workstream F**: `RollingBack{next_rollback_position}` with rollback-order coordinates. Hash verification after each rollback action. Commit b0cdc92.
+- **Workstream G**: `save_sync_settings` acquires `LocalDataLock`. All writers coordinate through the lock. Commit ef6123f.
+- **Workstream H**: `validate_library_no_duplicate_ids()` enforces domain contracts. `test_rejects_duplicate_ids` requires rejection. Commit e5e5ff3.
+- **Workstream I**: `test_executor_must_contact_server` proves executor contacts server via server-side state effects (R0→R1). `test_noop_executor_leaves_server_count_at_zero` proves no-op executor is caught.
+- **Workstream J**: `spawn_and_wait_execution()` unified helper. Output-file spawn failure returns `ProcessResult::Failed{exit_code: None}` (exit code 8). Commit 754dfea.
+- **Workstream K**: Centralized protoc installation scripts. Release-blocking tests job. Commit 4be404e.
+- **Workstream L**: Documentation reconciled. Closure status updated.

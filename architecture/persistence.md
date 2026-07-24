@@ -128,8 +128,7 @@ Coordinates multi-file operations (library create/delete, bulk import, restore, 
 ### State Machine
 
 ```
-Prepared → Committed
-Prepared → RolledBack
+Prepared → BackupsDurable → Committing{next_commit_position} → CommittedLocal{pending_generation, pending_recorded} → Committed
 Prepared → Failed(error_message)
 ```
 
@@ -137,7 +136,7 @@ Prepared → Failed(error_message)
 
 #### TransactionJournal
 
-Persisted as `txn-<uuid>.toml` in the state directory:
+Persisted as `txn-<uuid>.toml` in the `.transaction` subdirectory of the state directory:
 
 ```rust
 pub struct TransactionJournal {
@@ -153,16 +152,22 @@ pub struct TransactionJournal {
 
 ```rust
 pub struct StagedFile {
-    pub original_path: PathBuf,
-    pub backup_path: Option<PathBuf>,
-    pub staged_path: PathBuf,
-    pub sha256: String,
+    pub destination: PathBuf,
+    pub action: StagedAction,
+    pub existed_before: bool,
+    pub original_hash: Option<String>,
+    pub intended_hash: Option<String>,
+    pub durable_backup_path: Option<PathBuf>,
+    pub durable_staged_path: Option<PathBuf>,
+    pub original_permissions: Option<PortablePermissions>,
 }
 ```
 
+`durable_staged_path` is a private durable copy of the intended bytes, never the live destination. `durable_backup_path` is a durable copy of the original bytes for rollback.
+
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, and `operation` fields. On acquisition, if the lock already exists, the system checks PID liveness via `kill -0` (Unix) or `GetExitCodeProcess` (Windows) — dead owners are reclaimed, live owners cause an error. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce matches the guard's nonce, preventing old owners from removing a replacement owner's lock.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Phase 11C fix**: ownership verification observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
 
 ### API
 
@@ -181,10 +186,23 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 ### Journal Lifecycle
 
 1. `begin_transaction` writes journal via `write_private_atomic` in `Prepared` state
-2. Caller creates durable backups and advances to `BackupsDurable`
-3. Caller performs live replacements, advancing through `Committing { next_index }` per file
-4. `commit_transaction` marks `Committed`, cleans up backups, removes journal
-5. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan in any interruptible state
+2. Caller creates durable backups and staged files, then advances to `BackupsDurable`
+3. Caller performs live replacements, advancing through `Committing { next_commit_position }` per file — progress persisted only after each verified atomic write
+4. After all writes complete, advance to `CommittedLocal { pending_generation, pending_recorded }` — records pending sync intent atomically
+5. `commit_transaction` marks `Committed`, cleans up backups and journal
+6. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan in any interruptible state (including `CommittedLocal`, which completes the pending intent recording)
+
+### Commit Progress Semantics
+
+`Committing { next_commit_position }` uses completed-position semantics: `next_commit_position == N` means positions `0..N` have already been installed and verified; position `N` is next. Progress is persisted only after install and verification, never before.
+
+### Rollback Order
+
+`RollingBack { next_rollback_position }` uses rollback-order coordinates: `rollback_order = (0..files.len()).rev()`. `next_rollback_position == N` means positions `0..N` have been rolled back. Each rollback action verifies the pre-transaction bytes or expected absence after completion.
+
+### CommittedLocal State
+
+`CommittedLocal { pending_generation, pending_recorded }` eliminates the crash window between durable restore commit and pending-sync intent recording. After all live writes are committed, the journal transitions to `CommittedLocal` with the pending generation number. The pending sync intent is then recorded. If a crash occurs between `CommittedLocal` and `Committed`, recovery completes the pending intent recording.
 
 ---
 
@@ -330,24 +348,28 @@ Each file in the backup has a SHA-256 digest recorded in the manifest. Restore v
 
 ### Restore Flow
 
-1. Acquire transaction lock (`acquire_transaction_lock`)
-2. Begin transaction journal (`begin_transaction`)
-3. Load and validate manifest (`manifest.toml` or `manifest.json`)
-4. Validate every source artifact (checksum, size, symlink rejection)
-5. Validate every destination path (traversal, reserved names, kind constraints)
-6. Parse incoming TOML files before any live write
-7. Load every affected current file
-8. Compute full restore plan in memory (detect conflicts, produce deterministic report)
-9. Create pre-restore snapshot for every affected live file
-10. Stage all replacement files in destination directories
-11. Atomically replace each live file via `atomic_replace` with `Durability::DurableUserData`
-12. Update library index only after all library files are staged and validated
-13. On any failure: roll back all committed replacements in reverse order (`rollback_transaction`)
-14. Mark journal committed only after all live writes succeed (`commit_transaction`)
-15. Record one pending generation if syncable local state changed
-16. Release transaction lock
-17. Schedule auto-sync once, after commit, if policy permits
-18. Clean backups and journal according to retention policy
+1. Acquire `LocalDataLock` (backup coordination)
+2. Acquire transaction lock (`acquire_transaction_lock`)
+3. Begin transaction journal (`begin_transaction`)
+4. Load and validate manifest (`manifest.toml` or `manifest.json`)
+5. Validate every source artifact (checksum, size, symlink rejection)
+6. Validate every destination path (traversal, reserved names, kind constraints)
+7. Parse incoming TOML files before any live write
+8. Validate duplicate snippet IDs (`validate_library_no_duplicate_ids`)
+9. Load every affected current file
+10. Compute full restore plan in memory (detect conflicts, produce deterministic report)
+11. Create durable backups for every existing destination
+12. Create durable staged files containing exact intended bytes
+13. fsync files and required parent directories according to durability class
+14. Populate all journal fields, including hashes and action
+15. Atomically persist `BackupsDurable`
+16. Perform live replacements via `atomic_replace` with `Durability::DurableUserData`, persisting `Committing { next_commit_position }` only after each verified write
+17. Advance to `CommittedLocal { pending_generation, pending_recorded }` — records pending sync intent atomically
+18. Mark journal committed only after all live writes succeed and pending intent is recorded (`commit_transaction`)
+19. Release transaction lock
+20. Release `LocalDataLock`
+21. Schedule auto-sync once, after commit, if policy permits
+22. Clean backups and journal according to retention policy
 
 ### Merge Strategy
 
