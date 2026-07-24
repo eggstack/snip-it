@@ -1,0 +1,16 @@
+tools:
+    shell:
+        allow:
+            - ls *
+            - echo *
+            - head *
+            - cd *
+            - git log *
+            - git status *
+            - grep *
+            - cat *
+            - tail *
+            - cargo build *
+            - cargo test *
+            - git add *
+            - git commit *

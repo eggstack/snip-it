@@ -2,14 +2,41 @@
 
 Phase 11 status: INCOMPLETE
 Correctness program status: REOPENED
-Blocking corrective plan: plans/snip-it-correctness-11b-durability-verification-windows-ci-closure.md
-Corrective baseline: cd206fc2ee65f3a9a9307074a3eb93b82baeffb3
+Blocking plan: plans/snip-it-correctness-11c-final-durability-and-evidence-closure.md
+Corrective baseline: 20b6c52c8d01dea66b7f445ac756af2e71282406
 Baseline: 609ddca5611894684d2ca04a10138ddc606ff301
-Final commit (current): pending (11B corrective + architectural changes)
+Final commit (current): pending (11C corrective + architectural changes)
 
 ## Summary
 
-Phase 11 implemented substantial crash-correctness and verification improvements. Phase 11B applies corrective fixes and completes the remaining architectural workstreams: typed manifest kind, durable transaction executor, atomic rollback, mutation gate, process identity, local-data lock, server-observable E2E telemetry, and Windows CI portability.
+Phase 11 implemented substantial crash-correctness and verification improvements. Phase 11B applied corrective fixes for repair path, credential gating, execution exit code, and CI. Phase 11C (this plan) addresses the remaining correctness gaps identified in `plans/snip-it-correctness-11c-final-durability-and-evidence-closure.md`.
+
+### Open Workstreams (Phase 11C)
+
+| Workstream | Subject | Status |
+|------------|---------|--------|
+| A | Reopen closure evidence accurately | In progress |
+| B | Build one reusable owned-file-lock primitive | Not started |
+| C | Define lock hierarchy and transaction context | Not started |
+| D | Prepare a complete durable restore plan | Not started |
+| E | Commit with after-write progress and atomic pending intent | Not started |
+| F | Correct restartable rollback | Not started |
+| G | Coordinate backup with every included-state writer | Not started |
+| H | Enforce manifest and restore domain contracts before hashing | Not started |
+| I | Complete deterministic server and lifecycle evidence | Not started |
+| J | Finish execution outcome mapping | Not started |
+| K | Correct and prove Windows CI | Not started |
+| L | Final documentation and evidence reconciliation | Not started |
+
+### Superseded Claims (Phase 11B)
+
+The following items were previously marked complete but require re-verification under Phase 11C:
+
+- **Durable executor**: `BackupsDurable → Committing{next_index}` states exist, but commit progress is persisted before writes (defect 3.4)
+- **Restartable rollback**: rollback exists but uses original file indices, not rollback-order positions (defect 3.5)
+- **Complete backup coordination**: `LocalDataLock` exists but is a bare file with no ownership record or stale recovery (defect 3.8)
+- **Server-observable E2E telemetry**: headline test checks server count but discards the recording handle (defect 3.10)
+- **All execution outcomes**: output-file spawn failure still reaches generic exit code 1 (defect 3.11)
 
 ## Phase 11B Changes (Current Session)
 
@@ -146,13 +173,41 @@ Phase 11 implemented substantial crash-correctness and verification improvements
 
 ## Remaining Issues
 
-### 1. Cross-platform CI evidence
+### 1. Lock ownership comparison uses contender's identity
+The transaction-lock acquisition path compares the persisted owner start token with the new contender's own start token (defect 3.1). A live owner can be classified as PID reuse and quarantined. Fix: observe the process at `existing.pid`.
 
-The CI workflow is defined (`.github/workflows/ci.yml`) but has not been run on GitHub Actions. Cross-platform test evidence (Linux, macOS, Windows) is not yet available. Local tests pass on macOS.
+### 2. Stale-lock reclaim loses exclusivity
+After quarantine, the code recreates the lock with ordinary `fs::write` (defect 3.2). Two reclaimers can race. Fix: loop back to `create_new(true)`.
 
-### 2. Event capture flakiness in full test suite
+### 3. Restore can roll back its own active transaction
+Merge restore calls `save_library`, which invokes the global mutation gate (defect 3.3). Fix: internal guarded save path.
 
-The deterministic_e2e headline test passes in isolation but occasionally fails in the full workspace run due to lifecycle event capture interference from concurrent tests. This is a pre-existing test isolation issue, not a functional defect.
+### 4. Commit progress recorded before write
+`advance_to_committing` is called before the file write (defect 3.4). Fix: persist progress after verified writes.
+
+### 5. Rollback cursor not restartable
+Rollback uses original file indices, not rollback-order positions (defect 3.5). Fix: use rollback-order coordinates.
+
+### 6. Restore journal content incomplete
+Journal lacks complete staged replacement info and final hashes (defect 3.6). Fix: durable staged files and complete journal fields.
+
+### 7. Commit-to-pending crash window
+Restore removes journal then records pending intent (defect 3.7). Fix: transaction finalization state.
+
+### 8. Local-data lock not crash-recoverable
+`LocalDataLock` is a bare create/delete file with no ownership record (defect 3.8). Fix: owned-lock primitive.
+
+### 9. Manifest tests permissive
+Some tests accept either success or failure (defect 3.9). Fix: targeted negative fixtures.
+
+### 10. Headline E2E discards recording handle
+Test discards the recording handle and does not assert canonical request count, identity, or concurrency (defect 3.10). Fix: use `RecordingServer`.
+
+### 11. Output-file spawn failure reaches exit code 1
+Shell spawn in output-file branch returns `SnipError` through `?` (defect 3.11). Fix: unify outcome mapping.
+
+### 12. Windows CI unproven
+No successful same-commit Windows evidence recorded (defect 3.12). Fix: centralized protoc, shell-neutral commands.
 
 ## Closure Criteria Assessment
 
@@ -161,31 +216,31 @@ The deterministic_e2e headline test passes in isolation but occasionally fails i
 | Program status reopened | ✅ Complete |
 | Closure status file exists | ✅ Complete |
 | Operation-aware recovery classification | ✅ Complete |
-| Headline E2E requires real server effect | ✅ Complete — server count=1, device identity asserted |
-| No-op executor mode fails headline E2E | ✅ Complete — test_noop_executor_leaves_server_count_at_zero |
-| Read-only tests: pending marker G unchanged | ✅ Complete — run_read_only_command_and_verify helper |
-| Read-only tests: status S0 unchanged | ✅ Complete — run_read_only_command_and_verify helper |
-| Read-only tests: no worker/executor events | ✅ Complete — assert_no_worker_spawned |
-| Transaction crash-completeness | ✅ Complete (enriched states, durable progress per-file) |
-| Transaction lock ownership | ✅ Complete (PID/nonce/start_token/quarantine) |
-| Local-data lock for backup serialization | ✅ Complete (LocalDataLock, save_library integration) |
-| Mutation gate for interrupted transactions | ✅ Complete (gate_mutation_on_interrupted_transactions) |
-| Durable transaction executor | ✅ Complete (BackupsDurable → Committing per-file) |
-| Atomic restartable rollback | ✅ Complete (atomic_replace, create-aware, restartable) |
-| Typed manifest kind | ✅ Complete (BackupEntryKind enum, unknown rejected) |
-| Server-observable E2E telemetry | ✅ Complete (device identity, count, lifecycle events) |
-| PID1 assumptions removed | ✅ Complete (dead child processes in all tests) |
-| Coherent backup generation | ✅ Complete (generation counter, atomic staging) |
-| Execution outcome semantics | ✅ Complete (timeout/spawn/signal → code 8, including output-file) |
-| Update extraction hardening | ✅ Complete (ZIP, tar bounds, URL validation) |
-| CI/package evidence | ✅ Workflow defined, local checks pass |
-| Documentation reconciled | ✅ Updated (AGENTS, persistence, closure status) |
-| Repair path bug | ✅ Fixed — scans `.transaction/` subdirectory |
-| Test credential compile-time gate | ✅ Fixed — gated behind `#[cfg(feature = "test-support")]` |
-| Output-file exit code 8 | ✅ Fixed — timeout/spawn failures map to code 8 |
+| Headline E2E requires real server effect | ⚠️ Partial — server count asserted, recording handle discarded (defect 3.10) |
+| No-op executor mode fails headline E2E | ⚠️ Partial — uses unreachable server, not true no-op seam (defect 3.10) |
+| Read-only tests: pending marker G unchanged | ✅ Complete |
+| Read-only tests: status S0 unchanged | ✅ Complete |
+| Read-only tests: no worker/executor events | ✅ Complete |
+| Transaction crash-completeness | ⚠️ Partial — states exist, but commit progress before write (defect 3.4) |
+| Transaction lock ownership | ⚠️ Partial — compares contender token, not observed owner (defect 3.1) |
+| Local-data lock for backup serialization | ⚠️ Partial — bare file, no ownership/stale recovery (defect 3.8) |
+| Mutation gate for interrupted transactions | ✅ Complete |
+| Durable transaction executor | ⚠️ Partial — BackupsDurable exists, but progress before write (defect 3.4) |
+| Atomic restartable rollback | ⚠️ Partial — uses original indices, not rollback-order (defect 3.5) |
+| Typed manifest kind | ✅ Complete |
+| Server-observable E2E telemetry | ⚠️ Partial — recording handle discarded (defect 3.10) |
+| PID1 assumptions removed | ✅ Complete |
+| Coherent backup generation | ✅ Complete |
+| Execution outcome semantics | ⚠️ Partial — output-file spawn failure exits 1 (defect 3.11) |
+| Update extraction hardening | ✅ Complete |
+| CI/package evidence | ⚠️ Partial — workflow defined, Windows unproven (defect 3.12) |
+| Documentation reconciled | ⚠️ In progress |
+| Repair path bug | ✅ Fixed |
+| Test credential compile-time gate | ✅ Fixed |
+| Output-file exit code 8 | ⚠️ Partial — timeout/spawn mapped, but spawn `?` bypasses (defect 3.11) |
 
 ## Release Decision
 
 **Phase 11 status: INCOMPLETE**
 **Correctness program status: REOPENED**
-**Release blockers: Cross-platform CI evidence (GitHub Actions run required)**
+**Release blockers: Phase 11C corrective work required (see open workstreams above)**
