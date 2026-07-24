@@ -67,23 +67,6 @@ fn shell_arg_flag() -> &'static str {
     if cfg!(windows) { "/C" } else { "-c" }
 }
 
-fn spawn_shell_command(shell: &str, command: &str) -> SnipResult<std::process::Child> {
-    Command::new(shell)
-        .arg(shell_arg_flag())
-        .arg(command)
-        .spawn()
-        .map_err(|e| SnipError::command_error(shell, vec![command.to_string()], e))
-}
-
-fn run_shell_command(
-    shell: &str,
-    command: &str,
-    timeout: Option<Duration>,
-) -> SnipResult<std::process::ExitStatus> {
-    let mut child = spawn_shell_command(shell, command)?;
-    wait_for_command(&mut child, timeout)
-}
-
 fn get_shell() -> String {
     if cfg!(windows) {
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
@@ -92,35 +75,53 @@ fn get_shell() -> String {
     }
 }
 
-fn handle_command_result(
+/// Spawn a shell command and wait for it, returning a unified `ProcessResult`.
+///
+/// This helper is used by both the output-file and ordinary execution branches
+/// to ensure consistent outcome mapping. It returns:
+/// - `Done` for success (exit code 0);
+/// - `Failed { exit_code: Some(code) }` for normal child nonzero exit;
+/// - `Failed { exit_code: None }` for spawn failure, timeout, or
+///   signal/no-code termination (maps to execution-failure exit code 8).
+fn spawn_and_wait_execution(
+    shell: &str,
     command: &str,
-    result: std::process::ExitStatus,
-    snippet: &Snippet,
-    working_dir: Option<&std::path::Path>,
+    timeout: Option<Duration>,
+    stdout_file: Option<std::fs::File>,
 ) -> crate::ProcessResult {
-    let result_str: Result<(), String> = if result.success() {
-        if let Err(e) = audit_log("execute", snippet, None) {
-            tracing::debug!("Audit log write failed: {}", e);
-        }
-        // Record usage for sorting
-        let mut usage_idx = crate::usage::UsageIndex::load();
-        usage_idx.record_use(&snippet.id);
-        if let Err(e) = usage_idx.save() {
-            tracing::debug!("Usage save failed: {}", e);
-        }
-        Ok(())
-    } else {
-        Err(format!("exit code: {result}"))
-    };
-    log_command_execution(command, &[], &result_str, working_dir);
+    let mut cmd = Command::new(shell);
+    cmd.arg(shell_arg_flag()).arg(command);
+    if let Some(file) = stdout_file {
+        cmd.stdout(file);
+    }
 
-    if result.success() {
-        crate::ProcessResult::Done("Executed".to_string())
-    } else {
-        let code = result.code();
-        crate::ProcessResult::Failed {
-            exit_code: code,
-            message: format!("Executed with exit code: {result}"),
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            return crate::ProcessResult::Failed {
+                exit_code: None,
+                message: format!("Failed to spawn shell: {e}"),
+            };
+        }
+    };
+
+    match wait_for_command(&mut child, timeout) {
+        Ok(status) => {
+            if status.success() {
+                crate::ProcessResult::Done("Executed".to_string())
+            } else {
+                crate::ProcessResult::Failed {
+                    exit_code: status.code(),
+                    message: format!("Executed with exit code: {status}"),
+                }
+            }
+        }
+        Err(e) => {
+            // Timeout or wait failure: no child exit code.
+            crate::ProcessResult::Failed {
+                exit_code: None,
+                message: e.to_string(),
+            }
         }
     }
 }
@@ -205,48 +206,64 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         let timeout = get_timeout(TimeoutPolicy::Default(Duration::from_secs(
             DEFAULT_TIMEOUT_SECONDS,
         )));
-        let mut child = Command::new(&shell)
-            .arg(shell_arg_flag())
-            .arg(&final_command)
-            .stdout(output_file)
-            .spawn()
-            .map_err(|e| SnipError::command_error(&shell, vec![final_command.clone()], e))?;
-        let status = match wait_for_command(&mut child, timeout) {
-            Ok(status) => status,
-            Err(e) => {
-                let msg = e.to_string();
-                // Timeout or spawn failure: map to ProcessResult::Failed with no exit code.
-                // This ensures the execution-failure exit code (8) is used instead of 1.
-                return Ok(crate::ProcessResult::Failed {
-                    exit_code: None,
-                    message: msg,
-                });
-            }
-        };
 
-        Ok(handle_command_result(
+        // Use unified spawn_and_wait_execution so spawn failures map to
+        // ProcessResult::Failed { exit_code: None } (exit code 8), not
+        // generic SnipError (exit code 1).
+        let result = spawn_and_wait_execution(
+            &shell,
             &final_command,
-            status,
-            snippet,
-            Some(&cwd),
-        ))
+            timeout,
+            Some(output_file),
+        );
+
+        // Record audit/usage on success
+        if result.is_done() {
+            if let Err(e) = audit_log("execute", snippet, None) {
+                tracing::debug!("Audit log write failed: {}", e);
+            }
+            let mut usage_idx = crate::usage::UsageIndex::load();
+            usage_idx.record_use(&snippet.id);
+            if let Err(e) = usage_idx.save() {
+                tracing::debug!("Usage save failed: {}", e);
+            }
+        }
+
+        let result_str: Result<(), String> = if result.is_done() {
+            Ok(())
+        } else {
+            Err(format!("{:?}", result))
+        };
+        log_command_execution(&final_command, &[], &result_str, Some(&cwd));
+
+        Ok(result)
     } else {
         let shell = get_shell();
         let timeout = get_timeout(TimeoutPolicy::NoDefault);
-        let status = match run_shell_command(&shell, &final_command, timeout) {
-            Ok(status) => status,
-            Err(e) => {
-                let msg = e.to_string();
-                // Timeout or spawn/shell failure: return as failed execution
-                // with no child exit code, so the execution-failure code (8) is used.
-                return Ok(crate::ProcessResult::Failed {
-                    exit_code: None,
-                    message: msg,
-                });
-            }
-        };
 
-        Ok(handle_command_result(&final_command, status, snippet, None))
+        // Use unified spawn_and_wait_execution for consistent outcome mapping.
+        let result = spawn_and_wait_execution(&shell, &final_command, timeout, None);
+
+        // Record audit/usage on success
+        if result.is_done() {
+            if let Err(e) = audit_log("execute", snippet, None) {
+                tracing::debug!("Audit log write failed: {}", e);
+            }
+            let mut usage_idx = crate::usage::UsageIndex::load();
+            usage_idx.record_use(&snippet.id);
+            if let Err(e) = usage_idx.save() {
+                tracing::debug!("Usage save failed: {}", e);
+            }
+        }
+
+        let result_str: Result<(), String> = if result.is_done() {
+            Ok(())
+        } else {
+            Err(format!("{:?}", result))
+        };
+        log_command_execution(&final_command, &[], &result_str, None);
+
+        Ok(result)
     }
 }
 

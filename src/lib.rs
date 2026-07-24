@@ -63,6 +63,7 @@ pub struct SnippetData {
 
 /// Result of processing a snippet selection from the TUI.
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum ProcessResult {
     /// User cancelled the selection.
     Cancel,
@@ -77,6 +78,13 @@ pub enum ProcessResult {
         /// Human-readable description of the failure.
         message: String,
     },
+}
+
+impl ProcessResult {
+    /// Returns true if this result represents a successful execution.
+    pub fn is_done(&self) -> bool {
+        matches!(self, ProcessResult::Done(_))
+    }
 }
 
 /// Top-level outcome returned by command implementations for exit-code mapping.
