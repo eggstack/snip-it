@@ -554,6 +554,9 @@ struct SyncConfigSettings {
 }
 
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
+    let state_dir = crate::local_data::derive_local_data_state_dir();
+    let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
+
     let path = get_sync_config_path();
     let config = SyncConfigFile {
         settings: SyncConfigSettings {
