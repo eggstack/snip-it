@@ -139,6 +139,11 @@ fn create_closure_library(config_dir: &Path) {
 /// is unavailable in the test environment.
 #[test]
 fn test_real_server_executor_clears_pending_after_server_change() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't clear pending)");
+        return;
+    }
+
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (server_url, _api_key, server_task) = rt.block_on(boot_server_with_marker());
 

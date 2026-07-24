@@ -153,6 +153,7 @@ pub fn schedule_and_spawn(
 ) -> ScheduleDecision {
     let decision = schedule_sync(state_dir, policy, caller);
     if decision == ScheduleDecision::SpawnNow
+        && std::env::var("SNP_SKIP_WORKER_SPAWN").is_err()
         && let Err(e) = spawn::spawn_worker(state_dir)
     {
         tracing::warn!(error = %e, "schedule_and_spawn: failed to spawn worker");

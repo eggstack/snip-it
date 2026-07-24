@@ -199,6 +199,11 @@ async fn server_total_snippet_count_all_users(db: &snip_sync::db::Database) -> i
 /// - Exact assertion counts (not >= 1)
 #[test]
 fn test_real_remote_effect_before_pending_clear() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't clear pending)");
+        return;
+    }
+
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     // 1. Start isolated real protocol server.
@@ -490,6 +495,11 @@ fn test_noop_executor_leaves_server_count_at_zero() {
 /// and pushed data.
 #[test]
 fn test_executor_must_contact_server() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't contact server)");
+        return;
+    }
+
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     // 1. Start isolated real protocol server.

@@ -69,7 +69,9 @@ jobs:
 
       - name: Workspace tests
         shell: bash
-        timeout-minutes: 90
+        timeout-minutes: 45
+        env:
+          SNP_SKIP_WORKER_SPAWN: "1"
         run: |
           if [ "${{ matrix.profile }}" = "release" ]; then
             cargo test --release --workspace --all-features -- --test-threads=1
