@@ -1,0 +1,7 @@
+# Windows default stack (1MB) is too small for the large Commands enum in
+# main.rs.  Increase to 8 MB to match Linux/macOS defaults.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608"]

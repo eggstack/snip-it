@@ -156,7 +156,7 @@ fn generate_nonce() -> String {
     format!("{:x}-{:x}-{:x}", std::process::id(), nanos, seq)
 }
 
-fn restrict_permissions(path: &Path) {
+fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

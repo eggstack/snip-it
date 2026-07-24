@@ -338,7 +338,7 @@ fn crc32(bytes: &[u8]) -> u32 {
     !hash
 }
 
-fn restrict_permissions(path: &Path) {
+fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

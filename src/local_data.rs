@@ -190,20 +190,28 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
 }
 
 /// Quarantine a stale or malformed local-data lock by renaming it.
+///
+/// If the lock file has already been quarantined by a concurrent writer
+/// (race on stale-lock reclaim), the `NotFound` error is treated as success.
 fn quarantine_local_data_lock(lock_path: &Path) -> SnipResult<PathBuf> {
     let quarantine_name = format!("local-data.lock.quarantine.{}", uuid::Uuid::new_v4());
     let quarantine_path = lock_path
         .parent()
         .unwrap_or(lock_path)
         .join(&quarantine_name);
-    fs::rename(lock_path, &quarantine_path).map_err(|e| {
-        SnipError::io_error(
+    match fs::rename(lock_path, &quarantine_path) {
+        Ok(()) => Ok(quarantine_path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Another writer already quarantined the lock — treat as success.
+            tracing::debug!("local-data lock already quarantined by another writer");
+            Ok(quarantine_path)
+        }
+        Err(e) => Err(SnipError::io_error(
             "quarantine stale local-data lock",
             quarantine_path.clone(),
             e,
-        )
-    })?;
-    Ok(quarantine_path)
+        )),
+    }
 }
 
 /// Execute a closure while holding the local-data lock.

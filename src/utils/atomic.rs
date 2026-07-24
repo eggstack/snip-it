@@ -165,7 +165,10 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
 /// Returns `Some(true)` if dirfsync succeeded, `Some(false)` if it failed
 /// (logged but not fatal), and `None` for ephemeral durability.
 #[allow(dead_code)]
-fn parent_dir_sync(parent: &Path, durability: Durability) -> Option<bool> {
+fn parent_dir_sync(
+    #[cfg_attr(not(unix), allow(unused_variables))] parent: &Path,
+    durability: Durability,
+) -> Option<bool> {
     match durability {
         Durability::EphemeralCoordination => None,
         _ => {

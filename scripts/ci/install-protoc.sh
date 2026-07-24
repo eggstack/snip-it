@@ -86,8 +86,9 @@ mkdir -p "$INSTALL_DIR"
 unzip -o -q "$TMP_ZIP" -d "$INSTALL_DIR"
 rm -f "$TMP_ZIP" "${TMP_ZIP}.sha256"
 
-# Add to PATH
+# Add to PATH (both for this step via export and for subsequent steps via GITHUB_PATH)
 PROTOC_BIN="${INSTALL_DIR}/bin"
+export PATH="$PROTOC_BIN:$PATH"
 echo "$PROTOC_BIN" >> "$GITHUB_PATH"
 
 echo "protoc installed at: $PROTOC_BIN"

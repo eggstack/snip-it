@@ -82,7 +82,7 @@ impl BackupRelativePath {
         {
             use std::path::Component;
             for component in path.components() {
-                if let Component::Prefix(p) = component {
+                if let Component::Prefix(_p) = component {
                     return Err(SnipError::runtime_error(
                         "Windows prefix in backup path",
                         Some(&format!("Path contains Windows prefix: {input}")),

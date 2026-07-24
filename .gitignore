@@ -5,6 +5,10 @@
 # Cargo registry and git checkout directories (if any)
 **/.cargo/*
 
+# But allow committing .cargo/config.toml (needed for Windows stack size, etc.)
+!/.cargo/config.toml
+!/.cargo/config
+
 # Rust documentation files
 **/*.html
 

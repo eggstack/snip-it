@@ -68,6 +68,7 @@ jobs:
           key: ${{ matrix.os }}-${{ matrix.profile }}
 
       - name: Workspace tests
+        shell: bash
         timeout-minutes: 45
         run: |
           if [ "${{ matrix.profile }}" = "release" ]; then
@@ -78,6 +79,7 @@ jobs:
 
       - name: PTY integration tests
         if: runner.os != 'Windows'
+        shell: bash
         timeout-minutes: 15
         run: |
           if [ "${{ matrix.profile }}" = "release" ]; then

@@ -192,6 +192,8 @@ impl Drop for TestEnvironment {
                     }
                 }
             }
+            #[cfg(not(unix))]
+            let _ = pid;
         }
     }
 }
