@@ -407,7 +407,8 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                         // On Windows, a pending-delete file may be unreadable.
                         || e.kind() == std::io::ErrorKind::PermissionDenied =>
                     {
-                        // Lock was removed by another writer — loop back and retry.
+                        // Lock was removed or is in a transient state — loop back and retry.
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                     Err(e) => {
