@@ -32,8 +32,7 @@ use tempfile::TempDir;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-/// Drain PTY output on a background thread, reading directly from `fd`
-/// via `libc::read` after `libc::poll` confirms data is available.
+/// Read PTY output using `libc::poll` + `libc::read` on a non-blocking fd.
 /// A hard deadline ensures the thread terminates even if the kernel
 /// never signals POLLHUP (observed on some CI runners).
 fn drain_pty_output(fd: std::os::unix::io::RawFd) -> Vec<u8> {
@@ -142,14 +141,15 @@ fn run_snp_pty_with_delay(
     cmd.cwd(config_dir.parent().unwrap());
 
     let mut child = pair.slave.spawn_command(cmd).unwrap();
+    // Drop the slave so the master sees EOF when the child exits.
+    drop(pair.slave);
 
-    // Drain thread: dup the master fd and set non-blocking so read()
-    // never blocks. The main thread keeps the original fd for writes.
+    // Drain thread: dup the master fd, set non-blocking, read via libc.
     let master_fd = pair.master.as_raw_fd().expect("master pty fd");
     let drain_fd = unsafe { libc::dup(master_fd) };
     assert!(drain_fd >= 0, "dup failed");
-    let drain_flags = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
-    unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_flags | libc::O_NONBLOCK) };
+    let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
+    unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
     let drain = std::thread::spawn(move || {
         let out = drain_pty_output(drain_fd);
         unsafe { libc::close(drain_fd) };
@@ -177,7 +177,6 @@ fn run_snp_pty_with_delay(
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
-                    // Reap child so the PTY slave is closed.
                     let _ = child.wait();
                     let output = drain.join().unwrap();
                     let output_str = String::from_utf8_lossy(&output);
@@ -223,17 +222,18 @@ fn run_bash_capture_pty(
     shell.env("SNP_ARGS_CAPTURE", args_capture);
     shell.cwd(config_dir.parent().unwrap());
     let mut child = pair.slave.spawn_command(shell).unwrap();
+    drop(pair.slave);
 
-    // Drain thread: dup + non-blocking.
+    // Drain thread: dup the master fd, set non-blocking, read via libc.
     let master_fd_bash = pair.master.as_raw_fd().expect("master pty fd");
     let drain_fd_bash = unsafe { libc::dup(master_fd_bash) };
     assert!(drain_fd_bash >= 0, "dup failed");
-    let drain_flags_bash = unsafe { libc::fcntl(drain_fd_bash, libc::F_GETFL) };
+    let drain_orig_bash = unsafe { libc::fcntl(drain_fd_bash, libc::F_GETFL) };
     unsafe {
         libc::fcntl(
             drain_fd_bash,
             libc::F_SETFL,
-            drain_flags_bash | libc::O_NONBLOCK,
+            drain_orig_bash | libc::O_NONBLOCK,
         )
     };
     let drain = std::thread::spawn(move || {
@@ -261,13 +261,11 @@ fn run_bash_capture_pty(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    // Ctrl-N invokes the explicitly installed current-buffer widget.
     let ctrl_n = 0x0e_u8;
     unsafe {
         libc::write(raw_fd, &ctrl_n as *const u8 as *const libc::c_void, 1);
     }
     std::thread::sleep(Duration::from_millis(1200));
-    // Clear the unexecuted buffer, then exit the shell normally.
     for byte in b"\x15exit\n" {
         unsafe {
             libc::write(raw_fd, byte as *const u8 as *const libc::c_void, 1);
