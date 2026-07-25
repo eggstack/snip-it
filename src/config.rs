@@ -10,8 +10,8 @@
 //! be moved to the caller or an event bus in a future refactor.
 
 use crate::error::{SnipError, SnipResult};
-pub use crate::utils::config::get_sync_config_path;
 pub use crate::utils::config::derive_sync_state_dir;
+pub use crate::utils::config::get_sync_config_path;
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
