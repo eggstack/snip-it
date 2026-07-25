@@ -32,11 +32,11 @@ use tempfile::TempDir;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-/// Drain PTY output on a background thread, using `libc::poll` with a
-/// per-read timeout.  A hard deadline ensures the thread terminates
-/// even if the kernel never signals POLLHUP (observed on some CI
-/// runners).
-fn drain_pty_output(reader: &mut (dyn Read + Send), fd: std::os::unix::io::RawFd) -> Vec<u8> {
+/// Drain PTY output on a background thread, reading directly from `fd`
+/// via `libc::read` after `libc::poll` confirms data is available.
+/// A hard deadline ensures the thread terminates even if the kernel
+/// never signals POLLHUP (observed on some CI runners).
+fn drain_pty_output(fd: std::os::unix::io::RawFd) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     let mut output = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -59,11 +59,11 @@ fn drain_pty_output(reader: &mut (dyn Read + Send), fd: std::os::unix::io::RawFd
         if pollfd.revents & libc::POLLHUP != 0 && pollfd.revents & libc::POLLIN == 0 {
             break;
         }
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => output.extend_from_slice(&buf[..n]),
-            Err(_) => break,
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n <= 0 {
+            break;
         }
+        output.extend_from_slice(&buf[..n as usize]);
     }
     output
 }
@@ -143,11 +143,10 @@ fn run_snp_pty_with_delay(
 
     let mut child = pair.slave.spawn_command(cmd).unwrap();
 
-    // Drain thread: read master output so the slave's stdout doesn't block.
-    // Uses poll + hard deadline to prevent indefinite blocking on CI.
+    // Drain thread: reads from master fd via libc::read after poll confirms
+    // data. Hard deadline prevents indefinite blocking on CI.
     let master_fd = pair.master.as_raw_fd().expect("master pty fd");
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd));
+    let drain = std::thread::spawn(move || drain_pty_output(master_fd));
 
     // Give the TUI time to start up and render
     std::thread::sleep(initial_delay);
@@ -219,8 +218,7 @@ fn run_bash_capture_pty(
 
     // Drain thread with poll + hard deadline.
     let master_fd_bash = pair.master.as_raw_fd().expect("master pty fd");
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd_bash));
+    let drain = std::thread::spawn(move || drain_pty_output(master_fd_bash));
 
     std::thread::sleep(Duration::from_millis(700));
     let raw_fd = pair.master.as_raw_fd().expect("master pty fd");
