@@ -24,7 +24,6 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -516,18 +515,17 @@ fn test_pty_stdin_readable() {
     cmd.arg("-c");
     cmd.arg("read BYTE; echo GOT_$BYTE");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
+    drop(pair.slave);
 
-    let mut reader = pair.master.try_clone_reader().unwrap();
+    let master_fd = pair.master.as_raw_fd().expect("master pty fd");
+    let drain_fd = unsafe { libc::dup(master_fd) };
+    assert!(drain_fd >= 0, "dup failed");
+    let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
+    unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
     let drain = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let mut output = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => output.extend_from_slice(&buf[..n]),
-            }
-        }
-        output
+        let out = drain_pty_output(drain_fd);
+        unsafe { libc::close(drain_fd) };
+        out
     });
 
     std::thread::sleep(Duration::from_millis(500));
@@ -549,6 +547,7 @@ fn test_pty_stdin_readable() {
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
+                    let _ = child.wait();
                     panic!("child timed out");
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -584,18 +583,17 @@ fn test_pty_basic_echo() {
     cmd.arg("-c");
     cmd.arg("echo HELLO_FROM_PTY");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
+    drop(pair.slave);
 
-    let mut reader = pair.master.try_clone_reader().unwrap();
+    let master_fd = pair.master.as_raw_fd().expect("master pty fd");
+    let drain_fd = unsafe { libc::dup(master_fd) };
+    assert!(drain_fd >= 0, "dup failed");
+    let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
+    unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
     let drain = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let mut output = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => output.extend_from_slice(&buf[..n]),
-            }
-        }
-        output
+        let out = drain_pty_output(drain_fd);
+        unsafe { libc::close(drain_fd) };
+        out
     });
 
     // Wait for child to exit with timeout
@@ -610,6 +608,7 @@ fn test_pty_basic_echo() {
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
+                    let _ = child.wait();
                     panic!("child timed out");
                 }
                 std::thread::sleep(Duration::from_millis(50));
