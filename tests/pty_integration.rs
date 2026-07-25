@@ -25,7 +25,6 @@
 
 use std::fs;
 use std::io::Read;
-use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -33,28 +32,30 @@ use tempfile::TempDir;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-/// Read from `reader` in a loop, using `libc::poll` on `fd` with the given
-/// per-iteration timeout.  This prevents the drain thread from blocking
-/// indefinitely when the child process is killed but the PTY slave doesn't
-/// close promptly.
-fn drain_pty_output(reader: &mut dyn Read, fd: RawFd) -> Vec<u8> {
+/// Drain PTY output on a background thread, using `libc::poll` with a
+/// per-read timeout.  A hard deadline ensures the thread terminates
+/// even if the kernel never signals POLLHUP (observed on some CI
+/// runners).
+fn drain_pty_output(reader: &mut (dyn Read + Send), fd: std::os::unix::io::RawFd) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     let mut output = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         let mut pollfd = libc::pollfd {
             fd,
             events: libc::POLLIN,
             revents: 0,
         };
-        // Wait up to 500 ms for data (or hangup/error).
-        let ret = unsafe { libc::poll(&mut pollfd, 1, 500) };
+        let ret = unsafe { libc::poll(&mut pollfd, 1, 200) };
         if ret < 0 {
-            break; // poll error
+            break;
         }
         if ret == 0 {
-            continue; // timeout — loop to poll again
+            continue;
         }
-        // POLLHUP without POLLIN means the slave side closed.
         if pollfd.revents & libc::POLLHUP != 0 && pollfd.revents & libc::POLLIN == 0 {
             break;
         }
@@ -143,7 +144,7 @@ fn run_snp_pty_with_delay(
     let mut child = pair.slave.spawn_command(cmd).unwrap();
 
     // Drain thread: read master output so the slave's stdout doesn't block.
-    // Uses poll-based timeout to prevent indefinite blocking if the child hangs.
+    // Uses poll + hard deadline to prevent indefinite blocking on CI.
     let master_fd = pair.master.as_raw_fd().expect("master pty fd");
     let mut reader = pair.master.try_clone_reader().unwrap();
     let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd));
@@ -152,13 +153,9 @@ fn run_snp_pty_with_delay(
     std::thread::sleep(initial_delay);
 
     // Write keys directly to the master pty fd.
-    // Send each byte separately with a small delay so crossterm's parser
-    // processes them as individual events (e.g. Esc then 'q', not as a
-    // combined escape sequence like ESC-q).
     let raw_fd = pair.master.as_raw_fd().expect("master pty fd");
     for &byte in keys {
-        let written = unsafe { libc::write(raw_fd, &byte as *const u8 as *const libc::c_void, 1) };
-        eprintln!("Wrote byte {written} ({byte:#04x}) to master fd {raw_fd}");
+        unsafe { libc::write(raw_fd, &byte as *const u8 as *const libc::c_void, 1) };
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -173,7 +170,8 @@ fn run_snp_pty_with_delay(
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
-                    // Drain output before panicking
+                    // Reap child so the PTY slave is closed.
+                    let _ = child.wait();
                     let output = drain.join().unwrap();
                     let output_str = String::from_utf8_lossy(&output);
                     panic!("snp process timed out after {timeout:?}\nOUTPUT: {output_str}");
@@ -219,7 +217,7 @@ fn run_bash_capture_pty(
     shell.cwd(config_dir.parent().unwrap());
     let mut child = pair.slave.spawn_command(shell).unwrap();
 
-    // Drain thread: poll-based to prevent indefinite blocking.
+    // Drain thread with poll + hard deadline.
     let master_fd_bash = pair.master.as_raw_fd().expect("master pty fd");
     let mut reader = pair.master.try_clone_reader().unwrap();
     let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd_bash));
@@ -265,6 +263,7 @@ fn run_bash_capture_pty(
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
+                    let _ = child.wait();
                     let output = drain.join().unwrap();
                     panic!(
                         "bash PTY capture timed out after {timeout:?}; sentinel={:?}\nOUTPUT: {}",
