@@ -143,10 +143,18 @@ fn run_snp_pty_with_delay(
 
     let mut child = pair.slave.spawn_command(cmd).unwrap();
 
-    // Drain thread: reads from master fd via libc::read after poll confirms
-    // data. Hard deadline prevents indefinite blocking on CI.
+    // Drain thread: dup the master fd and set non-blocking so read()
+    // never blocks. The main thread keeps the original fd for writes.
     let master_fd = pair.master.as_raw_fd().expect("master pty fd");
-    let drain = std::thread::spawn(move || drain_pty_output(master_fd));
+    let drain_fd = unsafe { libc::dup(master_fd) };
+    assert!(drain_fd >= 0, "dup failed");
+    let drain_flags = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
+    unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_flags | libc::O_NONBLOCK) };
+    let drain = std::thread::spawn(move || {
+        let out = drain_pty_output(drain_fd);
+        unsafe { libc::close(drain_fd) };
+        out
+    });
 
     // Give the TUI time to start up and render
     std::thread::sleep(initial_delay);
@@ -216,9 +224,23 @@ fn run_bash_capture_pty(
     shell.cwd(config_dir.parent().unwrap());
     let mut child = pair.slave.spawn_command(shell).unwrap();
 
-    // Drain thread with poll + hard deadline.
+    // Drain thread: dup + non-blocking.
     let master_fd_bash = pair.master.as_raw_fd().expect("master pty fd");
-    let drain = std::thread::spawn(move || drain_pty_output(master_fd_bash));
+    let drain_fd_bash = unsafe { libc::dup(master_fd_bash) };
+    assert!(drain_fd_bash >= 0, "dup failed");
+    let drain_flags_bash = unsafe { libc::fcntl(drain_fd_bash, libc::F_GETFL) };
+    unsafe {
+        libc::fcntl(
+            drain_fd_bash,
+            libc::F_SETFL,
+            drain_flags_bash | libc::O_NONBLOCK,
+        )
+    };
+    let drain = std::thread::spawn(move || {
+        let out = drain_pty_output(drain_fd_bash);
+        unsafe { libc::close(drain_fd_bash) };
+        out
+    });
 
     std::thread::sleep(Duration::from_millis(700));
     let raw_fd = pair.master.as_raw_fd().expect("master pty fd");
