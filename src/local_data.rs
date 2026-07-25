@@ -270,7 +270,7 @@ pub fn with_local_data_lock<T>(state_dir: &Path, f: impl FnOnce() -> T) -> SnipR
 /// Returns `<config_dir>/.transaction` — the same directory used by the
 /// transaction module.
 pub fn derive_local_data_state_dir() -> PathBuf {
-    crate::auto_sync::notification::derive_state_dir().join(".transaction")
+    crate::config::derive_sync_state_dir().join(".transaction")
 }
 
 #[cfg(test)]

@@ -224,10 +224,7 @@ pub fn startup_recover_pending() {
 }
 
 pub fn derive_state_dir() -> std::path::PathBuf {
-    crate::config::get_sync_config_path()
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf()
+    crate::config::derive_sync_state_dir()
 }
 
 fn apply_scheduling_failure_policy(policy: &AutoSyncPolicy) {

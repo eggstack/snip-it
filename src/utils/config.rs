@@ -148,6 +148,16 @@ pub fn get_sync_config_path() -> PathBuf {
     get_config_path("sync.toml")
 }
 
+/// Derive the sync state directory from the sync config path.
+/// This is the canonical location for auto-sync state files (pending marker,
+/// worker lock, execution lock, status file, etc.).
+pub fn derive_sync_state_dir() -> PathBuf {
+    get_sync_config_path()
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -813,7 +813,7 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     // The gate needs both the canonical sync state directory (where the
     // pending marker lives) and the transaction directory (where journals
     // and locks live).
-    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let sync_state_dir = crate::config::derive_sync_state_dir();
     let transaction_dir = crate::local_data::derive_local_data_state_dir();
     crate::transaction::gate_mutation_on_interrupted_transactions(
         &sync_state_dir,
