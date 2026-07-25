@@ -31,6 +31,8 @@ struct PendingOnDisk {
     generation: u64,
     created_at_unix_ms: u64,
     snapshot: PendingSnapshot,
+    #[serde(default)]
+    source_transaction_id: Option<String>,
     integrity: String,
 }
 
@@ -77,6 +79,133 @@ pub fn record_pending_mutation(
     };
 
     write_pending_state(state_dir, &path, new_generation, created_at_ms, snapshot)
+}
+
+/// Outcome of an idempotent pending-intent request tied to a transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionPendingResult {
+    /// A new pending generation was created and associated with the transaction.
+    Created(PendingState),
+    /// An existing pending generation already names this transaction; it was
+    /// reused without incrementing.
+    Reused(PendingState),
+    /// A pending generation exists for unrelated newer work. It is preserved
+    /// and returned; the caller must handle the conflict conservatively.
+    Conflict(PendingState),
+}
+
+/// Idempotently ensure that a pending generation exists for `transaction_id`.
+///
+/// This is the transaction-associated pending API used by restore. It
+/// guarantees that one successful restore produces exactly one pending
+/// generation across crashes and retries:
+///
+/// 1. Acquire the pending transaction guard.
+/// 2. Read the current canonical marker.
+/// 3. If it already names the same transaction, return its generation
+///    without incrementing (`Reused`).
+/// 4. If no marker exists, create one generation and associate it with
+///    the transaction (`Created`).
+/// 5. If a marker exists for unrelated newer work, preserve it and return
+///    a `Conflict` that recovery can handle conservatively.
+/// 6. Never clear or replace a newer generation.
+///
+/// The `source_transaction_id` is included in the integrity computation so
+/// that a transaction association cannot be silently forged or corrupted.
+pub fn ensure_pending_for_transaction(
+    state_dir: &Path,
+    transaction_id: &str,
+    snapshot: PendingSnapshot,
+) -> Result<TransactionPendingResult, PendingError> {
+    let _guard =
+        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(500))
+            .map_err(PendingError::Lock)?;
+
+    let path = pending_path(state_dir);
+    match read_state(&path) {
+        Ok(existing) => {
+            // Check if the existing marker already names this transaction.
+            // We need to re-read the on-disk record to get the transaction ID.
+            let on_disk = read_on_disk(&path)?;
+            if on_disk.source_transaction_id.as_deref() == Some(transaction_id) {
+                // Same transaction — reuse without incrementing.
+                return Ok(TransactionPendingResult::Reused(existing));
+            }
+            // Unrelated newer work — preserve and return conflict.
+            Ok(TransactionPendingResult::Conflict(existing))
+        }
+        Err(PendingError::NotFound) => {
+            // No marker exists — create one generation.
+            let created_at_ms = unix_now_ms();
+            let state = write_pending_state_with_txn(
+                state_dir,
+                &path,
+                1u64,
+                created_at_ms,
+                snapshot,
+                Some(transaction_id.to_string()),
+            )?;
+            Ok(TransactionPendingResult::Created(state))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Read the full on-disk pending record (including transaction association).
+fn read_on_disk(path: &Path) -> Result<PendingOnDisk, PendingError> {
+    let contents = std::fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            PendingError::NotFound
+        } else {
+            PendingError::Io(e)
+        }
+    })?;
+    parse_on_disk(&contents)
+}
+
+/// Parse the on-disk pending record (including transaction association).
+///
+/// This is a superset of `parse`: it returns the full `PendingOnDisk`
+/// struct including `source_transaction_id`, while `parse` returns only
+/// the `PendingState` (generation, snapshot, created_at).
+fn parse_on_disk(contents: &str) -> Result<PendingOnDisk, PendingError> {
+    if let Ok(on_disk) = toml::from_str::<PendingOnDisk>(contents) {
+        if on_disk.schema != SCHEMA_VERSION {
+            return Err(PendingError::Deserialize(
+                <toml::de::Error as serde::de::Error>::custom("unsupported schema"),
+            ));
+        }
+        let expected = compute_integrity(
+            on_disk.schema,
+            on_disk.generation,
+            on_disk.created_at_unix_ms,
+            &on_disk.snapshot,
+            on_disk.source_transaction_id.as_deref(),
+        );
+        if on_disk.integrity != expected {
+            return Err(PendingError::IntegrityMismatch {
+                expected: on_disk.integrity.clone(),
+                got: expected,
+            });
+        }
+        return Ok(on_disk);
+    }
+
+    if let Ok(v1) = toml::from_str::<LegacyPendingOnDiskV1>(contents) {
+        tracing::debug!("migrating legacy pending marker v1 to v2");
+        return Ok(PendingOnDisk {
+            schema: SCHEMA_VERSION,
+            generation: 1,
+            created_at_unix_ms: v1.created_at_unix_ms,
+            snapshot: PendingSnapshot::Mutation { kind: v1.kind },
+            source_transaction_id: None,
+            integrity: String::new(),
+        });
+    }
+
+    Err(PendingError::Deserialize(
+        <toml::de::Error as serde::de::Error>::custom("failed to parse pending state"),
+    ))
 }
 
 pub fn read_state(path: &Path) -> Result<PendingState, PendingError> {
@@ -228,7 +357,23 @@ fn write_pending_state(
     created_at_ms: u64,
     snapshot: PendingSnapshot,
 ) -> Result<PendingState, PendingError> {
-    let on_disk = build_pending_on_disk(generation, created_at_ms, snapshot.clone());
+    write_pending_state_with_txn(_state_dir, path, generation, created_at_ms, snapshot, None)
+}
+
+fn write_pending_state_with_txn(
+    _state_dir: &Path,
+    path: &Path,
+    generation: u64,
+    created_at_ms: u64,
+    snapshot: PendingSnapshot,
+    source_transaction_id: Option<String>,
+) -> Result<PendingState, PendingError> {
+    let on_disk = build_pending_on_disk(
+        generation,
+        created_at_ms,
+        snapshot.clone(),
+        source_transaction_id,
+    );
     let serialized = toml::to_string_pretty(&on_disk).map_err(PendingError::Serialize)?;
     let _tmp =
         pending_lock::atomic_write_unique(path, serialized.as_bytes()).map_err(PendingError::Io)?;
@@ -246,26 +391,37 @@ fn build_pending_on_disk(
     generation: u64,
     created_at_ms: u64,
     snapshot: PendingSnapshot,
+    source_transaction_id: Option<String>,
 ) -> PendingOnDisk {
-    let integrity = compute_integrity(SCHEMA_VERSION, generation, created_at_ms, &snapshot);
+    let integrity = compute_integrity(
+        SCHEMA_VERSION,
+        generation,
+        created_at_ms,
+        &snapshot,
+        source_transaction_id.as_deref(),
+    );
     PendingOnDisk {
         schema: SCHEMA_VERSION,
         generation,
         created_at_unix_ms: created_at_ms,
         snapshot,
+        source_transaction_id,
         integrity,
     }
 }
 
-/// Computes CRC32 integrity over all behavior-driving fields.
+/// Computes CRC32 integrity over all behavior-driving fields, including the
+/// transaction association when present.
 ///
-/// This covers schema, generation, created_at_unix_ms, and the serialized
-/// snapshot — ensuring any corruption to these fields is detected.
+/// This covers schema, generation, created_at_unix_ms, the serialized
+/// snapshot, and the source_transaction_id — ensuring any corruption to
+/// these fields is detected.
 fn compute_integrity(
     schema: u32,
     generation: u64,
     created_at_ms: u64,
     snapshot: &PendingSnapshot,
+    source_transaction_id: Option<&str>,
 ) -> String {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&schema.to_le_bytes());
@@ -274,48 +430,20 @@ fn compute_integrity(
     if let Ok(snapshot_bytes) = serialize_snapshot(snapshot) {
         bytes.extend_from_slice(&snapshot_bytes);
     }
+    if let Some(txn_id) = source_transaction_id {
+        bytes.extend_from_slice(txn_id.as_bytes());
+    }
     let hash = crc32(&bytes);
     format!("crc32:{hash:08x}")
 }
 
 fn parse(contents: &str) -> Result<PendingState, PendingError> {
-    if let Ok(on_disk) = toml::from_str::<PendingOnDisk>(contents) {
-        if on_disk.schema != SCHEMA_VERSION {
-            return Err(PendingError::Deserialize(
-                <toml::de::Error as serde::de::Error>::custom("unsupported schema"),
-            ));
-        }
-        let expected = compute_integrity(
-            on_disk.schema,
-            on_disk.generation,
-            on_disk.created_at_unix_ms,
-            &on_disk.snapshot,
-        );
-        if on_disk.integrity != expected {
-            return Err(PendingError::IntegrityMismatch {
-                expected: on_disk.integrity.clone(),
-                got: expected,
-            });
-        }
-        return Ok(PendingState {
-            generation: on_disk.generation,
-            snapshot: on_disk.snapshot,
-            created_at_unix_ms: on_disk.created_at_unix_ms,
-        });
-    }
-
-    if let Ok(v1) = toml::from_str::<LegacyPendingOnDiskV1>(contents) {
-        tracing::debug!("migrating legacy pending marker v1 to v2");
-        return Ok(PendingState {
-            generation: 1,
-            snapshot: PendingSnapshot::Mutation { kind: v1.kind },
-            created_at_unix_ms: v1.created_at_unix_ms,
-        });
-    }
-
-    Err(PendingError::Deserialize(
-        <toml::de::Error as serde::de::Error>::custom("failed to parse pending state"),
-    ))
+    let on_disk = parse_on_disk(contents)?;
+    Ok(PendingState {
+        generation: on_disk.generation,
+        snapshot: on_disk.snapshot,
+        created_at_unix_ms: on_disk.created_at_unix_ms,
+    })
 }
 
 fn serialize_snapshot(snapshot: &PendingSnapshot) -> Result<Vec<u8>, PendingError> {

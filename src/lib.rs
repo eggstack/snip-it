@@ -36,6 +36,7 @@ pub mod selector;
 pub(crate) mod status_snapshot;
 pub mod sync;
 pub(crate) mod sync_commands;
+pub(crate) mod test_failpoints;
 pub(crate) mod transaction;
 pub mod usage;
 pub(crate) mod utils;

@@ -69,6 +69,9 @@ impl UsageIndex {
 
     /// Persist the index to disk via an atomic write.
     pub fn save(&self) -> SnipResult<()> {
+        // Acquire the local-data lock to serialize against backup snapshot capture.
+        let transaction_dir = crate::local_data::derive_local_data_state_dir();
+        let _lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
         self.save_to(&usage_path())
     }
 

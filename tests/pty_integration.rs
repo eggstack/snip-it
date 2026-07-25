@@ -25,12 +25,47 @@
 
 use std::fs;
 use std::io::Read;
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+/// Read from `reader` in a loop, using `libc::poll` on `fd` with the given
+/// per-iteration timeout.  This prevents the drain thread from blocking
+/// indefinitely when the child process is killed but the PTY slave doesn't
+/// close promptly.
+fn drain_pty_output(reader: &mut dyn Read, fd: RawFd) -> Vec<u8> {
+    let mut buf = [0u8; 4096];
+    let mut output = Vec::new();
+    loop {
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // Wait up to 500 ms for data (or hangup/error).
+        let ret = unsafe { libc::poll(&mut pollfd, 1, 500) };
+        if ret < 0 {
+            break; // poll error
+        }
+        if ret == 0 {
+            continue; // timeout — loop to poll again
+        }
+        // POLLHUP without POLLIN means the slave side closed.
+        if pollfd.revents & libc::POLLHUP != 0 && pollfd.revents & libc::POLLIN == 0 {
+            break;
+        }
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => output.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
+    output
+}
 
 fn snp_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_snp"))
@@ -108,18 +143,10 @@ fn run_snp_pty_with_delay(
     let mut child = pair.slave.spawn_command(cmd).unwrap();
 
     // Drain thread: read master output so the slave's stdout doesn't block.
+    // Uses poll-based timeout to prevent indefinite blocking if the child hangs.
+    let master_fd = pair.master.as_raw_fd().expect("master pty fd");
     let mut reader = pair.master.try_clone_reader().unwrap();
-    let drain = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let mut output = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => output.extend_from_slice(&buf[..n]),
-            }
-        }
-        output
-    });
+    let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd));
 
     // Give the TUI time to start up and render
     std::thread::sleep(initial_delay);
@@ -192,18 +219,10 @@ fn run_bash_capture_pty(
     shell.cwd(config_dir.parent().unwrap());
     let mut child = pair.slave.spawn_command(shell).unwrap();
 
+    // Drain thread: poll-based to prevent indefinite blocking.
+    let master_fd_bash = pair.master.as_raw_fd().expect("master pty fd");
     let mut reader = pair.master.try_clone_reader().unwrap();
-    let drain = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let mut output = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => output.extend_from_slice(&buf[..n]),
-            }
-        }
-        output
-    });
+    let drain = std::thread::spawn(move || drain_pty_output(reader.as_mut(), master_fd_bash));
 
     std::thread::sleep(Duration::from_millis(700));
     let raw_fd = pair.master.as_raw_fd().expect("master pty fd");

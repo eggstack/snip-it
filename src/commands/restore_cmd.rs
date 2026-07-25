@@ -2,8 +2,6 @@
 //!
 //! `snp restore` command — restore from a backup snapshot.
 
-use crate::auto_sync::notification::notify_mutation;
-use crate::auto_sync::policy::{MutationKind, MutationOrigin};
 use crate::error::{SnipError, SnipResult};
 use crate::utils::atomic::{AtomicWriteOptions, Durability, atomic_replace};
 use crate::utils::config::get_config_dir;
@@ -311,15 +309,23 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
     Ok(Some(backup_base))
 }
 
-/// Restore a single library file from backup into the config directory.
-fn restore_library_file(
+/// Compute the intended bytes for a library file during preparation.
+///
+/// For merge mode: loads existing and incoming, merges by ID (preferring
+/// newer updated_at), and returns the serialized merged library. If the
+/// content is identical, returns `None` (NoOp — no staging needed).
+///
+/// For replace/create mode: reads the backup file bytes and returns them.
+///
+/// This must be called during preparation (before BackupsDurable), not
+/// inside the live commit loop.
+fn compute_library_intended_bytes(
     backup_file: &Path,
     config_libraries_dir: &Path,
     library_name: &str,
     mode: RestoreMode,
     report: &mut RestoreReport,
-    local_guard: &crate::local_data::LocalDataLock,
-) -> SnipResult<()> {
+) -> SnipResult<Option<Vec<u8>>> {
     let dst = config_libraries_dir.join(format!("{}.toml", library_name));
 
     if dst.exists() && mode == RestoreMode::Merge {
@@ -334,7 +340,7 @@ fn restore_library_file(
             report
                 .skipped
                 .push(format!("{}.toml (identical)", library_name));
-            return Ok(());
+            return Ok(None);
         }
 
         // Merge: load both, combine snippets by ID, prefer newer updated_at
@@ -384,7 +390,10 @@ fn restore_library_file(
             }
         }
 
-        crate::library::save_library_internal(&dst, &merged, local_guard)?;
+        let bytes = toml::to_string_pretty(&merged)
+            .map_err(|e| SnipError::toml_error("serialize merged library", e))?
+            .into_bytes();
+        Ok(Some(bytes))
     } else {
         // Replace or first-time create
         if dst.exists() {
@@ -401,8 +410,47 @@ fn restore_library_file(
                 e,
             )
         })?;
-        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
-        atomic_replace(&dst, &bytes, &opts)?;
+        Ok(Some(bytes))
+    }
+}
+
+/// Restore a single library file from backup into the config directory.
+///
+/// This is the live commit-phase installer: it reads from the durable
+/// staged file (already synced and verified during preparation) and
+/// installs it to the live destination via atomic replacement. After
+/// installation, it verifies the live destination hash matches the
+/// intended hash.
+fn install_library_file(
+    staged_path: &Path,
+    config_libraries_dir: &Path,
+    library_name: &str,
+    intended_hash: &str,
+    report: &mut RestoreReport,
+) -> SnipResult<()> {
+    let dst = config_libraries_dir.join(format!("{}.toml", library_name));
+    let bytes = fs::read(staged_path).map_err(|e| {
+        SnipError::io_error(
+            "read staged library for install",
+            staged_path.to_path_buf(),
+            e,
+        )
+    })?;
+    let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+    atomic_replace(&dst, &bytes, &opts)?;
+
+    // Verify the installed destination from the live file.
+    let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_else(|_| String::new());
+    if actual != intended_hash {
+        return Err(SnipError::runtime_error(
+            "Commit verification failed",
+            Some(&format!(
+                "Library {} hash mismatch after install: expected {}, got {}",
+                dst.display(),
+                &intended_hash[..16.min(intended_hash.len())],
+                &actual[..16.min(actual.len())]
+            )),
+        ));
     }
 
     report.files_restored += 1;
@@ -577,10 +625,20 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
     // 6. Gate against foreign interrupted transactions, then acquire locks.
     //    Lock hierarchy: LocalDataLock -> TransactionLock -> destination writes.
-    let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-    crate::transaction::gate_mutation_on_interrupted_transactions(&state_dir)?;
-    let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
-    let _lock = crate::transaction::acquire_transaction_lock(&state_dir, "restore")?;
+    //
+    //    Two distinct directories:
+    //    - sync_state_dir: canonical config directory where the pending marker
+    //      lives (auto-sync-pending.toml). Pending APIs must receive this.
+    //    - transaction_dir: .transaction subdirectory where journals, locks,
+    //      and durable backups/stages live. Transaction APIs must receive this.
+    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let transaction_dir = sync_state_dir.join(".transaction");
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+    let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
+    let _lock = crate::transaction::acquire_transaction_lock(&transaction_dir, "restore")?;
 
     // Collect affected files for the transaction
     let mut affected_files: Vec<PathBuf> = Vec::new();
@@ -600,40 +658,134 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         affected_files.push(dst);
     }
 
-    let journal = crate::transaction::begin_transaction(&state_dir, "restore", &affected_files)?;
+    let journal =
+        crate::transaction::begin_transaction(&transaction_dir, "restore", &affected_files)?;
+    crate::test_failpoints::maybe_failpoint(
+        crate::test_failpoints::failpoints::RESTORE_AFTER_PREPARED,
+    );
 
-    // Create pre-restore backups for affected files
-    let backup_dir_base = state_dir.join("backups");
+    // Create pre-restore backups for affected files.
+    // Use copy_sync_verify to ensure each backup is durably written and
+    // verified from disk before proceeding.
+    let backup_dir_base = transaction_dir.join("backups");
     fs::create_dir_all(&backup_dir_base).map_err(|e| {
         SnipError::io_error("create transaction backup dir", backup_dir_base.clone(), e)
     })?;
 
-    // Build the journal with backup paths for rollback
+    // Build the journal with backup paths for rollback and durable staged
+    // paths for commit. All artifacts are written, synced, and verified
+    // before BackupsDurable is persisted.
+    let staged_dir_base = transaction_dir.join("staged");
+    fs::create_dir_all(&staged_dir_base).map_err(|e| {
+        SnipError::io_error("create transaction staged dir", staged_dir_base.clone(), e)
+    })?;
+
     let mut journal_with_backups = journal.clone();
     for (i, staged) in journal_with_backups.staged_files.iter_mut().enumerate() {
+        // Create backup for existing files (for rollback).
         if staged.original_path.exists() {
             let backup_path = backup_dir_base.join(format!("{i}.bak"));
-            fs::copy(&staged.original_path, &backup_path).map_err(|e| {
-                SnipError::io_error(
-                    "create pre-restore backup for transaction",
-                    backup_path.clone(),
-                    e,
-                )
-            })?;
+            crate::transaction::copy_sync_verify(&staged.original_path, &backup_path)?;
             staged.backup_path = Some(backup_path);
         }
+
+        // Compute intended replacement bytes and write to a durable staged file.
+        // The staged file is written, synced, and verified before
+        // BackupsDurable is persisted. The commit loop will move
+        // this content to the live destination.
+        let intended_bytes = match staged.action {
+            crate::transaction::StagedAction::Delete => {
+                // No staged content for delete — the file will be removed.
+                continue;
+            }
+            crate::transaction::StagedAction::NoOp => {
+                // No change needed — skip staging.
+                continue;
+            }
+            crate::transaction::StagedAction::Replace
+            | crate::transaction::StagedAction::Create => {
+                let entry = &manifest.files[i];
+                match entry.kind {
+                    BackupEntryKind::Library => {
+                        // For library files, compute intended bytes (including
+                        // merge computation for merge mode). This must happen
+                        // during preparation, not in the live commit loop.
+                        let library_name = Path::new(&entry.path)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let libraries_dir = config_dir.join("libraries");
+                        match compute_library_intended_bytes(
+                            &resolve_backup_path(&backup, entry),
+                            &libraries_dir,
+                            &library_name,
+                            mode,
+                            &mut report,
+                        )? {
+                            Some(bytes) => bytes,
+                            None => {
+                                // NoOp (identical content in merge mode) —
+                                // mark as NoOp and skip staging.
+                                staged.action = crate::transaction::StagedAction::NoOp;
+                                continue;
+                            }
+                        }
+                    }
+                    BackupEntryKind::Index | BackupEntryKind::Usage => {
+                        // In merge mode, skip existing files (preserve local state).
+                        let dst = match entry.kind {
+                            BackupEntryKind::Index => config_dir.join("libraries.toml"),
+                            BackupEntryKind::Usage => config_dir.join("usage.toml"),
+                            _ => unreachable!(),
+                        };
+                        if dst.exists() && mode == RestoreMode::Merge {
+                            staged.action = crate::transaction::StagedAction::NoOp;
+                            continue;
+                        }
+                        let src = resolve_backup_path(&backup, entry);
+                        fs::read(&src).map_err(|e| {
+                            SnipError::io_error("read backup source for staging", src.clone(), e)
+                        })?
+                    }
+                    BackupEntryKind::SyncConfig => {
+                        // In merge mode, skip existing sync.toml (preserve local config).
+                        let dst = config_dir.join("sync.toml");
+                        if dst.exists() && mode == RestoreMode::Merge {
+                            report
+                                .skipped
+                                .push("sync.toml (local config preserved)".to_string());
+                            staged.action = crate::transaction::StagedAction::NoOp;
+                            continue;
+                        }
+                        let src = resolve_backup_path(&backup, entry);
+                        fs::read(&src).map_err(|e| {
+                            SnipError::io_error("read backup source for staging", src.clone(), e)
+                        })?
+                    }
+                }
+            }
+        };
+
+        let staged_path = staged_dir_base.join(format!("{i}.new"));
+        let verified_hash = crate::transaction::write_sync_verify(&staged_path, &intended_bytes)?;
+        staged.durable_staged_path = Some(staged_path);
+        staged.new_hash = verified_hash;
     }
 
     // Persist BackupsDurable state before any live writes.
     // A crash after this point is recoverable: the journal contains all
-    // backup paths needed for rollback.
-    crate::transaction::advance_to_backups_durable(&state_dir, &mut journal_with_backups)?;
+    // backup paths needed for rollback and all staged paths needed for
+    // commit. All artifacts have been synced and verified from disk.
+    crate::transaction::advance_to_backups_durable(&transaction_dir, &mut journal_with_backups)?;
+    crate::test_failpoints::maybe_failpoint(
+        crate::test_failpoints::failpoints::RESTORE_AFTER_BACKUPS_DURABLE,
+    );
 
     // Persist initial Committing state (0 completed positions) before any
     // live writes begin. Progress is persisted AFTER each verified write,
     // so a crash never causes recovery to skip a destination that may not
     // have been written.
-    crate::transaction::advance_to_committing(&state_dir, &mut journal_with_backups, 0)?;
+    crate::transaction::advance_to_committing(&transaction_dir, &mut journal_with_backups, 0)?;
 
     // Execute the restore within a transaction boundary; roll back on any failure.
     let restore_result: SnipResult<()> = (|| {
@@ -650,71 +802,154 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             SnipError::io_error("create libraries directory", libraries_dir.clone(), e)
         })?;
 
-        // 8. Restore files with per-file durable commit progress.
-        // Each file is restored atomically; progress is persisted AFTER
-        // the write and verification so that a crash mid-restore can be
-        // recovered without skipping a destination.
+        // 8. Install files from durable staged artifacts with per-file
+        // durable commit progress. Each file is installed from its
+        // durable staged path (already synced and verified during
+        // preparation), then the live destination is verified by
+        // reopening and hashing it. Progress is persisted AFTER
+        // verification so that a crash mid-restore can be recovered
+        // without skipping a destination.
         for (position, entry) in manifest.files.iter().enumerate() {
-            match entry.kind {
-                BackupEntryKind::Library => {
-                    let src = resolve_backup_path(&backup, entry);
-                    let library_name = Path::new(&entry.path)
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    restore_library_file(
-                        &src,
-                        &libraries_dir,
-                        &library_name,
-                        mode,
-                        &mut report,
-                        &_local_lock,
-                    )?;
+            let staged = &journal_with_backups.staged_files[position];
+
+            match staged.action {
+                crate::transaction::StagedAction::NoOp => {
+                    // No change needed — skip.
                 }
-                BackupEntryKind::Index => {
-                    let src = backup.join(&entry.path);
-                    let dst = config_dir.join("libraries.toml");
-                    if mode == RestoreMode::Replace || !dst.exists() {
-                        let bytes = fs::read(&src).map_err(|e| {
-                            SnipError::io_error("read index file for restore", src.clone(), e)
+                crate::transaction::StagedAction::Delete => {
+                    // Remove the destination.
+                    if staged.original_path.exists() {
+                        fs::remove_file(&staged.original_path).map_err(|e| {
+                            SnipError::io_error(
+                                "remove file during restore delete",
+                                staged.original_path.clone(),
+                                e,
+                            )
                         })?;
-                        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
-                        atomic_replace(&dst, &bytes, &opts)?;
-                        report.files_restored += 1;
+                    }
+                    // Verify absence.
+                    if staged.original_path.exists() {
+                        return Err(SnipError::runtime_error(
+                            "Commit verification failed",
+                            Some(&format!(
+                                "File {} should be absent after delete but still exists",
+                                staged.original_path.display()
+                            )),
+                        ));
                     }
                 }
-                BackupEntryKind::Usage => {
-                    let src = backup.join(&entry.path);
-                    let dst = config_dir.join("usage.toml");
-                    if mode == RestoreMode::Replace || !dst.exists() {
-                        let bytes = fs::read(&src).map_err(|e| {
-                            SnipError::io_error("read usage file for restore", src.clone(), e)
-                        })?;
-                        let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
-                        atomic_replace(&dst, &bytes, &opts)?;
-                        report.files_restored += 1;
-                    }
-                }
-                BackupEntryKind::SyncConfig => {
-                    let src = backup.join(&entry.path);
-                    let dst = config_dir.join("sync.toml");
-                    if dst.exists() && mode == RestoreMode::Merge {
-                        report
-                            .skipped
-                            .push("sync.toml (local config preserved)".to_string());
-                    } else if mode == RestoreMode::Replace || !dst.exists() {
-                        let bytes = fs::read(&src).map_err(|e| {
-                            SnipError::io_error("read sync config for restore", src.clone(), e)
-                        })?;
-                        let opts = AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
-                        atomic_replace(&dst, &bytes, &opts)?;
-                        report.conflicts.push(RestoreConflict {
-                            library: "sync".to_string(),
-                            kind: "redacted_key".to_string(),
-                            detail: "API key was redacted in backup; re-enter with 'snp register'"
-                                .to_string(),
-                        });
-                        report.files_restored += 1;
+                crate::transaction::StagedAction::Replace
+                | crate::transaction::StagedAction::Create => {
+                    let staged_path = staged.durable_staged_path.as_ref().ok_or_else(|| {
+                        SnipError::runtime_error(
+                            "Missing staged path",
+                            Some(&format!(
+                                "File {} has no durable_staged_path; cannot commit",
+                                staged.original_path.display()
+                            )),
+                        )
+                    })?;
+
+                    match entry.kind {
+                        BackupEntryKind::Library => {
+                            let library_name = Path::new(&entry.path)
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            let libraries_dir = config_dir.join("libraries");
+                            install_library_file(
+                                staged_path,
+                                &libraries_dir,
+                                &library_name,
+                                &staged.new_hash,
+                                &mut report,
+                            )?;
+                        }
+                        BackupEntryKind::Index => {
+                            let dst = config_dir.join("libraries.toml");
+                            let bytes = fs::read(staged_path).map_err(|e| {
+                                SnipError::io_error(
+                                    "read staged index for install",
+                                    staged_path.clone(),
+                                    e,
+                                )
+                            })?;
+                            let opts =
+                                AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                            atomic_replace(&dst, &bytes, &opts)?;
+                            // Verify from live destination.
+                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            if actual != staged.new_hash {
+                                return Err(SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Index hash mismatch after install: expected {}, got {}",
+                                        &staged.new_hash[..16.min(staged.new_hash.len())],
+                                        &actual[..16.min(actual.len())]
+                                    )),
+                                ));
+                            }
+                            report.files_restored += 1;
+                        }
+                        BackupEntryKind::Usage => {
+                            let dst = config_dir.join("usage.toml");
+                            let bytes = fs::read(staged_path).map_err(|e| {
+                                SnipError::io_error(
+                                    "read staged usage for install",
+                                    staged_path.clone(),
+                                    e,
+                                )
+                            })?;
+                            let opts =
+                                AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                            atomic_replace(&dst, &bytes, &opts)?;
+                            // Verify from live destination.
+                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            if actual != staged.new_hash {
+                                return Err(SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Usage hash mismatch after install: expected {}, got {}",
+                                        &staged.new_hash[..16.min(staged.new_hash.len())],
+                                        &actual[..16.min(actual.len())]
+                                    )),
+                                ));
+                            }
+                            report.files_restored += 1;
+                        }
+                        BackupEntryKind::SyncConfig => {
+                            let dst = config_dir.join("sync.toml");
+                            let bytes = fs::read(staged_path).map_err(|e| {
+                                SnipError::io_error(
+                                    "read staged sync config for install",
+                                    staged_path.clone(),
+                                    e,
+                                )
+                            })?;
+                            let opts =
+                                AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
+                            atomic_replace(&dst, &bytes, &opts)?;
+                            // Verify from live destination.
+                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            if actual != staged.new_hash {
+                                return Err(SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Sync config hash mismatch after install: expected {}, got {}",
+                                        &staged.new_hash[..16.min(staged.new_hash.len())],
+                                        &actual[..16.min(actual.len())]
+                                    )),
+                                ));
+                            }
+                            report.conflicts.push(RestoreConflict {
+                                library: "sync".to_string(),
+                                kind: "redacted_key".to_string(),
+                                detail:
+                                    "API key was redacted in backup; re-enter with 'snp register'"
+                                        .to_string(),
+                            });
+                            report.files_restored += 1;
+                        }
                     }
                 }
             }
@@ -723,20 +958,36 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             // next_commit_position = position + 1 means positions 0..=position
             // have been completed and verified.
             crate::transaction::advance_to_committing(
-                &state_dir,
+                &transaction_dir,
                 &mut journal_with_backups,
                 position + 1,
             )?;
+
+            // Failpoints for crash testing at specific commit positions.
+            if position == 0 {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::RESTORE_AFTER_FIRST_INSTALL,
+                );
+            }
+            if entry.kind == BackupEntryKind::Index {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::RESTORE_AFTER_INDEX_INSTALL,
+                );
+            }
         }
 
         Ok(())
     })();
 
+    crate::test_failpoints::maybe_failpoint(
+        crate::test_failpoints::failpoints::RESTORE_AFTER_ALL_INSTALLS,
+    );
+
     // On failure, roll back the transaction to restore original files.
     if let Err(ref e) = restore_result {
         eprintln!("Restore failed, rolling back: {e}");
         if let Err(rb_err) =
-            crate::transaction::rollback_transaction(&state_dir, &journal_with_backups)
+            crate::transaction::rollback_transaction(&transaction_dir, &journal_with_backups)
         {
             eprintln!("Warning: rollback also failed: {rb_err}");
         }
@@ -746,10 +997,46 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // 12. Commit-to-pending finalization: use CommittedLocal state to
     // eliminate the crash window between committed local content and
     // durable pending intent.
+    //
+    // Protocol (per plan):
+    // 1. Persist CommittedLocal { pending_recorded: false } — marks
+    //    destinations as committed but pending not yet recorded.
+    // 2. Call ensure_pending_for_transaction — idempotently records
+    //    the pending marker in the canonical sync_state_dir.
+    // 3. Persist CommittedLocal { pending_recorded: true } — confirms
+    //    the pending marker is durably written.
+    // 4. Clean up transaction artifacts.
+    //
+    // The pending marker is written to the canonical sync_state_dir (NOT
+    // the transaction_dir), and uses the idempotent ensure_pending_for_transaction
+    // API so that one successful restore produces exactly one pending
+    // generation across crashes and retries.
     if report.files_restored > 0 {
-        // Record pending generation (writes the pending marker atomically).
-        let pending_state = crate::auto_sync::pending::record_pending_mutation(
-            &state_dir,
+        // Step 1: Persist CommittedLocal with pending_recorded: false.
+        // This marks the transaction as committed locally. A crash here
+        // is recoverable: the gate will see CommittedLocal and clean up
+        // without creating a pending generation.
+        crate::transaction::advance_to_committed_local(
+            &transaction_dir,
+            &mut journal_with_backups,
+            0, // placeholder generation; will be updated in step 3
+            false,
+        )?;
+
+        // Failpoint: after CommittedLocal persisted, before pending recorded.
+        // A crash here should leave NO pending marker.
+        crate::test_failpoints::maybe_failpoint(
+            crate::test_failpoints::failpoints::RESTORE_AFTER_COMMITTED_LOCAL_BEFORE_PENDING,
+        );
+
+        // Step 2: Idempotently record pending generation associated with
+        // this transaction. If a pending marker already exists for this
+        // transaction (e.g. from a crash recovery), it is reused without
+        // incrementing. The pending marker is written to sync_state_dir,
+        // the canonical config directory.
+        let pending_result = crate::auto_sync::pending::ensure_pending_for_transaction(
+            &sync_state_dir,
+            &journal.id,
             crate::auto_sync::pending::PendingSnapshot::Mutation {
                 kind: crate::auto_sync::policy::MutationKind::Import,
             },
@@ -761,35 +1048,61 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             )
         })?;
 
-        let generation = pending_state.generation;
+        let generation = match pending_result {
+            crate::auto_sync::pending::TransactionPendingResult::Created(state)
+            | crate::auto_sync::pending::TransactionPendingResult::Reused(state) => {
+                state.generation
+            }
+            crate::auto_sync::pending::TransactionPendingResult::Conflict(state) => {
+                // An unrelated newer pending generation exists. Per the
+                // conflict policy, preserve it and finalize safely without
+                // incrementing. The restore content is already committed
+                // locally; the existing pending generation will sync it.
+                tracing::warn!(
+                    txn_id = %journal.id,
+                    "Pending conflict during restore finalization: \
+                     an unrelated newer pending generation exists; \
+                     preserving it without incrementing"
+                );
+                state.generation
+            }
+        };
 
-        // Persist CommittedLocal with pending_recorded: false.
-        // A crash here is recoverable: the pending marker was already written
-        // by record_pending_mutation above.
-        crate::transaction::advance_to_committed_local(
-            &state_dir,
-            &mut journal_with_backups,
-            generation,
-            false,
-        )?;
-
-        // Persist CommittedLocal with pending_recorded: true.
+        // Step 3: Persist CommittedLocal with pending_recorded: true.
         // This confirms the pending marker is durably written.
         crate::transaction::advance_to_committed_local(
-            &state_dir,
+            &transaction_dir,
             &mut journal_with_backups,
             generation,
             true,
         )?;
 
-        // Clean up: remove journal and backups.
-        crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
+        // Failpoint: after pending recorded, before journal update.
+        crate::test_failpoints::maybe_failpoint(
+            crate::test_failpoints::failpoints::RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE,
+        );
+
+        // Step 4: Clean up: remove journal and backups.
+        crate::transaction::commit_transaction(&transaction_dir, &journal_with_backups)?;
+
+        // Failpoint: after journal update, before cleanup complete.
+        crate::test_failpoints::maybe_failpoint(
+            crate::test_failpoints::failpoints::RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP,
+        );
 
         // Schedule worker after durable pending intent.
-        let _ = notify_mutation(MutationKind::Import, MutationOrigin::User);
+        // This does NOT record another pending mutation — pending was
+        // already established by ensure_pending_for_transaction above.
+        let settings = crate::config::get_sync_settings();
+        let policy = crate::auto_sync::policy::AutoSyncPolicy::resolve(&settings);
+        let _ = crate::auto_sync::schedule::schedule_existing_pending(
+            &sync_state_dir,
+            &policy,
+            crate::auto_sync::schedule::Caller::Mutation,
+        );
     } else {
         // No files restored — just commit the transaction.
-        crate::transaction::commit_transaction(&state_dir, &journal_with_backups)?;
+        crate::transaction::commit_transaction(&transaction_dir, &journal_with_backups)?;
     }
 
     // 14. Output report

@@ -414,7 +414,8 @@ auto_sync_failure = "warn"
     new_snippet(&config_dir, "timeout-test");
 
     // Wait for the worker to record its failure outcome in the status file.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // The non-routable address times out after ~30s; 35s buffer is ample.
+    let deadline = Instant::now() + Duration::from_secs(35);
     while Instant::now() < deadline {
         if config_dir.join("auto-sync-status.toml").exists() {
             break;
@@ -476,7 +477,8 @@ fn test_executor_nonzero_exit_preserves_pending() {
     new_snippet(&config_dir, "nonzero-exit");
 
     // Wait for the worker to record its failure outcome in the status file.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // Connection refused (127.0.0.1:1) fails immediately; 15s buffer is ample.
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if config_dir.join("auto-sync-status.toml").exists() {
             break;

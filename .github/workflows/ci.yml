@@ -67,18 +67,40 @@ jobs:
         with:
           key: ${{ matrix.os }}-${{ matrix.profile }}
 
-      - name: Workspace tests
+      # Workspace lib tests (unit tests for all crates).
+      - name: Workspace lib tests
         shell: bash
-        timeout-minutes: 45
-        env:
-          SNP_SKIP_WORKER_SPAWN: "1"
+        timeout-minutes: 15
         run: |
           if [ "${{ matrix.profile }}" = "release" ]; then
-            cargo test --release --workspace --all-features -- --test-threads=1
+            cargo test --release --workspace --all-features --lib -- --test-threads=1
           else
-            cargo test --workspace --all-features -- --test-threads=1
+            cargo test --workspace --all-features --lib -- --test-threads=1
           fi
 
+      # Integration tests — explicit list excludes pty_integration
+      # (which has its own dedicated job below) to prevent the drain
+      # thread from hanging the workspace test step.
+      - name: Integration tests
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            PROFILE_FLAG="--release"
+          else
+            PROFILE_FLAG=""
+          fi
+          # Run every integration test binary except pty_integration.
+          for f in tests/*.rs; do
+            name=$(basename "$f" .rs)
+            if [ "$name" = "pty_integration" ]; then
+              continue
+            fi
+            cargo test $PROFILE_FLAG --test "$name" --all-features -- --test-threads=1 || exit 1
+          done
+
+      # PTY tests are isolated from workspace correctness tests.
+      # Run only on platforms where the product supports the PTY path.
       - name: PTY integration tests
         if: runner.os != 'Windows'
         shell: bash
@@ -92,6 +114,7 @@ jobs:
 
   # Focused release-blocking test suites on all platforms.
   # These run single-threaded to avoid PTY and lock contention.
+  # No SNP_SKIP_WORKER_SPAWN — all lifecycle tests run with real workers.
   release-blocking-tests:
     name: Release-blocking (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -120,25 +143,81 @@ jobs:
         with:
           key: ${{ matrix.os }}-blocking
 
+      - name: Deterministic E2E
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test deterministic_e2e --features test-support -- --test-threads=1
+
+      - name: Auto sync closure
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test auto_sync_closure --features test-support -- --test-threads=1
+
+      - name: Readonly no recovery
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test readonly_no_recovery --features test-support -- --test-threads=1
+
+      - name: Sync contracts
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test sync_contracts --features test-support -- --test-threads=1
+
+  # Transaction crash recovery and backup/restore contract tests on all
+  # platforms. These prove the production transaction protocol, manifest
+  # validation, and backup coherence.
+  transaction-tests:
+    name: Transaction (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+
+      - name: Install protoc (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-transaction
+
       - name: Transaction crash recovery
+        shell: bash
+        timeout-minutes: 20
         run: cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
 
       - name: Restore transactions
+        shell: bash
+        timeout-minutes: 20
         run: cargo test --test restore_transactions --features test-support -- --test-threads=1
 
+      - name: Restore crash failpoints
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
+
       - name: Backup snapshot concurrency
-        run: cargo test --test backup_contracts --features test-support -- --test-threads=1
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test backup_snapshot_concurrency --features test-support -- --test-threads=1
 
-      - name: Execution outcomes
-        run: cargo test --test execution_outcomes --features test-support -- --test-threads=1
-
-      - name: Deterministic E2E
-        if: runner.os != 'Windows'
-        run: cargo test --test deterministic_e2e --features test-support -- --test-threads=1
-
-      - name: Sync contracts
-        if: runner.os != 'Windows'
-        run: cargo test --test sync_contracts --features test-support -- --test-threads=1
+      - name: Manifest contracts
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test manifest_contracts --features test-support -- --test-threads=1
 
   package:
     name: Package (${{ matrix.os }})

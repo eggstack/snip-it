@@ -721,6 +721,18 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
         };
         persist_journal(state_dir, &rb_journal)?;
 
+        // Failpoints for crash testing during rollback.
+        if position == 0 {
+            crate::test_failpoints::maybe_failpoint(
+                crate::test_failpoints::failpoints::RESTORE_DURING_FIRST_ROLLBACK,
+            );
+        }
+        if position == 1 {
+            crate::test_failpoints::maybe_failpoint(
+                crate::test_failpoints::failpoints::RESTORE_DURING_SECOND_ROLLBACK,
+            );
+        }
+
         match staged.action {
             StagedAction::Create if !staged.existed_before => {
                 // This file was created by the transaction — remove it.
@@ -760,9 +772,11 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                     );
                     crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
 
-                    // Verify hash matches original
+                    // Verify hash from the LIVE destination, not the backup
+                    // buffer. This proves the installed content matches the
+                    // original.
                     if !staged.original_hash.is_empty() {
-                        let actual = sha256_hex(&bytes);
+                        let actual = hash_file(&staged.original_path)?;
                         if actual != staged.original_hash {
                             return Err(SnipError::runtime_error(
                                 "Rollback verification failed",
@@ -823,6 +837,93 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Write bytes to a file, sync it, reopen it, and verify its hash.
+///
+/// This is the durability helper used for staging and backup files. It
+/// ensures the content is durably on disk before returning, and verifies
+/// the hash from the reopened file (not from the source buffer).
+///
+/// Returns the verified SHA-256 hex digest.
+pub fn write_sync_verify(path: &Path, bytes: &[u8]) -> SnipResult<String> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .map_err(|e| SnipError::io_error("create parent dir for staged file", parent, e))?;
+
+    let mut file =
+        fs::File::create(path).map_err(|e| SnipError::io_error("create staged file", path, e))?;
+    file.write_all(bytes)
+        .map_err(|e| SnipError::io_error("write staged file", path, e))?;
+    file.sync_all()
+        .map_err(|e| SnipError::io_error("sync staged file", path, e))?;
+    drop(file);
+
+    // Reopen and verify from disk.
+    let read_back = fs::read(path)
+        .map_err(|e| SnipError::io_error("reopen staged file for verification", path, e))?;
+    let actual = sha256_hex(&read_back);
+    let expected = sha256_hex(bytes);
+    if actual != expected {
+        return Err(SnipError::runtime_error(
+            "Staged file verification failed",
+            Some(&format!(
+                "File {} hash mismatch after write: expected {}, got {}",
+                path.display(),
+                &expected[..16],
+                &actual[..16]
+            )),
+        ));
+    }
+
+    // Sync the parent directory where supported.
+    sync_parent_dir(path);
+
+    Ok(actual)
+}
+
+/// Copy a file, sync the destination, reopen it, and verify its hash matches
+/// the source.
+///
+/// Returns the verified SHA-256 hex digest of the destination.
+pub fn copy_sync_verify(src: &Path, dst: &Path) -> SnipResult<String> {
+    let bytes = fs::read(src).map_err(|e| SnipError::io_error("read source for copy", src, e))?;
+    write_sync_verify(dst, &bytes)
+}
+
+/// Sync the parent directory of a file to ensure directory entries are durable.
+///
+/// On Unix, this opens the parent directory and calls `sync_all`. On
+/// Windows, this is a no-op (directory sync is not supported via the
+/// same API). Failures are logged but not propagated — the file itself
+/// was already synced.
+fn sync_parent_dir(path: &Path) {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => return,
+    };
+    #[cfg(unix)]
+    {
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, directory sync is not available via std.
+        // The file sync_all already ensures data durability.
+    }
+}
+
+/// Read a file and compute its SHA-256 hex digest.
+///
+/// This is used to verify installed destinations from the live file,
+/// not from source buffers.
+pub fn hash_file(path: &Path) -> SnipResult<String> {
+    let bytes =
+        fs::read(path).map_err(|e| SnipError::io_error("read file for hashing", path, e))?;
+    Ok(sha256_hex(&bytes))
+}
+
 /// Check for interrupted transactions and refuse or auto-recover.
 ///
 /// This is the application-level mutation gate. It must be called before
@@ -835,8 +936,17 @@ fn sha256_hex(bytes: &[u8]) -> String {
 ///    the user to `snp repair`.
 ///
 /// Read-only commands must not call this function.
-pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult<()> {
-    let interrupted = check_interrupted_transactions(state_dir)?;
+///
+/// `transaction_dir` is the `.transaction` subdirectory where journals and
+/// locks live. `sync_state_dir` is the canonical config directory where the
+/// pending marker lives. The `CommittedLocal` recovery path needs both: it
+/// inspects the canonical pending marker (in `sync_state_dir`) while
+/// cleaning up transaction artifacts (in `transaction_dir`).
+pub fn gate_mutation_on_interrupted_transactions(
+    sync_state_dir: &Path,
+    transaction_dir: &Path,
+) -> SnipResult<()> {
+    let interrupted = check_interrupted_transactions(transaction_dir)?;
 
     if interrupted.is_empty() {
         return Ok(());
@@ -859,19 +969,33 @@ pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult
             );
 
             // If pending was not recorded, check if the pending marker
-            // already exists for this generation. If not, the sync may
-            // have already completed — just clean up.
+            // already exists for this generation. If not, create it
+            // idempotently using ensure_pending_for_transaction.
+            //
+            // The pending marker lives in the canonical sync state directory,
+            // NOT in the transaction directory. This is the fix for the
+            // defect where CommittedLocal recovery checked the wrong pending
+            // marker path.
             if !pending_recorded {
-                let pending_path = crate::auto_sync::pending::pending_path(state_dir);
+                let pending_path = crate::auto_sync::pending::pending_path(sync_state_dir);
                 let marker_exists = match crate::auto_sync::pending::read_state(&pending_path) {
                     Ok(state) => state.generation == pending_generation,
                     Err(_) => false,
                 };
                 if !marker_exists {
+                    // Idempotently create or reuse the pending marker.
+                    // A crash here is recoverable: the gate will retry.
                     tracing::info!(
+                        txn_id = %journal.id,
                         generation = pending_generation,
-                        "Pending marker for generation already absent or changed; \
-                         sync may have completed"
+                        "Creating pending marker for CommittedLocal recovery"
+                    );
+                    let _ = crate::auto_sync::pending::ensure_pending_for_transaction(
+                        sync_state_dir,
+                        &journal.id,
+                        crate::auto_sync::pending::PendingSnapshot::Mutation {
+                            kind: crate::auto_sync::policy::MutationKind::Import,
+                        },
                     );
                 }
                 // Persist pending_recorded: true to mark finalization complete.
@@ -880,7 +1004,7 @@ pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult
                     pending_generation,
                     pending_recorded: true,
                 };
-                persist_journal(state_dir, &finalized)?;
+                persist_journal(transaction_dir, &finalized)?;
             }
 
             // Clean up: remove journal and backups.
@@ -889,7 +1013,7 @@ pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult
                     let _ = fs::remove_file(backup);
                 }
             }
-            let jpath = journal_path(state_dir, &journal.id);
+            let jpath = journal_path(transaction_dir, &journal.id);
             let _ = fs::remove_file(&jpath);
 
             return Ok(());
@@ -901,7 +1025,7 @@ pub fn gate_mutation_on_interrupted_transactions(state_dir: &Path) -> SnipResult
             state = ?journal.state,
             "Attempting automatic rollback of interrupted transaction"
         );
-        match rollback_transaction(state_dir, journal) {
+        match rollback_transaction(transaction_dir, journal) {
             Ok(()) => {
                 tracing::info!(
                     txn_id = %journal.id,

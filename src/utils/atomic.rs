@@ -342,6 +342,20 @@ pub fn atomic_replace(
     })
 }
 
+/// Read a file and compute its SHA-256 hex digest.
+///
+/// Used to verify installed destinations from the live file, not from
+/// source buffers.
+pub fn hash_file(path: &Path) -> SnipResult<String> {
+    use sha2::Digest;
+    let bytes = std::fs::read(path)
+        .map_err(|e| crate::error::SnipError::io_error("read file for hashing", path, e))?;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    let result = hasher.finalize();
+    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -67,3 +67,7 @@ coverage/
 
 # snip-proto/src/snip_proto.rs is committed (standard for tonic crates)
 # so that consumers don't need protoc installed.
+
+# Poolside agent local settings (machine-specific, never committed)
+.poolside/settings.local.yaml
+.poolside/local*

@@ -171,6 +171,17 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
 pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> SnipResult<()> {
     let path = get_config_path(config)?;
 
+    // Check for interrupted transactions before any mutation.
+    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let transaction_dir = crate::local_data::derive_local_data_state_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+
+    // Acquire the local-data lock to serialize against backup snapshot capture.
+    let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
+
     if let Err(e) = crate::library::backup_library(&path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
     }

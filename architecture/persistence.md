@@ -125,6 +125,15 @@ pub struct AtomicWriteReport {
 
 Coordinates multi-file operations (library create/delete, bulk import, restore, repair) with crash-safe journaling. The transaction lock prevents concurrent mutations.
 
+### Directory Model
+
+The transaction subsystem uses two distinct directories:
+
+- **`sync_state_dir`** (canonical config directory, e.g. `~/.config/snp/`): Where the pending sync marker (`auto-sync-pending.toml`) lives. Pending APIs must receive this directory.
+- **`transaction_dir`** (`<sync_state_dir>/.transaction`): Where journals, locks, durable backups, and staged files live. Transaction APIs must receive this directory.
+
+This separation ensures the pending marker is never written to the `.transaction` subdirectory, which would cause it to be missed by the canonical pending path. The `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` function requires both directories: it inspects the canonical pending marker (in `sync_state_dir`) while cleaning up transaction artifacts (in `transaction_dir`).
+
 ### State Machine
 
 ```
