@@ -261,8 +261,9 @@ fn test_real_remote_effect_before_pending_clear() {
     new_snippet(config_dir, "headline-test-snippet");
 
     // 5. Observe pending generation G.
+    //    10s timeout to accommodate slower Windows CI runners.
     let marker = pending_marker(config_dir);
-    let gen_observed = wait_until(Duration::from_secs(5), || marker.exists());
+    let gen_observed = wait_until(Duration::from_secs(10), || marker.exists());
     assert!(gen_observed, "pending marker must exist after mutation");
     let generation = read_pending_generation(config_dir).unwrap_or_else(|| {
         panic!(
