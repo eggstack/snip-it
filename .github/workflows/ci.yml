@@ -78,9 +78,9 @@ jobs:
             cargo test --workspace --all-features --lib -- --test-threads=1
           fi
 
-      # Integration tests — explicit list excludes pty_integration
-      # (which has its own dedicated job below) to prevent the drain
-      # thread from hanging the workspace test step.
+      # Integration tests — runs all integration tests in a single
+      # cargo invocation (shared compilation), skipping PTY tests
+      # which have their own dedicated job below.
       - name: Integration tests
         shell: bash
         timeout-minutes: 30
@@ -90,14 +90,13 @@ jobs:
           else
             PROFILE_FLAG=""
           fi
-          # Run every integration test binary except pty_integration.
-          for f in tests/*.rs; do
-            name=$(basename "$f" .rs)
-            if [ "$name" = "pty_integration" ]; then
-              continue
-            fi
-            cargo test $PROFILE_FLAG --test "$name" --all-features -- --test-threads=1 || exit 1
-          done
+          # Build --skip flags from pty_integration test names.
+          SKIP_FLAGS=""
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            SKIP_FLAGS="$SKIP_FLAGS --skip $name"
+          done < <(sed -n 's/^fn \(test_[a-z_0-9]*\).*/\1/p' tests/pty_integration.rs)
+          eval cargo test $PROFILE_FLAG --workspace --all-features -- --test-threads=1 $SKIP_FLAGS
 
       # PTY tests are isolated from workspace correctness tests.
       # Run only on platforms where the product supports the PTY path.
