@@ -1446,6 +1446,14 @@ fn test_pty_run_sort_most_used_records_usage_for_b() {
 
 #[test]
 fn test_pty_clip_sort_last_used_records_usage_for_c() {
+    // Skip on headless environments — clipboard access requires a display server.
+    if cfg!(target_os = "linux")
+        && std::env::var("DISPLAY").is_err()
+        && std::env::var("WAYLAND_DISPLAY").is_err()
+    {
+        eprintln!("SKIP: no display server available for clipboard test");
+        return;
+    }
     let (_tmp, config_dir) = setup_divergent_metadata_pty_env();
 
     let (code, output) = run_snp_pty(&["clip", "--sort", "last-used"], &config_dir, b"\r");

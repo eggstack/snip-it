@@ -50,6 +50,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = {auto_sync}
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "warn"
 "#
         ),

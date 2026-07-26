@@ -114,6 +114,7 @@ device_id = "{device_id}"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = {debounce}
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "{failure_mode}"
 "#,
             api_key = self.api_key,

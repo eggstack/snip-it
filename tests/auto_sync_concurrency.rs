@@ -28,7 +28,8 @@ api_key = "test-key"
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
-auto_sync_debounce_seconds = 300
+auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -86,6 +87,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -139,7 +141,8 @@ api_key = "test-key"
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
-auto_sync_debounce_seconds = 300
+auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -192,7 +195,8 @@ api_key = "test-key"
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
-auto_sync_debounce_seconds = 300
+auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -272,7 +276,8 @@ api_key = "test-key"
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
-auto_sync_debounce_seconds = 300
+auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -327,6 +332,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -464,7 +470,8 @@ api_key = "test-key"
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
-auto_sync_debounce_seconds = 300
+auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -516,6 +523,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -582,6 +590,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -646,6 +655,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -703,6 +713,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -777,6 +788,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -843,6 +855,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )
@@ -920,6 +933,7 @@ device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = 0
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "ignore"
 "#,
     )

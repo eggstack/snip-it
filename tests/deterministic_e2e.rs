@@ -166,6 +166,7 @@ device_id = "headline-test-device"
 sync_interval_minutes = 30
 auto_sync = true
 auto_sync_debounce_seconds = {debounce}
+auto_sync_timeout_seconds = 5
 auto_sync_failure = "warn"
 "#
     );
@@ -248,6 +249,10 @@ fn test_real_remote_effect_before_pending_clear() {
 
     // Set up event sink for lifecycle tracking.
     let sink = EventSink::new(state_dir);
+    // Drain any events from the library-creation worker before clearing.
+    // On slow machines (Windows CI), the worker may not have written its
+    // events yet, so we wait briefly then clear to ensure a clean baseline.
+    std::thread::sleep(Duration::from_millis(200));
     sink.clear();
 
     // 3. Record pre-mutation server state (R0).
