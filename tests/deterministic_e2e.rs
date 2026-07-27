@@ -145,11 +145,14 @@ fn new_snippet(config_dir: &std::path::Path, desc: &str) {
         "e2e",
     ]);
     let out = support::helpers::output_with_stdin(cmd, format!("echo {desc}").as_bytes());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    eprintln!("NEW_STDOUT: {stdout}");
+    eprintln!("NEW_STDERR: {stderr}");
     assert!(
         out.status.success(),
-        "new snippet should succeed: status={:?} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr)
+        "new snippet should succeed: status={:?} stderr={stderr}",
+        out.status
     );
 }
 
@@ -265,7 +268,19 @@ fn test_real_remote_effect_before_pending_clear() {
     );
 
     // 4. Perform a real local mutation through the snp binary.
+    let pre_marker = pending_marker(config_dir);
+    eprintln!(
+        "PRE_NEWSNIPPET: marker exists = {}, state_dir = {}",
+        pre_marker.exists(),
+        config_dir.display()
+    );
     new_snippet(config_dir, "headline-test-snippet");
+    let post_marker = pending_marker(config_dir);
+    eprintln!(
+        "POST_NEWSNIPPET: marker exists = {}, raw = {:?}",
+        post_marker.exists(),
+        fs::read_to_string(&post_marker).ok()
+    );
 
     // 5. Observe pending generation G.
     //    20s timeout to accommodate slower Windows CI runners.

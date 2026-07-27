@@ -108,6 +108,12 @@ fn notify_local_mutation_with_dir(
             }
         }
         Err(e) => {
+            eprintln!(
+                "DIAG_NOTIFY: record_pending_mutation failed for state_dir={} kind={:?} error={}",
+                state_dir.display(),
+                context.kind,
+                e
+            );
             tracing::warn!(error = %e, "failed to record auto-sync pending generation");
             apply_scheduling_failure_policy(policy);
             AutoSyncNotificationResult::SchedulingFailed { generation: None }
