@@ -270,15 +270,20 @@ fn test_real_remote_effect_before_pending_clear() {
     assert!(generation >= 1, "generation must be >= 1, got {generation}");
 
     // 6. Wait for the successful remote sync before accepting marker clear.
-    let completed = sink
-        .wait_for_generation(
-            "worker",
-            "sync_completed",
-            generation,
-            Duration::from_secs(30),
-        )
-        .expect("worker must complete the sync for the observed generation");
-    assert_eq!(completed.detail.as_deref(), Some(r#"{"success":true}"#));
+    let completed = wait_until(Duration::from_secs(30), || {
+        sink.read_all().iter().any(|event| {
+            event.component == "worker"
+                && event.event == "sync_completed"
+                && event
+                    .generation
+                    .is_some_and(|observed| observed >= generation)
+                && event.detail.as_deref() == Some(r#"{"success":true}"#)
+        })
+    });
+    assert!(
+        completed,
+        "worker must successfully complete the observed generation or a newer coalesced one"
+    );
     let cleared = wait_until_cleared(&marker, Duration::from_secs(30));
     assert!(
         cleared,
