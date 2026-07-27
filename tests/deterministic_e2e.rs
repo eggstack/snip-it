@@ -231,12 +231,14 @@ fn test_real_remote_effect_before_pending_clear() {
     let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
     std::fs::write(&cred_path, &env.api_key).unwrap();
 
+    // Create the e2e library before registering the client. Registration
+    // enables sync settings, so creating it afterward would itself record a
+    // pending mutation and launch a worker that races with the headline
+    // mutation below.
+    create_library(config_dir, "e2e");
+
     // Register a real client against the server via the binary.
     register_with_binary(config_dir, &server_url);
-
-    // Create the e2e library before enabling auto-sync so setup cannot start
-    // a worker that races with the headline mutation.
-    create_library(config_dir, "e2e");
 
     // Enable auto-sync with 2-second debounce.
     enable_auto_sync(config_dir, 2);
