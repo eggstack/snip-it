@@ -140,7 +140,7 @@ fn internal_modules_are_not_pub_in_lib_rs() {
 fn test_events_is_not_pub_in_release_without_feature() {
     let mod_rs = read_source("auto_sync/mod.rs");
     // test_events should always be compiled (used by worker/executor)
-    // but its public API should be gated behind test-support feature
+    // and its public API is available unconditionally (runtime env var check)
     assert!(
         mod_rs.contains("pub mod test_events"),
         "test_events must remain a pub mod (used by worker/executor at compile time)"

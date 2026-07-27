@@ -2,35 +2,26 @@
 //!
 //! Process-crash failpoints for adversarial transaction testing.
 //!
-//! These failpoints compile only with the `test-support` feature. In
-//! production builds, `maybe_failpoint` is a no-op — the `SNP_TEST_FAILPOINT`
-//! environment variable is ignored entirely.
+//! When the `SNP_TEST_FAILPOINT` environment variable is set, the
+//! corresponding failpoint triggers `std::process::abort()` to simulate
+//! a hard crash at a specific production boundary. Production builds
+//! never set this variable, so `maybe_failpoint` is always a no-op at
+//! runtime.
 //!
-//! Each failpoint calls `std::process::abort()` to simulate a hard crash
-//! at a specific production boundary. Tests launch the real `snp restore`
-//! binary with one failpoint active, confirm the process terminated at
-//! the expected boundary, then launch a second command to verify recovery.
+//! Tests launch the real `snp restore` binary with one failpoint active,
+//! confirm the process terminated at the expected boundary, then launch
+//! a second command to verify recovery.
 
 /// Check whether a test-only failpoint is active and abort if so.
 ///
-/// In production builds (without `test-support`), this is always a no-op.
-/// In test-support builds, if `SNP_TEST_FAILPOINT` equals `name`, the
-/// process aborts immediately.
-///
-/// Usage:
-/// ```ignore
-/// maybe_failpoint("restore-after-backups-durable");
-/// ```
-#[cfg(feature = "test-support")]
+/// If `SNP_TEST_FAILPOINT` equals `name`, the process aborts immediately.
+/// Production builds never set this variable, so this is always a no-op.
 pub fn maybe_failpoint(name: &str) {
     if std::env::var("SNP_TEST_FAILPOINT").as_deref().ok() == Some(name) {
         tracing::error!(failpoint = name, "test failpoint triggered: aborting");
         std::process::abort();
     }
 }
-
-#[cfg(not(feature = "test-support"))]
-pub fn maybe_failpoint(_name: &str) {}
 
 /// Failpoint names used by the restore crash tests.
 ///

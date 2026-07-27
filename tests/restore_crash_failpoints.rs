@@ -14,7 +14,7 @@
 //! 7. Verifies exact final state.
 //! 8. Repeats recovery to prove idempotence.
 //!
-//! Failpoints compile only with `test-support`. Production builds ignore
+//! Failpoints use `SNP_TEST_FAILPOINT` env var. Production builds ignore
 //! `SNP_TEST_FAILPOINT` entirely.
 
 mod support;
@@ -464,22 +464,14 @@ fn test_crash_during_second_rollback() {
 #[test]
 fn test_production_build_ignores_failpoint() {
     // This test verifies that the SNP_TEST_FAILPOINT variable does not
-    // cause a crash in a production build. Since we're running with
-    // test-support, we can't directly test the production build here.
-    // Instead, we verify that the variable is set but the restore
-    // succeeds (because the failpoint is a no-op when not at the
-    // expected boundary, or because the variable is ignored).
-    //
-    // The actual production-seam test is done by building without
-    // test-support and running with SNP_TEST_FAILPOINT set.
+    // cause a crash when the failpoint name doesn't match any boundary.
+    // We use a non-matching failpoint name so the restore should succeed.
     let tmp = tempfile::TempDir::new().unwrap();
     let (_env_tmp, config_dir) = setup_test_env();
     let backup_dir = make_backup(tmp.path());
 
-    // Set the failpoint variable — in a production build, this would
-    // be ignored. In test-support, it would abort. Since we're in
-    // test-support, we use a failpoint name that doesn't match any
-    // boundary, so the restore should succeed.
+    // Set the failpoint variable with a non-matching name — the restore
+    // should succeed because the failpoint doesn't match any boundary.
     let mut cmd = snp_in(&config_dir);
     cmd.args(["restore", backup_dir.to_str().unwrap()]);
     cmd.env("SNP_TEST_FAILPOINT", "nonexistent-failpoint");

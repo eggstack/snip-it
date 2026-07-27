@@ -348,9 +348,8 @@ fn test_real_remote_effect_before_pending_clear() {
     );
 
     // 9. Verify exactly one sync attempt occurred.
-    //    Events are emitted only when the `test-support` feature is enabled and
-    //    SNP_TEST_EVENTS_DIR is set. If events are absent, we rely on the
-    //    pending-clear + status-success evidence above.
+    //    Events are emitted when SNP_TEST_EVENTS_DIR is set. If events are
+    //    absent, we rely on the pending-clear + status-success evidence above.
     let worker_starts = events
         .iter()
         .filter(|e| e.component == "worker" && e.event == "started")
@@ -362,8 +361,7 @@ fn test_real_remote_effect_before_pending_clear() {
 
     assert!(
         !events.is_empty(),
-        "lifecycle events must be present — test-support feature must be enabled and \
-         SNP_TEST_EVENTS_DIR must be set; found 0 events"
+        "lifecycle events must be present — SNP_TEST_EVENTS_DIR must be set; found 0 events"
     );
     assert_eq!(
         worker_starts, 1,

@@ -183,18 +183,11 @@ pub fn schedule_and_spawn(
 
 /// Test-only worker spawn suppression.
 ///
-/// In production builds this always returns `false` — the environment variable
-/// is ignored entirely. In test-support builds, `SNP_SKIP_WORKER_SPAWN`
-/// suppresses the actual spawn (used by CI to avoid worker storms in
-/// workspace test jobs that don't need lifecycle evidence).
-#[cfg(feature = "test-support")]
+/// When `SNP_SKIP_WORKER_SPAWN` is set, suppresses the actual spawn
+/// (used by CI to avoid worker storms in workspace test jobs that don't
+/// need lifecycle evidence). Production builds never set this variable.
 fn test_worker_spawn_suppressed() -> bool {
     std::env::var_os("SNP_SKIP_WORKER_SPAWN").is_some()
-}
-
-#[cfg(not(feature = "test-support"))]
-fn test_worker_spawn_suppressed() -> bool {
-    false
 }
 
 /// Who is requesting the scheduling decision.

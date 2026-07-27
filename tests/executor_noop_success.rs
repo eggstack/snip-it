@@ -3,8 +3,7 @@
 //! Verifies that the `SNP_TEST_EXECUTOR_MODE=noop-success` test seam
 //! makes the executor report success without performing a real sync.
 //!
-//! This is a test-only seam gated behind `#[cfg(feature = "test-support")]`.
-//! Production builds ignore the variable entirely.
+//! This is a test-only seam. Production builds ignore the variable entirely.
 
 mod support;
 
