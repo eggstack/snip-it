@@ -194,7 +194,28 @@ impl Drop for TestEnvironment {
                 }
             }
             #[cfg(not(unix))]
-            let _ = pid;
+            {
+                use windows_sys::Win32::Foundation::CloseHandle;
+                use windows_sys::Win32::System::Threading::{
+                    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+                    TerminateProcess,
+                };
+                unsafe {
+                    let handle = OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                        0,
+                        pid,
+                    );
+                    if !handle.is_null() {
+                        eprintln!(
+                            "WARNING: child process {pid} still running after \
+                             test environment drop"
+                        );
+                        TerminateProcess(handle, 1);
+                        CloseHandle(handle);
+                    }
+                }
+            }
         }
     }
 }

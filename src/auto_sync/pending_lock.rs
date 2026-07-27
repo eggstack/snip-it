@@ -72,6 +72,12 @@ pub fn pending_txn_lock_path(state_dir: &Path) -> PathBuf {
 /// Retries up to `timeout` total, with 1-5ms random jitter between attempts.
 /// Live owners are never reclaimed regardless of age. Dead owners (PID not
 /// alive) are reclaimed immediately.
+///
+/// On Windows, `remove_file` is asynchronous (delete-pending). After a
+/// guard is dropped, the lock file may still appear to exist briefly. When
+/// `create_new` fails with `AlreadyExists`, we re-check: if `read_to_string`
+/// returns `NotFound` (file vanished between the failed create and the read),
+/// we immediately retry `create_new` instead of waiting for the full timeout.
 pub fn acquire_pending_txn(
     state_dir: &Path,
     timeout: Duration,
@@ -106,17 +112,33 @@ pub fn acquire_pending_txn(
 
         let serialized = toml::to_string_pretty(&contents)
             .map_err(|e| PendingTxnLockError::Io(std::io::Error::other(e)))?;
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(PendingTxnLockError::Io)?;
-        f.write_all(serialized.as_bytes())
-            .map_err(PendingTxnLockError::Io)?;
-        f.sync_all().map_err(PendingTxnLockError::Io)?;
-        restrict_permissions(&path);
-
-        return Ok(PendingTxnGuard { path, nonce });
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                f.write_all(serialized.as_bytes())
+                    .map_err(PendingTxnLockError::Io)?;
+                f.sync_all().map_err(PendingTxnLockError::Io)?;
+                restrict_permissions(&path);
+                return Ok(PendingTxnGuard { path, nonce });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Windows delete-pending race: remove_file returned Ok but
+                // the file still exists. Re-check: if it's truly gone now,
+                // loop around immediately (no sleep) to retry create_new.
+                if !path.exists() {
+                    continue;
+                }
+                // File still exists — fall through to normal retry with backoff.
+                if std::time::Instant::now() >= deadline {
+                    return Err(PendingTxnLockError::Busy {
+                        timeout_ms: timeout.as_millis() as u64,
+                    });
+                }
+                let jitter_ms = 1 + (attempts % 5);
+                std::thread::sleep(Duration::from_millis(jitter_ms));
+                continue;
+            }
+            Err(e) => return Err(PendingTxnLockError::Io(e)),
+        }
     }
 }
 
@@ -159,7 +181,10 @@ fn process_alive(pid: u32) -> bool {
         let ok = GetExitCodeProcess(handle, &mut exit_code);
         CloseHandle(handle);
         if ok == 0 {
-            return true;
+            // GetExitCodeProcess failed — the handle was likely obtained
+            // but became invalid (process exited between OpenProcess and
+            // GetExitCodeProcess). Treat as dead to allow stale lock reclaim.
+            return false;
         }
         exit_code == STILL_ACTIVE as u32
     }
@@ -229,8 +254,38 @@ pub fn atomic_write_unique(final_path: &Path, bytes: &[u8]) -> Result<PathBuf, s
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, final_path)?;
+    replace_existing(&tmp, final_path)?;
     Ok(tmp)
+}
+
+/// Rename a temporary file over the target. Windows needs an explicit
+/// replace-existing flag; plain `std::fs::rename` fails when the target exists.
+#[cfg(unix)]
+fn replace_existing(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    std::fs::rename(from, to)
+}
+
+#[cfg(windows)]
+fn replace_existing(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        MoveFileExW(
+            from_wide.as_ptr(),
+            to_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 /// Attempts to fsync the parent directory. Best-effort on platforms that

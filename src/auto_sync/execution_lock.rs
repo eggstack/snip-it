@@ -219,7 +219,7 @@ pub fn process_alive(pid: u32) -> bool {
         let ok = GetExitCodeProcess(handle, &mut exit_code);
         CloseHandle(handle);
         if ok == 0 {
-            return true;
+            return false;
         }
         exit_code == STILL_ACTIVE as u32
     }

@@ -68,7 +68,7 @@ pub fn record_pending_mutation(
     snapshot: PendingSnapshot,
 ) -> Result<PendingState, PendingError> {
     let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(500))
+        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
             .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
@@ -118,7 +118,7 @@ pub fn ensure_pending_for_transaction(
     snapshot: PendingSnapshot,
 ) -> Result<TransactionPendingResult, PendingError> {
     let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(500))
+        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
             .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
@@ -233,7 +233,7 @@ pub fn clear_if_generation_matches(
     observed_generation: u64,
 ) -> Result<ConditionalClearResult, PendingError> {
     let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(500))
+        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
             .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
