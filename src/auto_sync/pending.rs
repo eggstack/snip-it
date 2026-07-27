@@ -67,36 +67,18 @@ pub fn record_pending_mutation(
     state_dir: &Path,
     snapshot: PendingSnapshot,
 ) -> Result<PendingState, PendingError> {
-    let lock_start = std::time::Instant::now();
     let _guard =
         pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
-            .map_err(|e| {
-                eprintln!("DIAG_PENDING: acquire_pending_txn failed: {e}");
-                PendingError::Lock(e)
-            })?;
-    let lock_elapsed = lock_start.elapsed();
+            .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
     let (new_generation, created_at_ms) = match read_state(&path) {
         Ok(existing) => (existing.generation.saturating_add(1), unix_now_ms()),
         Err(PendingError::NotFound) => (1u64, unix_now_ms()),
-        Err(e) => {
-            eprintln!("DIAG_PENDING: read_state failed: {e}");
-            return Err(e);
-        }
+        Err(e) => return Err(e),
     };
 
-    let result = write_pending_state(state_dir, &path, new_generation, created_at_ms, snapshot);
-    match &result {
-        Ok(state) => eprintln!(
-            "DIAG_PENDING: wrote gen={} lock_ms={:?} path={}",
-            state.generation,
-            lock_elapsed,
-            path.display()
-        ),
-        Err(e) => eprintln!("DIAG_PENDING: write_pending_state failed: {e}"),
-    }
-    result
+    write_pending_state(state_dir, &path, new_generation, created_at_ms, snapshot)
 }
 
 /// Outcome of an idempotent pending-intent request tied to a transaction.

@@ -145,14 +145,11 @@ fn new_snippet(config_dir: &std::path::Path, desc: &str) {
         "e2e",
     ]);
     let out = support::helpers::output_with_stdin(cmd, format!("echo {desc}").as_bytes());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    eprintln!("NEW_STDOUT: {stdout}");
-    eprintln!("NEW_STDERR: {stderr}");
     assert!(
         out.status.success(),
-        "new snippet should succeed: status={:?} stderr={stderr}",
-        out.status
+        "new snippet should succeed: status={:?} stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -237,27 +234,15 @@ fn test_real_remote_effect_before_pending_clear() {
     // Register a real client against the server via the binary.
     register_with_binary(config_dir, &server_url);
 
+    // Create the e2e library before enabling auto-sync so setup cannot start
+    // a worker that races with the headline mutation.
+    create_library(config_dir, "e2e");
+
     // Enable auto-sync with 2-second debounce.
     enable_auto_sync(config_dir, 2);
 
-    // Debug: verify sync.toml after setup
-    let sync_path = config_dir.join("sync.toml");
-    let sync_bytes = std::fs::read(&sync_path).unwrap_or_default();
-    eprintln!(
-        "SYNC_TOML after setup: {:?}",
-        String::from_utf8_lossy(&sync_bytes)
-    );
-    eprintln!("CREDENTIAL_FILE exists: {}", cred_path.exists());
-
-    // Create the e2e library.
-    create_library(config_dir, "e2e");
-
     // Set up event sink for lifecycle tracking.
     let sink = EventSink::new(state_dir);
-    // Drain any events from the library-creation worker before clearing.
-    // On slow machines (Windows CI), the worker may not have written its
-    // events yet, so we wait briefly then clear to ensure a clean baseline.
-    std::thread::sleep(Duration::from_millis(200));
     sink.clear();
 
     // 3. Record pre-mutation server state (R0).
@@ -268,34 +253,32 @@ fn test_real_remote_effect_before_pending_clear() {
     );
 
     // 4. Perform a real local mutation through the snp binary.
-    let pre_marker = pending_marker(config_dir);
-    eprintln!(
-        "PRE_NEWSNIPPET: marker exists = {}, state_dir = {}",
-        pre_marker.exists(),
-        config_dir.display()
-    );
     new_snippet(config_dir, "headline-test-snippet");
-    let post_marker = pending_marker(config_dir);
-    eprintln!(
-        "POST_NEWSNIPPET: marker exists = {}, raw = {:?}",
-        post_marker.exists(),
-        fs::read_to_string(&post_marker).ok()
-    );
 
-    // 5. Observe pending generation G.
-    //    20s timeout to accommodate slower Windows CI runners.
+    // 5. Observe pending generation G from the worker lifecycle event.
+    //    The worker may complete the whole cycle before the mutation
+    //    subprocess returns on Windows, so requiring the marker to still be
+    //    present here introduces a timing race. The event is emitted only
+    //    after the worker has read a valid pending marker.
     let marker = pending_marker(config_dir);
-    let gen_observed = wait_until(Duration::from_secs(20), || marker.exists());
-    assert!(gen_observed, "pending marker must exist after mutation");
-    let generation = read_pending_generation(config_dir).unwrap_or_else(|| {
-        panic!(
-            "pending generation must be readable; marker: {:?}",
-            fs::read_to_string(&marker).ok()
-        )
-    });
+    let cycle = sink
+        .wait_for_event("worker", "cycle_started", Duration::from_secs(20))
+        .expect("worker must observe a pending generation after mutation");
+    let generation = cycle
+        .generation
+        .expect("worker cycle event must include the pending generation");
     assert!(generation >= 1, "generation must be >= 1, got {generation}");
 
-    // 6. Wait for the worker+executor to complete the sync cycle.
+    // 6. Wait for the successful remote sync before accepting marker clear.
+    let completed = sink
+        .wait_for_generation(
+            "worker",
+            "sync_completed",
+            generation,
+            Duration::from_secs(30),
+        )
+        .expect("worker must complete the sync for the observed generation");
+    assert_eq!(completed.detail.as_deref(), Some(r#"{"success":true}"#));
     let cleared = wait_until_cleared(&marker, Duration::from_secs(30));
     assert!(
         cleared,
