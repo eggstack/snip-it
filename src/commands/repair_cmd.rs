@@ -12,12 +12,35 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Typed repair action categories for safe, structured repair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepairAction {
     /// Prune orphaned usage entries (usage index entries for snippets that no longer exist).
     PruneOrphanedUsage,
-    /// Roll back an interrupted transaction.
-    RollbackInterruptedTransaction,
+    /// Roll back an interrupted transaction (Prepared, BackupsDurable, Committing, RollingBack).
+    RollbackTransaction {
+        /// Transaction ID to roll back.
+        transaction_id: String,
+    },
+    /// Resume cleanup for a CleaningUp transaction.
+    ResumeCleanup {
+        /// Transaction ID to resume cleanup for.
+        transaction_id: String,
+    },
+    /// Finalize a CommittedLocal transaction (complete pending, then cleanup).
+    FinalizeCommittedLocal {
+        /// Transaction ID to finalize.
+        transaction_id: String,
+    },
+    /// Clean up a legacy Committed journal with artifacts.
+    CleanupLegacyCommitted {
+        /// Transaction ID.
+        transaction_id: String,
+    },
+    /// Clean up a legacy RolledBack journal with artifacts.
+    CleanupLegacyRolledBack {
+        /// Transaction ID.
+        transaction_id: String,
+    },
     /// Remove an orphaned transaction artifact directory (no matching journal).
     RemoveOrphanedArtifact,
     /// Repair library index (duplicate entries, missing primary, etc.).
@@ -33,7 +56,11 @@ impl RepairAction {
     pub fn category(&self) -> &'static str {
         match self {
             RepairAction::PruneOrphanedUsage => "usage",
-            RepairAction::RollbackInterruptedTransaction => "transaction",
+            RepairAction::RollbackTransaction { .. } => "transaction",
+            RepairAction::ResumeCleanup { .. } => "transaction",
+            RepairAction::FinalizeCommittedLocal { .. } => "transaction",
+            RepairAction::CleanupLegacyCommitted { .. } => "transaction",
+            RepairAction::CleanupLegacyRolledBack { .. } => "transaction",
             RepairAction::RemoveOrphanedArtifact => "transaction",
             RepairAction::RepairLibraryIndex => "index",
             RepairAction::RepairSnippetIds => "ids",
@@ -46,9 +73,25 @@ impl RepairAction {
         matches!(
             self,
             RepairAction::PruneOrphanedUsage
-                | RepairAction::RollbackInterruptedTransaction
+                | RepairAction::RollbackTransaction { .. }
+                | RepairAction::ResumeCleanup { .. }
+                | RepairAction::FinalizeCommittedLocal { .. }
+                | RepairAction::CleanupLegacyCommitted { .. }
+                | RepairAction::CleanupLegacyRolledBack { .. }
                 | RepairAction::RemoveOrphanedArtifact
         )
+    }
+
+    /// Get the transaction ID for this action, if applicable.
+    pub fn transaction_id(&self) -> Option<&str> {
+        match self {
+            RepairAction::RollbackTransaction { transaction_id }
+            | RepairAction::ResumeCleanup { transaction_id }
+            | RepairAction::FinalizeCommittedLocal { transaction_id }
+            | RepairAction::CleanupLegacyCommitted { transaction_id }
+            | RepairAction::CleanupLegacyRolledBack { transaction_id } => Some(transaction_id),
+            _ => None,
+        }
     }
 }
 
@@ -369,15 +412,48 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
     let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
 
     for journal in &interrupted {
+        let action = match &journal.state {
+            crate::transaction::TransactionState::CommittedLocal { .. } => {
+                RepairAction::FinalizeCommittedLocal {
+                    transaction_id: journal.id.clone(),
+                }
+            }
+            crate::transaction::TransactionState::CleaningUp { .. } => {
+                RepairAction::ResumeCleanup {
+                    transaction_id: journal.id.clone(),
+                }
+            }
+            crate::transaction::TransactionState::Prepared
+            | crate::transaction::TransactionState::BackupsDurable
+            | crate::transaction::TransactionState::Committing { .. }
+            | crate::transaction::TransactionState::RollingBack { .. } => {
+                RepairAction::RollbackTransaction {
+                    transaction_id: journal.id.clone(),
+                }
+            }
+            // Failed and terminal states should not appear here (not interruptible).
+            _ => continue,
+        };
+
+        let fix = match &action {
+            RepairAction::FinalizeCommittedLocal { .. } => {
+                "Finalize committed-local transaction (complete pending, then clean up)"
+            }
+            RepairAction::ResumeCleanup { .. } => "Resume interrupted cleanup",
+            RepairAction::RollbackTransaction { .. } => "Roll back interrupted transaction",
+            _ => "Repair transaction",
+        };
+
         report.items.push(RepairItem {
-            action: RepairAction::RollbackInterruptedTransaction,
+            action,
             category: "transaction".to_string(),
             problem: format!(
-                "Interrupted transaction '{}' (op: {})",
+                "Interrupted transaction '{}' (op: {}, state: {:?})",
                 &journal.id[..8],
-                journal.operation
+                journal.operation,
+                journal.state
             ),
-            fix: "Roll back interrupted transaction".to_string(),
+            fix: fix.to_string(),
             safe: true,
             target_path: None,
         });
@@ -462,7 +538,7 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
 
 /// Apply a single safe repair.
 fn apply_repair(item: &RepairItem) -> SnipResult<()> {
-    match item.action {
+    match &item.action {
         RepairAction::PruneOrphanedUsage => {
             // Prune orphaned usage entries
             let mut usage_index = crate::usage::UsageIndex::load();
@@ -516,20 +592,124 @@ fn apply_repair(item: &RepairItem) -> SnipResult<()> {
                 }
             }
         }
-        RepairAction::RollbackInterruptedTransaction => {
+        RepairAction::RollbackTransaction { transaction_id } => {
             let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-            let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
-            for journal in &interrupted {
-                crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
-                    SnipError::runtime_error(
-                        "rollback interrupted transaction",
-                        Some(&format!(
-                            "Failed to rollback transaction '{}': {e}",
-                            &journal.id[..8]
-                        )),
-                    )
-                })?;
+            let jpath = state_dir.join(format!("txn-{transaction_id}.toml"));
+            if !jpath.exists() {
+                return Err(SnipError::runtime_error(
+                    "Transaction journal not found",
+                    Some(&format!(
+                        "Journal for transaction {transaction_id} does not exist"
+                    )),
+                ));
             }
+            let content = fs::read_to_string(&jpath)
+                .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+            let journal: crate::transaction::TransactionJournal = toml::from_str(&content)
+                .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+            crate::transaction::rollback_transaction(&state_dir, &journal).map_err(|e| {
+                SnipError::runtime_error(
+                    "rollback transaction",
+                    Some(&format!(
+                        "Failed to rollback transaction '{transaction_id}': {e}"
+                    )),
+                )
+            })?;
+        }
+        RepairAction::ResumeCleanup { transaction_id } => {
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+            let jpath = state_dir.join(format!("txn-{transaction_id}.toml"));
+            if !jpath.exists() {
+                return Ok(()); // Already cleaned up
+            }
+            let content = fs::read_to_string(&jpath)
+                .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+            let mut journal: crate::transaction::TransactionJournal = toml::from_str(&content)
+                .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+            crate::transaction::resume_cleanup(&state_dir, &mut journal).map_err(|e| {
+                SnipError::runtime_error(
+                    "resume cleanup",
+                    Some(&format!(
+                        "Failed to resume cleanup for transaction '{transaction_id}': {e}"
+                    )),
+                )
+            })?;
+        }
+        RepairAction::FinalizeCommittedLocal { transaction_id } => {
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+            let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+            let jpath = state_dir.join(format!("txn-{transaction_id}.toml"));
+            if !jpath.exists() {
+                return Ok(()); // Already cleaned up
+            }
+            let content = fs::read_to_string(&jpath)
+                .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+            let journal: crate::transaction::TransactionJournal = toml::from_str(&content)
+                .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+
+            // Use the mutation gate to handle CommittedLocal recovery.
+            crate::transaction::gate_mutation_on_interrupted_transactions(
+                &sync_state_dir,
+                &state_dir,
+            )
+            .map_err(|e| {
+                SnipError::runtime_error(
+                    "finalize committed-local",
+                    Some(&format!(
+                        "Failed to finalize transaction '{transaction_id}': {e}"
+                    )),
+                )
+            })?;
+            // Suppress unused variable warning.
+            let _ = journal;
+        }
+        RepairAction::CleanupLegacyCommitted { transaction_id } => {
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+            let jpath = state_dir.join(format!("txn-{transaction_id}.toml"));
+            if !jpath.exists() {
+                return Ok(()); // Already cleaned up
+            }
+            let content = fs::read_to_string(&jpath)
+                .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+            let journal: crate::transaction::TransactionJournal = toml::from_str(&content)
+                .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+            crate::transaction::begin_cleanup(
+                &state_dir,
+                &journal,
+                crate::transaction::CleanupOutcome::Commit,
+            )
+            .map_err(|e| {
+                SnipError::runtime_error(
+                    "cleanup legacy committed",
+                    Some(&format!(
+                        "Failed to cleanup legacy committed transaction '{transaction_id}': {e}"
+                    )),
+                )
+            })?;
+        }
+        RepairAction::CleanupLegacyRolledBack { transaction_id } => {
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+            let jpath = state_dir.join(format!("txn-{transaction_id}.toml"));
+            if !jpath.exists() {
+                return Ok(()); // Already cleaned up
+            }
+            let content = fs::read_to_string(&jpath)
+                .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+            let journal: crate::transaction::TransactionJournal = toml::from_str(&content)
+                .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+            crate::transaction::begin_cleanup(
+                &state_dir,
+                &journal,
+                crate::transaction::CleanupOutcome::Rollback,
+            )
+            .map_err(|e| {
+                SnipError::runtime_error(
+                    "cleanup legacy rolled-back",
+                    Some(&format!(
+                        "Failed to cleanup legacy rolled-back transaction '{transaction_id}': {e}"
+                    )),
+                )
+            })?;
         }
         RepairAction::RepairLibraryIndex
         | RepairAction::RepairSnippetIds

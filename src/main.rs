@@ -1121,10 +1121,20 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             library,
             json,
         }) => {
-            commands::repair_cmd::run(dry_run, apply, library, json)?;
-            // Exit status is encoded in RepairExitStatus; for now,
-            // all non-error outcomes return exit code 0.
-            // Future: map RepairExitStatus to CliOutcome exit codes.
+            let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
+            // Map RepairExitStatus to process exit codes per the plan:
+            // Clean/DryRun/Repaired → 0, UnsafeOnly → 2, PartialFailure → 1
+            match status {
+                commands::repair_cmd::RepairExitStatus::Clean
+                | commands::repair_cmd::RepairExitStatus::Repaired
+                | commands::repair_cmd::RepairExitStatus::DryRun => {}
+                commands::repair_cmd::RepairExitStatus::PartialFailure => {
+                    std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
+                }
+                commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
+                    std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
+                }
+            }
         }
         Some(Commands::Validate {
             library,

@@ -6,362 +6,68 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: "25.1"
 
 jobs:
-  fmt:
-    name: Format
+  linux-correctness:
+    name: Linux correctness
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94"
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          components: clippy
+          components: rustfmt, clippy
       - name: Install protoc
         run: bash scripts/ci/install-protoc.sh
         env:
           PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build
+        run: cargo build --workspace --all-features
+      - name: Test
+        run: cargo test --workspace --all-features -- --test-threads=1
 
-  # Production seam proof — verifies that a binary built without test-support
-  # cannot be influenced by test-only environment variables.
-  # Runs on Linux and Windows minimum (macOS is optional per the plan).
-  production-seam:
-    name: Production Seam (${{ matrix.os }})
+  platform-smoke:
+    name: Platform smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94"
-
       - name: Install protoc (Unix)
         if: runner.os != 'Windows'
         run: bash scripts/ci/install-protoc.sh
         env:
           PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}-seam
-
-      - name: Build production binary (no test-support)
-        shell: bash
-        timeout-minutes: 15
-        run: cargo build --release --no-default-features --target-dir target/production-seam
-
-      - name: Run production seam proof (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        timeout-minutes: 10
-        run: bash scripts/ci/test-production-seams.sh
-
-      - name: Run production seam proof (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        timeout-minutes: 10
-        run: pwsh -File scripts/ci/test-production-seams.ps1
-
-  test:
-    name: Test (${{ matrix.os }}, ${{ matrix.profile }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        profile: [dev, release]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-
-      - name: Install protoc (Unix)
-        if: runner.os != 'Windows'
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}-${{ matrix.profile }}
-
-      # Workspace lib tests (unit tests for all crates).
-      - name: Workspace lib tests
-        shell: bash
-        timeout-minutes: 15
-        run: |
-          if [ "${{ matrix.profile }}" = "release" ]; then
-            cargo test --release --workspace --all-features --lib -- --test-threads=1
-          else
-            cargo test --workspace --all-features --lib -- --test-threads=1
-          fi
-
-      # Integration tests — runs all integration tests in a single
-      # cargo invocation (shared compilation), skipping PTY tests
-      # which have their own dedicated job below.
-      - name: Integration tests
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          if [ "${{ matrix.profile }}" = "release" ]; then
-            PROFILE_FLAG="--release"
-          else
-            PROFILE_FLAG=""
-          fi
-          # Build --skip flags from pty_integration test names.
-          SKIP_FLAGS=""
-          while IFS= read -r name; do
-            [ -z "$name" ] && continue
-            SKIP_FLAGS="$SKIP_FLAGS --skip $name"
-          done < <(sed -n 's/^fn \(test_[a-z_0-9]*\).*/\1/p' tests/pty_integration.rs)
-          eval cargo test $PROFILE_FLAG --workspace --all-features -- --test-threads=1 $SKIP_FLAGS
-
-      # PTY tests are isolated from workspace correctness tests.
-      # Run only on platforms where the product supports the PTY path.
-      - name: PTY integration tests
-        if: runner.os != 'Windows'
-        shell: bash
-        timeout-minutes: 15
-        run: |
-          if [ "${{ matrix.profile }}" = "release" ]; then
-            cargo test --release --test pty_integration --features test-support -- --test-threads=1
-          else
-            cargo test --test pty_integration --features test-support -- --test-threads=1
-          fi
-
-  # Focused release-blocking test suites on all platforms.
-  # These run single-threaded to avoid PTY and lock contention.
-  # No SNP_SKIP_WORKER_SPAWN — all lifecycle tests run with real workers.
-  release-blocking-tests:
-    name: Release-blocking (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-
-      - name: Install protoc (Unix)
-        if: runner.os != 'Windows'
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}-blocking
-
-      - name: Deterministic E2E
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test deterministic_e2e --features test-support -- --test-threads=1
-
-      - name: Auto sync closure
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test auto_sync_closure --features test-support -- --test-threads=1
-
-      - name: Readonly no recovery
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test readonly_no_recovery --features test-support -- --test-threads=1
-
-      - name: Sync contracts
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test sync_contracts --features test-support -- --test-threads=1
-
-      - name: Auto sync lifecycle
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test auto_sync_lifecycle --features test-support -- --test-threads=1
-
-      - name: Executor noop success
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test executor_noop_success --features test-support -- --test-threads=1
-
-  # Transaction crash recovery and backup/restore contract tests on all
-  # platforms. These prove the production transaction protocol, manifest
-  # validation, and backup coherence.
-  transaction-tests:
-    name: Transaction (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-
-      - name: Install protoc (Unix)
-        if: runner.os != 'Windows'
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}-transaction
-
-      - name: Transaction crash recovery
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
-
-      - name: Restore transactions
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test restore_transactions --features test-support -- --test-threads=1
-
-      - name: Restore crash failpoints
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
-
-      - name: Backup snapshot concurrency
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test backup_snapshot_concurrency --features test-support -- --test-threads=1
-
-      - name: Manifest contracts
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test manifest_contracts --features test-support -- --test-threads=1
-
-      - name: Local data lock barriers
-        shell: bash
-        timeout-minutes: 20
-        run: cargo test --test local_data_lock_barriers --features test-support -- --test-threads=1
-
-  # Verify that evidence files (production seam scripts, test scripts) are
-  # committed alongside the code at the same commit. This prevents the
-  # scenario where evidence scripts are updated but not committed, or
-  # where stale evidence scripts are used against newer code.
-  verify-evidence:
-    name: Verify Evidence
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check production seam script exists and is committed
-        run: |
-          git ls-files --error-unmatch scripts/ci/test-production-seams.sh
-          git ls-files --error-unmatch scripts/ci/test-production-seams.ps1
-          test -x scripts/ci/test-production-seams.sh
-      - name: Check test scripts are committed
-        run: |
-          git ls-files --error-unmatch tests/support/recording_server.rs
-          git ls-files --error-unmatch tests/support/environment.rs
-          git ls-files --error-unmatch tests/support/event_sink.rs
-      - name: Check no uncommitted changes to evidence files
-        run: |
-          git diff --exit-code scripts/ci/ tests/support/ || {
-            echo "::error::Evidence files have uncommitted changes"
-            exit 1
-          }
-
-  package:
-    name: Package (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-
-      - name: Install protoc (Unix)
-        if: runner.os != 'Windows'
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Package and install (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          set -euo pipefail
-          cargo package -p snip-it --locked --allow-dirty
-          crate_file=$(ls target/package/snip-it-*.crate | head -1)
-          unpack_dir=$(mktemp -d)
-          tar -xzf "$crate_file" -C "$unpack_dir"
-          package_dir=$(find "$unpack_dir" -maxdepth 1 -type d -name 'snip-it-*' | head -1)
-          install_root="$RUNNER_TEMP/snp-install"
-          cargo install --path "$package_dir" --locked --root "$install_root"
-          "$install_root/bin/snp" --version
-          "$install_root/bin/snp" --help >/dev/null
-
-      - name: Package and install (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          cargo package -p snip-it --locked --allow-dirty
-          $crate = Get-ChildItem 'target/package/snip-it-*.crate' | Select-Object -First 1
-          if (-not $crate) { throw 'snip-it crate archive not found' }
-          $unpack = Join-Path $env:RUNNER_TEMP ("snip-it-package-" + [guid]::NewGuid())
-          New-Item -ItemType Directory -Path $unpack | Out-Null
-          tar -xzf $crate.FullName -C $unpack
-          $packageDir = Get-ChildItem $unpack -Directory | Where-Object Name -Like 'snip-it-*' | Select-Object -First 1
-          if (-not $packageDir) { throw 'unpacked snip-it package directory not found' }
-          $installRoot = Join-Path $env:RUNNER_TEMP 'snp-install'
-          cargo install --path $packageDir.FullName --locked --root $installRoot
-          $snp = Join-Path $installRoot 'bin/snp.exe'
-          & $snp --version
-          & $snp --help | Out-Null
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --all-features
+      - name: Library tests
+        run: cargo test --workspace --all-features --lib -- --test-threads=1
+      - name: CLI/platform smoke
+        run: cargo test --test platform_smoke --features test-support -- --test-threads=1

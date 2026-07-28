@@ -113,3 +113,16 @@ Phase 11 may be marked `COMPLETE` and the correctness program `CLOSED` only when
 - no known production correctness blocker remains.
 
 Until then, the repository is not correctness-closed or release-ready.
+
+## Implementation progress
+
+Phase 11H workstreams A–J are being implemented. The implementation includes:
+- Transaction cleanup state machine correction (Workstream B)
+- Transaction-specific state-aware repair (Workstream C)
+- Destination privacy finalization (Workstream D)
+- Manifest test fixture builder (Workstream E)
+- Sync E2E simplification (Workstream F)
+- CI workflow simplification to 3 instances (Workstream G)
+- Local verification scripts (Workstream H)
+- Manual crates.io release guide (Workstream I)
+- Documentation simplification (Workstream J)

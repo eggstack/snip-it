@@ -14,15 +14,20 @@
 //!
 //! ```text
 //! Prepared → BackupsDurable → Committing{pos} → CommittedLocal{pending}
-//!          → Committed → CleaningUp{pos} → (journal removed)
+//!          → CleaningUp{outcome: Commit, next_step: Validate} → ... → (journal removed)
 //!
-//! Prepared → BackupsDurable → RollingBack{pos} → RolledBack
-//!          → CleaningUp{pos} → (journal removed)
+//! Prepared → BackupsDurable → RollingBack{pos} → CleaningUp{outcome: Rollback, next_step: Validate}
+//!          → ... → (journal removed)
 //! ```
 //!
 //! `CleaningUp` is interruptible and restartable: `finalize_transaction_cleanup`
-//! persists progress after each step and resumes from `next_cleanup_position`
-//! on recovery.
+//! persists progress after each step and resumes from `next_step` on recovery.
+//!
+//! New transactions never persist terminal `Committed` or `RolledBack` states.
+//! The journal is removed during cleanup, making the absence of a journal the
+//! true terminal indicator. Legacy `Committed` and `RolledBack` journals (from
+//! older versions) are handled as `CleaningUp` with the appropriate outcome
+//! during recovery.
 
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
@@ -263,6 +268,30 @@ pub enum PendingFinalization {
     CoveredByExisting { generation: u64 },
 }
 
+/// Outcome of the cleanup phase — whether the transaction committed or rolled back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupOutcome {
+    /// Transaction committed successfully; cleanup removes commit artifacts.
+    #[default]
+    Commit,
+    /// Transaction was rolled back; cleanup removes rollback artifacts.
+    Rollback,
+}
+
+/// Individual cleanup step — tracks progress through the cleanup sequence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupStep {
+    /// Validate artifact containment and remove staged files.
+    #[default]
+    Validate,
+    /// Remove backup files.
+    RemoveBackups,
+    /// Remove the artifact directory.
+    RemoveArtifactRoot,
+    /// Remove the journal file.
+    RemoveJournal,
+}
+
 /// State machine for a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionState {
@@ -298,16 +327,17 @@ pub enum TransactionState {
     },
     /// Transaction was rolled back; backups restored.
     RolledBack,
-    /// Cleanup is in progress; tracks cleanup position.
+    /// Cleanup is in progress; tracks cleanup outcome and step.
     ///
-    /// `next_cleanup_position == N` means cleanup steps `0..N` have been
-    /// completed and verified; step `N` is next.
-    ///
-    /// Cleanup order: 0=staged files, 1=backup files, 2=artifact dir,
-    /// 3=journal removal.
+    /// Each step is persisted before execution so a crash during cleanup
+    /// is recoverable. The journal is removed last.
     CleaningUp {
-        /// Number of completed cleanup steps.
-        next_cleanup_position: usize,
+        /// Whether this cleanup is for a commit or rollback.
+        #[serde(default)]
+        outcome: CleanupOutcome,
+        /// The next cleanup step to execute.
+        #[serde(default)]
+        next_step: CleanupStep,
     },
     /// Transaction failed with an error message.
     Failed(String),
@@ -724,18 +754,15 @@ pub fn advance_to_committed_local(
 
 /// Commit a transaction (atomic multi-file commit).
 ///
-/// Marks the journal as `Committed` and removes all transaction artifacts
-/// via `finalize_transaction_cleanup`. The caller is responsible for
+/// Transitions to `CleaningUp { outcome: Commit }` and removes all transaction
+/// artifacts via `finalize_transaction_cleanup`. The caller is responsible for
 /// actually writing the staged files before calling this function.
+///
+/// New transactions never persist a terminal `Committed` state. The journal is
+/// removed during cleanup, making the absence of a journal the true terminal
+/// indicator.
 pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
-    let mut committed = journal.clone();
-    committed.state = TransactionState::Committed;
-
-    persist_journal(state_dir, &committed)?;
-
-    // Clean up all transaction artifacts (staged files, backups, journal).
-    // The cleanup is restartable via the CleaningUp state.
-    finalize_transaction_cleanup(state_dir, &mut committed)
+    begin_cleanup(state_dir, journal, CleanupOutcome::Commit)
 }
 
 /// Validate that all artifact paths in the journal remain contained within
@@ -926,45 +953,91 @@ fn remove_dir_all_with_retry(path: &Path) -> SnipResult<()> {
     Ok(())
 }
 
+/// Begin the cleanup phase for a transaction.
+///
+/// Transitions the journal to `CleaningUp { outcome, next_step: Validate }`
+/// and persists it before any destructive operations. This ensures cleanup
+/// ownership is durable before any artifacts are removed.
+///
+/// Called from `commit_transaction` and `rollback_transaction` instead of
+/// persisting terminal `Committed` or `RolledBack` states.
+pub fn begin_cleanup(
+    state_dir: &Path,
+    journal: &TransactionJournal,
+    outcome: CleanupOutcome,
+) -> SnipResult<()> {
+    let mut cleaning = journal.clone();
+    cleaning.state = TransactionState::CleaningUp {
+        outcome,
+        next_step: CleanupStep::Validate,
+    };
+    persist_journal(state_dir, &cleaning)?;
+    finalize_transaction_cleanup(state_dir, &mut cleaning)
+}
+
+/// Resume an interrupted cleanup from the last durably persisted step.
+///
+/// Reads the journal's `CleaningUp` state to determine the outcome and
+/// next step, then continues cleanup from that point. Used by the mutation
+/// gate and repair to recover interrupted cleanups.
+pub fn resume_cleanup(state_dir: &Path, journal: &mut TransactionJournal) -> SnipResult<()> {
+    if let TransactionState::CleaningUp { outcome, next_step } = &journal.state {
+        tracing::info!(
+            txn_id = %journal.id,
+            outcome = ?outcome,
+            next_step = ?next_step,
+            "Resuming interrupted cleanup"
+        );
+    }
+    finalize_transaction_cleanup(state_dir, journal)
+}
+
 /// Finalize transaction cleanup: remove all artifacts and the journal last.
 ///
 /// This is the canonical cleanup path used by commit, rollback, and
 /// CommittedLocal recovery. It is restartable: if interrupted, the next
 /// call (from recovery or a new cleanup attempt) resumes from the last
-/// durably recorded `next_cleanup_position` in the `CleaningUp` state.
+/// durably recorded `next_step` in the `CleaningUp` state.
 ///
-/// Cleanup order:
-/// 0. Validate artifact containment before any deletion;
-/// 1. Remove staged files;
+/// Cleanup steps in order:
+/// 1. Validate artifact containment and remove staged files;
 /// 2. Remove backup files;
 /// 3. Remove the artifact directory;
 /// 4. Remove the journal file;
 /// 5. Fsync the parent directory after journal removal.
 ///
-/// The journal is advanced to `CleaningUp { next_cleanup_position }`
-/// before each step, so a crash during cleanup is recoverable.
+/// The journal is advanced to `CleaningUp { next_step }` before each
+/// destructive step, so a crash during cleanup is recoverable.
 pub fn finalize_transaction_cleanup(
     state_dir: &Path,
     journal: &mut TransactionJournal,
 ) -> SnipResult<()> {
-    // Determine the starting position from the journal state.
-    let start_position = match &journal.state {
-        TransactionState::CleaningUp {
-            next_cleanup_position,
-        } => *next_cleanup_position,
-        _ => 0,
+    // Determine the starting step from the journal state.
+    let start_step = match &journal.state {
+        TransactionState::CleaningUp { next_step, .. } => *next_step,
+        _ => CleanupStep::Validate,
     };
 
-    // Cleanup steps in order. Each step is persisted before execution
-    // so a crash during the step is recoverable.
-    let total_steps = 5;
+    let steps = [
+        CleanupStep::Validate,
+        CleanupStep::RemoveBackups,
+        CleanupStep::RemoveArtifactRoot,
+        CleanupStep::RemoveJournal,
+    ];
 
-    for position in start_position..total_steps {
+    let start_index = steps.iter().position(|s| *s == start_step).unwrap_or(0);
+
+    for (idx, &step) in steps.iter().enumerate().skip(start_index) {
         // Persist the CleaningUp state before executing the step.
-        // Skip persistence if the journal has already been removed (position >= 3).
-        if position < 3 {
+        // Skip persistence if the journal has already been removed (RemoveJournal and later).
+        if step != CleanupStep::RemoveJournal {
+            let outcome = match &journal.state {
+                TransactionState::CleaningUp { outcome, .. } => *outcome,
+                _ => CleanupOutcome::Commit,
+            };
             journal.state = TransactionState::CleaningUp {
-                next_cleanup_position: position,
+                outcome,
+                next_step: step,
             };
             persist_journal(state_dir, journal)?;
         }
@@ -972,18 +1045,18 @@ pub fn finalize_transaction_cleanup(
         // Failpoints for crash testing during cleanup.
         // Each fires AFTER the journal has been persisted at the named
         // step but BEFORE the step body executes.
-        match position {
-            0 => {
+        match step {
+            CleanupStep::Validate => {
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_STATE_BEFORE_VALIDATION,
                 );
             }
-            1 => {
+            CleanupStep::RemoveBackups => {
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_STAGED_BEFORE_BACKUPS,
                 );
             }
-            2 => {
+            CleanupStep::RemoveArtifactRoot => {
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_BACKUPS_BEFORE_ARTIFACT_ROOT,
                 );
@@ -991,25 +1064,22 @@ pub fn finalize_transaction_cleanup(
             _ => {}
         }
 
-        match position {
-            0 => {
-                // Validate artifact containment before any deletion.
+        match step {
+            CleanupStep::Validate => {
+                // Validate artifact containment and remove staged files.
                 validate_artifact_containment(state_dir, journal)?;
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_VALIDATION_BEFORE_STAGED,
                 );
-                // Remove staged files.
                 remove_all_staged_files(journal)?;
             }
-            1 => {
-                // Remove backup files.
+            CleanupStep::RemoveBackups => {
                 remove_all_backup_files(journal)?;
             }
-            2 => {
-                // Remove the artifact directory.
+            CleanupStep::RemoveArtifactRoot => {
                 remove_empty_transaction_artifact_dir(state_dir, &journal.id)?;
             }
-            3 => {
+            CleanupStep::RemoveJournal => {
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_ARTIFACT_ROOT_BEFORE_JOURNAL,
                 );
@@ -1024,28 +1094,29 @@ pub fn finalize_transaction_cleanup(
                         )
                     })?;
                 }
-                // Do NOT persist the journal state after removal — the file
-                // is gone. The fsync in step 4 durably records the removal.
-                continue;
-            }
-            4 => {
                 crate::test_failpoints::maybe_failpoint(
                     crate::test_failpoints::failpoints::CLEANUP_AFTER_JOURNAL_BEFORE_PARENT_SYNC,
                 );
                 // Fsync the parent directory to durably record the removal.
-                let jpath = journal_path(state_dir, &journal.id);
                 fsync_parent_dir(&jpath)?;
-                // Final step — do not persist journal state.
+                // Final step — journal is gone, no further state to persist.
                 continue;
             }
-            _ => unreachable!("cleanup position {} out of range", position),
         }
 
-        // Persist progress after each step (except journal removal and fsync).
-        journal.state = TransactionState::CleaningUp {
-            next_cleanup_position: position + 1,
-        };
-        persist_journal(state_dir, journal)?;
+        // Persist progress after each step (except RemoveJournal).
+        if idx + 1 < steps.len() {
+            let next = steps[idx + 1];
+            let outcome = match &journal.state {
+                TransactionState::CleaningUp { outcome, .. } => *outcome,
+                _ => CleanupOutcome::Commit,
+            };
+            journal.state = TransactionState::CleaningUp {
+                outcome,
+                next_step: next,
+            };
+            persist_journal(state_dir, journal)?;
+        }
     }
 
     Ok(())
@@ -1317,12 +1388,13 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
         persist_journal(state_dir, &rb_journal)?;
     }
 
-    rb_journal.state = TransactionState::RolledBack;
+    rb_journal.state = TransactionState::RollingBack {
+        next_rollback_position: rollback_order.len(),
+    };
     persist_journal(state_dir, &rb_journal)?;
 
-    // Clean up all transaction artifacts and the journal last.
-    // The cleanup is restartable via the CleaningUp state.
-    finalize_transaction_cleanup(state_dir, &mut rb_journal)
+    // Transition to cleanup instead of persisting terminal RolledBack.
+    begin_cleanup(state_dir, &rb_journal, CleanupOutcome::Rollback)
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.
@@ -1492,18 +1564,16 @@ pub fn gate_mutation_on_interrupted_transactions(
     if interrupted.len() == 1 {
         let journal = &interrupted[0];
 
-        // Handle CleaningUp state: resume cleanup from the last position.
-        if let TransactionState::CleaningUp {
-            next_cleanup_position,
-        } = &journal.state
-        {
+        // Handle CleaningUp state: resume cleanup from the last step.
+        if let TransactionState::CleaningUp { outcome, next_step } = &journal.state {
             tracing::info!(
                 txn_id = %journal.id,
-                next_cleanup_position = *next_cleanup_position,
+                outcome = ?outcome,
+                next_step = ?next_step,
                 "Resuming interrupted cleanup"
             );
             let mut cleanup_journal = journal.clone();
-            match finalize_transaction_cleanup(transaction_dir, &mut cleanup_journal) {
+            match resume_cleanup(transaction_dir, &mut cleanup_journal) {
                 Ok(()) => {
                     tracing::info!(
                         txn_id = %journal.id,
@@ -1516,12 +1586,92 @@ pub fn gate_mutation_on_interrupted_transactions(
                         "Interrupted cleanup requires manual recovery",
                         Some(&format!(
                             "Transaction '{}' ({}) was interrupted during cleanup \
-                             at position {} and automatic cleanup failed: {}. \
+                             at step {:?} and automatic cleanup failed: {}. \
                              Run `snp repair` to inspect and recover.",
-                            journal.operation, journal.id, next_cleanup_position, e
+                            journal.operation, journal.id, next_step, e
                         )),
                     ));
                 }
+            }
+        }
+
+        // Handle legacy terminal Committed journal with artifacts:
+        // treat as commit cleanup.
+        if let TransactionState::Committed = &journal.state {
+            if has_transaction_artifacts(transaction_dir, &journal.id) {
+                tracing::info!(
+                    txn_id = %journal.id,
+                    "Legacy Committed journal has artifacts, cleaning up"
+                );
+                let cleanup_journal = journal.clone();
+                match begin_cleanup(transaction_dir, &cleanup_journal, CleanupOutcome::Commit) {
+                    Ok(()) => {
+                        tracing::info!(
+                            txn_id = %journal.id,
+                            "Legacy Committed cleanup completed"
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(SnipError::runtime_error(
+                            "Legacy committed cleanup failed",
+                            Some(&format!(
+                                "Transaction '{}' ({}) has legacy Committed state with artifacts \
+                                 and cleanup failed: {}. Run `snp repair`.",
+                                journal.operation, journal.id, e
+                            )),
+                        ));
+                    }
+                }
+            } else {
+                // No artifacts — safe to remove the orphan journal.
+                tracing::info!(
+                    txn_id = %journal.id,
+                    "Legacy Committed journal has no artifacts, removing"
+                );
+                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
+                let _ = fs::remove_file(&jpath);
+                return Ok(());
+            }
+        }
+
+        // Handle legacy terminal RolledBack journal with artifacts:
+        // treat as rollback cleanup.
+        if let TransactionState::RolledBack = &journal.state {
+            if has_transaction_artifacts(transaction_dir, &journal.id) {
+                tracing::info!(
+                    txn_id = %journal.id,
+                    "Legacy RolledBack journal has artifacts, cleaning up"
+                );
+                let cleanup_journal = journal.clone();
+                match begin_cleanup(transaction_dir, &cleanup_journal, CleanupOutcome::Rollback) {
+                    Ok(()) => {
+                        tracing::info!(
+                            txn_id = %journal.id,
+                            "Legacy RolledBack cleanup completed"
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(SnipError::runtime_error(
+                            "Legacy rolled-back cleanup failed",
+                            Some(&format!(
+                                "Transaction '{}' ({}) has legacy RolledBack state with artifacts \
+                                 and cleanup failed: {}. Run `snp repair`.",
+                                journal.operation, journal.id, e
+                            )),
+                        ));
+                    }
+                }
+            } else {
+                // No artifacts — safe to remove the orphan journal.
+                tracing::info!(
+                    txn_id = %journal.id,
+                    "Legacy RolledBack journal has no artifacts, removing"
+                );
+                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
+                let _ = fs::remove_file(&jpath);
+                return Ok(());
             }
         }
 
@@ -1702,6 +1852,17 @@ pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<Transa
     Ok(interrupted)
 }
 
+/// Check whether a transaction has artifacts (staged files, backups, or
+/// artifact directory) that still need cleanup.
+fn has_transaction_artifacts(state_dir: &Path, txn_id: &str) -> bool {
+    let artifact_dir = transaction_artifact_dir(state_dir, txn_id);
+    if artifact_dir.exists() {
+        return true;
+    }
+    // Also check for staged files referenced in the journal.
+    false
+}
+
 /// Derive the journal file path for a given transaction ID.
 fn journal_path(state_dir: &Path, txn_id: &str) -> PathBuf {
     state_dir.join(format!("txn-{txn_id}.toml"))
@@ -1863,6 +2024,13 @@ mod tests {
         assert!(
             TransactionState::CommittedLocal {
                 pending: PendingFinalization::NotRecorded
+            }
+            .is_interruptible()
+        );
+        assert!(
+            TransactionState::CleaningUp {
+                outcome: CleanupOutcome::Commit,
+                next_step: CleanupStep::Validate,
             }
             .is_interruptible()
         );

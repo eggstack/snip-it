@@ -142,30 +142,33 @@ Include:
 
 ## Release Process
 
-The release process is automated by `.github/workflows/release.yml`
-and is triggered by pushing a `vX.Y.Z` tag.
+Publishing to crates.io is a **manual, local** operation. There is no
+automated publish workflow and no crates.io token in GitHub Actions.
 
-1. **Bump version** in `Cargo.toml` (only the `snp` package; the
-   other crates are `publish = false`).
+1. **Bump version** in the changed crate's `Cargo.toml`. If `snip-proto`
+   changed, update its dependency version in `snip-sync` and `snip-it`.
 2. **Update `CHANGELOG.md`**: move `[Unreleased]` entries under a new
    dated version heading; add a link reference at the bottom.
 3. **Open a PR** with both changes; get review and merge.
-4. **Tag the merge commit** on `main`:
+4. **Run release checks** locally:
    ```bash
-   git tag -s vX.Y.Z -m "Release X.Y.Z"
+   bash scripts/release-check.sh
+   ```
+5. **Publish** in dependency order (see [RELEASING.md](RELEASING.md)):
+   ```bash
+   cargo publish -p snip-proto   # only if snip-proto changed
+   cargo publish -p snip-sync    # only if snip-sync changed
+   cargo publish -p snip-it
+   ```
+6. **Tag** (optional):
+   ```bash
+   git tag -a vX.Y.Z -m "snip-it vX.Y.Z"
    git push origin vX.Y.Z
    ```
-5. **`release.yml`** then:
-   - Runs the full CI gate.
-   - Publishes `snp` to crates.io.
-   - Builds 5 release targets, generates SHA256 checksums, and
-     attaches everything to a GitHub Release.
-   - Builds and pushes the `snip-sync` Docker image to GHCR.
-6. **Verify** from a clean machine:
+7. **Verify** from a clean machine:
    ```bash
    cargo install snp --version X.Y.Z --locked
    snp --version
-   docker pull ghcr.io/eggstack/snip-it/snip-sync:X.Y.Z
    ```
 
 ## MSRV Policy

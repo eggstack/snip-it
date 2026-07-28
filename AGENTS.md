@@ -61,6 +61,10 @@ cargo test --test backup_snapshot_concurrency --features test-support -- --test-
 cargo test --test auto_sync_lifecycle --features test-support -- --test-threads=1
 cargo test --test executor_noop_success --features test-support -- --test-threads=1
 
+# Run Phase 11H test suites (requires test-support feature)
+cargo test --test cleanup_crash_failpoints --features test-support -- --test-threads=1
+cargo test --test platform_smoke --features test-support -- --test-threads=1
+
 # Run production seam proof (no test-support feature)
 bash scripts/ci/test-production-seams.sh
 
@@ -73,6 +77,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # Format check
 cargo fmt --all -- --check
 cargo fmt  # auto-format
+
+# Local verification scripts
+bash scripts/check.sh        # ordinary developer verification
+bash scripts/release-check.sh  # exhaustive pre-release verification
 ```
 
 **Key gotcha:** The main `snip-it` crate is binary-only — `cargo test --lib -p snip-it` does not work. Use `cargo test -p snip-it` (binary + integration tests) or `cargo test --workspace`.
@@ -183,6 +191,9 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
 
+### Transaction cleanup state machine (Phase 11H)
+New transactions enter `CleaningUp { outcome, next_step }` before any terminal state. The `CleanupOutcome` enum (`Commit` or `Rollback`) records whether the transaction committed or rolled back. The `CleanupStep` enum (`Validate`, `RemoveBackups`, `RemoveArtifactRoot`, `RemoveJournal`) tracks progress. Journal removal is the last step — absence of a journal is the true terminal indicator. Legacy `Committed` and `RolledBack` journals from older versions are handled as `CleaningUp` with the appropriate outcome during recovery.
+
 ### Transaction lock (PID/nonce/start_token)
 The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. On macOS, `proc_pidinfo` with `PROC_PIDTBSDINFO` is used for process start time. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
 
@@ -232,6 +243,9 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 
 ### Production seam proofs
 `scripts/ci/test-production-seams.sh` and `scripts/ci/test-production-seams.ps1` traverse real guarded code paths: real `snp restore` with failpoints, real `snp auto-sync-execute --generation`, real `snp library create`, and real worker/executor logic. No `snp list` is used.
+
+### Phase 11H closure
+Phase 11H is the authoritative plan for CI simplification, local verification, and manual release. See `plans/snip-it-correctness-11h-ci-simplification-local-verification-and-manual-release.md` and `plans/snip-it-correctness-11-closure-status.md` for status.
 
 ### Phase 11F closure
 All 12 workstreams (A–L) from `plans/snip-it-correctness-11f-finalization-security-and-evidence-closure.md` are complete. See `plans/snip-it-correctness-11-closure-status.md` for detailed evidence per workstream.

@@ -129,17 +129,40 @@ fn count_journals(config_dir: &Path) -> usize {
     count
 }
 
-/// Read the CleaningUp next_cleanup_position value from the journal file, if present.
+/// Read the CleaningUp next_step value from the journal file, if present.
 fn read_cleaningup_next_step(journal_path: &Path) -> Option<String> {
     let content = fs::read_to_string(journal_path).ok()?;
+    // Look for the next_step field in [state.CleaningUp] section
+    let mut in_cleaning_up = false;
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("next_cleanup_position") {
-            // `next_cleanup_position = 0` on one line
-            if let Some(idx) = trimmed.find('=') {
-                let val = trimmed[idx + 1..].trim();
-                return Some(val.to_string());
+        if trimmed == "[state.CleaningUp]" {
+            in_cleaning_up = true;
+            continue;
+        }
+        if in_cleaning_up {
+            if trimmed.starts_with('[') && !trimmed.starts_with("[state") {
+                break; // Left the CleaningUp section
             }
+            if let Some(idx) = trimmed.find('=') {
+                let key = trimmed[..idx].trim();
+                let val = trimmed[idx + 1..].trim();
+                if key == "next_step" {
+                    // Remove quotes if present
+                    let val = val.trim_matches('"');
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    // Fallback: look for old-format next_cleanup_position
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("next_cleanup_position")
+            && let Some(idx) = trimmed.find('=')
+        {
+            let val = trimmed[idx + 1..].trim();
+            return Some(val.to_string());
         }
     }
     None
@@ -317,15 +340,16 @@ fn test_recovery_after_typed_cleaning_up_journal() {
     fs::write(&backup_file, b"orphan-backup").unwrap();
     let backup_file_str = backup_file.to_string_lossy();
 
-    // Write a CleaningUp journal with next_cleanup_position = 1
-    // (RemoveBackups step), matching the current integer-based schema.
+    // Write a CleaningUp journal with next_step = RemoveBackups,
+    // matching the current typed schema.
     let journal = format!(
         r#"id = "{orphan_id}"
 operation = "orphan"
 created_at_unix_ms = 1000000
 
 [state.CleaningUp]
-next_cleanup_position = 1
+outcome = "Commit"
+next_step = "RemoveBackups"
 
 [[staged_files]]
 original_path = "{backup_file_str}"
@@ -367,9 +391,9 @@ fn test_persisted_journal_after_typed_crash_still_parses() {
         first_journal(&config_dir).expect("a journal must exist on disk after the typed crash");
     let raw = fs::read_to_string(&journal_path).unwrap();
     let next_step = read_cleaningup_next_step(&journal_path)
-        .unwrap_or_else(|| panic!("typed journal did not contain next_cleanup_position:\n{raw}"));
-    // Position 0 = Validate step (first cleanup step).
-    assert_eq!(next_step, "0");
+        .unwrap_or_else(|| panic!("typed journal did not contain next_step:\n{raw}"));
+    // First cleanup step is Validate.
+    assert_eq!(next_step, "Validate");
 
     // Now run a recovery to ensure the journal is cleanly removed.
     let recovery = run_restore(&config_dir, &backup_dir);

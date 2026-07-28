@@ -362,13 +362,24 @@ fn test_valid_index_path_accepted() {
     let backup_dir = _tmp.path().join("backup");
     fs::create_dir_all(backup_dir.join("libraries")).unwrap();
 
-    let content = r#"[[libraries]]
+    // Create the library artifact that the index references.
+    let lib_content = r#"[[snippets]]
+id = "valid-index-1"
+description = "valid index snippet"
+command = "echo valid"
+"#;
+    fs::write(backup_dir.join("libraries").join("test.toml"), lib_content).unwrap();
+
+    let index_content = r#"[[libraries]]
 filename = "test"
 is_primary = true
 "#;
-    fs::write(backup_dir.join("libraries.toml"), content).unwrap();
+    fs::write(backup_dir.join("libraries.toml"), index_content).unwrap();
 
-    let sha = sha256_hex(content.as_bytes().to_vec());
+    let lib_sha = sha256_hex(lib_content.as_bytes().to_vec());
+    let lib_size = lib_content.len();
+    let idx_sha = sha256_hex(index_content.as_bytes().to_vec());
+    let idx_size = index_content.len();
     let manifest = format!(
         r#"schema = 1
 created_at_unix_ms = 0
@@ -376,12 +387,17 @@ snip_it_version = "1.0.0"
 layout = "directory"
 
 [[files]]
+path = "test.toml"
+kind = "library"
+size = {lib_size}
+sha256 = "{lib_sha}"
+
+[[files]]
 path = "libraries.toml"
 kind = "index"
-size = {size}
-sha256 = "{sha}"
+size = {idx_size}
+sha256 = "{idx_sha}"
 "#,
-        size = content.len(),
     );
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
