@@ -327,6 +327,18 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Tests / evidence** | CI pipeline runs `cargo-deny`. |
 | **Owner / module** | `Cargo.toml`, `Cargo.lock`, CI configuration. |
 
+### T14: Test Seam Activation in Production Binary
+
+| Field | Detail |
+|-------|--------|
+| **Description** | Environment variables that control test-only behavior (failpoints, executor modes, worker suppression, event emission, mutation barriers) could activate in a production build, altering behavior through caller-controlled input. |
+| **Attack vector** | A caller (script, CI, or attacker) sets `SNP_TEST_FAILPOINT`, `SNP_TEST_EXECUTOR_MODE`, `SNP_SKIP_WORKER_SPAWN`, `SNP_TEST_EVENTS_DIR`, or `SNP_TEST_MUTATION_BARRIER_DIR` on a production `snp` binary. |
+| **Mitigations** | All test seams are gated behind `#[cfg(feature = "test-support")]` at compile time. Production builds (`--no-default-features`) contain no runtime environment checks for these variables — the seam functions are compiled as no-ops. Integration tests use `env!("CARGO_BIN_EXE_snp")` to select the correct feature-enabled binary. A production-seam proof script builds without `test-support` and verifies each variable is ignored. |
+| **Residual risk** | Very low. The compile-time boundary eliminates the class of vulnerability entirely — there is no code path in the production binary that reads these environment variables. |
+| **User responsibility** | None. Production builds are immune to test seam activation by construction. |
+| **Tests / evidence** | `scripts/ci/test-production-seams.sh` builds and tests the no-feature binary. `#[cfg(not(feature = "test-support"))]` no-op stubs in `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`. |
+| **Owner / module** | `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`, `src/auto_sync/executor.rs`, `Cargo.toml` `[features]` table. |
+
 ---
 
 ## 6. Same-User Attacker Limitations
@@ -370,6 +382,7 @@ Users who require protection against local attackers should use full-disk encryp
 | T11: Compromised Release Asset | `update.rs` | Self-update verification tests | Low |
 | T12: Accidental Unsafe Execution | `run_cmd.rs`, `get_cmd.rs`, `clip_cmd.rs` | CLI integration tests | **Medium** |
 | T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo-deny` | Low |
+| T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs`, `executor.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
 
 ---
 

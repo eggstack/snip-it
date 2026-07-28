@@ -574,19 +574,21 @@ sha256 = "{dummy_hash}"
     // The key invariant: the operation must not succeed with ambiguous state.
     // Either it rejects the duplicate or it treats them as the same file.
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if output.status.success() {
-        // Dry-run succeeded — it displayed planned actions without writing.
-        // This is acceptable if the implementation handles case-fold in dry-run.
-    } else {
-        // Dry-run rejected — duplicate destination detected, which is correct.
-        assert!(
-            stderr.contains("duplicate")
-                || stderr.contains("already")
-                || stderr.contains("conflict")
-                || stderr.contains("Checksum"),
-            "Should reject case-folded duplicates with clear message, got: {stderr}"
-        );
-    }
+    let stderr_lower = stderr.to_lowercase();
+    // Dry-run must reject — case-folded duplicates must be unconditionally
+    // rejected on every platform (the plan requires this test never accepts
+    // success).
+    assert!(
+        !output.status.success(),
+        "Case-folded duplicate destinations must be rejected, but dry-run succeeded"
+    );
+    assert!(
+        stderr_lower.contains("duplicate")
+            || stderr_lower.contains("already")
+            || stderr_lower.contains("conflict")
+            || stderr_lower.contains("collides"),
+        "Should reject case-folded duplicates with clear message, got: {stderr}"
+    );
 }
 
 // === 17. Windows drive-relative path rejection (Workstream G) ===

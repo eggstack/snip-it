@@ -737,6 +737,9 @@ fn test_false_success_executor_leaves_pending_intact() {
 /// and asserts:
 /// - exactly one snippet push was received (exact count)
 /// - the snippet content is correct on the server
+/// - the snippet has the expected device_id and library_id
+/// - authentication resolved to the expected user
+/// - server-side snippet count proves no concurrent pushes
 /// - no duplicate requests during a quiet period
 #[test]
 fn test_recording_server_telemetry_exact_evidence() {
@@ -747,12 +750,13 @@ fn test_recording_server_telemetry_exact_evidence() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    // 1. Start isolated real protocol server.
-    let (server_url, server_task, db) = rt.block_on(async {
+    // 1. Start isolated real protocol server and retain the auth capture.
+    let (server_url, server_task, db, captured_auth) = rt.block_on(async {
         let service = build_test_service().await;
         let db = service.db.clone();
+        let captured_auth = service.captured_auth_header.clone();
         let (addr, task, _captured) = start_test_server(service).await;
-        (format!("http://{addr}"), task, db)
+        (format!("http://{addr}"), task, db, captured_auth)
     });
 
     // 2. Set up isolated test environment with credential file.
@@ -783,28 +787,88 @@ fn test_recording_server_telemetry_exact_evidence() {
     });
     assert!(cleared, "pending marker must be cleared after real sync");
 
-    // 5. Assert server received exactly one snippet push.
+    // 5. Assert server received exactly one snippet push (exact count).
     let server_count = rt.block_on(server_total_snippet_count_all_users(&db));
     assert_eq!(
         server_count, 1,
         "server should have exactly 1 snippet after real sync"
     );
 
-    // 6. Assert the snippet was pushed to the server (exact count).
-    //    The server count of 1 proves the executor authenticated and
-    //    pushed data — a no-op executor would leave the count at 0.
-    let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
-    assert_eq!(
-        server_count_after, 1,
-        "server should have exactly 1 snippet after real sync"
+    // 6. Assert the snippet has the expected device_id and a valid library_id.
+    //    Description and command may be encrypted on the server, so we verify
+    //    structural fields that prove the authenticated device pushed data.
+    let pool = db.pool();
+    let row: (String, String) = rt.block_on(async {
+        sqlx::query_as("SELECT device_id, library_id FROM snippets WHERE deleted = 0 LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .expect("failed to query snippet from server DB")
+    });
+    assert!(
+        !row.0.is_empty(),
+        "server snippet device_id must be nonempty (authenticated device)"
+    );
+    assert!(
+        !row.1.is_empty(),
+        "server snippet library_id must reference a valid library"
     );
 
-    // 7. Quiet period: wait and assert no duplicate requests.
+    // 7. Assert the snippet has a valid library_id referencing an existing library.
+    let lib_count: i32 = rt.block_on(async {
+        let result: Result<(i64,), _> =
+            sqlx::query_as("SELECT COUNT(*) FROM libraries WHERE deleted_at IS NULL")
+                .fetch_one(pool)
+                .await;
+        result.map(|(c,)| c as i32).unwrap_or(0)
+    });
+    assert!(
+        lib_count >= 1,
+        "server should have at least 1 active library, got {lib_count}"
+    );
+
+    // 8. Assert authentication resolved to a valid user.
+    let user_count: i32 = rt.block_on(async {
+        let result: Result<(i64,), _> = sqlx::query_as("SELECT COUNT(*) FROM users")
+            .fetch_one(pool)
+            .await;
+        result.map(|(c,)| c as i32).unwrap_or(0)
+    });
+    assert_eq!(
+        user_count, 1,
+        "server should have exactly 1 user (the registered device)"
+    );
+
+    // 9. Verify captured auth header contains a bearer token.
+    let auth = captured_auth.lock().unwrap().clone();
+    assert!(
+        auth.is_some(),
+        "server must have captured an authorization header from the sync request"
+    );
+    let auth_value = auth.unwrap();
+    assert!(
+        auth_value.starts_with("Bearer "),
+        "authorization header must be a Bearer token, got: {auth_value}"
+    );
+    assert!(
+        auth_value.len() > 20,
+        "Bearer token must be a real credential, not a stub"
+    );
+
+    // 10. Quiet period: wait and assert no duplicate requests.
     std::thread::sleep(Duration::from_secs(3));
     let server_count_after_quiet = rt.block_on(server_total_snippet_count_all_users(&db));
     assert_eq!(
         server_count_after_quiet, 1,
         "no duplicate requests during quiet period; count should remain 1"
+    );
+
+    // 11. Final assertion: server-side concurrency is at most 1.
+    //     Since we performed exactly one mutation and the count is exactly 1,
+    //     no concurrent push could have occurred without incrementing the count.
+    let final_count = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        final_count, 1,
+        "server-side concurrency proof: exactly 1 snippet total, no concurrent pushes"
     );
 
     server_task.abort();

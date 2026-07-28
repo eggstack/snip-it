@@ -9,7 +9,7 @@
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single repair action identified during validation.
 #[derive(Debug, Clone)]
@@ -282,6 +282,78 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
         });
     }
 
+    // Scan for orphaned artifact directories — directories under
+    // `artifacts/` that have no corresponding journal file.
+    // This catches stale artifacts left behind by crashes during cleanup.
+    collect_orphan_artifact_repairs(report, &state_dir)?;
+
+    Ok(())
+}
+
+/// Scan the transaction artifact root for orphaned directories that have
+/// no corresponding journal file. These waste disk space and may contain
+/// sensitive staged content.
+fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) -> SnipResult<()> {
+    let artifacts_root = state_dir.join("artifacts");
+    if !artifacts_root.exists() {
+        return Ok(());
+    }
+
+    // Collect journal IDs from existing journal files.
+    let mut journal_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if state_dir.exists() {
+        for entry in fs::read_dir(state_dir).map_err(|e| {
+            SnipError::io_error(
+                "read transaction state directory",
+                state_dir.to_path_buf(),
+                e,
+            )
+        })? {
+            let entry = entry.map_err(|e| {
+                SnipError::io_error("read transaction state entry", state_dir.to_path_buf(), e)
+            })?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "toml")
+                && path
+                    .file_stem()
+                    .is_some_and(|s| s.to_string_lossy().starts_with("txn-"))
+            {
+                // Extract the UUID from `txn-<uuid>.toml`.
+                if let Some(stem) = path.file_stem() {
+                    let name = stem.to_string_lossy();
+                    if let Some(uuid) = name.strip_prefix("txn-") {
+                        journal_ids.insert(uuid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Check each artifact directory for a matching journal.
+    for entry in fs::read_dir(&artifacts_root)
+        .map_err(|e| SnipError::io_error("read artifacts directory", artifacts_root.clone(), e))?
+    {
+        let entry = entry
+            .map_err(|e| SnipError::io_error("read artifacts entry", artifacts_root.clone(), e))?;
+        let path = entry.path();
+        if path.is_dir()
+            && let Some(dir_name) = path.file_stem()
+        {
+            let id = dir_name.to_string_lossy().to_string();
+            if !journal_ids.contains(&id) {
+                report.items.push(RepairItem {
+                    category: "transaction".to_string(),
+                    problem: format!(
+                        "Orphaned transaction artifact directory '{}'",
+                        path.display()
+                    ),
+                    fix: "Remove orphaned artifact directory".to_string(),
+                    safe: true,
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -296,19 +368,42 @@ fn apply_repair(item: &RepairItem) -> SnipResult<()> {
             usage_index.save()?;
         }
         "transaction" => {
-            // Roll back interrupted transactions
             let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-            let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
-            for journal in &interrupted {
-                crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
-                    SnipError::runtime_error(
-                        "rollback interrupted transaction",
-                        Some(&format!(
-                            "Failed to rollback transaction '{}': {e}",
-                            &journal.id[..8]
-                        )),
-                    )
-                })?;
+
+            // Distinguish interrupted transactions from orphaned artifacts
+            // by the problem description prefix.
+            if item.problem.starts_with("Orphaned") {
+                // Extract the artifact directory path from the problem message.
+                // Format: "Orphaned transaction artifact directory '<path>'"
+                if let Some(start) = item.problem.find('\'')
+                    && let Some(end) = item.problem[start + 1..].find('\'')
+                {
+                    let dir_path = &item.problem[start + 1..start + 1 + end];
+                    let path = Path::new(dir_path);
+                    if path.exists() {
+                        fs::remove_dir_all(path).map_err(|e| {
+                            SnipError::io_error(
+                                "remove orphaned artifact directory",
+                                path.to_path_buf(),
+                                e,
+                            )
+                        })?;
+                    }
+                }
+            } else {
+                // Roll back interrupted transactions
+                let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
+                for journal in &interrupted {
+                    crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
+                        SnipError::runtime_error(
+                            "rollback interrupted transaction",
+                            Some(&format!(
+                                "Failed to rollback transaction '{}': {e}",
+                                &journal.id[..8]
+                            )),
+                        )
+                    })?;
+                }
             }
         }
         "ids" | "timestamps" | "primary" => {

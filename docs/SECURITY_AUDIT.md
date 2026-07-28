@@ -16,6 +16,7 @@
 - [H. Execution Safety Audit](#h-execution-safety-audit)
 - [I. Backup / Restore Security Review](#i-backup--restore-security-review)
 - [J. Self-Update and Distribution Hardening](#j-self-update-and-distribution-hardening)
+- [K. Compile-Time Test Seam Isolation](#k-compile-time-test-seam-isolation)
 
 ---
 
@@ -484,6 +485,55 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 | Tar symlink following | **Mitigated (Phase 10)** | `tar -xf` followed symlinks by default in earlier versions. A malicious archive could contain symlinks pointing outside the work directory. | Self-update now uses Rust's `tar` crate with entry validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
 | Concurrent worker/update | Low | If an auto-sync worker is running when self-update replaces the binary, the worker continues running the old binary until it exits. | By design — the detached worker is fire-and-forget and holds no resources that the new binary needs. The worker will exit normally and the next cycle will use the new binary. |
 | Checksum manifest trust | Low | The `SHA256SUMS` file is fetched from the same release as the archive. A compromised release could ship matching checksums. | GitHub repository trust and SHA-256 checksums provide the root of trust. Releases are not cryptographically signed — checksums detect accidental corruption but not a compromised release. This is standard practice for GitHub-distributed binaries. |
+
+---
+
+## K. Compile-Time Test Seam Isolation
+
+### K.1 Test Seam Inventory
+
+| Seam Variable | Purpose | Feature Gate | Production Behavior |
+|---|---|---|---|
+| `SNP_TEST_FAILPOINT` | Abort at named restore boundary | `#[cfg(feature = "test-support")]` | No-op (`maybe_failpoint` compiles to empty function) |
+| `SNP_TEST_EXECUTOR_MODE` | Executor exits 0 without sync | `#[cfg(feature = "test-support")]` | Block disappears entirely from `executor.rs` |
+| `SNP_SKIP_WORKER_SPAWN` | Suppress worker creation | `#[cfg(feature = "test-support")]` | No-op (`test_worker_spawn_suppressed` returns `false`) |
+| `SNP_TEST_EVENTS_DIR` | Emit lifecycle JSON-lines | `#[cfg(feature = "test-support")]` | `enabled()`, `sink_path()`, `emit()` all compile to no-ops |
+| `SNP_TEST_MUTATION_BARRIER_DIR` | Block at mutation barriers | `#[cfg(feature = "test-support")]` | No-op (`mutation_barrier` compiles to empty function) |
+| `SNP_TEST_INJECT_ERROR` | Inject handled errors for rollback testing | `#[cfg(feature = "test-support")]` | No-op (`maybe_injected_error` returns `Ok(())`) |
+
+### K.2 Compile-Time Boundary
+
+All test seams use paired `#[cfg(feature = "test-support")]` / `#[cfg(not(feature = "test-support"))]` implementations. The `test-support` feature is an empty label in `Cargo.toml`:
+
+```toml
+[features]
+test-support = []
+```
+
+Production builds use `--no-default-features` or omit the feature entirely. In this configuration, every seam function resolves to a compile-time no-op — there is no runtime environment variable check in the production binary. The compiler eliminates all test behavior via dead-code elimination.
+
+### K.3 Integration Test Binary Selection
+
+Integration tests use `env!("CARGO_BIN_EXE_snp")` (a compile-time Cargo-provided path) to locate the binary, ensuring the test always invokes the feature-enabled build. Tests clear test-control environment variables by default via `snp_cmd()` helper before adding specific seams.
+
+### K.4 Production Seam Proof
+
+`scripts/ci/test-production-seams.sh` builds `snp` without `test-support` and verifies:
+
+- `SNP_TEST_FAILPOINT=restore-after-prepared` does not abort
+- `SNP_TEST_EXECUTOR_MODE=noop-success` does not bypass executor
+- `SNP_SKIP_WORKER_SPAWN=1` does not suppress scheduling
+- `SNP_TEST_EVENTS_DIR` does not create event files
+- `SNP_TEST_MUTATION_BARRIER_DIR` does not block
+
+### K.5 Verification
+
+| Check | Status | Evidence |
+|---|---|---|
+| Production binary contains no env var test seams | Verified | `cargo build --release --no-default-features` + binary inspection |
+| Feature-enabled tests use correct binary | Verified | All 15 integration test files use `env!("CARGO_BIN_EXE_snp")` |
+| No `SNP_SKIP_WORKER_SPAWN` in CI-wide env | Verified | CI workflow sets no global worker suppression |
+| Production-seam CI job on Linux + Windows | Verified | `.github/workflows/ci.yml` production-seam job |
 
 ---
 
