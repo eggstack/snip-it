@@ -10,7 +10,7 @@ Corrective baseline: `164bd6130ca1cfb6734c02e63b9d5ac47928b2f7`
 
 Phase 11H plan commit: `3fc5eff25d323230871f5f5c001ffdfd5af1c6bd`
 
-Final implementation commit: pending
+Final implementation commit: `fa314fd`
 
 Release process: manual crates.io publishing
 
