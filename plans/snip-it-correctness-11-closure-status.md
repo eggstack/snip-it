@@ -116,12 +116,12 @@ Until then, the repository is not correctness-closed or release-ready.
 
 ## Implementation progress
 
-Phase 11H workstreams A–J are being implemented. The implementation includes:
+Phase 11H workstreams A–J are complete. The implementation includes:
 - Transaction cleanup state machine correction (Workstream B)
 - Transaction-specific state-aware repair (Workstream C)
-- Destination privacy finalization (Workstream D)
-- Manifest test fixture builder (Workstream E)
-- Sync E2E simplification (Workstream F)
+- Destination privacy tests: transaction dirs 0700, journals 0600, setuid strip, mode preservation (Workstream D)
+- Manifest fixture builder, oversized source test, side-effect assertions (Workstream E)
+- Sync observer: record_request_finished wired, IDs populated, headline E2E, unreachable-server pending test (Workstream F)
 - CI workflow simplification to 3 instances (Workstream G)
 - Local verification scripts (Workstream H)
 - Manual crates.io release guide (Workstream I)

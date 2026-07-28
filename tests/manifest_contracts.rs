@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use support::helpers::*;
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -12,6 +13,148 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{:02x}", b))
         .collect()
+}
+
+/// Assert that a rejected restore created no transaction artifacts,
+/// no pending marker, and no live destination writes.
+fn assert_no_side_effects(config_dir: &Path, _backup_dir: &Path) {
+    let txn_dir = config_dir.join(".transaction");
+    if txn_dir.exists() {
+        let entries: Vec<_> = fs::read_dir(&txn_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "transaction directory should be empty after rejection, found: {:?}",
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        !config_dir.join("auto-sync-pending.toml").exists(),
+        "no pending marker should exist after rejection"
+    );
+    // No live destination files should have been written.
+    let libraries_dir = config_dir.join("libraries");
+    if libraries_dir.exists() {
+        // It's OK if the directory existed before (from setup), but
+        // no new .toml files should have been created by restore.
+        // We check that default.toml (the backup's library) doesn't exist.
+        assert!(
+            !libraries_dir.join("default.toml").exists(),
+            "no live library should be written after rejection"
+        );
+    }
+    // libraries.toml (the index) should not have been written.
+    assert!(
+        !config_dir.join("libraries.toml").exists(),
+        "no live index should be written after rejection"
+    );
+}
+
+/// Shared fixture builder for manifest tests.
+///
+/// Creates a valid backup directory with exact sizes and SHA-256 hashes,
+/// allowing one targeted mutation per test case.
+#[allow(dead_code)]
+struct BackupFixture {
+    root: tempfile::TempDir,
+    backup_dir: PathBuf,
+    lib_content: String,
+    index_content: String,
+}
+
+#[allow(dead_code)]
+impl BackupFixture {
+    /// Create a valid replace-mode backup with one library and one index.
+    fn valid_replace() -> Self {
+        let root = tempfile::TempDir::new().unwrap();
+        let backup_dir = root.path().join("backup");
+        let libraries_dir = backup_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).unwrap();
+
+        let lib_content = r#"[[snippets]]
+id = "test-1"
+description = "test snippet"
+command = "echo test"
+"#;
+        fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+        let index_content = r#"[[libraries]]
+filename = "default"
+is_primary = true
+"#;
+        fs::write(backup_dir.join("libraries.toml"), index_content).unwrap();
+
+        let fixture = Self {
+            root,
+            backup_dir,
+            lib_content: lib_content.to_string(),
+            index_content: index_content.to_string(),
+        };
+        fixture.write_manifest();
+        fixture
+    }
+
+    /// Rewrite the index content and regenerate the manifest.
+    fn rewrite_index(&mut self, content: &str) {
+        self.index_content = content.to_string();
+        fs::write(self.backup_dir.join("libraries.toml"), content).unwrap();
+        self.write_manifest();
+    }
+
+    /// Add a library file and regenerate the manifest.
+    fn add_library(&mut self, name: &str, content: &str) {
+        let libraries_dir = self.backup_dir.join("libraries");
+        fs::create_dir_all(&libraries_dir).unwrap();
+        fs::write(libraries_dir.join(name), content).unwrap();
+        // Append to lib_content tracking for manifest generation.
+        // For simplicity, we just rewrite the manifest with all known files.
+        self.write_manifest();
+    }
+
+    /// Write the manifest with exact sizes and hashes for all known files.
+    fn write_manifest(&self) {
+        let libraries_dir = self.backup_dir.join("libraries");
+        let mut files_section = String::new();
+
+        // Add library files.
+        if libraries_dir.exists() {
+            for entry in fs::read_dir(&libraries_dir).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy().to_string();
+                let content = fs::read(entry.path()).unwrap();
+                let sha = sha256_hex(&content);
+                files_section.push_str(&format!(
+                    "[[files]]\npath = \"{name_str}\"\nkind = \"library\"\nsize = {}\nsha256 = \"{sha}\"\n\n",
+                    content.len(),
+                ));
+            }
+        }
+
+        // Add index.
+        let index_sha = sha256_hex(self.index_content.as_bytes());
+        files_section.push_str(&format!(
+            "[[files]]\npath = \"libraries.toml\"\nkind = \"index\"\nsize = {}\nsha256 = \"{index_sha}\"\n\n",
+            self.index_content.len(),
+        ));
+
+        let manifest = format!(
+            r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+{files_section}"#
+        );
+        fs::write(self.backup_dir.join("manifest.toml"), manifest).unwrap();
+    }
+
+    /// Path to the backup directory.
+    fn path(&self) -> &Path {
+        &self.backup_dir
+    }
 }
 
 /// Create a valid backup directory with a library and index, returning (backup_dir, tmp).
@@ -95,6 +238,7 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         !output.status.success(),
         "restore should reject unknown entry kind"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 2. Schema version zero ===
@@ -130,6 +274,7 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         !output.status.success(),
         "restore should reject schema version 0"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 3. Future schema version ===
@@ -165,6 +310,7 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         !output.status.success(),
         "restore should reject future schema version 999"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 4. Duplicate destination paths ===
@@ -206,6 +352,7 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         !output.status.success(),
         "restore should reject duplicate destination paths"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 5. Empty path ===
@@ -885,6 +1032,7 @@ sha256 = "{index_sha}"
         !output.status.success(),
         "restore should reject multiple primary libraries"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 20. Index references missing library artifact ===
@@ -913,6 +1061,7 @@ is_primary = false
         !output.status.success(),
         "restore should reject index references to missing library artifacts"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 21. Library artifact not referenced by index (replace mode) ===
@@ -984,6 +1133,7 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         !output.status.success(),
         "restore should reject unreferenced library in replace mode"
     );
+    assert_no_side_effects(&_config_dir, &backup_dir);
 }
 
 // === 22. No journal, artifact, pending, or live write on rejection ===
@@ -1052,18 +1202,55 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
         "restore should reject duplicate destinations"
     );
 
-    // Assert no transaction artifacts were created.
-    let txn_dir = config_dir.join(".transaction");
-    assert!(
-        !txn_dir.exists() || txn_dir.read_dir().unwrap().next().is_none(),
-        "no transaction directory should exist after manifest rejection"
+    assert_no_side_effects(&config_dir, &backup_dir);
+}
+
+// === 23. Oversized source ===
+
+/// A library file whose manifest-declared size exceeds MAX_RESTORE_SOURCE_SIZE
+/// (10 MiB) must be rejected before any transaction artifacts are created.
+#[test]
+fn test_rejects_oversized_source() {
+    let (tmp, config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    // Declare size as 11 MiB (exceeds 10 MiB limit).
+    let oversized_size = 11 * 1024 * 1024;
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = {oversized_size}
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+"#,
     );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .output()
+        .unwrap();
     assert!(
-        !config_dir.join("auto-sync-pending.toml").exists(),
-        "no pending marker should exist after manifest rejection"
+        !output.status.success(),
+        "restore should reject oversized source"
     );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !config_dir.join("libraries").join("default.toml").exists(),
-        "no live destination should be written after manifest rejection"
+        stderr.contains("exceeds maximum size") || stderr.contains("maximum"),
+        "stderr should mention size limit: {}",
+        stderr
     );
+
+    assert_no_side_effects(&config_dir, &backup_dir);
 }

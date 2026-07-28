@@ -417,6 +417,24 @@ impl SnipSyncService {
         }
     }
 
+    /// Update the last started request's authenticated IDs.
+    ///
+    /// Called after authentication resolves the user and device IDs.
+    /// Only active with `test-helpers` feature.
+    #[cfg_attr(not(feature = "test-helpers"), allow(unused_variables))]
+    pub fn update_request_ids(
+        &self,
+        method: &str,
+        user_id: Option<String>,
+        device_id: Option<String>,
+        library_id: Option<String>,
+    ) {
+        #[cfg(feature = "test-helpers")]
+        if let Some(ref obs) = self.test_observer {
+            obs.update_ids_for_last_method(method, user_id, device_id, library_id);
+        }
+    }
+
     pub fn record_request_duration(&self, method: &str, start: std::time::Instant) {
         let duration = start.elapsed().as_secs_f64();
         self.metrics
@@ -624,6 +642,7 @@ impl SnippetSync for SnipSyncService {
         tracing::debug!(request_id = %request_id, "Health check");
         let healthy = self.db.ping().await.is_ok();
         self.record_request_duration("health", start);
+        self.record_request_finished("health", healthy);
         Ok(Response::new(HealthResponse {
             healthy,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -671,6 +690,7 @@ impl SnippetSync for SnipSyncService {
         {
             self.record_rate_limit();
             self.record_request_duration("register", start);
+            self.record_request_finished("register", false);
             return Err(Status::resource_exhausted(
                 "Rate limit exceeded for registration",
             ));
@@ -689,6 +709,7 @@ impl SnippetSync for SnipSyncService {
                         device_id
                     );
                     self.record_request_duration("register", start);
+                    self.record_request_finished("register", false);
                     return Err(Status::internal(
                         "Internal error: invalid device ID generated",
                     ));
@@ -699,6 +720,7 @@ impl SnippetSync for SnipSyncService {
                     "Created new user"
                 );
                 self.record_request_duration("register", start);
+                self.record_request_finished("register", true);
                 Ok(Response::new(RegisterResponse {
                     success: true,
                     api_key,
@@ -709,6 +731,7 @@ impl SnippetSync for SnipSyncService {
             Err(e) => {
                 tracing::error!(request_id = %request_id, "Failed to create user: {}", e);
                 self.record_request_duration("register", start);
+                self.record_request_finished("register", false);
                 Err(Status::internal("Internal error"))
             }
         }
@@ -727,11 +750,15 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("get_snippets", false);
+            })?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
                 self.record_request_duration("get_snippets", start);
+                self.record_request_finished("get_snippets", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -742,6 +769,7 @@ impl SnippetSync for SnipSyncService {
                 .await
                 .map_err(|e| {
                     self.record_request_duration("get_snippets", start);
+                    self.record_request_finished("get_snippets", false);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -752,6 +780,7 @@ impl SnippetSync for SnipSyncService {
                     req.library_id
                 );
                 self.record_request_duration("get_snippets", start);
+                self.record_request_finished("get_snippets", false);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
@@ -770,6 +799,7 @@ impl SnippetSync for SnipSyncService {
             .await
             .map_err(|e| {
                 self.record_request_duration("get_snippets", start);
+                self.record_request_finished("get_snippets", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -793,11 +823,13 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("get_snippets", start);
 
-        Ok(Response::new(SnippetList {
+        let result = Ok(Response::new(SnippetList {
             snippets: proto_snippets,
             total_count: total,
             has_more,
-        }))
+        }));
+        self.record_request_finished("get_snippets", result.is_ok());
+        result
     }
 
     async fn push_snippets(
@@ -813,11 +845,15 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("push_snippets", false);
+            })?;
 
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
                 self.record_request_duration("push_snippets", start);
+                self.record_request_finished("push_snippets", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -828,6 +864,7 @@ impl SnippetSync for SnipSyncService {
                 .await
                 .map_err(|e| {
                     self.record_request_duration("push_snippets", start);
+                    self.record_request_finished("push_snippets", false);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -838,6 +875,7 @@ impl SnippetSync for SnipSyncService {
                     req.library_id
                 );
                 self.record_request_duration("push_snippets", start);
+                self.record_request_finished("push_snippets", false);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
@@ -845,6 +883,7 @@ impl SnippetSync for SnipSyncService {
 
         if req.snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
             self.record_request_duration("push_snippets", start);
+            self.record_request_finished("push_snippets", false);
             return Err(Status::invalid_argument(format!(
                 "Too many snippets in push request (max {}), got {}",
                 DEFAULT_MAX_SYNC_SNIPPETS,
@@ -857,6 +896,7 @@ impl SnippetSync for SnipSyncService {
 
         let mut tx = self.db.pool().begin().await.map_err(|e| {
             self.record_request_duration("push_snippets", start);
+            self.record_request_finished("push_snippets", false);
             tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -900,18 +940,21 @@ impl SnippetSync for SnipSyncService {
 
         tx.commit().await.map_err(|e| {
             self.record_request_duration("push_snippets", start);
+            self.record_request_finished("push_snippets", false);
             tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
             Status::internal("Internal error")
         })?;
 
         self.record_request_duration("push_snippets", start);
 
-        Ok(Response::new(PushSnippetsResponse {
+        let result = Ok(Response::new(PushSnippetsResponse {
             success: rejected == 0,
             message: format!("Accepted {}, rejected {}", accepted, rejected),
             accepted_count: accepted,
             rejected_count: rejected,
-        }))
+        }));
+        self.record_request_finished("push_snippets", result.is_ok());
+        result
     }
 
     async fn sync(&self, request: Request<SyncRequest>) -> Result<Response<SyncResponse>, Status> {
@@ -924,10 +967,14 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("sync", false);
+            })?;
 
         if req.local_snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
             self.record_request_duration("sync", start);
+            self.record_request_finished("sync", false);
             return Err(Status::invalid_argument(format!(
                 "Too many snippets in sync request (max {}), got {}",
                 DEFAULT_MAX_SYNC_SNIPPETS,
@@ -940,6 +987,7 @@ impl SnippetSync for SnipSyncService {
         let library_id = if req.library_id.is_empty() {
             self.db.get_default_library(&user_id).await.map_err(|e| {
                 self.record_request_duration("sync", start);
+                self.record_request_finished("sync", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?
@@ -950,6 +998,7 @@ impl SnippetSync for SnipSyncService {
                 .await
                 .map_err(|e| {
                     self.record_request_duration("sync", start);
+                    self.record_request_finished("sync", false);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -960,6 +1009,7 @@ impl SnippetSync for SnipSyncService {
                     req.library_id
                 );
                 self.record_request_duration("sync", start);
+                self.record_request_finished("sync", false);
                 return Err(Status::not_found("Library not found"));
             }
             req.library_id
@@ -969,6 +1019,7 @@ impl SnippetSync for SnipSyncService {
 
         let mut tx = self.db.pool().begin().await.map_err(|e| {
             self.record_request_duration("sync", start);
+            self.record_request_finished("sync", false);
             tracing::error!(request_id = %request_id, "Failed to begin transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -1018,6 +1069,7 @@ impl SnippetSync for SnipSyncService {
 
         tx.commit().await.map_err(|e| {
             self.record_request_duration("sync", start);
+            self.record_request_finished("sync", false);
             tracing::error!(request_id = %request_id, "Failed to commit transaction: {}", e);
             Status::internal("Internal error")
         })?;
@@ -1043,6 +1095,7 @@ impl SnippetSync for SnipSyncService {
             .await
             .map_err(|e| {
                 self.record_request_duration("sync", start);
+                self.record_request_finished("sync", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -1058,6 +1111,7 @@ impl SnippetSync for SnipSyncService {
                 .await
                 .map_err(|e| {
                     self.record_request_duration("sync", start);
+                    self.record_request_finished("sync", false);
                     tracing::error!("Internal error: {}", e);
                     Status::internal("Internal error")
                 })?
@@ -1090,7 +1144,7 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("sync", start);
 
-        Ok(Response::new(SyncResponse {
+        let result = Ok(Response::new(SyncResponse {
             success: true,
             message: if skipped_count > 0 {
                 format!("Sync completed, {} snippets skipped", skipped_count)
@@ -1103,7 +1157,9 @@ impl SnippetSync for SnipSyncService {
             skipped_ids,
             has_more,
             total_count: total,
-        }))
+        }));
+        self.record_request_finished("sync", result.is_ok());
+        result
     }
 
     async fn create_library(
@@ -1120,9 +1176,12 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("create_library", false);
+            })?;
 
-        match self.db.create_library(&user_id, &req.name).await {
+        let result = match self.db.create_library(&user_id, &req.name).await {
             Ok(lib_id) => {
                 tracing::info!("Created library '{}' for user {}", req.name, user_id);
                 self.record_request_duration("create_library", start);
@@ -1154,7 +1213,9 @@ impl SnippetSync for SnipSyncService {
                 self.record_request_duration("create_library", start);
                 Err(Status::internal("Internal error"))
             }
-        }
+        };
+        self.record_request_finished("create_library", result.is_ok());
+        result
     }
 
     async fn list_libraries(
@@ -1171,7 +1232,10 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("list_libraries", false);
+            })?;
 
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)
@@ -1186,6 +1250,7 @@ impl SnippetSync for SnipSyncService {
             .await
             .map_err(|e| {
                 self.record_request_duration("list_libraries", start);
+                self.record_request_finished("list_libraries", false);
                 tracing::error!("Internal error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -1204,11 +1269,13 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("list_libraries", start);
 
-        Ok(Response::new(ListLibrariesResponse {
+        let result = Ok(Response::new(ListLibrariesResponse {
             libraries: proto_libraries,
             total_count: total,
             has_more,
-        }))
+        }));
+        self.record_request_finished("list_libraries", result.is_ok());
+        result
     }
 
     async fn delete_library(
@@ -1225,18 +1292,23 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("delete_library", false);
+            })?;
 
         // Prevent deleting default library — resolve the actual UUID, not
         // the literal string "default" which is just the library name.
         if req.library_id.is_empty() || req.library_id == "default" {
             self.record_request_duration("delete_library", start);
+            self.record_request_finished("delete_library", false);
             return Err(Status::invalid_argument("Cannot delete default library"));
         }
         if let Ok(default_id) = self.db.get_default_library(&user_id).await
             && req.library_id == default_id
         {
             self.record_request_duration("delete_library", start);
+            self.record_request_finished("delete_library", false);
             return Err(Status::invalid_argument("Cannot delete default library"));
         }
 
@@ -1261,6 +1333,7 @@ impl SnippetSync for SnipSyncService {
             }
         };
         self.record_request_duration("delete_library", start);
+        self.record_request_finished("delete_library", result.is_ok());
         result
     }
 
@@ -1277,7 +1350,10 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("list_premade_libraries", false);
+            })?;
 
         let libraries = self.premade_manager.list();
 
@@ -1303,11 +1379,13 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("list_premade_libraries", start);
 
-        Ok(Response::new(ListPremadeLibrariesResponse {
+        let result = Ok(Response::new(ListPremadeLibrariesResponse {
             libraries: proto_libraries,
             has_more: false,
             total_count: count,
-        }))
+        }));
+        self.record_request_finished("list_premade_libraries", result.is_ok());
+        result
     }
 
     async fn get_premade_library(
@@ -1323,16 +1401,21 @@ impl SnippetSync for SnipSyncService {
 
         let user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("get_premade_library", false);
+            })?;
 
         if req.filename.is_empty() {
             self.record_request_duration("get_premade_library", start);
+            self.record_request_finished("get_premade_library", false);
             return Err(Status::invalid_argument("Filename is required"));
         }
 
         if req.filename.contains("..") || req.filename.contains('/') || req.filename.contains('\\')
         {
             self.record_request_duration("get_premade_library", start);
+            self.record_request_finished("get_premade_library", false);
             return Err(Status::invalid_argument("Invalid filename"));
         }
 
@@ -1344,10 +1427,12 @@ impl SnippetSync for SnipSyncService {
 
         if sanitized.is_empty() || sanitized.len() > 64 {
             self.record_request_duration("get_premade_library", start);
+            self.record_request_finished("get_premade_library", false);
             return Err(Status::invalid_argument("Invalid filename"));
         }
         if sanitized != req.filename {
             self.record_request_duration("get_premade_library", start);
+            self.record_request_finished("get_premade_library", false);
             return Err(Status::invalid_argument("Invalid filename"));
         }
 
@@ -1355,6 +1440,7 @@ impl SnippetSync for SnipSyncService {
             Ok(c) => c,
             Err(e) => {
                 self.record_request_duration("get_premade_library", start);
+                self.record_request_finished("get_premade_library", false);
                 return Err(e);
             }
         };
@@ -1363,12 +1449,14 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("get_premade_library", start);
 
-        Ok(Response::new(GetPremadeLibraryResponse {
+        let result = Ok(Response::new(GetPremadeLibraryResponse {
             success: true,
             name: sanitized.clone(),
             content,
             message: "Library fetched successfully".to_string(),
-        }))
+        }));
+        self.record_request_finished("get_premade_library", result.is_ok());
+        result
     }
 
     async fn search_premade_libraries(
@@ -1384,10 +1472,14 @@ impl SnippetSync for SnipSyncService {
 
         let _user_id = self
             .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
-            .await?;
+            .await
+            .inspect_err(|_| {
+                self.record_request_finished("search_premade_libraries", false);
+            })?;
 
         if req.query.is_empty() {
             self.record_request_duration("search_premade_libraries", start);
+            self.record_request_finished("search_premade_libraries", false);
             return Err(Status::invalid_argument("Query is required"));
         }
 
@@ -1415,10 +1507,12 @@ impl SnippetSync for SnipSyncService {
 
         self.record_request_duration("search_premade_libraries", start);
 
-        Ok(Response::new(SearchPremadeLibrariesResponse {
+        let result = Ok(Response::new(SearchPremadeLibrariesResponse {
             libraries: proto_libraries,
             total_count: count,
-        }))
+        }));
+        self.record_request_finished("search_premade_libraries", result.is_ok());
+        result
     }
 }
 

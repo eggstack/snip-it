@@ -88,6 +88,17 @@ pub trait TestRequestObserver: Send + Sync {
     fn last_started_sequence_for_method(&self, _method: &str) -> u64 {
         0
     }
+
+    /// Update the IDs of the most recent request for the given method.
+    /// Default is a no-op.
+    fn update_ids_for_last_method(
+        &self,
+        _method: &str,
+        _user_id: Option<String>,
+        _device_id: Option<String>,
+        _library_id: Option<String>,
+    ) {
+    }
 }
 
 /// Default in-memory observer used by `RecordingServer`.
@@ -198,6 +209,21 @@ impl TestRequestObserver for InMemoryObserver {
             .find(|s| s.method == method)
             .map(|s| s.sequence)
             .unwrap_or(0)
+    }
+
+    fn update_ids_for_last_method(
+        &self,
+        method: &str,
+        user_id: Option<String>,
+        device_id: Option<String>,
+        library_id: Option<String>,
+    ) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(start) = inner.starts.iter_mut().rev().find(|s| s.method == method) {
+            start.authenticated_user_id = user_id;
+            start.authenticated_device_id = device_id;
+            start.target_library_id = library_id;
+        }
     }
 
     fn request_started(&self, event: RequestStarted) {

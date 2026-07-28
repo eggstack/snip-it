@@ -52,6 +52,12 @@ cargo test --test update_archive_security --features test-support
 cargo test --test readonly_no_recovery --features test-support
 cargo test --test canary_nonexecution --features test-support
 
+# Run Phase 11H test suites (requires test-support feature)
+cargo test --test destination_permissions --features test-support
+cargo test --test manifest_contracts --features test-support
+cargo test --test deterministic_e2e --features test-support -- --test-threads=1
+cargo test -p snip-sync --features test-helpers
+
 # Run Phase 11E test suites (requires test-support feature)
 cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
 cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
