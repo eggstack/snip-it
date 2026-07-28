@@ -970,21 +970,34 @@ pub fn finalize_transaction_cleanup(
         }
 
         // Failpoints for crash testing during cleanup.
-        if position == 0 {
-            crate::test_failpoints::maybe_failpoint(
-                crate::test_failpoints::failpoints::CLEANUP_DURING_STAGED_REMOVAL,
-            );
-        }
-        if position == 2 {
-            crate::test_failpoints::maybe_failpoint(
-                crate::test_failpoints::failpoints::CLEANUP_DURING_DIR_REMOVAL,
-            );
+        // Each fires AFTER the journal has been persisted at the named
+        // step but BEFORE the step body executes.
+        match position {
+            0 => {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_STATE_BEFORE_VALIDATION,
+                );
+            }
+            1 => {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_STAGED_BEFORE_BACKUPS,
+                );
+            }
+            2 => {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_BACKUPS_BEFORE_ARTIFACT_ROOT,
+                );
+            }
+            _ => {}
         }
 
         match position {
             0 => {
                 // Validate artifact containment before any deletion.
                 validate_artifact_containment(state_dir, journal)?;
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_VALIDATION_BEFORE_STAGED,
+                );
                 // Remove staged files.
                 remove_all_staged_files(journal)?;
             }
@@ -997,6 +1010,9 @@ pub fn finalize_transaction_cleanup(
                 remove_empty_transaction_artifact_dir(state_dir, &journal.id)?;
             }
             3 => {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_ARTIFACT_ROOT_BEFORE_JOURNAL,
+                );
                 // Remove the journal file last.
                 let jpath = journal_path(state_dir, &journal.id);
                 if jpath.exists() {
@@ -1013,6 +1029,9 @@ pub fn finalize_transaction_cleanup(
                 continue;
             }
             4 => {
+                crate::test_failpoints::maybe_failpoint(
+                    crate::test_failpoints::failpoints::CLEANUP_AFTER_JOURNAL_BEFORE_PARENT_SYNC,
+                );
                 // Fsync the parent directory to durably record the removal.
                 let jpath = journal_path(state_dir, &journal.id);
                 fsync_parent_dir(&jpath)?;

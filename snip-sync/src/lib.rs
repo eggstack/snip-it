@@ -23,6 +23,7 @@ pub mod process;
 pub mod rate_limiter;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
+pub mod test_observer;
 
 pub use db::Database;
 pub use metrics::Metrics;
@@ -365,6 +366,11 @@ pub struct SnipSyncService {
     /// (catching the auth-header regression where `request.api_key` was
     /// read instead of the caller's API key).
     pub captured_auth_header: Arc<std::sync::Mutex<Option<String>>>,
+    /// Test-only: optional request observer for telemetry tests.
+    /// When set, `record_request` and `record_request_finished` emit
+    /// sanitized events to the observer.
+    #[cfg(feature = "test-helpers")]
+    pub test_observer: Option<Arc<dyn crate::test_observer::TestRequestObserver>>,
 }
 
 impl SnipSyncService {
@@ -374,6 +380,41 @@ impl SnipSyncService {
             .with_label_values(&[method])
             .inc();
         tracing::trace!("Request: {}", method);
+        #[cfg(feature = "test-helpers")]
+        if let Some(ref obs) = self.test_observer {
+            use crate::test_observer::{RequestStarted, now_millis, operation_name_for_method};
+            let sequence = obs.allocate_sequence();
+            let concurrent = obs.current_concurrent();
+            obs.request_started(RequestStarted {
+                sequence,
+                started_at_unix_ms: now_millis(),
+                method: method.to_string(),
+                operation: operation_name_for_method(method).to_string(),
+                authenticated_user_id: None,
+                authenticated_device_id: None,
+                target_library_id: None,
+                request_revision: None,
+                payload_len: 0,
+                payload_sha256: String::new(),
+                payload_contains_plaintext_sentinel: false,
+                concurrent_at_start: concurrent,
+            });
+        }
+    }
+
+    #[cfg_attr(not(feature = "test-helpers"), allow(unused_variables))]
+    pub fn record_request_finished(&self, method: &str, success: bool) {
+        #[cfg(feature = "test-helpers")]
+        if let Some(ref obs) = self.test_observer {
+            use crate::test_observer::RequestFinished;
+            let sequence = obs.last_started_sequence_for_method(method);
+            obs.request_finished(RequestFinished {
+                sequence,
+                finished_at_unix_ms: crate::test_observer::now_millis(),
+                success,
+                response_revision: None,
+            });
+        }
     }
 
     pub fn record_request_duration(&self, method: &str, start: std::time::Instant) {
@@ -1431,6 +1472,7 @@ mod tests {
             metrics,
             premade_manager,
             captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
+            test_observer: None,
         }
     }
 

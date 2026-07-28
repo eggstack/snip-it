@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use snip_it::sync::SyncClient;
-use snip_sync::test_helpers::{build_test_service, start_test_server};
+use snip_sync::test_helpers::{build_test_service_with_observer, start_test_server};
 
 /// Events captured by the recording server during test execution.
 #[allow(dead_code)]
@@ -118,13 +118,18 @@ pub struct RecordingServer {
     failure_mode: Arc<Mutex<FailureMode>>,
     request_count: Arc<Mutex<usize>>,
     db: Arc<snip_sync::db::Database>,
+    observer: Arc<snip_sync::test_observer::InMemoryObserver>,
 }
 
 #[allow(dead_code)]
 impl RecordingServer {
     /// Starts a new recording server on a random port.
     pub async fn start() -> Self {
-        let service = build_test_service().await;
+        let observer = snip_sync::test_observer::InMemoryObserver::shared();
+        let service = build_test_service_with_observer(Some(
+            observer.clone() as Arc<dyn snip_sync::test_observer::TestRequestObserver>
+        ))
+        .await;
         let db = service.db.clone();
         let captured_auth_header = service.captured_auth_header.clone();
         let (addr, server_task, _captured) = start_test_server(service).await;
@@ -138,6 +143,7 @@ impl RecordingServer {
             failure_mode: Arc::new(Mutex::new(FailureMode::None)),
             request_count: Arc::new(Mutex::new(0)),
             db,
+            observer,
         }
     }
 
@@ -159,6 +165,18 @@ impl RecordingServer {
     /// Access the server task handle for abort.
     pub fn server_task(&self) -> &tokio::task::JoinHandle<()> {
         &self.server_task
+    }
+
+    /// Returns a reference to the in-memory observer wired into the
+    /// server for telemetry assertions.
+    pub fn observer(&self) -> &Arc<snip_sync::test_observer::InMemoryObserver> {
+        &self.observer
+    }
+
+    /// Maximum number of concurrent in-flight requests observed by the
+    /// server's telemetry observer.
+    pub fn max_concurrent_requests(&self) -> usize {
+        self.observer.max_concurrent()
     }
 
     /// Returns all captured events.
@@ -342,6 +360,9 @@ impl RecordingServer {
     }
 
     /// Returns an exact summary of all recorded requests.
+    ///
+    /// Merges manually recorded requests with observer events so that
+    /// telemetry-driven evidence is surfaced through a single query.
     pub fn summary(&self) -> RecordingSummary {
         let requests = self.recorded_requests.lock().unwrap();
         let mut by_operation: std::collections::HashMap<String, usize> =
@@ -352,8 +373,19 @@ impl RecordingServer {
             *by_operation.entry(req.operation.clone()).or_insert(0) += 1;
             *by_success.entry(req.success).or_insert(0) += 1;
         }
+
+        // Merge in observer events for telemetry-driven tests.
+        let starts = self.observer.starts();
+        for event in &starts {
+            *by_operation.entry(event.operation.clone()).or_insert(0) += 1;
+        }
+        let finishes = self.observer.finishes();
+        for event in &finishes {
+            *by_success.entry(event.success).or_insert(0) += 1;
+        }
+
         RecordingSummary {
-            total_requests: requests.len(),
+            total_requests: requests.len() + starts.len(),
             by_operation,
             by_success,
         }

@@ -57,6 +57,52 @@ pub async fn build_test_service() -> SnipSyncService {
         metrics,
         premade_manager,
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
+        test_observer: None,
+    }
+}
+
+/// Builds a `SnipSyncService` pre-configured for in-process testing
+/// with an optional request observer wired in.
+pub async fn build_test_service_with_observer(
+    observer: Option<Arc<dyn crate::test_observer::TestRequestObserver>>,
+) -> SnipSyncService {
+    let db = Arc::new(Database::connect("sqlite::memory:", 5).await.unwrap());
+    let config = Config {
+        grpc_host: "127.0.0.1".to_string(),
+        grpc_port: 0,
+        http_host: "127.0.0.1".to_string(),
+        http_port: 0,
+        db_path: "sqlite::memory:".to_string(),
+        db_max_connections: 5,
+        premade_dir: PathBuf::from("premade-libraries"),
+        max_command_length: 1024,
+        max_description_length: 1024,
+        max_tags: 50,
+        max_tag_length: 100,
+        max_id_length: 128,
+        max_device_id_length: 128,
+        max_api_key_length: 512,
+        request_timeout_secs: 30,
+        grpc_max_message_size: 4 * 1024 * 1024,
+        rate_limit_per_minute: 120,
+        trusted_proxies: vec![],
+        persist_rate_limits: false,
+        metrics_username: None,
+        metrics_password: None,
+        cors_allowed_origins: vec![],
+    };
+    let metrics = Metrics::fallback();
+    let rate_limiter = Arc::new(RateLimiter::new());
+    let premade_manager = PremadeManager::new(PathBuf::from("premade-libraries"));
+
+    SnipSyncService {
+        db,
+        rate_limiter,
+        config,
+        metrics,
+        premade_manager,
+        captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
+        test_observer: observer,
     }
 }
 

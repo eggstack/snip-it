@@ -202,6 +202,8 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         metrics,
         premade_manager,
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
+        #[cfg(feature = "test-helpers")]
+        test_observer: None,
     };
 
     let cors_allow_all = std::env::var("CORS_ALLOW_ALL")

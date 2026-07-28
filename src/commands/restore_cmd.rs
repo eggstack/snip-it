@@ -1344,13 +1344,30 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     e,
                                 )
                             })?;
-                            let opts =
-                                AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                            // Use SensitiveConfig for new files to get 0o600;
+                            // DurableUserData for existing files (permissions restored below).
+                            let existed_before = dst.exists();
+                            let dest_class =
+                                DestinationClass::for_destination(existed_before, true);
+                            let opts = match dest_class {
+                                DestinationClass::NewPrivate => {
+                                    AtomicWriteOptions::for_durability(Durability::SensitiveConfig)
+                                }
+                                _ => {
+                                    AtomicWriteOptions::for_durability(Durability::DurableUserData)
+                                        .preserve_permissions(true)
+                                }
+                            };
                             atomic_replace(&dst, &bytes, &opts)?;
-                            crate::transaction::apply_original_metadata(
-                                &dst,
-                                &staged.original_metadata,
-                            )?;
+                            // Only restore metadata for existing files (non-NewPrivate).
+                            // NewPrivate files get 0o600 from SensitiveConfig; restoring
+                            // metadata would overwrite that with the default 0o644.
+                            if !matches!(dest_class, DestinationClass::NewPrivate) {
+                                crate::transaction::apply_original_metadata(
+                                    &dst,
+                                    &staged.original_metadata,
+                                )?;
+                            }
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -1363,7 +1380,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
-                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
+                            if !matches!(dest_class, DestinationClass::NewPrivate) {
+                                crate::transaction::verify_metadata(
+                                    &dst,
+                                    &staged.original_metadata,
+                                )?;
+                            }
                             report.files_restored += 1;
                         }
                         BackupEntryKind::Usage => {
@@ -1375,13 +1397,28 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     e,
                                 )
                             })?;
-                            let opts =
-                                AtomicWriteOptions::for_durability(Durability::DurableUserData);
+                            // Use SensitiveConfig for new files to get 0o600;
+                            // DurableUserData for existing files (permissions restored below).
+                            let existed_before = dst.exists();
+                            let dest_class =
+                                DestinationClass::for_destination(existed_before, true);
+                            let opts = match dest_class {
+                                DestinationClass::NewPrivate => {
+                                    AtomicWriteOptions::for_durability(Durability::SensitiveConfig)
+                                }
+                                _ => {
+                                    AtomicWriteOptions::for_durability(Durability::DurableUserData)
+                                        .preserve_permissions(true)
+                                }
+                            };
                             atomic_replace(&dst, &bytes, &opts)?;
-                            crate::transaction::apply_original_metadata(
-                                &dst,
-                                &staged.original_metadata,
-                            )?;
+                            // Only restore metadata for existing files (non-NewPrivate).
+                            if !matches!(dest_class, DestinationClass::NewPrivate) {
+                                crate::transaction::apply_original_metadata(
+                                    &dst,
+                                    &staged.original_metadata,
+                                )?;
+                            }
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -1394,7 +1431,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
-                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
+                            if !matches!(dest_class, DestinationClass::NewPrivate) {
+                                crate::transaction::verify_metadata(
+                                    &dst,
+                                    &staged.original_metadata,
+                                )?;
+                            }
                             report.files_restored += 1;
                         }
                         BackupEntryKind::SyncConfig => {
@@ -1409,10 +1451,8 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             let opts =
                                 AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
                             atomic_replace(&dst, &bytes, &opts)?;
-                            crate::transaction::apply_original_metadata(
-                                &dst,
-                                &staged.original_metadata,
-                            )?;
+                            // SyncConfig always uses SensitiveConfig (0o600).
+                            // Skip apply_original_metadata to preserve 0o600.
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -1425,7 +1465,6 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
-                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
                             report.conflicts.push(RestoreConflict {
                                 library: "sync".to_string(),
                                 kind: "redacted_key".to_string(),

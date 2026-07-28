@@ -105,6 +105,14 @@ pub mod failpoints {
         "restore-after-journal-pending-before-cleanup";
     pub const RESTORE_DURING_FIRST_ROLLBACK: &str = "restore-during-first-rollback";
     pub const RESTORE_DURING_SECOND_ROLLBACK: &str = "restore-during-second-rollback";
-    pub const CLEANUP_DURING_STAGED_REMOVAL: &str = "cleanup-during-staged-removal";
-    pub const CLEANUP_DURING_DIR_REMOVAL: &str = "cleanup-during-dir-removal";
+    pub const CLEANUP_AFTER_STATE_BEFORE_VALIDATION: &str = "cleanup-after-state-before-validation";
+    pub const CLEANUP_AFTER_VALIDATION_BEFORE_STAGED: &str =
+        "cleanup-after-validation-before-staged";
+    pub const CLEANUP_AFTER_STAGED_BEFORE_BACKUPS: &str = "cleanup-after-staged-before-backups";
+    pub const CLEANUP_AFTER_BACKUPS_BEFORE_ARTIFACT_ROOT: &str =
+        "cleanup-after-backups-before-artifact-root";
+    pub const CLEANUP_AFTER_ARTIFACT_ROOT_BEFORE_JOURNAL: &str =
+        "cleanup-after-artifact-root-before-journal";
+    pub const CLEANUP_AFTER_JOURNAL_BEFORE_PARENT_SYNC: &str =
+        "cleanup-after-journal-before-parent-sync";
 }
