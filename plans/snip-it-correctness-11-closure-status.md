@@ -4,100 +4,112 @@ Phase 11 status: INCOMPLETE
 
 Correctness program status: REOPENED
 
-Blocking plan: `plans/snip-it-correctness-11g-final-cleanup-permission-telemetry-and-proof-closure.md`
+Blocking plan: `plans/snip-it-correctness-11h-ci-simplification-local-verification-and-manual-release.md`
 
-Corrective baseline: `5f430b0a5fca2b1fce486b50445337826358a3f6`
+Corrective baseline: `164bd6130ca1cfb6734c02e63b9d5ac47928b2f7`
 
-Phase 11G plan commit: `04420a8441e39a4390e29a49947a7c78e94b2856`
+Phase 11H plan commit: `3fc5eff25d323230871f5f5c001ffdfd5af1c6bd`
 
 Final implementation commit: pending
 
-Final workflow evidence: pending
+Release process: manual crates.io publishing
 
 ## Current assessment
 
-Phase 11F materially improved sync outcome classification, pending finalization, private transaction artifact creation, manifest validation, concurrent backup testing, typed repair scaffolding, production-seam scripts, and CI structure.
+Phase 11G partially landed. The current implementation includes useful cleanup failpoints, crash-test scaffolding, private destination handling, and test request-observer infrastructure.
 
-Phase 11F did not complete the correctness program. Direct review of implementation commit `5f430b0a5fca2b1fce486b50445337826358a3f6` identified remaining production correctness, security, recovery, repair, test-proof, and evidence gaps. Phase 11G is the authoritative handoff for those residual defects and supersedes Phase 11F for release-closure decisions.
+Phase 11 remains open because production transaction cleanup and repair are not fully correct. The current CI and evidence model is also disproportionate to this repository and materially impedes iteration.
 
-The architecture remains intentionally unchanged:
+Phase 11H is the authoritative handoff for both remaining correctness work and verification/release simplification. It supersedes Phase 11G for all remaining-work, CI, closure, and release-process decisions.
 
-- one installed `snp` binary;
-- one-shot detached worker and executor subprocesses;
-- no daemon or resident helper;
+The architecture remains intentionally lightweight:
+
+- one installed `snp` client binary;
+- one `snip-sync` server binary;
+- one-shot worker and executor subprocesses;
+- no resident client daemon;
 - TOML remains authoritative local state;
-- pending clear remains executor-owned and generation-conditional.
+- pending clear remains executor-owned and generation-conditional;
+- releases are published manually to crates.io.
 
-## Materially completed work that should be preserved
+## Materially completed work to preserve
 
-1. test-only failpoints, executor modes, event sinks, worker suppression, and mutation barriers are compile-time gated behind `test-support` in production code;
-2. pending finalization uses typed states rather than generation zero as an unknown sentinel;
-3. transaction lock ownership observes the recorded PID and process start token conservatively;
-4. restore uses per-transaction staged and backup artifact directories;
-5. commit progress is persisted after verified live writes;
-6. rollback progress uses rollback-order coordinates and has real subprocess crash coverage;
-7. pending clear occurs in the executor after protocol success;
-8. executor exit zero with unchanged pending generation is classified as non-success;
-9. manifest schema, layout, path-shape, collision, size, and hash checks are substantially improved;
-10. the CI workflow contains Linux, macOS, Windows, production-seam, transaction, release-blocking, and packaging jobs.
+1. test-only failpoints, executor modes, event sinks, worker suppression, and barriers are compile-time gated;
+2. pending finalization uses typed states rather than generation-zero sentinels;
+3. restore uses per-transaction staged and backup artifacts;
+4. commit and rollback progress are persisted after verified operations;
+5. pending clear occurs after executor protocol success;
+6. false executor success with unchanged pending generation is classified as non-success;
+7. restore schema, path, collision, size, and checksum validation is substantially improved;
+8. new restored libraries, index, usage, and sync files have private handling in the current implementation;
+9. cleanup crash and permission test scaffolding exists;
+10. a test request observer is wired into the sync server test-helper surface.
 
-These areas may be corrected where Phase 11G identifies a specific defect, but they should not be redesigned broadly.
+These areas may be corrected narrowly but should not be redesigned broadly.
 
-## Remaining release blockers
+## Remaining correctness blockers
 
-### 1. Cleanup ownership and recovery
+### 1. Cleanup ownership
 
-Commit and rollback still persist terminal states before cleanup ownership is durably represented. A crash in that interval can leave terminal journals with artifacts that startup recovery ignores. Cleanup step coordinates are also inconsistent across code and documentation.
+New commit and rollback paths still persist terminal `Committed` or `RolledBack` state before restartable cleanup ownership is durable. A crash in that interval can leave terminal journals with artifacts that startup recovery ignores.
 
-Required closure is defined in Phase 11G Workstreams B and C.
+Phase 11H Workstream B defines the required typed cleanup outcome/step model and legacy-journal handling.
 
-### 2. Destination permission policy
+### 2. Repair behavior
 
-The explicit private new-file policy is fully wired only for libraries. New index, usage, and sync-config destinations can still reach an implicit `0644` metadata fallback. Exact mode and permission-failure tests are incomplete.
+Repair remains incomplete and must become transaction-specific and state-aware. Cleanup-pending and committed-local transactions must not be handled by generic rollback. Partial repair failure must return a nonzero process exit.
 
-Required closure is defined in Phase 11G Workstreams D and E.
+Phase 11H Workstream C defines closure.
 
-### 3. Manifest proof quality
+### 3. Permission closure
 
-Several semantic tests still contain stale sizes, stale hashes, dummy hashes, or multiple simultaneous defects. These tests can pass before reaching the semantic rule named by the test. No-side-effect assertions are not applied uniformly.
+The private destination policy should be retained and verified with a focused Unix test contract. No new restored state file may fall back to an implicit `0644`, and `sync.toml` must remain private.
 
-Required closure is defined in Phase 11G Workstream F.
+Phase 11H Workstream D defines closure.
 
-### 4. Production-seam validity
+### 4. Manifest proof quality
 
-The restore seam proof uses dry-run, the worker-suppression proof disables auto-sync, and executor/event/barrier proofs do not yet demonstrate every exact guarded path with valid state.
+Remaining semantic fixtures must compute exact sizes and hashes and contain one targeted defect. Every rejected restore must prove no journal, artifacts, pending marker, or live mutation.
 
-Required closure is defined in Phase 11G Workstream G.
+Phase 11H Workstream E defines closure.
 
-### 5. Real request telemetry
+### 5. Sync functional proof
 
-The recording helper defines manual request-recording structures, but those structures are not connected to the actual server handler path. The headline E2E still discards capture data and does not prove exact request count, identity, revision, payload properties, maximum concurrency, or acknowledgement ordering.
+Keep one strong real sync end-to-end test proving one remote operation, remote state change, pending clear after success, maximum concurrency one, and no duplicate after a quiet period. Do not expand this into a generalized telemetry framework.
 
-Required closure is defined in Phase 11G Workstream H.
+Phase 11H Workstream F defines closure.
 
-### 6. State-aware repair and process exit
+## CI and release decision
 
-Repair items are not transaction-specific. Applying a rollback repair can process every interrupted journal, including cleanup-pending or committed-local transactions that must not be rolled back. Partial repair failure is calculated but discarded by the CLI, leaving exit code zero.
+The current GitHub Actions workflow is overbuilt. It repeats broad test suites across operating systems, profiles, specialized matrices, package jobs, production-seam jobs, and evidence jobs.
 
-Required closure is defined in Phase 11G Workstream I.
+Phase 11H replaces this with:
 
-### 7. Adversarial and cross-platform evidence
+- one Linux correctness job containing format, clippy, build, and the full normal test suite once;
+- one macOS/Windows smoke matrix containing workspace checks, library tests, and a small CLI smoke suite;
+- three runner instances total per push or pull request;
+- deep crash, production-seam, release-profile, and package checks run locally before release;
+- no GitHub Actions publishing;
+- no crates.io credential in GitHub;
+- manual crates.io publishing documented in `RELEASING.md`.
 
-Cleanup-boundary crash tests, second-crash cleanup recovery, exact artifact-mode tests, permission-failure tests, and same-commit Linux/macOS/Windows evidence remain pending.
-
-Required closure is defined in Phase 11G Workstreams C, E, and J.
+Exact workflow URLs, package matrices, release-profile matrices, and evidence registries are no longer Phase 11 closure requirements.
 
 ## Closure rule
 
 Phase 11 may be marked `COMPLETE` and the correctness program `CLOSED` only when:
 
-- every release-blocking Phase 11G acceptance criterion is implemented;
-- focused adversarial tests pass;
-- full dev and release suites pass on Linux, macOS, and Windows;
-- production-seam jobs pass on Linux and Windows;
-- package/install smoke passes on Linux, macOS, and Windows;
-- all evidence refers to one exact final commit;
-- exact workflow and job URLs are recorded here;
-- no implementation or evidence item remains pending.
+- cleanup ownership is durable before terminal state;
+- legacy terminal journals with artifacts recover safely;
+- repair is transaction-specific and state-aware;
+- partial repair failure exits nonzero;
+- private destination and artifact tests pass;
+- focused manifest tests are single-fault and side-effect-free;
+- one real sync E2E proves the core pending/remote invariant;
+- `scripts/check.sh` and `scripts/release-check.sh` exist and pass locally;
+- the simplified three-instance CI passes;
+- `RELEASING.md` documents manual dependency-ordered crates.io publishing;
+- no automated publish or GitHub release workflow exists;
+- no known production correctness blocker remains.
 
 Until then, the repository is not correctness-closed or release-ready.
