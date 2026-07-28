@@ -41,6 +41,8 @@ fn test_noop_success_executor_mode() {
         "auto-sync-execute",
         "--state-dir",
         env.state_dir.to_str().unwrap(),
+        "--generation",
+        "1",
     ]);
     cmd.env("SNP_TEST_EXECUTOR_MODE", "noop-success");
     cmd.env("SNP_TEST_EVENTS_DIR", &env.state_dir);
@@ -98,6 +100,8 @@ fn test_normal_executor_mode_fails_without_server() {
         "auto-sync-execute",
         "--state-dir",
         env.state_dir.to_str().unwrap(),
+        "--generation",
+        "1",
     ]);
     cmd.env("SNP_TEST_EVENTS_DIR", &env.state_dir);
     // Do NOT set SNP_TEST_EXECUTOR_MODE — use normal mode.
@@ -142,6 +146,8 @@ fn test_invalid_executor_mode_is_ignored() {
         "auto-sync-execute",
         "--state-dir",
         env.state_dir.to_str().unwrap(),
+        "--generation",
+        "1",
     ]);
     cmd.env("SNP_TEST_EXECUTOR_MODE", "invalid-mode");
     cmd.env("SNP_TEST_EVENTS_DIR", &env.state_dir);
