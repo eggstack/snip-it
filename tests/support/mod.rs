@@ -12,6 +12,14 @@ pub mod helpers {
     pub fn snp_cmd() -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_snp"));
         cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        // Clear test-control variables by default so child processes don't
+        // inherit them from the test runner's environment.
+        cmd.env_remove("SNP_TEST_FAILPOINT");
+        cmd.env_remove("SNP_TEST_EXECUTOR_MODE");
+        cmd.env_remove("SNP_SKIP_WORKER_SPAWN");
+        cmd.env_remove("SNP_TEST_EVENTS_DIR");
+        cmd.env_remove("SNP_TEST_INJECT_ERROR");
+        cmd.env_remove("SNP_TEST_MUTATION_BARRIER_DIR");
         cmd
     }
 

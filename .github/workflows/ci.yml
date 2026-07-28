@@ -38,6 +38,54 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # Production seam proof — verifies that a binary built without test-support
+  # cannot be influenced by test-only environment variables.
+  # Runs on Linux and Windows minimum (macOS is optional per the plan).
+  production-seam:
+    name: Production Seam (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+
+      - name: Install protoc (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-protoc.sh
+        env:
+          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-seam
+
+      - name: Build production binary (no test-support)
+        shell: bash
+        timeout-minutes: 15
+        run: cargo build --release --no-default-features --target-dir target/production-seam
+
+      - name: Run production seam proof (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        timeout-minutes: 10
+        run: bash scripts/ci/test-production-seams.sh
+
+      - name: Run production seam proof (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: pwsh -File scripts/ci/test-production-seams.ps1
+
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
@@ -162,6 +210,16 @@ jobs:
         timeout-minutes: 20
         run: cargo test --test sync_contracts --features test-support -- --test-threads=1
 
+      - name: Auto sync lifecycle
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test auto_sync_lifecycle --features test-support -- --test-threads=1
+
+      - name: Executor noop success
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test executor_noop_success --features test-support -- --test-threads=1
+
   # Transaction crash recovery and backup/restore contract tests on all
   # platforms. These prove the production transaction protocol, manifest
   # validation, and backup coherence.
@@ -217,6 +275,11 @@ jobs:
         shell: bash
         timeout-minutes: 20
         run: cargo test --test manifest_contracts --features test-support -- --test-threads=1
+
+      - name: Local data lock barriers
+        shell: bash
+        timeout-minutes: 20
+        run: cargo test --test local_data_lock_barriers --features test-support -- --test-threads=1
 
   package:
     name: Package (${{ matrix.os }})

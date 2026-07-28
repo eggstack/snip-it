@@ -47,6 +47,15 @@ impl TestEnvironment {
             self.home_dir.join(".config").to_str().unwrap(),
         );
         cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        // Clear test-control variables by default so child processes don't
+        // inherit them from the test runner's environment. Individual tests
+        // add back only the specific seam they need.
+        cmd.env_remove("SNP_TEST_FAILPOINT");
+        cmd.env_remove("SNP_TEST_EXECUTOR_MODE");
+        cmd.env_remove("SNP_SKIP_WORKER_SPAWN");
+        cmd.env_remove("SNP_TEST_EVENTS_DIR");
+        cmd.env_remove("SNP_TEST_INJECT_ERROR");
+        cmd.env_remove("SNP_TEST_MUTATION_BARRIER_DIR");
         // Test credential file: ensures deterministic credential availability
         // for parent, worker, and executor subprocesses. Bypasses keychain
         // entirely so the executor uses the real API key, not @keychain.

@@ -210,6 +210,24 @@ fn default_action() -> StagedAction {
     StagedAction::Replace
 }
 
+/// Pending finalization state for `CommittedLocal`.
+///
+/// Replaces the sentinel `pending_generation: 0` + `pending_recorded: bool`
+/// pattern with an explicit typed model. Unknown is not encoded as a valid
+/// generation — `NotRecorded` is a distinct variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PendingFinalization {
+    /// No pending marker has been durably recorded yet.
+    NotRecorded,
+    /// A transaction-associated pending marker has been durably recorded
+    /// with the given generation.
+    Recorded { generation: u64 },
+    /// An unrelated existing pending generation covers the restored state.
+    /// This is valid only when the pending protocol is full-current-state
+    /// sync (a single generation causes a full synchronization).
+    CoveredByExisting { generation: u64 },
+}
+
 /// State machine for a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionState {
@@ -226,13 +244,12 @@ pub enum TransactionState {
         next_commit_position: usize,
     },
     /// All destinations installed and verified; pending sync intent is
-    /// being durably recorded. `pending_recorded` tracks whether the
-    /// pending marker has been durably written.
+    /// being durably recorded. The `pending` field tracks the finalization
+    /// state of the pending marker.
     CommittedLocal {
-        /// The pending generation to record.
-        pending_generation: u64,
-        /// Whether the pending marker has been durably written.
-        pending_recorded: bool,
+        /// Pending finalization state — whether and how the pending
+        /// marker has been durably recorded.
+        pending: PendingFinalization,
     },
     /// Transaction has been committed; staged files are in place.
     Committed,
@@ -644,18 +661,14 @@ pub fn advance_to_rolling_back(
 /// Advance the journal to `CommittedLocal` finalization state.
 ///
 /// This is persisted after all destinations are installed and verified,
-/// before the pending sync intent is durably recorded. `pending_recorded`
-/// tracks whether the pending marker has been written.
+/// before the pending sync intent is durably recorded. The `pending`
+/// parameter tracks the finalization state of the pending marker.
 pub fn advance_to_committed_local(
     state_dir: &Path,
     journal: &mut TransactionJournal,
-    pending_generation: u64,
-    pending_recorded: bool,
+    pending: PendingFinalization,
 ) -> SnipResult<()> {
-    journal.state = TransactionState::CommittedLocal {
-        pending_generation,
-        pending_recorded,
-    };
+    journal.state = TransactionState::CommittedLocal { pending };
     persist_journal(state_dir, journal)
 }
 
@@ -956,56 +969,74 @@ pub fn gate_mutation_on_interrupted_transactions(
         let journal = &interrupted[0];
 
         // Handle CommittedLocal finalization state: clean up without rollback.
-        if let TransactionState::CommittedLocal {
-            pending_generation,
-            pending_recorded,
-        } = journal.state
+        if let TransactionState::CommittedLocal { pending } = &journal.state
         {
             tracing::info!(
                 txn_id = %journal.id,
-                generation = pending_generation,
-                pending_recorded,
+                pending = ?pending,
                 "Finalizing CommittedLocal transaction"
             );
 
-            // If pending was not recorded, check if the pending marker
-            // already exists for this generation. If not, create it
-            // idempotently using ensure_pending_for_transaction.
-            //
+            // If pending has not been recorded, attempt to finalize it.
             // The pending marker lives in the canonical sync state directory,
-            // NOT in the transaction directory. This is the fix for the
-            // defect where CommittedLocal recovery checked the wrong pending
-            // marker path.
-            if !pending_recorded {
-                let pending_path = crate::auto_sync::pending::pending_path(sync_state_dir);
-                let marker_exists = match crate::auto_sync::pending::read_state(&pending_path) {
-                    Ok(state) => state.generation == pending_generation,
-                    Err(_) => false,
-                };
-                if !marker_exists {
+            // NOT in the transaction directory.
+            let finalized = match pending {
+                PendingFinalization::NotRecorded => {
                     // Idempotently create or reuse the pending marker.
                     // A crash here is recoverable: the gate will retry.
                     tracing::info!(
                         txn_id = %journal.id,
-                        generation = pending_generation,
                         "Creating pending marker for CommittedLocal recovery"
                     );
-                    let _ = crate::auto_sync::pending::ensure_pending_for_transaction(
+                    let pending_result = crate::auto_sync::pending::ensure_pending_for_transaction(
                         sync_state_dir,
                         &journal.id,
                         crate::auto_sync::pending::PendingSnapshot::Mutation {
                             kind: crate::auto_sync::policy::MutationKind::Import,
                         },
                     );
+                    match pending_result {
+                        Ok(crate::auto_sync::pending::TransactionPendingResult::Created(state))
+                        | Ok(crate::auto_sync::pending::TransactionPendingResult::Reused(state)) => {
+                            PendingFinalization::Recorded { generation: state.generation }
+                        }
+                        Ok(crate::auto_sync::pending::TransactionPendingResult::Conflict(state)) => {
+                            // An unrelated newer pending generation exists.
+                            // Per the conflict policy, preserve it — the
+                            // restored state is covered by the existing
+                            // full-current-state sync generation.
+                            tracing::warn!(
+                                txn_id = %journal.id,
+                                generation = state.generation,
+                                "Pending conflict during recovery: \
+                                 preserving existing generation"
+                            );
+                            PendingFinalization::CoveredByExisting { generation: state.generation }
+                        }
+                        Err(e) => {
+                            // Fail closed: preserve journal and artifacts.
+                            return Err(SnipError::runtime_error(
+                                "Committed restore requires pending recovery",
+                                Some(&format!(
+                                    "Transaction {} is committed locally but pending intent \
+                                     could not be finalized: {e}. Recovery evidence was \
+                                     preserved; run `snp repair`.",
+                                    journal.id
+                                )),
+                            ));
+                        }
+                    }
                 }
-                // Persist pending_recorded: true to mark finalization complete.
-                let mut finalized = journal.clone();
-                finalized.state = TransactionState::CommittedLocal {
-                    pending_generation,
-                    pending_recorded: true,
-                };
-                persist_journal(transaction_dir, &finalized)?;
-            }
+                // Already recorded — no action needed.
+                PendingFinalization::Recorded { .. } | PendingFinalization::CoveredByExisting { .. } => {
+                    pending.clone()
+                }
+            };
+
+            // Persist the finalized pending state durably.
+            let mut finalized_journal = journal.clone();
+            finalized_journal.state = TransactionState::CommittedLocal { pending: finalized };
+            persist_journal(transaction_dir, &finalized_journal)?;
 
             // Clean up: remove journal and backups.
             for staged in &journal.staged_files {
@@ -1261,8 +1292,7 @@ mod tests {
         );
         assert!(
             TransactionState::CommittedLocal {
-                pending_generation: 0,
-                pending_recorded: false
+                pending: PendingFinalization::NotRecorded
             }
             .is_interruptible()
         );

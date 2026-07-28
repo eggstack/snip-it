@@ -999,12 +999,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // durable pending intent.
     //
     // Protocol (per plan):
-    // 1. Persist CommittedLocal { pending_recorded: false } — marks
+    // 1. Persist CommittedLocal { pending: NotRecorded } — marks
     //    destinations as committed but pending not yet recorded.
     // 2. Call ensure_pending_for_transaction — idempotently records
     //    the pending marker in the canonical sync_state_dir.
-    // 3. Persist CommittedLocal { pending_recorded: true } — confirms
-    //    the pending marker is durably written.
+    // 3. Persist CommittedLocal { pending: Recorded(g) | CoveredByExisting(g) } —
+    //    confirms the pending marker is durably written.
     // 4. Clean up transaction artifacts.
     //
     // The pending marker is written to the canonical sync_state_dir (NOT
@@ -1012,15 +1012,14 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // API so that one successful restore produces exactly one pending
     // generation across crashes and retries.
     if report.files_restored > 0 {
-        // Step 1: Persist CommittedLocal with pending_recorded: false.
+        // Step 1: Persist CommittedLocal with pending: NotRecorded.
         // This marks the transaction as committed locally. A crash here
         // is recoverable: the gate will see CommittedLocal and clean up
         // without creating a pending generation.
         crate::transaction::advance_to_committed_local(
             &transaction_dir,
             &mut journal_with_backups,
-            0, // placeholder generation; will be updated in step 3
-            false,
+            crate::transaction::PendingFinalization::NotRecorded,
         )?;
 
         // Failpoint: after CommittedLocal persisted, before pending recorded.
@@ -1048,10 +1047,10 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             )
         })?;
 
-        let generation = match pending_result {
+        let finalization = match pending_result {
             crate::auto_sync::pending::TransactionPendingResult::Created(state)
             | crate::auto_sync::pending::TransactionPendingResult::Reused(state) => {
-                state.generation
+                crate::transaction::PendingFinalization::Recorded { generation: state.generation }
             }
             crate::auto_sync::pending::TransactionPendingResult::Conflict(state) => {
                 // An unrelated newer pending generation exists. Per the
@@ -1064,17 +1063,16 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                      an unrelated newer pending generation exists; \
                      preserving it without incrementing"
                 );
-                state.generation
+                crate::transaction::PendingFinalization::CoveredByExisting { generation: state.generation }
             }
         };
 
-        // Step 3: Persist CommittedLocal with pending_recorded: true.
+        // Step 3: Persist CommittedLocal with the finalized pending state.
         // This confirms the pending marker is durably written.
         crate::transaction::advance_to_committed_local(
             &transaction_dir,
             &mut journal_with_backups,
-            generation,
-            true,
+            finalization,
         )?;
 
         // Failpoint: after pending recorded, before journal update.

@@ -194,17 +194,21 @@ pub fn run_executor(_state_dir: &Path) -> i32 {
     // When SNP_TEST_EXECUTOR_MODE=noop-success, the executor reports
     // success without performing any sync. This is useful for testing
     // the worker's success handling without a real server.
-    // Production builds ignore this variable — it is never set outside tests.
-    if std::env::var("SNP_TEST_EXECUTOR_MODE").as_deref().ok() == Some("noop-success") {
-        tracing::info!("executor: noop-success mode (test seam)");
-        crate::auto_sync::test_events::emit(
-            "executor",
-            "exited",
-            std::process::id(),
-            None,
-            Some(r#"{"success":true,"mode":"noop-success"}"#.into()),
-        );
-        return ExecutorExitCode::Success.to_exit_status();
+    // Only compiled with the test-support feature — production builds
+    // never check this variable.
+    #[cfg(feature = "test-support")]
+    {
+        if std::env::var("SNP_TEST_EXECUTOR_MODE").as_deref().ok() == Some("noop-success") {
+            tracing::info!("executor: noop-success mode (test seam)");
+            crate::auto_sync::test_events::emit(
+                "executor",
+                "exited",
+                std::process::id(),
+                None,
+                Some(r#"{"success":true,"mode":"noop-success"}"#.into()),
+            );
+            return ExecutorExitCode::Success.to_exit_status();
+        }
     }
 
     let settings = match crate::config::load_sync_settings() {
