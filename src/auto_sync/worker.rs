@@ -32,6 +32,35 @@ pub enum WorkerOutcome {
     NothingToDo,
 }
 
+/// Classification of an executor exit-zero completion based on the
+/// observed pending disposition.
+///
+/// The executor is the only component allowed to clear pending. After
+/// the executor exits zero, the worker inspects the pending marker to
+/// determine whether the zero exit actually represents remote
+/// acknowledgement. Exit zero alone is never sufficient evidence of
+/// remote success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutorCompletion {
+    /// Pending marker for generation `G` is gone — the executor cleared
+    /// it after remote acknowledgement. Record durable success for `G`.
+    AcknowledgedAndCleared,
+    /// Pending marker exists with a generation greater than `G` — the
+    /// executor's work was acknowledged but a newer mutation arrived.
+    /// Record success for completed `G` while preserving the newer marker.
+    AcknowledgedCoveredByNewer { current_generation: u64 },
+    /// Pending marker still exists with generation exactly `G` — the
+    /// executor exited zero without clearing pending (e.g. noop-success
+    /// test seam or protocol-integrity violation). Do NOT record success.
+    ExitZeroWithoutAcknowledgement,
+    /// Pending marker exists with generation lower than `G` — corrupt
+    /// or inconsistent state. Do NOT record success; preserve evidence.
+    PendingGenerationLowerThanObserved,
+    /// Pending marker cannot be read — local persistence/internal failure.
+    /// Do NOT record success; preserve recoverability.
+    PendingStateUnreadable,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnResult {
     Spawned,
@@ -430,6 +459,33 @@ fn unix_ms_to_instant(target_unix_ms: u64, clock: &dyn Clock) -> Instant {
         .unwrap_or_else(|| clock.now_instant())
 }
 
+/// Classify an executor exit-zero completion by inspecting the pending
+/// marker against the observed generation.
+///
+/// This implements the Workstream A classification rules:
+/// 1. pending missing → `AcknowledgedAndCleared`
+/// 2. pending generation > observed → `AcknowledgedCoveredByNewer`
+/// 3. pending generation == observed → `ExitZeroWithoutAcknowledgement`
+/// 4. pending generation < observed → `PendingGenerationLowerThanObserved`
+/// 5. pending unreadable → `PendingStateUnreadable`
+fn classify_executor_completion(state_dir: &Path, observed_generation: u64) -> ExecutorCompletion {
+    match pending::read_state_from_dir(state_dir) {
+        Ok(current) => {
+            if current.generation == observed_generation {
+                ExecutorCompletion::ExitZeroWithoutAcknowledgement
+            } else if current.generation > observed_generation {
+                ExecutorCompletion::AcknowledgedCoveredByNewer {
+                    current_generation: current.generation,
+                }
+            } else {
+                ExecutorCompletion::PendingGenerationLowerThanObserved
+            }
+        }
+        Err(pending::PendingError::NotFound) => ExecutorCompletion::AcknowledgedAndCleared,
+        Err(_) => ExecutorCompletion::PendingStateUnreadable,
+    }
+}
+
 /// Performs the bounded sync attempt for the observed generation.
 ///
 /// Spawns an executor subprocess and waits for it, enforcing the sync
@@ -485,19 +541,146 @@ fn execute_sync(
             let code = status_out.code().unwrap_or(7);
             match ExecutorExitCode::from_exit_status(status_out) {
                 ExecutorExitCode::Success => {
-                    let _ = status::record_success(
-                        state_dir,
-                        observed_generation,
-                        "executor exited successfully; pending clear is executor-owned",
-                    );
-                    crate::auto_sync::test_events::emit(
-                        "worker",
-                        "sync_completed",
-                        std::process::id(),
-                        Some(observed_generation),
-                        Some(r#"{"success":false,"reason":"executor_exit_only_pending_not_cleared"}"#.into()),
-                    );
-                    WorkerOutcome::Success
+                    // Do NOT treat exit zero alone as remote success.
+                    // Classify using the observed pending disposition.
+                    let completion = classify_executor_completion(state_dir, observed_generation);
+                    match completion {
+                        ExecutorCompletion::AcknowledgedAndCleared => {
+                            let _ = status::record_success(
+                                state_dir,
+                                observed_generation,
+                                "executor cleared pending after remote acknowledgement",
+                            );
+                            crate::auto_sync::test_events::emit(
+                                "worker",
+                                "sync_completed",
+                                std::process::id(),
+                                Some(observed_generation),
+                                Some(r#"{"success":true,"reason":"pending_cleared"}"#.into()),
+                            );
+                            WorkerOutcome::Success
+                        }
+                        ExecutorCompletion::AcknowledgedCoveredByNewer { current_generation } => {
+                            // Record success for the completed generation G
+                            // while preserving the newer marker.
+                            let _ = status::record_success(
+                                state_dir,
+                                observed_generation,
+                                "executor acknowledged; newer pending generation preserved",
+                            );
+                            crate::auto_sync::test_events::emit(
+                                "worker",
+                                "sync_completed",
+                                std::process::id(),
+                                Some(observed_generation),
+                                Some(
+                                    serde_json::json!({
+                                        "success": true,
+                                        "reason": "newer_generation_preserved",
+                                        "current_generation": current_generation,
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                            // Return NothingToDo so the caller's follow-up
+                            // cycle loop handles the newer generation.
+                            WorkerOutcome::NothingToDo
+                        }
+                        ExecutorCompletion::ExitZeroWithoutAcknowledgement => {
+                            // Executor exited zero but pending G is unchanged.
+                            // This is a protocol-integrity failure: the
+                            // noop-success seam or an unacknowledged exit
+                            // must NOT produce a success status.
+                            let consecutive = next_consecutive_failures(state_dir);
+                            let backoff = transient_backoff(consecutive);
+                            let next_attempt =
+                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
+                            let _ = status::record_failure(
+                                state_dir,
+                                observed_generation,
+                                FailureClass::Internal,
+                                ExecutorExitCode::Success.to_exit_status(),
+                                consecutive,
+                                next_attempt,
+                                "executor exited zero without clearing pending (protocol integrity)",
+                                current_config_fingerprint(),
+                            );
+                            crate::auto_sync::test_events::emit(
+                                "worker",
+                                "sync_completed",
+                                std::process::id(),
+                                Some(observed_generation),
+                                Some(
+                                    serde_json::json!({
+                                        "success": false,
+                                        "reason": "exit_zero_without_acknowledgement",
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                            WorkerOutcome::Failed
+                        }
+                        ExecutorCompletion::PendingGenerationLowerThanObserved => {
+                            let consecutive = next_consecutive_failures(state_dir);
+                            let backoff = transient_backoff(consecutive);
+                            let next_attempt =
+                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
+                            let _ = status::record_failure(
+                                state_dir,
+                                observed_generation,
+                                FailureClass::Internal,
+                                ExecutorExitCode::Success.to_exit_status(),
+                                consecutive,
+                                next_attempt,
+                                "pending generation lower than observed (corrupt state)",
+                                current_config_fingerprint(),
+                            );
+                            crate::auto_sync::test_events::emit(
+                                "worker",
+                                "sync_completed",
+                                std::process::id(),
+                                Some(observed_generation),
+                                Some(
+                                    serde_json::json!({
+                                        "success": false,
+                                        "reason": "pending_generation_lower_than_observed",
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                            WorkerOutcome::Failed
+                        }
+                        ExecutorCompletion::PendingStateUnreadable => {
+                            let consecutive = next_consecutive_failures(state_dir);
+                            let backoff = transient_backoff(consecutive);
+                            let next_attempt =
+                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
+                            let _ = status::record_failure(
+                                state_dir,
+                                observed_generation,
+                                FailureClass::Internal,
+                                ExecutorExitCode::Success.to_exit_status(),
+                                consecutive,
+                                next_attempt,
+                                "pending state unreadable after executor exit zero",
+                                current_config_fingerprint(),
+                            );
+                            crate::auto_sync::test_events::emit(
+                                "worker",
+                                "sync_completed",
+                                std::process::id(),
+                                Some(observed_generation),
+                                Some(
+                                    serde_json::json!({
+                                        "success": false,
+                                        "reason": "pending_state_unreadable",
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                            WorkerOutcome::Failed
+                        }
+                    }
                 }
                 exit_code => {
                     let failure_class = exit_code.failure_class();
@@ -1235,6 +1418,76 @@ mod tests {
         assert!(t2 >= t1);
         assert!(ms2 >= ms1);
         assert!(ms2 - ms1 < 1000);
+    }
+
+    // ── ExecutorCompletion classification tests ─────────────────────
+
+    #[test]
+    fn test_classify_completion_missing_pending_is_acknowledged() {
+        let dir = TempDir::new().unwrap();
+        // No pending marker — executor cleared it.
+        let result = classify_executor_completion(dir.path(), 1);
+        assert_eq!(result, ExecutorCompletion::AcknowledgedAndCleared);
+    }
+
+    #[test]
+    fn test_classify_completion_same_generation_is_false_success() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        // Pending still has generation 1, observed was 1 → false success.
+        let result = classify_executor_completion(dir.path(), 1);
+        assert_eq!(result, ExecutorCompletion::ExitZeroWithoutAcknowledgement);
+    }
+
+    #[test]
+    fn test_classify_completion_newer_generation_is_covered() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
+            },
+        )
+        .unwrap();
+        // Pending has generation 2, observed was 1 → covered by newer.
+        let result = classify_executor_completion(dir.path(), 1);
+        assert_eq!(
+            result,
+            ExecutorCompletion::AcknowledgedCoveredByNewer {
+                current_generation: 2
+            }
+        );
+    }
+
+    #[test]
+    fn test_classify_completion_lower_generation_is_corrupt() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        // Pending has generation 1, observed was 5 → corrupt/inconsistent.
+        let result = classify_executor_completion(dir.path(), 5);
+        assert_eq!(
+            result,
+            ExecutorCompletion::PendingGenerationLowerThanObserved
+        );
     }
 
     // ── Debounce tests ──────────────────────────────────────────────

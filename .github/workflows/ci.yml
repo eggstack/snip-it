@@ -281,6 +281,32 @@ jobs:
         timeout-minutes: 20
         run: cargo test --test local_data_lock_barriers --features test-support -- --test-threads=1
 
+  # Verify that evidence files (production seam scripts, test scripts) are
+  # committed alongside the code at the same commit. This prevents the
+  # scenario where evidence scripts are updated but not committed, or
+  # where stale evidence scripts are used against newer code.
+  verify-evidence:
+    name: Verify Evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check production seam script exists and is committed
+        run: |
+          git ls-files --error-unmatch scripts/ci/test-production-seams.sh
+          git ls-files --error-unmatch scripts/ci/test-production-seams.ps1
+          test -x scripts/ci/test-production-seams.sh
+      - name: Check test scripts are committed
+        run: |
+          git ls-files --error-unmatch tests/support/recording_server.rs
+          git ls-files --error-unmatch tests/support/environment.rs
+          git ls-files --error-unmatch tests/support/event_sink.rs
+      - name: Check no uncommitted changes to evidence files
+        run: |
+          git diff --exit-code scripts/ci/ tests/support/ || {
+            echo "::error::Evidence files have uncommitted changes"
+            exit 1
+          }
+
   package:
     name: Package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

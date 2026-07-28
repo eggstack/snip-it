@@ -9,6 +9,20 @@
 //! can be detected and either rolled forward (commit) or rolled back on
 //! startup. The lock prevents concurrent transactions from corrupting shared
 //! state.
+//!
+//! ## State machine
+//!
+//! ```text
+//! Prepared → BackupsDurable → Committing{pos} → CommittedLocal{pending}
+//!          → Committed → CleaningUp{pos} → (journal removed)
+//!
+//! Prepared → BackupsDurable → RollingBack{pos} → RolledBack
+//!          → CleaningUp{pos} → (journal removed)
+//! ```
+//!
+//! `CleaningUp` is interruptible and restartable: `finalize_transaction_cleanup`
+//! persists progress after each step and resumes from `next_cleanup_position`
+//! on recovery.
 
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
@@ -284,6 +298,17 @@ pub enum TransactionState {
     },
     /// Transaction was rolled back; backups restored.
     RolledBack,
+    /// Cleanup is in progress; tracks cleanup position.
+    ///
+    /// `next_cleanup_position == N` means cleanup steps `0..N` have been
+    /// completed and verified; step `N` is next.
+    ///
+    /// Cleanup order: 0=staged files, 1=backup files, 2=artifact dir,
+    /// 3=journal removal.
+    CleaningUp {
+        /// Number of completed cleanup steps.
+        next_cleanup_position: usize,
+    },
     /// Transaction failed with an error message.
     Failed(String),
 }
@@ -302,6 +327,7 @@ impl TransactionState {
                 | TransactionState::Committing { .. }
                 | TransactionState::CommittedLocal { .. }
                 | TransactionState::RollingBack { .. }
+                | TransactionState::CleaningUp { .. }
         )
     }
 }
@@ -386,8 +412,7 @@ fn is_process_alive(pid: u32) -> bool {
 /// the acquisition loop retries with `create_new(true)`. Returns an error
 /// if the lock is held by a live process.
 pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult<TransactionLock> {
-    fs::create_dir_all(state_dir)
-        .map_err(|e| SnipError::io_error("create state directory", state_dir, e))?;
+    create_private_dir(state_dir)?;
 
     let lock_path = state_dir.join("transaction.lock");
     let nonce = uuid::Uuid::new_v4().to_string();
@@ -569,8 +594,7 @@ pub fn begin_transaction(
     operation: &str,
     affected_files: &[PathBuf],
 ) -> SnipResult<TransactionJournal> {
-    fs::create_dir_all(state_dir)
-        .map_err(|e| SnipError::io_error("create state directory", state_dir, e))?;
+    create_private_dir(state_dir)?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -710,7 +734,8 @@ pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> Sni
     persist_journal(state_dir, &committed)?;
 
     // Clean up all transaction artifacts (staged files, backups, journal).
-    finalize_transaction_cleanup(state_dir, &committed)
+    // The cleanup is restartable via the CleaningUp state.
+    finalize_transaction_cleanup(state_dir, &mut committed)
 }
 
 /// Validate that all artifact paths in the journal remain contained within
@@ -783,21 +808,53 @@ pub fn transaction_artifact_dir(state_dir: &Path, txn_id: &str) -> PathBuf {
 ///
 /// Used for transaction artifact directories that may contain plaintext
 /// snippet commands or sync configuration.
+///
+/// On Unix, the directory is created with `0o700` permissions at creation
+/// time using `DirBuilderExt::mode`, preventing a window where the directory
+/// is briefly world-readable. Permission failures are fatal.
 pub fn create_private_dir(path: &Path) -> SnipResult<()> {
-    fs::create_dir_all(path)
-        .map_err(|e| SnipError::io_error("create private directory", path, e))?;
-
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        // DirBuilder::create with mode(0o700) sets the mode at creation time
+        // for new directories, avoiding a world-readable window. For
+        // existing directories, we must also set_permissions to enforce
+        // the policy.
+        builder
+            .create(path)
+            .map_err(|e| SnipError::io_error("create private directory", path, e))?;
+        // Enforce permissions on existing directories too.
         let perms = fs::Permissions::from_mode(0o700);
         if let Err(e) = fs::set_permissions(path, perms) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "Failed to set private permissions on directory"
-            );
+            return Err(SnipError::io_error(
+                "set private directory permissions",
+                path,
+                e,
+            ));
         }
+        // Verify permissions were applied correctly.
+        use std::os::unix::fs::MetadataExt;
+        let actual_mode = fs::metadata(path)
+            .map_err(|e| SnipError::io_error("stat private directory", path, e))?
+            .mode()
+            & 0o777;
+        if actual_mode != 0o700 {
+            return Err(SnipError::runtime_error(
+                "Private directory permission failure",
+                Some(&format!(
+                    "Directory {} created with mode {:o}, expected 700. Refusing to proceed.",
+                    path.display(),
+                    actual_mode
+                )),
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)
+            .map_err(|e| SnipError::io_error("create private directory", path, e))?;
     }
 
     Ok(())
@@ -872,46 +929,105 @@ fn remove_dir_all_with_retry(path: &Path) -> SnipResult<()> {
 /// Finalize transaction cleanup: remove all artifacts and the journal last.
 ///
 /// This is the canonical cleanup path used by commit, rollback, and
-/// CommittedLocal recovery. It ensures:
+/// CommittedLocal recovery. It is restartable: if interrupted, the next
+/// call (from recovery or a new cleanup attempt) resumes from the last
+/// durably recorded `next_cleanup_position` in the `CleaningUp` state.
 ///
-/// 1. Artifact containment is validated before any deletion;
-/// 2. Staged files are removed first;
-/// 3. Backup files are removed second;
-/// 4. The artifact directory is removed third;
-/// 5. The journal is removed last;
-/// 6. The parent directory is fsync'd after journal removal.
+/// Cleanup order:
+/// 0. Validate artifact containment before any deletion;
+/// 1. Remove staged files;
+/// 2. Remove backup files;
+/// 3. Remove the artifact directory;
+/// 4. Remove the journal file;
+/// 5. Fsync the parent directory after journal removal.
 ///
-/// Cleanup errors are propagated rather than discarded.
+/// The journal is advanced to `CleaningUp { next_cleanup_position }`
+/// before each step, so a crash during cleanup is recoverable.
 pub fn finalize_transaction_cleanup(
     state_dir: &Path,
-    journal: &TransactionJournal,
+    journal: &mut TransactionJournal,
 ) -> SnipResult<()> {
-    // 1. Validate artifact containment before any deletion.
-    validate_artifact_containment(state_dir, journal)?;
+    // Determine the starting position from the journal state.
+    let start_position = match &journal.state {
+        TransactionState::CleaningUp {
+            next_cleanup_position,
+        } => *next_cleanup_position,
+        _ => 0,
+    };
 
-    // 2. Remove staged files.
-    remove_all_staged_files(journal)?;
+    // Cleanup steps in order. Each step is persisted before execution
+    // so a crash during the step is recoverable.
+    let total_steps = 5;
 
-    // 3. Remove backup files.
-    remove_all_backup_files(journal)?;
+    for position in start_position..total_steps {
+        // Persist the CleaningUp state before executing the step.
+        // Skip persistence if the journal has already been removed (position >= 3).
+        if position < 3 {
+            journal.state = TransactionState::CleaningUp {
+                next_cleanup_position: position,
+            };
+            persist_journal(state_dir, journal)?;
+        }
 
-    // 4. Remove the artifact directory.
-    remove_empty_transaction_artifact_dir(state_dir, &journal.id)?;
+        // Failpoints for crash testing during cleanup.
+        if position == 0 {
+            crate::test_failpoints::maybe_failpoint(
+                crate::test_failpoints::failpoints::CLEANUP_DURING_STAGED_REMOVAL,
+            );
+        }
+        if position == 2 {
+            crate::test_failpoints::maybe_failpoint(
+                crate::test_failpoints::failpoints::CLEANUP_DURING_DIR_REMOVAL,
+            );
+        }
 
-    // 5. Remove the journal file last.
-    let jpath = journal_path(state_dir, &journal.id);
-    if jpath.exists() {
-        fs::remove_file(&jpath).map_err(|e| {
-            SnipError::io_error(
-                "remove transaction journal during cleanup",
-                jpath.clone(),
-                e,
-            )
-        })?;
+        match position {
+            0 => {
+                // Validate artifact containment before any deletion.
+                validate_artifact_containment(state_dir, journal)?;
+                // Remove staged files.
+                remove_all_staged_files(journal)?;
+            }
+            1 => {
+                // Remove backup files.
+                remove_all_backup_files(journal)?;
+            }
+            2 => {
+                // Remove the artifact directory.
+                remove_empty_transaction_artifact_dir(state_dir, &journal.id)?;
+            }
+            3 => {
+                // Remove the journal file last.
+                let jpath = journal_path(state_dir, &journal.id);
+                if jpath.exists() {
+                    fs::remove_file(&jpath).map_err(|e| {
+                        SnipError::io_error(
+                            "remove transaction journal during cleanup",
+                            jpath.clone(),
+                            e,
+                        )
+                    })?;
+                }
+                // Do NOT persist the journal state after removal — the file
+                // is gone. The fsync in step 4 durably records the removal.
+                continue;
+            }
+            4 => {
+                // Fsync the parent directory to durably record the removal.
+                let jpath = journal_path(state_dir, &journal.id);
+                fsync_parent_dir(&jpath)?;
+                // Final step — do not persist journal state.
+                continue;
+            }
+            _ => unreachable!("cleanup position {} out of range", position),
+        }
+
+        // Persist progress after each step (except journal removal and fsync).
+        journal.state = TransactionState::CleaningUp {
+            next_cleanup_position: position + 1,
+        };
+        persist_journal(state_dir, journal)?;
     }
-
-    // 6. Fsync the parent directory to durably record the removal.
-    fsync_parent_dir(&jpath)?;
 
     Ok(())
 }
@@ -1186,7 +1302,8 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
     persist_journal(state_dir, &rb_journal)?;
 
     // Clean up all transaction artifacts and the journal last.
-    finalize_transaction_cleanup(state_dir, &rb_journal)
+    // The cleanup is restartable via the CleaningUp state.
+    finalize_transaction_cleanup(state_dir, &mut rb_journal)
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.
@@ -1206,38 +1323,57 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// ensures the content is durably on disk before returning, and verifies
 /// the hash from the reopened file (not from the source buffer).
 ///
-/// On Unix, the file is created with `0o600` permissions so that transaction
-/// artifacts (which may contain plaintext snippet commands) are not briefly
-/// world-readable.
+/// On Unix, the file is created with `0o600` permissions at creation time
+/// using `OpenOptionsExt::mode`, preventing a window where the file is
+/// briefly world-readable. Permission failures are fatal.
 ///
 /// Returns the verified SHA-256 hex digest.
 pub fn write_sync_verify(path: &Path, bytes: &[u8]) -> SnipResult<String> {
     use std::io::Write;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)
-        .map_err(|e| SnipError::io_error("create parent dir for staged file", parent, e))?;
+    create_private_dir(parent)?;
 
-    let mut file =
-        fs::File::create(path).map_err(|e| SnipError::io_error("create staged file", path, e))?;
-    file.write_all(bytes)
-        .map_err(|e| SnipError::io_error("write staged file", path, e))?;
-    file.sync_all()
-        .map_err(|e| SnipError::io_error("sync staged file", path, e))?;
-    drop(file);
-
-    // Apply private permissions to the artifact file so that staged
-    // content (which may contain snippet commands) is not world-readable.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        if let Err(e) = fs::set_permissions(path, perms) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "Failed to set private permissions on transaction artifact"
-            );
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| SnipError::io_error("create staged file", path, e))?;
+        file.write_all(bytes)
+            .map_err(|e| SnipError::io_error("write staged file", path, e))?;
+        file.sync_all()
+            .map_err(|e| SnipError::io_error("sync staged file", path, e))?;
+        drop(file);
+
+        // Verify permissions were applied correctly.
+        use std::os::unix::fs::MetadataExt;
+        let actual_mode = fs::metadata(path)
+            .map_err(|e| SnipError::io_error("stat staged file", path, e))?
+            .mode()
+            & 0o777;
+        if actual_mode != 0o600 {
+            return Err(SnipError::runtime_error(
+                "Staged file permission failure",
+                Some(&format!(
+                    "File {} created with mode {:o}, expected 600. Refusing to proceed.",
+                    path.display(),
+                    actual_mode
+                )),
+            ));
         }
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = fs::File::create(path)
+            .map_err(|e| SnipError::io_error("create staged file", path, e))?;
+        file.write_all(bytes)
+            .map_err(|e| SnipError::io_error("write staged file", path, e))?;
+        file.sync_all()
+            .map_err(|e| SnipError::io_error("sync staged file", path, e))?;
+        drop(file);
     }
 
     // Reopen and verify from disk.
@@ -1337,6 +1473,39 @@ pub fn gate_mutation_on_interrupted_transactions(
     if interrupted.len() == 1 {
         let journal = &interrupted[0];
 
+        // Handle CleaningUp state: resume cleanup from the last position.
+        if let TransactionState::CleaningUp {
+            next_cleanup_position,
+        } = &journal.state
+        {
+            tracing::info!(
+                txn_id = %journal.id,
+                next_cleanup_position = *next_cleanup_position,
+                "Resuming interrupted cleanup"
+            );
+            let mut cleanup_journal = journal.clone();
+            match finalize_transaction_cleanup(transaction_dir, &mut cleanup_journal) {
+                Ok(()) => {
+                    tracing::info!(
+                        txn_id = %journal.id,
+                        "Cleanup resumed and completed successfully"
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    return Err(SnipError::runtime_error(
+                        "Interrupted cleanup requires manual recovery",
+                        Some(&format!(
+                            "Transaction '{}' ({}) was interrupted during cleanup \
+                             at position {} and automatic cleanup failed: {}. \
+                             Run `snp repair` to inspect and recover.",
+                            journal.operation, journal.id, next_cleanup_position, e
+                        )),
+                    ));
+                }
+            }
+        }
+
         // Handle CommittedLocal finalization state: clean up without rollback.
         if let TransactionState::CommittedLocal { pending } = &journal.state {
             tracing::info!(
@@ -1411,16 +1580,22 @@ pub fn gate_mutation_on_interrupted_transactions(
             finalized_journal.state = TransactionState::CommittedLocal { pending: finalized };
             persist_journal(transaction_dir, &finalized_journal)?;
 
-            // Clean up: remove journal and backups.
-            for staged in &journal.staged_files {
-                if let Some(ref backup) = staged.backup_path {
-                    let _ = fs::remove_file(backup);
+            // Clean up: use the canonical restartable cleanup path.
+            // This removes staged files, backup files, artifact directory,
+            // and the journal itself, with progress persisted at each step.
+            match finalize_transaction_cleanup(transaction_dir, &mut finalized_journal) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    return Err(SnipError::runtime_error(
+                        "Committed restore cleanup failed",
+                        Some(&format!(
+                            "Transaction {} committed locally but cleanup failed: {}. \
+                             Recovery evidence was preserved; run `snp repair`.",
+                            journal.id, e
+                        )),
+                    ));
                 }
             }
-            let jpath = journal_path(transaction_dir, &journal.id);
-            let _ = fs::remove_file(&jpath);
-
-            return Ok(());
         }
 
         tracing::info!(

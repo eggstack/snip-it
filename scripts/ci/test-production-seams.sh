@@ -4,7 +4,8 @@
 #
 # This script:
 # 1. Builds `snp` without `test-support` into an isolated target directory.
-# 2. Sets matching valid seam values and runs valid scenarios.
+# 2. Sets matching valid seam values and runs valid scenarios that traverse
+#    the guarded code paths.
 # 3. Asserts that no test behavior activates.
 #
 # Usage: scripts/ci/test-production-seams.sh
@@ -45,47 +46,135 @@ sync_interval_minutes = 30
 auto_sync = false
 TOML
 
+# Helper: bounded wait for a file to appear, returns 0 if found, 1 on timeout.
+wait_for_file() {
+    local file="$1"
+    local timeout_secs="${2:-10}"
+    local elapsed=0
+    while [ ! -f "$file" ]; do
+        sleep 0.2
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge $((timeout_secs * 5)) ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Helper: bounded wait for a process to exit, returns 0 if exited, 1 on timeout.
+wait_for_exit() {
+    local pid="$1"
+    local timeout_secs="${2:-15}"
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 0.5
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge $((timeout_secs * 2)) ]; then
+            kill -9 "$pid" 2>/dev/null || true
+            return 1
+        fi
+    done
+    return 0
+}
+
 echo ""
-echo "=== Test 1: SNP_TEST_FAILPOINT does not abort production binary ==="
+echo "=== Test 1: SNP_TEST_FAILPOINT does not abort production restore ==="
+# Create a valid backup to restore.
+BACKUP_DIR="$TMPDIR/valid-backup"
+mkdir -p "$BACKUP_DIR/libraries"
+LIB_CONTENT='[[snippets]]
+id = "test-1"
+description = "test snippet"
+command = "echo test"
+'
+echo "$LIB_CONTENT" > "$BACKUP_DIR/libraries/default.toml"
+INDEX_CONTENT='[[libraries]]
+filename = "default"
+is_primary = true
+'
+echo "$INDEX_CONTENT" > "$BACKUP_DIR/libraries.toml"
+LIB_SHA=$(sha256sum "$BACKUP_DIR/libraries/default.toml" | awk '{print $1}')
+INDEX_SHA=$(sha256sum "$BACKUP_DIR/libraries.toml" | awk '{print $1}')
+LIB_SIZE=$(wc -c < "$BACKUP_DIR/libraries/default.toml" | tr -d ' ')
+INDEX_SIZE=$(wc -c < "$BACKUP_DIR/libraries.toml" | tr -d ' ')
+cat > "$BACKUP_DIR/manifest.toml" <<EOF
+schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = $LIB_SIZE
+sha256 = "$LIB_SHA"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = $INDEX_SIZE
+sha256 = "$INDEX_SHA"
+EOF
+
+# Run restore with the failpoint env var set. Production binary ignores it.
 SNP_TEST_FAILPOINT="restore-after-prepared" \
-    "$BINARY" list >/dev/null 2>&1
+    "$BINARY" restore "$BACKUP_DIR" --mode dry-run >/dev/null 2>&1
 if [ $? -ne 0 ]; then
     echo "FAIL: production binary aborted or errored with matching failpoint"
     exit 1
 fi
-echo "PASS: failpoint did not abort production binary"
+echo "PASS: failpoint did not abort production restore"
 
 echo ""
-echo "=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass executor ==="
+echo "=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass production executor ==="
 # The noop-success seam should not exist in production. The executor
 # should attempt real sync (and fail to connect), not exit 0 immediately.
 set +e
 SNP_TEST_EXECUTOR_MODE="noop-success" \
-    "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" >/dev/null 2>&1
+    "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 \
+    >/tmp/seam-stderr-2 2>&1
 EXIT_CODE=$?
 set -e
 if [ $EXIT_CODE -eq 0 ]; then
     echo "FAIL: production executor exited 0 with noop-success mode (seam is active)"
     exit 1
 fi
+# Verify stderr does not contain argument-parsing/usage diagnostics.
+if grep -qi "usage\|invalid\|unknown.*argument\|missing.*required" /tmp/seam-stderr-2; then
+    echo "FAIL: executor stderr contains usage/parsing diagnostics (argument parsing, not seam isolation):"
+    cat /tmp/seam-stderr-2
+    exit 1
+fi
 echo "PASS: noop-success mode did not bypass production executor (exit code: $EXIT_CODE)"
 
 echo ""
 echo "=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==="
+# Perform a real mutation (create a library) with SNP_SKIP_WORKER_SPAWN set.
+# Production binary ignores the variable — the mutation should complete normally.
+# We use a reachable-but-non-syncing config (auto_sync=false) so the mutation
+# completes without attempting network operations.
 SNP_SKIP_WORKER_SPAWN=1 \
-    "$BINARY" list >/dev/null 2>&1
+    "$BINARY" library create seam-test >/dev/null 2>&1
 if [ $? -ne 0 ]; then
-    echo "FAIL: production binary errored with SNP_SKIP_WORKER_SPAWN set"
+    echo "FAIL: production binary errored with SNP_SKIP_WORKER_SPAWN set during real mutation"
     exit 1
 fi
-echo "PASS: worker spawn suppression did not affect production binary"
+# Verify the library file was actually created (mutation succeeded).
+if [ ! -f "$CONFIG_HOME/snp/libraries/seam-test.toml" ]; then
+    echo "FAIL: library file was not created — mutation was suppressed"
+    exit 1
+fi
+echo "PASS: worker spawn suppression did not affect production mutation"
 
 echo ""
 echo "=== Test 4: SNP_TEST_EVENTS_DIR does not create event files ==="
+# Run a real worker/executor path with SNP_TEST_EVENTS_DIR set.
+# Production binary ignores the variable — no event file should be created.
 EVENTS_DIR="$TMPDIR/events"
 mkdir -p "$EVENTS_DIR"
 SNP_TEST_EVENTS_DIR="$EVENTS_DIR" \
-    "$BINARY" list >/dev/null 2>&1
+    "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 \
+    >/dev/null 2>&1 || true
 if [ -f "$EVENTS_DIR/test-events.jsonl" ]; then
     echo "FAIL: production binary created event file at $EVENTS_DIR/test-events.jsonl"
     exit 1
@@ -94,13 +183,23 @@ echo "PASS: no event file created in production binary"
 
 echo ""
 echo "=== Test 5: SNP_TEST_MUTATION_BARRIER_DIR does not block production ==="
+# Set up a barrier directory for a barrier point reached by library creation.
 BARRIER_DIR="$TMPDIR/barrier"
 mkdir -p "$BARRIER_DIR"
-echo "snippet-save" > "$BARRIER_DIR/point"
+echo "library-create" > "$BARRIER_DIR/point"
+# Do NOT create a release file — if the binary checked the barrier, it would hang.
 SNP_TEST_MUTATION_BARRIER_DIR="$BARRIER_DIR" \
-    "$BINARY" list >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "FAIL: production binary blocked or errored with mutation barrier set"
+    "$BINARY" library create barrier-test >/dev/null 2>&1 &
+BARRIER_PID=$!
+if ! wait_for_exit "$BARRIER_PID" 10; then
+    echo "FAIL: production binary blocked with mutation barrier set (timeout)"
+    kill -9 "$BARRIER_PID" 2>/dev/null || true
+    exit 1
+fi
+wait "$BARRIER_PID"
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "FAIL: production binary errored with mutation barrier set (exit: $EXIT_CODE)"
     exit 1
 fi
 # No "entered" file should exist since production ignores the barrier.

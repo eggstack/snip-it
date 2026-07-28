@@ -83,7 +83,7 @@ layout = "directory"
 path = "default.toml"
 kind = "unknown_kind"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -118,7 +118,7 @@ layout = "directory"
 path = "default.toml"
 kind = "library"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -153,7 +153,7 @@ layout = "directory"
 path = "default.toml"
 kind = "library"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -188,13 +188,13 @@ layout = "directory"
 path = "default.toml"
 kind = "library"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 
 [[files]]
 path = "default.toml"
 kind = "library"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -451,7 +451,7 @@ layout = "directory"
 path = "subdir/file.toml"
 kind = "library"
 size = 7
-sha256 = "placeholder"
+sha256 = "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -485,7 +485,7 @@ layout = "directory"
 path = "file.txt"
 kind = "library"
 size = 7
-sha256 = "placeholder"
+sha256 = "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -516,7 +516,7 @@ layout = "directory"
 path = "wrong-name.toml"
 kind = "index"
 size = 7
-sha256 = "placeholder"
+sha256 = "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -749,7 +749,7 @@ layout = "directory"
 path = "default.toml"
 kind = "unknown_kind"
 size = 11
-sha256 = "placeholder"
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
 "#;
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
@@ -760,5 +760,310 @@ sha256 = "placeholder"
     assert!(
         !output.status.success(),
         "restore should reject unknown entry kind in replace mode"
+    );
+}
+
+// === 18. Duplicate library names in index ===
+
+#[test]
+fn test_rejects_duplicate_library_names_in_index() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = create_valid_backup(&tmp);
+
+    // Corrupt the index to have duplicate library filenames.
+    let index_content = r#"[[libraries]]
+filename = "default"
+is_primary = true
+
+[[libraries]]
+filename = "default"
+is_primary = false
+"#;
+    fs::write(backup_dir.join("libraries.toml"), index_content).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject duplicate library names in index"
+    );
+
+    // Assert no transaction artifacts were created.
+    let txn_dir = _config_dir.join(".transaction");
+    assert!(
+        !txn_dir.exists() || txn_dir.read_dir().unwrap().next().is_none(),
+        "no transaction artifacts should exist after manifest rejection"
+    );
+    assert!(
+        !_config_dir.join("auto-sync-pending.toml").exists(),
+        "no pending marker should exist after manifest rejection"
+    );
+}
+
+// === 19. Multiple primary libraries in index ===
+
+#[test]
+fn test_rejects_multiple_primary_libraries() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = create_valid_backup(&tmp);
+
+    // Add a second library file.
+    fs::write(
+        backup_dir.join("libraries").join("second.toml"),
+        r#"[[snippets]]
+id = "test-2"
+description = "second snippet"
+command = "echo second"
+"#,
+    )
+    .unwrap();
+
+    // Corrupt the index to have two primaries.
+    let index_content = r#"[[libraries]]
+filename = "default"
+is_primary = true
+
+[[libraries]]
+filename = "second"
+is_primary = true
+"#;
+    let index_path = backup_dir.join("libraries.toml");
+    fs::write(&index_path, index_content).unwrap();
+
+    // Update the manifest to include the second library.
+    let lib_sha = sha256_hex(
+        r#"[[snippets]]
+id = "test-2"
+description = "second snippet"
+command = "echo second"
+"#
+        .as_bytes(),
+    );
+    let index_sha = sha256_hex(index_content.as_bytes());
+    let lib_size = r#"[[snippets]]
+id = "test-2"
+description = "second snippet"
+command = "echo second"
+"#
+    .len();
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 130
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+
+[[files]]
+path = "second.toml"
+kind = "library"
+size = {lib_size}
+sha256 = "{lib_sha}"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = {index_size}
+sha256 = "{index_sha}"
+"#,
+        lib_size = lib_size,
+        index_size = index_content.len(),
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject multiple primary libraries"
+    );
+}
+
+// === 20. Index references missing library artifact ===
+
+#[test]
+fn test_rejects_index_references_missing_library() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = create_valid_backup(&tmp);
+
+    // Corrupt the index to reference a library that doesn't exist.
+    let index_content = r#"[[libraries]]
+filename = "default"
+is_primary = true
+
+[[libraries]]
+filename = "nonexistent"
+is_primary = false
+"#;
+    fs::write(backup_dir.join("libraries.toml"), index_content).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject index references to missing library artifacts"
+    );
+}
+
+// === 21. Library artifact not referenced by index (replace mode) ===
+
+#[test]
+fn test_rejects_unreferenced_library_in_replace_mode() {
+    let (tmp, _config_dir) = setup_test_env();
+    let backup_dir = create_valid_backup(&tmp);
+
+    // Add a library file that is not referenced by the index.
+    fs::write(
+        backup_dir.join("libraries").join("extra.toml"),
+        r#"[[snippets]]
+id = "extra-1"
+description = "extra snippet"
+command = "echo extra"
+"#,
+    )
+    .unwrap();
+
+    // Update the manifest to include the extra library.
+    let extra_sha = sha256_hex(
+        r#"[[snippets]]
+id = "extra-1"
+description = "extra snippet"
+command = "echo extra"
+"#
+        .as_bytes(),
+    );
+    let extra_size = r#"[[snippets]]
+id = "extra-1"
+description = "extra snippet"
+command = "echo extra"
+"#
+    .len();
+    let manifest = format!(
+        r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 130
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+
+[[files]]
+path = "extra.toml"
+kind = "library"
+size = {extra_size}
+sha256 = "{extra_sha}"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = 68
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+"#,
+        extra_size = extra_size,
+    );
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&_config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject unreferenced library in replace mode"
+    );
+}
+
+// === 22. No journal, artifact, pending, or live write on rejection ===
+
+#[test]
+fn test_invalid_manifest_creates_no_transaction_artifacts() {
+    let (tmp, config_dir) = setup_test_env();
+    let backup_dir = tmp.path().join("bad-backup");
+    let libraries_dir = backup_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let lib_content = "placeholder";
+    fs::write(libraries_dir.join("default.toml"), lib_content).unwrap();
+
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = 68
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    // The index references "default" but the manifest has no index entry
+    // with a valid libraries.toml file. Actually, the manifest has an index
+    // entry but the file doesn't exist. This should fail at source file
+    // checks (file missing), not at semantic validation.
+    //
+    // Instead, let's create a manifest with a duplicate destination to
+    // trigger a structural validation failure.
+    let manifest = r#"schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = 11
+sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
+"#;
+    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+
+    let output = snp_in(&config_dir)
+        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "restore should reject duplicate destinations"
+    );
+
+    // Assert no transaction artifacts were created.
+    let txn_dir = config_dir.join(".transaction");
+    assert!(
+        !txn_dir.exists() || txn_dir.read_dir().unwrap().next().is_none(),
+        "no transaction directory should exist after manifest rejection"
+    );
+    assert!(
+        !config_dir.join("auto-sync-pending.toml").exists(),
+        "no pending marker should exist after manifest rejection"
+    );
+    assert!(
+        !config_dir.join("libraries").join("default.toml").exists(),
+        "no live destination should be written after manifest rejection"
     );
 }

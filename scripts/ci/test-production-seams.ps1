@@ -6,7 +6,8 @@
 .DESCRIPTION
     This script:
     1. Builds `snp` without `test-support` into an isolated target directory.
-    2. Sets matching valid seam values and runs valid scenarios.
+    2. Sets matching valid seam values and runs valid scenarios that traverse
+      the guarded code paths.
     3. Asserts that no test behavior activates.
 #>
 param()
@@ -49,44 +50,114 @@ sync_interval_minutes = 30
 auto_sync = false
 '@ | Set-Content (Join-Path $SnipConfig 'sync.toml')
 
+# Helper: bounded wait for a file to appear
+function Wait-ForFile {
+    param([string]$Path, [int]$TimeoutSecs = 10)
+    $elapsed = 0
+    while (-not (Test-Path $Path)) {
+        Start-Sleep -Milliseconds 200
+        $elapsed++
+        if ($elapsed -ge ($TimeoutSecs * 5)) { return $false }
+    }
+    return $true
+}
+
 try {
     Write-Host ''
-    Write-Host '=== Test 1: SNP_TEST_FAILPOINT does not abort production binary ==='
+    Write-Host '=== Test 1: SNP_TEST_FAILPOINT does not abort production restore ==='
+    # Create a valid backup to restore.
+    $BackupDir = Join-Path $TmpDir 'valid-backup'
+    $LibDir = Join-Path $BackupDir 'libraries'
+    New-Item -ItemType Directory -Path $LibDir -Force | Out-Null
+
+    $LibContent = '[[snippets]]
+id = "test-1"
+description = "test snippet"
+command = "echo test"
+'
+    $LibContent | Set-Content (Join-Path $LibDir 'default.toml')
+
+    $IndexContent = '[[libraries]]
+filename = "default"
+is_primary = true
+'
+    $IndexContent | Set-Content (Join-Path $BackupDir 'libraries.toml')
+
+    $LibSha = (Get-FileHash -Path (Join-Path $LibDir 'default.toml') -Algorithm SHA256).Hash.ToLower()
+    $IndexSha = (Get-FileHash -Path (Join-Path $BackupDir 'libraries.toml') -Algorithm SHA256).Hash.ToLower()
+    $LibSize = (Get-Item (Join-Path $LibDir 'default.toml')).Length
+    $IndexSize = (Get-Item (Join-Path $BackupDir 'libraries.toml')).Length
+
+    $Manifest = @"
+schema = 1
+created_at_unix_ms = 1700000000000
+snip_it_version = "1.0.0"
+layout = "directory"
+
+[[files]]
+path = "default.toml"
+kind = "library"
+size = $($LibSize)
+sha256 = "$LibSha"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = $($IndexSize)
+sha256 = "$IndexSha"
+"@
+    $Manifest | Set-Content (Join-Path $BackupDir 'manifest.toml')
+
+    # Run restore with the failpoint env var set. Production binary ignores it.
     $env:SNP_TEST_FAILPOINT = 'restore-after-prepared'
-    & $Binary list *>$null
+    & $Binary restore $BackupDir --mode dry-run *>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host 'FAIL: production binary aborted or errored with matching failpoint'
         exit 1
     }
-    Write-Host 'PASS: failpoint did not abort production binary'
+    Write-Host 'PASS: failpoint did not abort production restore'
 
     Write-Host ''
-    Write-Host '=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass executor ==='
+    Write-Host '=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass production executor ==='
     $env:SNP_TEST_EXECUTOR_MODE = 'noop-success'
     $StateDir = Join-Path $TmpDir 'state'
-    & $Binary auto-sync-execute --state-dir $StateDir *>$null
-    if ($LASTEXITCODE -eq 0) {
+    $stderr2 = Join-Path $TmpDir 'seam-stderr-2.txt'
+    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *> $stderr2
+    $exitCode2 = $LASTEXITCODE
+    if ($exitCode2 -eq 0) {
         Write-Host 'FAIL: production executor exited 0 with noop-success mode (seam is active)'
         exit 1
     }
-    Write-Host 'PASS: noop-success mode did not bypass production executor'
+    $stderrContent = Get-Content $stderr2 -Raw
+    if ($stderrContent -match '(?i)usage|invalid|unknown.*argument|missing.*required') {
+        Write-Host 'FAIL: executor stderr contains usage/parsing diagnostics:'
+        Write-Host $stderrContent
+        exit 1
+    }
+    Write-Host "PASS: noop-success mode did not bypass production executor (exit code: $exitCode2)"
 
     Write-Host ''
     Write-Host '=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==='
     $env:SNP_SKIP_WORKER_SPAWN = '1'
-    & $Binary list *>$null
+    & $Binary library create seam-test *>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host 'FAIL: production binary errored with SNP_SKIP_WORKER_SPAWN set'
+        Write-Host 'FAIL: production binary errored with SNP_SKIP_WORKER_SPAWN set during real mutation'
         exit 1
     }
-    Write-Host 'PASS: worker spawn suppression did not affect production binary'
+    $libPath = Join-Path $SnipConfig 'libraries\seam-test.toml'
+    if (-not (Test-Path $libPath)) {
+        Write-Host 'FAIL: library file was not created — mutation was suppressed'
+        exit 1
+    }
+    Write-Host 'PASS: worker spawn suppression did not affect production mutation'
 
     Write-Host ''
     Write-Host '=== Test 4: SNP_TEST_EVENTS_DIR does not create event files ==='
     $EventsDir = Join-Path $TmpDir 'events'
     New-Item -ItemType Directory -Path $EventsDir -Force | Out-Null
     $env:SNP_TEST_EVENTS_DIR = $EventsDir
-    & $Binary list *>$null
+    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *>$null
+    $null = $LASTEXITCODE  # may fail due to unreachable server; that's expected
     if (Test-Path (Join-Path $EventsDir 'test-events.jsonl')) {
         Write-Host 'FAIL: production binary created event file'
         exit 1
@@ -97,11 +168,19 @@ try {
     Write-Host '=== Test 5: SNP_TEST_MUTATION_BARRIER_DIR does not block production ==='
     $BarrierDir = Join-Path $TmpDir 'barrier'
     New-Item -ItemType Directory -Path $BarrierDir -Force | Out-Null
-    'snippet-save' | Set-Content (Join-Path $BarrierDir 'point')
+    'library-create' | Set-Content (Join-Path $BarrierDir 'point')
     $env:SNP_TEST_MUTATION_BARRIER_DIR = $BarrierDir
-    & $Binary list *>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host 'FAIL: production binary blocked or errored with mutation barrier set'
+    $job = Start-Job { & $using:Binary library create barrier-test *>$null; $LASTEXITCODE }
+    $completed = $job | Wait-Job -Timeout 10
+    if (-not $completed) {
+        Write-Host 'FAIL: production binary blocked with mutation barrier set (timeout)'
+        Stop-Job $job
+        exit 1
+    }
+    $exitCode5 = (Receive-Job $job)
+    Remove-Job $job
+    if ($exitCode5 -ne 0) {
+        Write-Host "FAIL: production binary errored with mutation barrier set (exit: $exitCode5)"
         exit 1
     }
     if (Test-Path (Join-Path $BarrierDir 'entered')) {

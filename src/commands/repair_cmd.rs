@@ -11,10 +11,53 @@ use crate::library::LibraryManager;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Typed repair action categories for safe, structured repair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairAction {
+    /// Prune orphaned usage entries (usage index entries for snippets that no longer exist).
+    PruneOrphanedUsage,
+    /// Roll back an interrupted transaction.
+    RollbackInterruptedTransaction,
+    /// Remove an orphaned transaction artifact directory (no matching journal).
+    RemoveOrphanedArtifact,
+    /// Repair library index (duplicate entries, missing primary, etc.).
+    RepairLibraryIndex,
+    /// Repair snippet IDs (duplicates, missing IDs).
+    RepairSnippetIds,
+    /// Repair timestamps (missing, invalid).
+    RepairTimestamps,
+}
+
+impl RepairAction {
+    /// Short category string for display.
+    pub fn category(&self) -> &'static str {
+        match self {
+            RepairAction::PruneOrphanedUsage => "usage",
+            RepairAction::RollbackInterruptedTransaction => "transaction",
+            RepairAction::RemoveOrphanedArtifact => "transaction",
+            RepairAction::RepairLibraryIndex => "index",
+            RepairAction::RepairSnippetIds => "ids",
+            RepairAction::RepairTimestamps => "timestamps",
+        }
+    }
+
+    /// Whether this action is safe to apply automatically.
+    pub fn is_safe(&self) -> bool {
+        matches!(
+            self,
+            RepairAction::PruneOrphanedUsage
+                | RepairAction::RollbackInterruptedTransaction
+                | RepairAction::RemoveOrphanedArtifact
+        )
+    }
+}
+
 /// A single repair action identified during validation.
 #[derive(Debug, Clone)]
 pub struct RepairItem {
-    /// Short category (e.g. "index", "primary", "usage", "ids", "transaction").
+    /// Typed action category.
+    pub action: RepairAction,
+    /// Short category string (for display).
     pub category: String,
     /// Description of the problem found.
     pub problem: String,
@@ -22,6 +65,25 @@ pub struct RepairItem {
     pub fix: String,
     /// Whether this fix is safe to apply automatically.
     pub safe: bool,
+    /// Target path for the repair action, if applicable.
+    /// This replaces fragile string parsing of the problem description.
+    pub target_path: Option<PathBuf>,
+}
+
+/// Exit status for the repair command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepairExitStatus {
+    /// No issues found — nothing to repair.
+    #[default]
+    Clean,
+    /// Issues found and all safe repairs applied successfully.
+    Repaired,
+    /// Issues found but some repairs failed.
+    PartialFailure,
+    /// Issues found but no safe repairs to apply (all unsafe).
+    UnsafeOnly,
+    /// Dry run completed — no changes made.
+    DryRun,
 }
 
 /// Report emitted after repair analysis or application.
@@ -32,6 +94,7 @@ pub struct RepairReport {
     pub applied: usize,
     pub skipped: usize,
     pub failed: usize,
+    pub exit_status: RepairExitStatus,
 }
 
 /// Run the repair command.
@@ -41,7 +104,12 @@ pub struct RepairReport {
 /// - `dry_run=true`: Analyse and print planned repairs without changes.
 /// - `apply=true`: Create pre-repair backup, apply safe repairs, emit report.
 /// - Neither: Print validation summary only.
-pub fn run(dry_run: bool, apply: bool, library: Option<String>, json: bool) -> SnipResult<()> {
+pub fn run(
+    dry_run: bool,
+    apply: bool,
+    library: Option<String>,
+    json: bool,
+) -> SnipResult<RepairExitStatus> {
     let mut report = RepairReport::default();
 
     // Step 1: Validate and collect repair candidates
@@ -63,7 +131,8 @@ pub fn run(dry_run: bool, apply: bool, library: Option<String>, json: bool) -> S
 
         if safe_items.is_empty() {
             eprintln!("\nNo safe repairs to apply.");
-            return Ok(());
+            report.exit_status = RepairExitStatus::UnsafeOnly;
+            return Ok(report.exit_status);
         }
 
         // Create backup before applying
@@ -85,13 +154,25 @@ pub fn run(dry_run: bool, apply: bool, library: Option<String>, json: bool) -> S
 
         // Count skipped (unsafe) items
         report.skipped = report.items.len() - safe_items.len();
+
+        if report.failed > 0 {
+            report.exit_status = RepairExitStatus::PartialFailure;
+        } else {
+            report.exit_status = RepairExitStatus::Repaired;
+        }
+    } else if report.items.is_empty() {
+        report.exit_status = RepairExitStatus::Clean;
+    } else if dry_run {
+        report.exit_status = RepairExitStatus::DryRun;
+    } else {
+        report.exit_status = RepairExitStatus::UnsafeOnly;
     }
 
     if dry_run {
         eprintln!("\n(dry run — no changes made)");
     }
 
-    Ok(())
+    Ok(report.exit_status)
 }
 
 /// Collect repair candidates from library validation.
@@ -100,10 +181,12 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
         Ok(m) => m,
         Err(e) => {
             report.items.push(RepairItem {
+                action: RepairAction::RepairLibraryIndex,
                 category: "config".to_string(),
                 problem: format!("Failed to load library manager: {e}"),
                 fix: "Check ~/.config/snp/libraries.toml for corruption".to_string(),
                 safe: false,
+                target_path: None,
             });
             return Ok(());
         }
@@ -144,6 +227,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                 for (i, snippet) in snippets.snippets.iter().enumerate() {
                     if snippet.id.is_empty() {
                         report.items.push(RepairItem {
+                            action: RepairAction::RepairSnippetIds,
                             category: "ids".to_string(),
                             problem: format!(
                                 "Snippet {} in '{}' has empty ID",
@@ -152,9 +236,11 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                             ),
                             fix: "Generate UUID for snippet".to_string(),
                             safe: true,
+                            target_path: None,
                         });
                     } else if !all_ids.insert(snippet.id.clone()) {
                         report.items.push(RepairItem {
+                            action: RepairAction::RepairSnippetIds,
                             category: "ids".to_string(),
                             problem: format!(
                                 "Duplicate ID '{}' in '{}'",
@@ -163,6 +249,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                             ),
                             fix: "Regenerate duplicate ID".to_string(),
                             safe: true,
+                            target_path: None,
                         });
                     }
                 }
@@ -171,6 +258,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                 for (i, snippet) in snippets.snippets.iter().enumerate() {
                     if snippet.created_at == 0 || snippet.updated_at == 0 {
                         report.items.push(RepairItem {
+                            action: RepairAction::RepairTimestamps,
                             category: "timestamps".to_string(),
                             problem: format!(
                                 "Snippet {} ('{}') in '{}' has zero timestamp",
@@ -180,12 +268,14 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                             ),
                             fix: "Set timestamps to current time".to_string(),
                             safe: true,
+                            target_path: None,
                         });
                     }
                 }
             }
             Err(e) => {
                 report.items.push(RepairItem {
+                    action: RepairAction::RepairLibraryIndex,
                     category: "config".to_string(),
                     problem: format!(
                         "Failed to load '{}': {e}",
@@ -193,6 +283,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                     ),
                     fix: "Check file for TOML syntax errors".to_string(),
                     safe: false,
+                    target_path: None,
                 });
             }
         }
@@ -204,6 +295,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
             let primary_path = libraries_dir.join(format!("{}.toml", primary.filename));
             if !primary_path.exists() {
                 report.items.push(RepairItem {
+                    action: RepairAction::RepairLibraryIndex,
                     category: "primary".to_string(),
                     problem: format!(
                         "Primary library '{}' references missing file",
@@ -211,6 +303,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                     ),
                     fix: "Promote first available library to primary".to_string(),
                     safe: true,
+                    target_path: None,
                 });
             }
         }
@@ -219,17 +312,21 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
             let libs = mgr.list_libraries();
             if libs.len() == 1 {
                 report.items.push(RepairItem {
+                    action: RepairAction::RepairLibraryIndex,
                     category: "primary".to_string(),
                     problem: "No primary library is set (only one library exists)".to_string(),
                     fix: format!("Set '{}' as primary", libs[0].filename),
                     safe: true,
+                    target_path: None,
                 });
             } else if !libs.is_empty() {
                 report.items.push(RepairItem {
+                    action: RepairAction::RepairLibraryIndex,
                     category: "primary".to_string(),
                     problem: "No primary library is set".to_string(),
                     fix: "Run 'snp library set-primary <name>' to choose one".to_string(),
                     safe: false,
+                    target_path: None,
                 });
             }
         }
@@ -254,10 +351,12 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
     }
     if orphaned_count > 0 {
         report.items.push(RepairItem {
+            action: RepairAction::PruneOrphanedUsage,
             category: "usage".to_string(),
             problem: format!("{orphaned_count} orphaned usage entries (snippets no longer exist)"),
             fix: "Remove orphaned usage entries".to_string(),
             safe: true,
+            target_path: None,
         });
     }
 
@@ -271,6 +370,7 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
 
     for journal in &interrupted {
         report.items.push(RepairItem {
+            action: RepairAction::RollbackInterruptedTransaction,
             category: "transaction".to_string(),
             problem: format!(
                 "Interrupted transaction '{}' (op: {})",
@@ -279,6 +379,7 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
             ),
             fix: "Roll back interrupted transaction".to_string(),
             safe: true,
+            target_path: None,
         });
     }
 
@@ -342,6 +443,7 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
             let id = dir_name.to_string_lossy().to_string();
             if !journal_ids.contains(&id) {
                 report.items.push(RepairItem {
+                    action: RepairAction::RemoveOrphanedArtifact,
                     category: "transaction".to_string(),
                     problem: format!(
                         "Orphaned transaction artifact directory '{}'",
@@ -349,6 +451,7 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
                     ),
                     fix: "Remove orphaned artifact directory".to_string(),
                     safe: true,
+                    target_path: Some(path.clone()),
                 });
             }
         }
@@ -359,68 +462,86 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
 
 /// Apply a single safe repair.
 fn apply_repair(item: &RepairItem) -> SnipResult<()> {
-    match item.category.as_str() {
-        "usage" => {
+    match item.action {
+        RepairAction::PruneOrphanedUsage => {
             // Prune orphaned usage entries
             let mut usage_index = crate::usage::UsageIndex::load();
             let active_ids = collect_active_snippet_ids();
             usage_index.prune(&active_ids);
             usage_index.save()?;
         }
-        "transaction" => {
-            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+        RepairAction::RemoveOrphanedArtifact => {
+            // Safe orphan deletion: use target_path (not string parsing),
+            // validate containment, and reject symlinks.
+            if let Some(ref path) = item.target_path {
+                // Validate the path is within the transaction state directory.
+                let state_dir =
+                    crate::auto_sync::notification::derive_state_dir().join(".transaction");
+                let artifacts_root = state_dir.join("artifacts");
+                let canonical_root = artifacts_root
+                    .canonicalize()
+                    .unwrap_or(artifacts_root.clone());
+                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-            // Distinguish interrupted transactions from orphaned artifacts
-            // by the problem description prefix.
-            if item.problem.starts_with("Orphaned") {
-                // Extract the artifact directory path from the problem message.
-                // Format: "Orphaned transaction artifact directory '<path>'"
-                if let Some(start) = item.problem.find('\'')
-                    && let Some(end) = item.problem[start + 1..].find('\'')
-                {
-                    let dir_path = &item.problem[start + 1..start + 1 + end];
-                    let path = Path::new(dir_path);
-                    if path.exists() {
-                        fs::remove_dir_all(path).map_err(|e| {
-                            SnipError::io_error(
-                                "remove orphaned artifact directory",
-                                path.to_path_buf(),
-                                e,
-                            )
-                        })?;
-                    }
+                if !canonical_path.starts_with(&canonical_root) {
+                    return Err(SnipError::runtime_error(
+                        "Orphaned artifact path traversal",
+                        Some(&format!(
+                            "Artifact directory {} is outside the transaction artifacts root {}",
+                            path.display(),
+                            canonical_root.display()
+                        )),
+                    ));
                 }
-            } else {
-                // Roll back interrupted transactions
-                let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
-                for journal in &interrupted {
-                    crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
-                        SnipError::runtime_error(
-                            "rollback interrupted transaction",
-                            Some(&format!(
-                                "Failed to rollback transaction '{}': {e}",
-                                &journal.id[..8]
-                            )),
+
+                // Reject symlinks.
+                if path.is_symlink() {
+                    return Err(SnipError::runtime_error(
+                        "Orphaned artifact is a symlink",
+                        Some(&format!(
+                            "Refusing to remove symlinked artifact directory: {}",
+                            path.display()
+                        )),
+                    ));
+                }
+
+                if path.exists() {
+                    fs::remove_dir_all(path).map_err(|e| {
+                        SnipError::io_error(
+                            "remove orphaned artifact directory",
+                            path.to_path_buf(),
+                            e,
                         )
                     })?;
                 }
             }
         }
-        "ids" | "timestamps" | "primary" => {
+        RepairAction::RollbackInterruptedTransaction => {
+            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
+            let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
+            for journal in &interrupted {
+                crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
+                    SnipError::runtime_error(
+                        "rollback interrupted transaction",
+                        Some(&format!(
+                            "Failed to rollback transaction '{}': {e}",
+                            &journal.id[..8]
+                        )),
+                    )
+                })?;
+            }
+        }
+        RepairAction::RepairLibraryIndex
+        | RepairAction::RepairSnippetIds
+        | RepairAction::RepairTimestamps => {
             // These require library file mutations — not safe for auto-apply
             // without the full library context. Return a descriptive error.
             return Err(SnipError::runtime_error(
                 "Auto-repair not implemented for this category",
                 Some(&format!(
-                    "Category '{}' requires manual intervention or full library context",
-                    item.category
+                    "Action {:?} requires manual intervention or full library context",
+                    item.action
                 )),
-            ));
-        }
-        _ => {
-            return Err(SnipError::runtime_error(
-                "Unknown repair category",
-                Some(&item.category),
             ));
         }
     }
@@ -628,13 +749,16 @@ mod tests {
     #[test]
     fn test_repair_item_creation() {
         let item = RepairItem {
+            action: RepairAction::PruneOrphanedUsage,
             category: "usage".to_string(),
             problem: "orphaned entries".to_string(),
             fix: "prune".to_string(),
             safe: true,
+            target_path: None,
         };
         assert!(item.safe);
         assert_eq!(item.category, "usage");
+        assert_eq!(item.action, RepairAction::PruneOrphanedUsage);
     }
 
     #[test]

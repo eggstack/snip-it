@@ -81,6 +81,106 @@ fn read_manifest(backup_dir: &Path) -> serde_json::Value {
     toml::from_str(&content).unwrap()
 }
 
+/// Verify backup snapshot coherence: every manifest entry exists,
+/// actual size equals manifest size, actual hash equals manifest hash,
+/// index references correspond to copied library files, every copied
+/// library parses, and no temporary or partially written files are included.
+fn verify_backup_coherence(backup_dir: &Path) {
+    let manifest = read_manifest(backup_dir);
+    let files = manifest["files"].as_array().unwrap();
+
+    for entry in files {
+        let path = entry["path"].as_str().unwrap();
+        let kind = entry["kind"].as_str().unwrap();
+        let size = entry["size"].as_u64().unwrap();
+        let sha = entry["sha256"].as_str().unwrap();
+
+        // Resolve the actual file path in the backup directory.
+        let file_path = if kind == "library" {
+            let basename = path.strip_prefix("libraries/").unwrap_or(path);
+            backup_dir.join("libraries").join(basename)
+        } else {
+            backup_dir.join(path)
+        };
+
+        assert!(
+            file_path.exists(),
+            "backup manifest entry '{}' does not exist in backup directory",
+            path
+        );
+
+        // Verify actual size equals manifest size.
+        let actual_size = fs::metadata(&file_path).unwrap().len();
+        assert_eq!(
+            actual_size, size,
+            "backup file '{}' size mismatch: manifest={}, actual={}",
+            path, size, actual_size
+        );
+
+        // Verify actual hash equals manifest hash.
+        let content = fs::read(&file_path).unwrap();
+        let actual_hash = sha256_hex(&content);
+        assert_eq!(
+            actual_hash, sha,
+            "backup file '{}' hash mismatch: manifest={}, actual={}",
+            path, sha, actual_hash
+        );
+
+        // For library files, verify they parse as valid TOML.
+        if kind == "library" {
+            let _: toml::Value = toml::from_str(&String::from_utf8_lossy(&content))
+                .unwrap_or_else(|e| panic!("backup library {} is not valid TOML: {}", path, e));
+        }
+
+        // For index files, verify library references correspond to copied files.
+        if kind == "index" {
+            let index_value: toml::Value =
+                toml::from_str(&String::from_utf8_lossy(&content)).unwrap();
+            if let Some(libraries) = index_value.get("libraries").and_then(|l| l.as_array()) {
+                for lib in libraries {
+                    let filename = lib.get("filename").and_then(|f| f.as_str()).unwrap();
+                    let lib_path = backup_dir
+                        .join("libraries")
+                        .join(format!("{filename}.toml"));
+                    assert!(
+                        lib_path.exists(),
+                        "index references library '{}' but file does not exist in backup",
+                        filename
+                    );
+                }
+            }
+        }
+    }
+
+    // Verify no temporary or partially written files are included.
+    fn check_no_temp(dir: &Path) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".tmp") || name.ends_with(".partial") || name.ends_with(".bak") {
+                    panic!("backup contains temporary file: {}", name);
+                }
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    check_no_temp(&entry.path());
+                }
+            }
+        }
+    }
+    check_no_temp(backup_dir);
+}
+
+/// Compute SHA-256 hex digest of bytes.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
 /// Create a library with a test snippet via the snp binary.
 fn setup_library(config_dir: &Path, name: &str) {
     let mut cmd = snp_in(config_dir);
@@ -165,8 +265,13 @@ fn test_library_create_barrier_coherent_snapshot() {
         .spawn()
         .unwrap();
 
-    // Give backup a moment to start and attempt lock acquisition.
-    std::thread::sleep(Duration::from_millis(500));
+    // Assert backup has NOT completed while the writer holds the lock.
+    // Poll with try_wait for a bounded observation interval.
+    std::thread::sleep(Duration::from_millis(250));
+    assert!(
+        backup.try_wait().unwrap().is_none(),
+        "backup completed while writer still held LocalDataLock"
+    );
 
     // Release the writer.
     release_barrier(&barrier_dir);
@@ -198,6 +303,9 @@ fn test_library_create_barrier_coherent_snapshot() {
         content.contains("snippet") || content.contains("snippets"),
         "library file in backup should be complete"
     );
+
+    // Verify full backup snapshot coherence.
+    verify_backup_coherence(&backup_dir);
 }
 
 /// Test: snippet save barrier — backup sees coherent state during save.
@@ -293,6 +401,9 @@ fn test_snippet_save_barrier_coherent_snapshot() {
             }
         }
     }
+
+    // Verify full backup snapshot coherence.
+    verify_backup_coherence(&backup_dir);
 }
 
 /// Test: library delete barrier — backup sees coherent state during delete.
@@ -464,6 +575,9 @@ auto_sync_failure = "warn"
                 panic!("backup sync.toml is not valid TOML (partial write?): {}", e)
             });
         }
+
+        // Verify full backup snapshot coherence.
+        verify_backup_coherence(&backup_dir);
     } else {
         // Register may have failed before reaching the barrier (e.g.,
         // server not available). This is acceptable — the barrier point

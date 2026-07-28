@@ -209,6 +209,33 @@ Library files can carry a `schema_version` key. Use `migration.rs` for version-g
 ### Read-only commands suppress startup recovery
 `StartupRecoveryPolicy` in `src/auto_sync/notification.rs` classifies commands into five policies: `Allow` (mutation commands), `SuppressReadOnly` (list, search, get, status, validate, etc.), `SuppressExplicitSync` (sync, cron, register), `SuppressInternal` (worker/executor subprocesses), and `SuppressConfiguration` (doctor, keybindings, shell init). Only `Allow` triggers startup recovery — read-only commands never spawn workers or access the network.
 
+### Restartable transaction cleanup (CleaningUp state)
+`TransactionState` now includes `CleaningUp { next_cleanup_position: usize }`. `finalize_transaction_cleanup` is restartable: it persists `CleaningUp` state before each step and resumes from `next_cleanup_position` on recovery. The recovery scanner in `gate_mutation_on_interrupted_transactions` handles `CleaningUp` by resuming cleanup. Cleanup order: 0=validate containment, 1=remove staged files, 2=remove backup files, 3=remove artifact dir, 4=remove journal, 5=fsync parent.
+
+### Fail-closed artifact permissions
+`create_private_dir` uses `DirBuilderExt::mode(0o700)` at creation time and verifies the mode post-creation, returning `Err` on mismatch. `write_sync_verify` uses `OpenOptionsExt::mode(0o600)` at creation time and verifies the mode post-creation, returning `Err` on mismatch. Permission failures are fatal, not warnings.
+
+### Destination permission policy
+`DestinationClass` enum (`NewPrivate`, `ExistingPreserved`, `Restore`) in `src/commands/restore_cmd.rs` defines the permission policy for restore installation. New files default to `0o600` on Unix. Existing files preserve their original mode. After installation, `verify_permissions` checks the destination mode matches expectations.
+
+### Manifest semantic validation
+`validate_manifest_semantics` in `src/commands/restore_cmd.rs` parses the index file and enforces index/library consistency: no duplicate library names, no multiple primaries, no missing library references, no duplicate case-folded names, no path alias collisions, and (for replace mode) every library artifact must be referenced by the index. Called after source-file checks but before lock acquisition.
+
+### Typed repair actions
+`RepairAction` enum in `src/commands/repair_cmd.rs` provides typed repair categories. `RepairItem` uses `action: RepairAction` and `target_path: Option<PathBuf>` instead of string parsing. `RepairExitStatus` enum (`Clean`, `Repaired`, `PartialFailure`, `UnsafeOnly`, `DryRun`) provides typed exit status. Safe orphan deletion validates path containment and rejects symlinks.
+
+### Recording server telemetry
+`RecordedRequest` and `RecordingSummary` types in `tests/support/recording_server.rs` provide exact sanitized request telemetry. `RecordingServer` has `record_request()`, `summary()`, `assert_exact_request_count()`, `assert_operation_seen()`, `assert_operation_not_seen()`, `assert_total_request_count()`, and `assert_success_count()` methods.
+
+### LocalDataLock blocking proof
+`tests/local_data_lock_barriers.rs` uses `try_wait` to assert that backup remains blocked while the writer holds `LocalDataLock`. The `verify_backup_coherence()` helper verifies manifest hashes, index/library relationships, and no partial writes.
+
+### Production seam proofs
+`scripts/ci/test-production-seams.sh` and `scripts/ci/test-production-seams.ps1` traverse real guarded code paths: real `snp restore` with failpoints, real `snp auto-sync-execute --generation`, real `snp library create`, and real worker/executor logic. No `snp list` is used.
+
+### Phase 11F closure
+All 12 workstreams (A–L) from `plans/snip-it-correctness-11f-finalization-security-and-evidence-closure.md` are complete. See `plans/snip-it-correctness-11-closure-status.md` for detailed evidence per workstream.
+
 ### Feature labels are removed (binary is monolithic)
 The `[features]` table in `Cargo.toml` previously contained empty labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) that did not gate any dependencies. These were removed in Phase 10 as misleading. The binary is monolithic — all functionality is unconditionally compiled. Only `test-support` remains for test infrastructure.
 

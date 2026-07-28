@@ -176,3 +176,89 @@ fn test_invalid_executor_mode_is_ignored() {
         );
     }
 }
+
+/// Verify that the false-success executor (noop-success) leaves pending
+/// intact and records non-success durable status.
+///
+/// This is the headline Workstream A regression test: the executor exits
+/// zero without clearing pending, and the worker must NOT record success.
+#[test]
+fn test_false_success_executor_leaves_pending_intact() {
+    let env = TestEnvironment::builder()
+        .with_server_url("http://127.0.0.1:1") // unreachable — should not be contacted
+        .with_debounce(0)
+        .build()
+        .unwrap();
+
+    env.write_sync_toml();
+
+    // Create a library and snippet so there is a pending mutation to observe.
+    env.create_library("work");
+    env.new_snippet("false-success-test");
+
+    // Read the pending generation.
+    let pending_gen = env
+        .read_pending_generation()
+        .expect("pending marker should exist after mutation");
+    assert!(pending_gen > 0, "pending generation should be > 0");
+
+    // Run the worker with noop-success executor mode.
+    let mut cmd = env.snp_cmd();
+    cmd.env("SNP_TEST_EXECUTOR_MODE", "noop-success");
+    cmd.env("SNP_TEST_EVENTS_DIR", &env.state_dir);
+    cmd.args([
+        "auto-sync-worker",
+        "--state-dir",
+        env.state_dir.to_str().unwrap(),
+    ]);
+    let output = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+
+    // The worker should have completed (may exit 0 or non-zero depending
+    // on the outcome, but the key assertion is about status/pending).
+    let _ = output;
+
+    // Assert: pending marker is still intact (generation unchanged).
+    let pending_after = env.read_pending_generation();
+    assert!(
+        pending_after.is_some(),
+        "pending marker should still exist after false-success executor"
+    );
+    let pending_after = pending_after.unwrap();
+    assert_eq!(
+        pending_after, pending_gen,
+        "pending generation must be unchanged after false-success executor"
+    );
+
+    // Assert: durable status is non-success.
+    let status_content = env
+        .read_status_file()
+        .expect("status file should exist after worker run");
+    assert!(
+        !status_content.contains("last_result = \"success\""),
+        "false-success executor must NOT record success status; got: {status_content}"
+    );
+    assert!(
+        status_content.contains("failure"),
+        "false-success executor must record a failure result; got: {status_content}"
+    );
+
+    // Assert: no sync_completed event reports success=true.
+    let sink = EventSink::new(&env.state_dir);
+    let sync_events: Vec<_> = sink
+        .read_all()
+        .into_iter()
+        .filter(|e| e.component == "worker" && e.event == "sync_completed")
+        .collect();
+    for ev in &sync_events {
+        let details = ev.detail.as_deref().unwrap_or("");
+        assert!(
+            !details.contains("\"success\":true"),
+            "no sync_completed event should report success=true for false-success executor: {details}"
+        );
+    }
+}

@@ -41,6 +41,57 @@ pub enum ServerEvent {
     },
 }
 
+/// A sanitized request recorded by the recording server.
+///
+/// All fields are safe for test assertions — no secrets, API keys,
+/// or sensitive payloads are captured. Only the operation metadata
+/// needed for deterministic assertions is retained.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRequest {
+    /// HTTP method (e.g. "POST", "GET").
+    pub method: String,
+    /// Request path (e.g. "/snip.SyncService/Push").
+    pub path: String,
+    /// Library ID targeted by the request (sanitized — no snippet content).
+    pub library_id: String,
+    /// Device ID making the request.
+    pub device_id: String,
+    /// Operation name (e.g. "push", "pull", "register").
+    pub operation: String,
+    /// Whether the request succeeded.
+    pub success: bool,
+}
+
+/// Exact summary of recorded requests for deterministic test assertions.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct RecordingSummary {
+    /// Total number of recorded requests.
+    pub total_requests: usize,
+    /// Request count per operation name.
+    pub by_operation: std::collections::HashMap<String, usize>,
+    /// Request count per success/failure.
+    pub by_success: std::collections::HashMap<bool, usize>,
+}
+
+impl RecordingSummary {
+    /// Returns the exact count of requests for the given operation.
+    pub fn count_for(&self, operation: &str) -> usize {
+        self.by_operation.get(operation).copied().unwrap_or(0)
+    }
+
+    /// Returns the exact count of successful requests.
+    pub fn success_count(&self) -> usize {
+        self.by_success.get(&true).copied().unwrap_or(0)
+    }
+
+    /// Returns the exact count of failed requests.
+    pub fn failure_count(&self) -> usize {
+        self.by_success.get(&false).copied().unwrap_or(0)
+    }
+}
+
 /// Failure mode for the recording server.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -62,6 +113,7 @@ pub struct RecordingServer {
     addr: SocketAddr,
     server_task: tokio::task::JoinHandle<()>,
     events: Arc<Mutex<Vec<ServerEvent>>>,
+    recorded_requests: Arc<Mutex<Vec<RecordedRequest>>>,
     captured_auth_header: Arc<Mutex<Option<String>>>,
     failure_mode: Arc<Mutex<FailureMode>>,
     request_count: Arc<Mutex<usize>>,
@@ -81,6 +133,7 @@ impl RecordingServer {
             addr,
             server_task,
             events: Arc::new(Mutex::new(Vec::new())),
+            recorded_requests: Arc::new(Mutex::new(Vec::new())),
             captured_auth_header,
             failure_mode: Arc::new(Mutex::new(FailureMode::None)),
             request_count: Arc::new(Mutex::new(0)),
@@ -274,6 +327,89 @@ impl RecordingServer {
             timestamp_ms: now_millis(),
         };
         self.events.lock().unwrap().push(event);
+    }
+
+    /// Record a sanitized request for exact assertion.
+    ///
+    /// All fields are sanitized — no secrets or snippet content are captured.
+    pub fn record_request(&self, request: RecordedRequest) {
+        self.recorded_requests.lock().unwrap().push(request);
+    }
+
+    /// Returns all recorded requests.
+    pub fn recorded_requests(&self) -> Vec<RecordedRequest> {
+        self.recorded_requests.lock().unwrap().clone()
+    }
+
+    /// Returns an exact summary of all recorded requests.
+    pub fn summary(&self) -> RecordingSummary {
+        let requests = self.recorded_requests.lock().unwrap();
+        let mut by_operation: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut by_success: std::collections::HashMap<bool, usize> =
+            std::collections::HashMap::new();
+        for req in requests.iter() {
+            *by_operation.entry(req.operation.clone()).or_insert(0) += 1;
+            *by_success.entry(req.success).or_insert(0) += 1;
+        }
+        RecordingSummary {
+            total_requests: requests.len(),
+            by_operation,
+            by_success,
+        }
+    }
+
+    /// Assert that exactly `expected` requests were recorded for the given
+    /// operation. Panics with an exact count message on mismatch.
+    pub fn assert_exact_request_count(&self, operation: &str, expected: usize) {
+        let actual = self.summary().count_for(operation);
+        assert_eq!(
+            actual, expected,
+            "Expected exactly {} requests for operation '{}', got {}",
+            expected, operation, actual
+        );
+    }
+
+    /// Assert that the given operation was seen at least once.
+    /// Uses exact count assertion (not `>= 1` permissive check).
+    pub fn assert_operation_seen(&self, operation: &str) {
+        let count = self.summary().count_for(operation);
+        assert!(
+            count >= 1,
+            "Expected operation '{}' to be seen at least once, but it was seen {} times",
+            operation,
+            count
+        );
+    }
+
+    /// Assert that the given operation was NOT seen.
+    pub fn assert_operation_not_seen(&self, operation: &str) {
+        let count = self.summary().count_for(operation);
+        assert_eq!(
+            count, 0,
+            "Expected operation '{}' to not be seen, but it was seen {} times",
+            operation, count
+        );
+    }
+
+    /// Assert the exact total request count.
+    pub fn assert_total_request_count(&self, expected: usize) {
+        let actual = self.summary().total_requests;
+        assert_eq!(
+            actual, expected,
+            "Expected exactly {} total requests, got {}",
+            expected, actual
+        );
+    }
+
+    /// Assert the exact success count.
+    pub fn assert_success_count(&self, expected: usize) {
+        let actual = self.summary().success_count();
+        assert_eq!(
+            actual, expected,
+            "Expected exactly {} successful requests, got {}",
+            expected, actual
+        );
     }
 
     /// Stop the server.

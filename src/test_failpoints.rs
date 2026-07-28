@@ -105,4 +105,6 @@ pub mod failpoints {
         "restore-after-journal-pending-before-cleanup";
     pub const RESTORE_DURING_FIRST_ROLLBACK: &str = "restore-during-first-rollback";
     pub const RESTORE_DURING_SECOND_ROLLBACK: &str = "restore-during-second-rollback";
+    pub const CLEANUP_DURING_STAGED_REMOVAL: &str = "cleanup-during-staged-removal";
+    pub const CLEANUP_DURING_DIR_REMOVAL: &str = "cleanup-during-dir-removal";
 }

@@ -19,6 +19,117 @@ pub enum RestoreMode {
     Replace,
 }
 
+/// Destination permission policy for restore installation.
+///
+/// Determines how file permissions are applied to the destination after
+/// content installation:
+/// - `NewPrivate`: new file — default to `0o600` on Unix (private).
+/// - `ExistingPreserved`: existing file — preserve original mode.
+/// - `Restore`: restore from backup — use the original mode captured
+///   in `OriginalFileMetadata`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationClass {
+    /// Destination did not exist before restore — create with `0o600`.
+    NewPrivate,
+    /// Destination existed and is being overwritten — preserve its mode.
+    ExistingPreserved,
+    /// Destination is being restored from backup — use original mode.
+    Restore,
+}
+
+impl DestinationClass {
+    /// Determine the destination class based on whether the file existed
+    /// before the transaction and whether we are restoring from backup.
+    pub fn for_destination(existed_before: bool, is_restore: bool) -> Self {
+        if !existed_before {
+            DestinationClass::NewPrivate
+        } else if is_restore {
+            DestinationClass::Restore
+        } else {
+            DestinationClass::ExistingPreserved
+        }
+    }
+
+    /// Apply the permission policy to the destination file.
+    ///
+    /// On Unix:
+    /// - `NewPrivate`: sets `0o600`.
+    /// - `ExistingPreserved`: preserves the original mode from metadata.
+    /// - `Restore`: restores the original mode from metadata.
+    ///
+    /// On non-Unix, this is a best-effort operation.
+    pub fn apply_permissions(
+        &self,
+        path: &Path,
+        metadata: &crate::transaction::OriginalFileMetadata,
+    ) -> SnipResult<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = match self {
+                DestinationClass::NewPrivate => 0o600,
+                DestinationClass::ExistingPreserved | DestinationClass::Restore => {
+                    metadata.unix_mode.unwrap_or(0o600)
+                }
+            };
+            let perms = fs::Permissions::from_mode(mode);
+            fs::set_permissions(path, perms).map_err(|e| {
+                SnipError::io_error("set destination permissions", path.to_path_buf(), e)
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            if let Some(readonly) = metadata.readonly {
+                if let Ok(meta) = fs::metadata(path) {
+                    let mut perms = meta.permissions();
+                    perms.set_readonly(readonly);
+                    let _ = fs::set_permissions(path, perms);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify the destination file's permissions match expectations.
+    ///
+    /// On Unix, compares `mode & 0o777` to the expected value.
+    /// Returns an error on mismatch.
+    pub fn verify_permissions(
+        &self,
+        path: &Path,
+        metadata: &crate::transaction::OriginalFileMetadata,
+    ) -> SnipResult<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let expected = match self {
+                DestinationClass::NewPrivate => 0o600,
+                DestinationClass::ExistingPreserved | DestinationClass::Restore => {
+                    metadata.unix_mode.unwrap_or(0o600)
+                }
+            };
+            let actual = fs::metadata(path)
+                .map_err(|e| {
+                    SnipError::io_error("stat destination for verification", path.to_path_buf(), e)
+                })?
+                .mode()
+                & 0o777;
+            if actual != expected {
+                return Err(SnipError::runtime_error(
+                    "Destination permission verification failed",
+                    Some(&format!(
+                        "File {} mode mismatch: expected {:o}, got {:o}",
+                        path.display(),
+                        expected,
+                        actual
+                    )),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Conflict report for merge/replace operations.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RestoreConflict {
@@ -170,26 +281,12 @@ fn validate_manifest_contract(manifest: &BackupManifest) -> SnipResult<()> {
     }
 
     // 7. Validate index/library relationships
-    if index_count == 1 {
-        // Parse the index to check for duplicate library filenames and
-        // duplicate primary declarations.
-        let index_entry = manifest
-            .files
-            .iter()
-            .find(|e| e.kind == BackupEntryKind::Index)
-            .unwrap();
-        let index_path = resolve_backup_path(
-            &PathBuf::new(), // We only need the relative path for parsing
-            index_entry,
-        );
-        // We can't read the file here (no backup root), so we skip content
-        // parsing. Index content validation happens during artifact inspection.
-        // But we can validate that library entries in the manifest have
-        // corresponding index references if the index is present.
-        let _ = index_path;
-    }
+    // Semantic validation (parsing index content) is performed by
+    // `validate_manifest_semantics` after safe source-file checks,
+    // before any lock, transaction, or live write. This phase only
+    // validates structural cardinality and destination uniqueness.
 
-    // 8. Validate entry size/hash field shape
+    // 8. Validate entry size/hash field shape (structural — no artifact access)
     for entry in &manifest.files {
         if entry.sha256.len() != 64 {
             return Err(SnipError::runtime_error(
@@ -236,6 +333,153 @@ fn verify_checksum(file_path: &Path, expected_sha: &str) -> SnipResult<bool> {
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     Ok(actual == expected_sha)
+}
+
+/// Semantic manifest validation: parse index content and enforce
+/// index/library consistency.
+///
+/// This is called after safe source-file checks (existence, type, size,
+/// symlink rejection) but before any lock, transaction, or live write.
+/// It reads the index file from the backup root and enforces:
+/// - duplicate library filenames in the index are rejected;
+/// - more than one primary library is rejected;
+/// - index references without matching library artifacts are rejected;
+/// - duplicate normalized/case-folded library names are rejected;
+/// - path aliases that map to the same destination are rejected;
+/// - for replace mode, every library artifact must be referenced by the index.
+fn validate_manifest_semantics(
+    backup_root: &Path,
+    manifest: &BackupManifest,
+    mode: RestoreMode,
+) -> SnipResult<()> {
+    let index_entry = manifest
+        .files
+        .iter()
+        .find(|e| e.kind == BackupEntryKind::Index);
+
+    let Some(index_entry) = index_entry else {
+        // No index present — nothing to validate semantically.
+        return Ok(());
+    };
+
+    let index_path = resolve_backup_path(backup_root, index_entry);
+    let index_content = fs::read_to_string(&index_path).map_err(|e| {
+        SnipError::io_error("read index for semantic validation", index_path.clone(), e)
+    })?;
+
+    let index: crate::library::LibraryConfig = toml::from_str(&index_content)
+        .map_err(|e| SnipError::toml_error("parse index for semantic validation", e))?;
+
+    // Collect library filenames from the index.
+    let mut seen_filenames: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_normalized: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut primary_count = 0u32;
+
+    for lib in &index.libraries {
+        // Reject duplicate exact filenames.
+        if !seen_filenames.insert(lib.filename.clone()) {
+            return Err(SnipError::runtime_error(
+                "Duplicate library in index",
+                Some(&format!(
+                    "index references library '{}' more than once",
+                    lib.filename
+                )),
+            ));
+        }
+
+        // Reject duplicate normalized/case-folded names.
+        let normalized = lib.filename.to_lowercase();
+        if !seen_normalized.insert(normalized.clone()) {
+            return Err(SnipError::runtime_error(
+                "Duplicate library name in index",
+                Some(&format!(
+                    "index references library '{}' with case-folded collision '{}'",
+                    lib.filename, normalized
+                )),
+            ));
+        }
+
+        // Count primaries.
+        if lib.is_primary {
+            primary_count += 1;
+        }
+    }
+
+    // Reject more than one primary library.
+    if primary_count > 1 {
+        return Err(SnipError::runtime_error(
+            "Multiple primary libraries in index",
+            Some(&format!(
+                "index declares {} primary libraries; exactly one is allowed",
+                primary_count
+            )),
+        ));
+    }
+
+    // Build a set of library filenames referenced by the index.
+    let indexed_filenames: std::collections::HashSet<String> =
+        index.libraries.iter().map(|l| l.filename.clone()).collect();
+
+    // Collect library filenames from the manifest.
+    let manifest_library_filenames: std::collections::HashSet<String> = manifest
+        .files
+        .iter()
+        .filter(|e| e.kind == BackupEntryKind::Library)
+        .map(|e| {
+            Path::new(&e.path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+
+    // Reject index references without matching library artifacts.
+    for lib in &index.libraries {
+        if !manifest_library_filenames.contains(&lib.filename) {
+            return Err(SnipError::runtime_error(
+                "Index references missing library artifact",
+                Some(&format!(
+                    "index references library '{}' but no matching library artifact exists in manifest",
+                    lib.filename
+                )),
+            ));
+        }
+    }
+
+    // For replace mode: every library artifact must be referenced by the index.
+    if mode == RestoreMode::Replace {
+        for lib_name in &manifest_library_filenames {
+            if !indexed_filenames.contains(lib_name) {
+                return Err(SnipError::runtime_error(
+                    "Library artifact not referenced by index",
+                    Some(&format!(
+                        "replace mode requires every library artifact to be referenced by the index; '{}' is not indexed",
+                        lib_name
+                    )),
+                ));
+            }
+        }
+    }
+
+    // Reject path aliases that map to the same destination.
+    let mut seen_destinations: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in &manifest.files {
+        if entry.kind == BackupEntryKind::Library {
+            let key = portable_destination_key(entry)?;
+            if !seen_destinations.insert(key.clone()) {
+                return Err(SnipError::runtime_error(
+                    "Library path alias collision",
+                    Some(&format!(
+                        "library entry '{}' maps to the same destination as another entry",
+                        entry.path
+                    )),
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Validate that a library TOML file does not contain duplicate snippet IDs.
@@ -613,6 +857,12 @@ fn install_library_file(
     report: &mut RestoreReport,
 ) -> SnipResult<()> {
     let dst = config_libraries_dir.join(format!("{}.toml", library_name));
+
+    // Determine destination class: if the file existed before, we preserve
+    // its mode; if it's new, we create with 0o600 (private).
+    let existed_before = dst.exists();
+    let dest_class = DestinationClass::for_destination(existed_before, true);
+
     let bytes = fs::read(staged_path).map_err(|e| {
         SnipError::io_error(
             "read staged library for install",
@@ -620,11 +870,18 @@ fn install_library_file(
             e,
         )
     })?;
-    let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
+
+    // Use SensitiveConfig durability for new files to get 0o600 at creation;
+    // use DurableUserData for existing files (permissions restored below).
+    let opts = if dest_class == DestinationClass::NewPrivate {
+        AtomicWriteOptions::for_durability(Durability::SensitiveConfig)
+    } else {
+        AtomicWriteOptions::for_durability(Durability::DurableUserData).preserve_permissions(true)
+    };
     atomic_replace(&dst, &bytes, &opts)?;
 
-    // Restore original file permissions after installation.
-    crate::transaction::apply_original_metadata(&dst, original_metadata)?;
+    // Apply destination permission policy.
+    dest_class.apply_permissions(&dst, original_metadata)?;
 
     // Verify the installed destination from the live file.
     let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_else(|_| String::new());
@@ -642,6 +899,7 @@ fn install_library_file(
 
     // Verify metadata after installation.
     crate::transaction::verify_metadata(&dst, original_metadata)?;
+    dest_class.verify_permissions(&dst, original_metadata)?;
 
     report.files_restored += 1;
     Ok(())
@@ -767,6 +1025,12 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             ));
         }
     }
+
+    // 5b. Semantic validation: parse index content and enforce
+    // index/library consistency. This happens after safe source-file
+    // checks (existence, type, size, symlink rejection, checksum) but
+    // before any lock, transaction, or live write.
+    validate_manifest_semantics(&backup, &manifest, mode)?;
 
     let config_dir = get_config_dir();
     let mut report = RestoreReport {

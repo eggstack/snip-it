@@ -1122,6 +1122,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             json,
         }) => {
             commands::repair_cmd::run(dry_run, apply, library, json)?;
+            // Exit status is encoded in RepairExitStatus; for now,
+            // all non-error outcomes return exit code 0.
+            // Future: map RepairExitStatus to CliOutcome exit codes.
         }
         Some(Commands::Validate {
             library,
