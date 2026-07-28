@@ -126,12 +126,13 @@ fn enable_auto_sync(config_dir: &std::path::Path, debounce_secs: u64) {
 }
 
 fn create_library(config_dir: &std::path::Path, name: &str) {
-    let _ = snp_cmd(config_dir)
-        .args(["library", "create", name])
-        .output();
-    let _ = snp_cmd(config_dir)
-        .args(["library", "set-primary", name])
-        .output();
+    let mut create = snp_cmd(config_dir);
+    create.env("SNP_SKIP_WORKER_SPAWN", "1");
+    let _ = create.args(["library", "create", name]).output();
+
+    let mut set_primary = snp_cmd(config_dir);
+    set_primary.env("SNP_SKIP_WORKER_SPAWN", "1");
+    let _ = set_primary.args(["library", "set-primary", name]).output();
 }
 
 fn new_snippet(config_dir: &std::path::Path, desc: &str) {
@@ -231,11 +232,19 @@ fn test_real_remote_effect_before_pending_clear() {
     let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
     std::fs::write(&cred_path, &env.api_key).unwrap();
 
-    // Create the e2e library before registering the client. Registration
-    // enables sync settings, so creating it afterward would itself record a
-    // pending mutation and launch a worker that races with the headline
-    // mutation below.
+    // TestEnvironment already writes enabled auto-sync settings. Suppress the
+    // worker for this setup mutation, then discard its pending intent so the
+    // headline mutation below is the only measured scheduling input.
     create_library(config_dir, "e2e");
+    let setup_pending = pending_marker(config_dir);
+    if let Err(error) = fs::remove_file(&setup_pending)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        panic!(
+            "failed to clear setup pending marker {}: {error}",
+            setup_pending.display()
+        );
+    }
 
     // Register a real client against the server via the binary.
     register_with_binary(config_dir, &server_url);
