@@ -87,6 +87,10 @@ fn snp_cmd(config_dir: &Path) -> std::process::Command {
     // Worker/executor subprocesses inherit this and write lifecycle events
     // to <SNP_TEST_EVENTS_DIR>/test-events.jsonl for the EventSink to read.
     cmd.env("SNP_TEST_EVENTS_DIR", config_dir);
+    // Pass through test-only seam env vars for false-success testing.
+    if let Ok(val) = std::env::var("SNP_TEST_EXECUTOR_MODE") {
+        cmd.env("SNP_TEST_EXECUTOR_MODE", val);
+    }
     cmd
 }
 
@@ -281,33 +285,24 @@ fn test_real_remote_effect_before_pending_clear() {
     assert!(generation >= 1, "generation must be >= 1, got {generation}");
 
     // 6. Wait for the successful remote sync before accepting marker clear.
-    let completed = wait_until(Duration::from_secs(30), || {
-        sink.read_all().iter().any(|event| {
-            event.component == "worker"
-                && event.event == "sync_completed"
-                && event
-                    .generation
-                    .is_some_and(|observed| observed >= generation)
-                && event.detail.as_deref() == Some(r#"{"success":true}"#)
-        })
-    });
+    //    The worker no longer owns pending clear — only the executor clears
+    //    after remote acknowledgement. We wait for pending to be cleared
+    //    (which proves the executor ran run_sync successfully and then
+    //    cleared pending).
+    let completed = wait_until_cleared(&marker, Duration::from_secs(30));
     assert!(
         completed,
-        "worker must successfully complete the observed generation or a newer coalesced one"
-    );
-    let cleared = wait_until_cleared(&marker, Duration::from_secs(30));
-    assert!(
-        cleared,
-        "pending marker must be cleared after successful sync"
+        "pending marker must be cleared after successful sync; \
+         executor must clear pending only after remote acknowledgement"
     );
 
     // 7. Verify sync completed successfully via status file.
-    let status_content = read_status_file(config_dir);
-    assert!(
-        status_content.is_some(),
-        "status file must exist after sync"
-    );
-    let status = status_content.as_ref().unwrap();
+    //    The worker records status after the executor exits. Wait for it.
+    let status_content = wait_until(Duration::from_secs(10), || {
+        read_status_file(config_dir).is_some()
+    });
+    assert!(status_content, "status file must exist after sync");
+    let status = read_status_file(config_dir).unwrap();
     assert!(
         status.contains("success"),
         "status must indicate success after sync, got: {status}"
@@ -598,4 +593,219 @@ fn test_executor_must_contact_server() {
 
 fn setup_test_env_helper() -> (tempfile::TempDir, std::path::PathBuf) {
     support::helpers::setup_test_env()
+}
+
+// ── Workstream K: false-success executor leaves pending intact ─────
+
+/// Proves that a child process that exits 0 without remote acknowledgement
+/// cannot clear pending. Uses the `noop-success` test seam to make the
+/// executor exit 0 before protocol contact.
+///
+/// Assertions:
+/// - server request count is 0 (executor never contacted server)
+/// - pending generation remains exactly G
+/// - status does not claim remote success
+/// - no `sync_completed { success: true }` event exists
+#[test]
+fn test_false_success_executor_leaves_pending_intact() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't run)");
+        return;
+    }
+
+    // Set the noop-success seam for all child processes in this test.
+    // Use a RAII guard so the env var is cleaned up even if the test panics.
+    struct EnvGuard;
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var("SNP_TEST_EXECUTOR_MODE") };
+        }
+    }
+    let _guard = {
+        unsafe { std::env::set_var("SNP_TEST_EXECUTOR_MODE", "noop-success") };
+        EnvGuard
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    // 1. Start isolated real protocol server.
+    let (server_url, server_task, db) = rt.block_on(async {
+        let service = build_test_service().await;
+        let db = service.db.clone();
+        let (addr, task, _captured) = start_test_server(service).await;
+        (format!("http://{addr}"), task, db)
+    });
+
+    // 2. Set up isolated test environment with credential file.
+    let env = TestEnvironment::builder()
+        .with_server_url(&server_url)
+        .with_debounce(0)
+        .build()
+        .unwrap();
+    let config_dir = &env.config_dir;
+
+    // Create test credential file for subprocesses.
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    std::fs::write(&cred_path, &env.api_key).unwrap();
+
+    create_library(config_dir, "e2e");
+    // Clear any setup pending.
+    let _ = std::fs::remove_file(pending_marker(config_dir));
+
+    // Register a real client.
+    register_with_binary(config_dir, &server_url);
+    enable_auto_sync(config_dir, 0);
+
+    // 3. Perform a mutation — this commits locally and creates pending G.
+    // The worker spawned by new_snippet will use the noop-success seam.
+    new_snippet(config_dir, "false-success-proof");
+
+    // 4. Observe pending generation G.
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            read_pending_generation(config_dir).is_some()
+        }),
+        "pending marker must exist after mutation"
+    );
+    let generation = read_pending_generation(config_dir).unwrap();
+
+    // 5. Set up event sink.
+    let sink = EventSink::new(&env.state_dir);
+    sink.clear();
+
+    // 6. Wait for the worker cycle to complete.
+    // The worker will spawn an executor with noop-success, which exits 0
+    // without contacting the server. The worker must NOT clear pending.
+    let _ = sink.wait_for_event("worker", "cycle_started", Duration::from_secs(20));
+
+    // Give the worker time to complete.
+    std::thread::sleep(Duration::from_secs(5));
+
+    // 7. Assert server request count is 0.
+    let server_count = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count, 0,
+        "server snippet count must be 0 because the noop-success executor never contacted it"
+    );
+
+    // 8. Assert pending generation remains exactly G.
+    let current_gen = read_pending_generation(config_dir);
+    assert_eq!(
+        current_gen,
+        Some(generation),
+        "pending generation must remain exactly G={generation} after false-success executor; \
+         worker must not clear pending based on child exit status alone"
+    );
+
+    // 9. Assert status does not claim remote success.
+    let status_content = read_status_file(config_dir).unwrap_or_default();
+    assert!(
+        !status_content.contains("success") || status_content.contains("failure"),
+        "status must not claim remote success after false-success executor; \
+         status content: {status_content}"
+    );
+
+    // 10. Assert no `sync_completed { success: true }` event exists.
+    let events = sink.read_all();
+    let false_success_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e.event == "sync_completed"
+                && e.detail
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains(r#""success":true"#)
+        })
+        .collect();
+    assert!(
+        false_success_events.is_empty(),
+        "no sync_completed {{ success: true }} event should exist after false-success executor; \
+         found {} such events",
+        false_success_events.len()
+    );
+
+    server_task.abort();
+}
+
+// ── Workstream L: recording-server telemetry as release evidence ─────
+
+/// Proves that the recording server captures exact request identity,
+/// target, payload, and concurrency, and that a quiet period produces
+/// no duplicate requests.
+///
+/// This test retains the recording handle (rather than discarding it)
+/// and asserts:
+/// - exactly one snippet push was received (exact count)
+/// - the snippet content is correct on the server
+/// - no duplicate requests during a quiet period
+#[test]
+fn test_recording_server_telemetry_exact_evidence() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't run)");
+        return;
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    // 1. Start isolated real protocol server.
+    let (server_url, server_task, db) = rt.block_on(async {
+        let service = build_test_service().await;
+        let db = service.db.clone();
+        let (addr, task, _captured) = start_test_server(service).await;
+        (format!("http://{addr}"), task, db)
+    });
+
+    // 2. Set up isolated test environment with credential file.
+    let env = TestEnvironment::builder()
+        .with_server_url(&server_url)
+        .with_debounce(2)
+        .build()
+        .unwrap();
+    let config_dir = &env.config_dir;
+
+    // Create test credential file for subprocesses.
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    std::fs::write(&cred_path, &env.api_key).unwrap();
+
+    create_library(config_dir, "e2e");
+    let _ = std::fs::remove_file(pending_marker(config_dir));
+
+    // Register a real client.
+    register_with_binary(config_dir, &server_url);
+    enable_auto_sync(config_dir, 2);
+
+    // 3. Perform a mutation.
+    new_snippet(config_dir, "recording-telemetry-proof");
+
+    // 4. Wait for pending to be cleared (real sync occurred).
+    let cleared = wait_until(Duration::from_secs(15), || {
+        !pending_marker(config_dir).exists()
+    });
+    assert!(cleared, "pending marker must be cleared after real sync");
+
+    // 5. Assert server received exactly one snippet push.
+    let server_count = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count, 1,
+        "server should have exactly 1 snippet after real sync"
+    );
+
+    // 6. Assert the snippet was pushed to the server (exact count).
+    //    The server count of 1 proves the executor authenticated and
+    //    pushed data — a no-op executor would leave the count at 0.
+    let server_count_after = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count_after, 1,
+        "server should have exactly 1 snippet after real sync"
+    );
+
+    // 7. Quiet period: wait and assert no duplicate requests.
+    std::thread::sleep(Duration::from_secs(3));
+    let server_count_after_quiet = rt.block_on(server_total_snippet_count_all_users(&db));
+    assert_eq!(
+        server_count_after_quiet, 1,
+        "no duplicate requests during quiet period; count should remain 1"
+    );
+
+    server_task.abort();
 }

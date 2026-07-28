@@ -187,7 +187,12 @@ pub enum ExecutorCommand {
 /// Loads sync settings, checks if sync is configured, determines
 /// direction, creates a Tokio runtime, runs one sync, and maps the
 /// outcome to an internal exit code.
-pub fn run_executor(_state_dir: &Path) -> i32 {
+///
+/// After `run_sync` returns `Ok(())` (remote acknowledgement), the
+/// executor clears the pending marker with `clear_if_generation_matches`.
+/// This ensures that only the executor — not the worker — owns the
+/// pending clear, and only after actual protocol success.
+pub fn run_executor(state_dir: &Path, generation: u64) -> i32 {
     crate::auto_sync::test_events::emit("executor", "started", std::process::id(), None, None);
 
     // Test seam: false-success executor mode.
@@ -280,11 +285,56 @@ pub fn run_executor(_state_dir: &Path) -> i32 {
     match result {
         Ok(()) => {
             tracing::info!("executor: sync completed successfully");
+            // Clear pending ONLY after remote acknowledgement (run_sync
+            // returned Ok). The worker does not clear pending — only the
+            // executor owns this responsibility.
+            match crate::auto_sync::pending::clear_if_generation_matches(state_dir, generation) {
+                Ok(crate::auto_sync::pending::ConditionalClearResult::Cleared) => {
+                    tracing::info!(
+                        generation,
+                        "executor: pending cleared after remote acknowledgement"
+                    );
+                }
+                Ok(crate::auto_sync::pending::ConditionalClearResult::GenerationChanged {
+                    current,
+                }) => {
+                    tracing::warn!(
+                        expected = generation,
+                        current,
+                        "executor: pending generation changed; not clearing (coalesced success)"
+                    );
+                    // Report coalesced success — the worker will schedule
+                    // another cycle for the newer generation.
+                }
+                Ok(crate::auto_sync::pending::ConditionalClearResult::Missing) => {
+                    tracing::warn!(
+                        generation,
+                        "executor: pending marker missing; nothing to clear"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        generation,
+                        error = %e,
+                        "executor: pending clear failed; preserving recoverability"
+                    );
+                    // Remote work may have succeeded, but local intent is
+                    // unresolved. Exit nonzero to signal attention needed.
+                    crate::auto_sync::test_events::emit(
+                        "executor",
+                        "exited",
+                        std::process::id(),
+                        Some(generation),
+                        Some(r#"{"success":false,"reason":"pending_clear_error"}"#.into()),
+                    );
+                    return ExecutorExitCode::InternalError.to_exit_status();
+                }
+            }
             crate::auto_sync::test_events::emit(
                 "executor",
                 "exited",
                 std::process::id(),
-                None,
+                Some(generation),
                 Some(r#"{"success":true}"#.into()),
             );
             ExecutorExitCode::Success.to_exit_status()

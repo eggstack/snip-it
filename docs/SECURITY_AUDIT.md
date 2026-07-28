@@ -36,8 +36,8 @@
 
 | Property | Status | Evidence |
 |---|---|---|
-| No raw secret in CLI argv | Verified | API key is loaded from keychain/config at runtime, never passed as CLI argument. Worker/executor receive `--state-dir` only (`src/auto_sync/spawn.rs:38-40`). |
-| No raw secret in worker/executor argv | Verified | `spawn_worker` and `spawn_executor` pass only `--state-dir <path>` (`src/auto_sync/spawn.rs:38-40`, `src/auto_sync/spawn.rs:74-77`). The API key is loaded from keychain inside the executor child process (`src/auto_sync/executor.rs:193`). |
+| No raw secret in CLI argv | Verified | API key is loaded from keychain/config at runtime, never passed as CLI argument. Worker/executor receive `--state-dir <path>` and `--generation <u64>` only (`src/auto_sync/spawn.rs:38-40`, `src/auto_sync/spawn.rs:74-77`). Generation is not sensitive. |
+| No raw secret in worker/executor argv | Verified | `spawn_worker` and `spawn_executor` pass only `--state-dir <path>` and `--generation <u64>` (`src/auto_sync/spawn.rs:38-40`, `src/auto_sync/spawn.rs:74-77`). The API key is loaded from keychain inside the executor child process (`src/auto_sync/executor.rs:193`). |
 | No secret in pending/status/locks/journals/temp filenames | Verified | Pending files use `auto-sync-pending.toml`, locks use `auto-sync-worker.lock` / `auto-sync-execution.lock`, status uses `auto-sync-status.toml`, temp files use UUID-based `.tmp` suffixes. Lock files contain PID, timestamp, and nonce only (`src/auto_sync/lock.rs:10-15`, `src/auto_sync/execution_lock.rs:21-26`). |
 | No secret in tracing/logs/panics/error display | Verified | `SyncSettings` implements `Debug` with `api_key` field printing `[REDACTED]` (`src/config.rs:248`). Snippet IDs logged, not content. gRPC errors logged as status strings. |
 | Backup excludes credentials | Verified | `redact_sync_config()` replaces API key lines with `<redacted>` (`src/commands/backup_cmd.rs:230-247`). Backups include `sync.toml` only when `include_sync_state` is explicitly requested. |

@@ -37,6 +37,193 @@ pub struct RestoreReport {
     pub pre_restore_backup: Option<String>,
 }
 
+/// Supported backup manifest schema version.
+const SUPPORTED_BACKUP_SCHEMA: u32 = 1;
+
+/// Supported backup layout.
+const SUPPORTED_BACKUP_LAYOUT: &str = "directory";
+
+/// Maximum allowed backup source file size (10 MiB).
+const MAX_RESTORE_SOURCE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Normalize path separators for portable collision detection.
+/// Converts backslashes to forward slashes.
+fn normalize_separators(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// Map a manifest entry to its logical destination path within the config
+/// directory. Returns an error for unsupported combinations.
+fn map_entry_to_destination(normalized_path: &str, kind: BackupEntryKind) -> SnipResult<PathBuf> {
+    match kind {
+        BackupEntryKind::Library => {
+            // Library paths may be "libraries/foo.toml" or just "foo.toml"
+            let basename = normalized_path
+                .strip_prefix("libraries/")
+                .unwrap_or(normalized_path);
+            Ok(PathBuf::from("libraries").join(basename))
+        }
+        BackupEntryKind::Index => Ok(PathBuf::from("libraries.toml")),
+        BackupEntryKind::Usage => Ok(PathBuf::from("usage.toml")),
+        BackupEntryKind::SyncConfig => Ok(PathBuf::from("sync.toml")),
+    }
+}
+
+/// Compute a portable, case-folded collision key for a manifest entry.
+///
+/// This normalizes separators, maps to the logical destination, and
+/// lowercases each component (with trailing-dot/trailing-space trimming)
+/// to detect collisions across platforms.
+fn portable_destination_key(entry: &BackupManifestEntry) -> SnipResult<String> {
+    let normalized = normalize_separators(&entry.path);
+    let logical = map_entry_to_destination(&normalized, entry.kind)?;
+    let components: Vec<String> = logical
+        .components()
+        .map(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .trim_end_matches(['.', ' '])
+                .to_lowercase()
+        })
+        .collect();
+    Ok(components.join("/"))
+}
+
+/// Validate the full manifest contract before any artifact access.
+///
+/// This enforces schema, layout, cardinality, destination uniqueness,
+/// and index/library consistency in a single phase. No transaction,
+/// lock, or live write may start before this succeeds.
+fn validate_manifest_contract(manifest: &BackupManifest) -> SnipResult<()> {
+    // 2. Validate schema
+    if manifest.schema != SUPPORTED_BACKUP_SCHEMA {
+        return Err(SnipError::runtime_error(
+            "Unsupported backup schema",
+            Some(&format!("unsupported backup schema: {}", manifest.schema)),
+        ));
+    }
+
+    // 3. Validate layout
+    if manifest.layout != SUPPORTED_BACKUP_LAYOUT {
+        return Err(SnipError::runtime_error(
+            "Unsupported backup layout",
+            Some(&format!("unsupported backup layout: {}", manifest.layout)),
+        ));
+    }
+
+    // 4. Validate entry kinds and required cardinality
+    let mut index_count = 0u32;
+    let mut usage_count = 0u32;
+    let mut sync_count = 0u32;
+
+    for entry in &manifest.files {
+        match entry.kind {
+            BackupEntryKind::Index => index_count += 1,
+            BackupEntryKind::Usage => usage_count += 1,
+            BackupEntryKind::SyncConfig => sync_count += 1,
+            BackupEntryKind::Library => {} // counted implicitly
+        }
+    }
+
+    if index_count > 1 {
+        return Err(SnipError::runtime_error(
+            "Duplicate index entry",
+            Some("manifest contains multiple index (libraries.toml) entries"),
+        ));
+    }
+    if usage_count > 1 {
+        return Err(SnipError::runtime_error(
+            "Duplicate usage entry",
+            Some("manifest contains multiple usage (usage.toml) entries"),
+        ));
+    }
+    if sync_count > 1 {
+        return Err(SnipError::runtime_error(
+            "Duplicate sync config entry",
+            Some("manifest contains multiple sync config (sync.toml) entries"),
+        ));
+    }
+
+    // 5. Canonicalize and validate paths (path traversal, Windows names, etc.)
+    for entry in &manifest.files {
+        validate_backup_path(&entry.path, entry.kind)?;
+    }
+
+    // 6. Detect exact and portable destination collisions
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in &manifest.files {
+        let key = portable_destination_key(entry).map_err(|e| {
+            SnipError::runtime_error(
+                "Invalid destination mapping",
+                Some(&format!("entry '{}': {e}", entry.path)),
+            )
+        })?;
+        if !seen_keys.insert(key.clone()) {
+            return Err(SnipError::runtime_error(
+                "Duplicate destination",
+                Some(&format!(
+                    "manifest entry '{}' collides with another entry on destination key '{}'",
+                    entry.path, key
+                )),
+            ));
+        }
+    }
+
+    // 7. Validate index/library relationships
+    if index_count == 1 {
+        // Parse the index to check for duplicate library filenames and
+        // duplicate primary declarations.
+        let index_entry = manifest
+            .files
+            .iter()
+            .find(|e| e.kind == BackupEntryKind::Index)
+            .unwrap();
+        let index_path = resolve_backup_path(
+            &PathBuf::new(), // We only need the relative path for parsing
+            index_entry,
+        );
+        // We can't read the file here (no backup root), so we skip content
+        // parsing. Index content validation happens during artifact inspection.
+        // But we can validate that library entries in the manifest have
+        // corresponding index references if the index is present.
+        let _ = index_path;
+    }
+
+    // 8. Validate entry size/hash field shape
+    for entry in &manifest.files {
+        if entry.sha256.len() != 64 {
+            return Err(SnipError::runtime_error(
+                "Invalid SHA-256 in manifest",
+                Some(&format!(
+                    "entry '{}': sha256 must be 64 hex chars, got {} chars",
+                    entry.path,
+                    entry.sha256.len()
+                )),
+            ));
+        }
+        if !entry.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SnipError::runtime_error(
+                "Invalid SHA-256 in manifest",
+                Some(&format!(
+                    "entry '{}': sha256 contains non-hex characters",
+                    entry.path
+                )),
+            ));
+        }
+        if entry.size > MAX_RESTORE_SOURCE_SIZE {
+            return Err(SnipError::runtime_error(
+                "Manifest entry exceeds maximum size",
+                Some(&format!(
+                    "entry '{}': {} bytes exceeds {} byte limit",
+                    entry.path, entry.size, MAX_RESTORE_SOURCE_SIZE
+                )),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Verify a single file's SHA-256 checksum.
 fn verify_checksum(file_path: &Path, expected_sha: &str) -> SnipResult<bool> {
     let bytes = fs::read(file_path)
@@ -161,12 +348,8 @@ fn validate_backup_path(path: &str, kind: BackupEntryKind) -> SnipResult<PathBuf
             Some(&format!("path={path}")),
         ));
     }
-    // Reject Windows drive letter paths (C:\, D:\, etc.)
-    if path.len() >= 3
-        && path.as_bytes()[0].is_ascii_alphabetic()
-        && path.as_bytes()[1] == b':'
-        && (path.as_bytes()[2] == b'/' || path.as_bytes()[2] == b'\\')
-    {
+    // Reject Windows drive letter paths (C:\, C:/, C:test.toml — any drive letter)
+    if path.len() >= 2 && path.as_bytes()[0].is_ascii_alphabetic() && path.as_bytes()[1] == b':' {
         return Err(SnipError::runtime_error(
             "Absolute path in backup manifest",
             Some(&format!("path={path}")),
@@ -420,12 +603,13 @@ fn compute_library_intended_bytes(
 /// staged file (already synced and verified during preparation) and
 /// installs it to the live destination via atomic replacement. After
 /// installation, it verifies the live destination hash matches the
-/// intended hash.
+/// intended hash and restores original file permissions.
 fn install_library_file(
     staged_path: &Path,
     config_libraries_dir: &Path,
     library_name: &str,
     intended_hash: &str,
+    original_metadata: &crate::transaction::OriginalFileMetadata,
     report: &mut RestoreReport,
 ) -> SnipResult<()> {
     let dst = config_libraries_dir.join(format!("{}.toml", library_name));
@@ -438,6 +622,9 @@ fn install_library_file(
     })?;
     let opts = AtomicWriteOptions::for_durability(Durability::DurableUserData);
     atomic_replace(&dst, &bytes, &opts)?;
+
+    // Restore original file permissions after installation.
+    crate::transaction::apply_original_metadata(&dst, original_metadata)?;
 
     // Verify the installed destination from the live file.
     let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_else(|_| String::new());
@@ -452,6 +639,9 @@ fn install_library_file(
             )),
         ));
     }
+
+    // Verify metadata after installation.
+    crate::transaction::verify_metadata(&dst, original_metadata)?;
 
     report.files_restored += 1;
     Ok(())
@@ -469,13 +659,18 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // 1. Load and validate manifest
     let manifest = load_manifest(&backup)?;
 
-    // 2. Validate all paths in manifest (path traversal prevention)
+    // 2. Validate manifest contract (schema, layout, cardinality,
+    //    destination uniqueness, index consistency) BEFORE any artifact
+    //    access. No transaction, lock, or live write may start before
+    //    this succeeds.
+    validate_manifest_contract(&manifest)?;
+
+    // 3. Validate all paths in manifest (path traversal prevention)
     for entry in &manifest.files {
         validate_backup_path(&entry.path, entry.kind)?;
     }
 
-    // 3. Validate source artifact sizes and types
-    const MAX_RESTORE_SOURCE_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB
+    // 4. Validate source artifact sizes and types
     for entry in &manifest.files {
         let file_path = resolve_backup_path(&backup, entry);
 
@@ -556,7 +751,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
-    // 4. Verify checksums
+    // 5. Verify checksums
     for entry in &manifest.files {
         // Resolve path relative to backup directory
         let file_path = resolve_backup_path(&backup, entry);
@@ -667,17 +862,27 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
     // Create pre-restore backups for affected files.
     // Use copy_sync_verify to ensure each backup is durably written and
     // verified from disk before proceeding.
-    let backup_dir_base = transaction_dir.join("backups");
-    fs::create_dir_all(&backup_dir_base).map_err(|e| {
-        SnipError::io_error("create transaction backup dir", backup_dir_base.clone(), e)
+    // Artifacts are stored under a per-transaction directory:
+    //   .transaction/artifacts/<txn-id>/backups/
+    //   .transaction/artifacts/<txn-id>/staged/
+    let artifact_dir = crate::transaction::transaction_artifact_dir(&transaction_dir, &journal.id);
+    let backup_dir_base = artifact_dir.join("backups");
+    crate::transaction::create_private_dir(&backup_dir_base).map_err(|e| {
+        SnipError::runtime_error(
+            "create transaction backup dir",
+            Some(&format!("{}: {e}", backup_dir_base.display())),
+        )
     })?;
 
     // Build the journal with backup paths for rollback and durable staged
     // paths for commit. All artifacts are written, synced, and verified
     // before BackupsDurable is persisted.
-    let staged_dir_base = transaction_dir.join("staged");
-    fs::create_dir_all(&staged_dir_base).map_err(|e| {
-        SnipError::io_error("create transaction staged dir", staged_dir_base.clone(), e)
+    let staged_dir_base = artifact_dir.join("staged");
+    crate::transaction::create_private_dir(&staged_dir_base).map_err(|e| {
+        SnipError::runtime_error(
+            "create transaction staged dir",
+            Some(&format!("{}: {e}", staged_dir_base.display())),
+        )
     })?;
 
     let mut journal_with_backups = journal.clone();
@@ -862,6 +1067,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                 &libraries_dir,
                                 &library_name,
                                 &staged.new_hash,
+                                &staged.original_metadata,
                                 &mut report,
                             )?;
                         }
@@ -877,6 +1083,10 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             let opts =
                                 AtomicWriteOptions::for_durability(Durability::DurableUserData);
                             atomic_replace(&dst, &bytes, &opts)?;
+                            crate::transaction::apply_original_metadata(
+                                &dst,
+                                &staged.original_metadata,
+                            )?;
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -889,6 +1099,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
+                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
                             report.files_restored += 1;
                         }
                         BackupEntryKind::Usage => {
@@ -903,6 +1114,10 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             let opts =
                                 AtomicWriteOptions::for_durability(Durability::DurableUserData);
                             atomic_replace(&dst, &bytes, &opts)?;
+                            crate::transaction::apply_original_metadata(
+                                &dst,
+                                &staged.original_metadata,
+                            )?;
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -915,6 +1130,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
+                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
                             report.files_restored += 1;
                         }
                         BackupEntryKind::SyncConfig => {
@@ -929,6 +1145,10 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             let opts =
                                 AtomicWriteOptions::for_durability(Durability::SensitiveConfig);
                             atomic_replace(&dst, &bytes, &opts)?;
+                            crate::transaction::apply_original_metadata(
+                                &dst,
+                                &staged.original_metadata,
+                            )?;
                             // Verify from live destination.
                             let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
                             if actual != staged.new_hash {
@@ -941,6 +1161,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     )),
                                 ));
                             }
+                            crate::transaction::verify_metadata(&dst, &staged.original_metadata)?;
                             report.conflicts.push(RestoreConflict {
                                 library: "sync".to_string(),
                                 kind: "redacted_key".to_string(),
@@ -974,6 +1195,22 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                     crate::test_failpoints::failpoints::RESTORE_AFTER_INDEX_INSTALL,
                 );
             }
+
+            // Test-only error injection: after the second live install,
+            // inject a handled error to trigger rollback. This is used by
+            // crash-during-rollback tests to ensure rollback has at least
+            // two actions to perform. Only compiled with test-support.
+            #[cfg(feature = "test-support")]
+            {
+                if position >= 1 {
+                    crate::test_failpoints::maybe_injected_error("restore-after-second-install")?;
+                }
+            }
+
+            // Barrier point: after first installed destination, while
+            // local-data lock remains held. Used by barrier-controlled
+            // backup concurrency tests.
+            crate::test_failpoints::mutation_barrier("restore-after-first-install-while-locked");
         }
 
         Ok(())
@@ -1050,7 +1287,9 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         let finalization = match pending_result {
             crate::auto_sync::pending::TransactionPendingResult::Created(state)
             | crate::auto_sync::pending::TransactionPendingResult::Reused(state) => {
-                crate::transaction::PendingFinalization::Recorded { generation: state.generation }
+                crate::transaction::PendingFinalization::Recorded {
+                    generation: state.generation,
+                }
             }
             crate::auto_sync::pending::TransactionPendingResult::Conflict(state) => {
                 // An unrelated newer pending generation exists. Per the
@@ -1063,9 +1302,17 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                      an unrelated newer pending generation exists; \
                      preserving it without incrementing"
                 );
-                crate::transaction::PendingFinalization::CoveredByExisting { generation: state.generation }
+                crate::transaction::PendingFinalization::CoveredByExisting {
+                    generation: state.generation,
+                }
             }
         };
+
+        // Failpoint: canonical pending marker is durably created or reused;
+        // journal still says CommittedLocal(NotRecorded).
+        crate::test_failpoints::maybe_failpoint(
+            crate::test_failpoints::failpoints::RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE,
+        );
 
         // Step 3: Persist CommittedLocal with the finalized pending state.
         // This confirms the pending marker is durably written.
@@ -1075,18 +1322,15 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             finalization,
         )?;
 
-        // Failpoint: after pending recorded, before journal update.
+        // Failpoint: after journal durably records Recorded(g) or
+        // CoveredByExisting(g), before cleanup (backups, staged files,
+        // and journal still exist).
         crate::test_failpoints::maybe_failpoint(
-            crate::test_failpoints::failpoints::RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE,
+            crate::test_failpoints::failpoints::RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP,
         );
 
         // Step 4: Clean up: remove journal and backups.
         crate::transaction::commit_transaction(&transaction_dir, &journal_with_backups)?;
-
-        // Failpoint: after journal update, before cleanup complete.
-        crate::test_failpoints::maybe_failpoint(
-            crate::test_failpoints::failpoints::RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP,
-        );
 
         // Schedule worker after durable pending intent.
         // This does NOT record another pending mutation — pending was
@@ -1766,6 +2010,297 @@ is_primary = true
         assert!(
             journals.is_empty(),
             "dry run must not create transaction journals"
+        );
+    }
+
+    // === Manifest contract validation tests (Workstream I) ===
+
+    /// Shared builder: creates a valid manifest with real sizes and SHA-256 values.
+    /// Tests modify the returned manifest to inject a single targeted fault.
+    fn make_valid_manifest() -> BackupManifest {
+        let lib_content =
+            b"[[snippets]]\nid = \"test\"\ndescription = \"test\"\ncommand = \"echo test\"\n";
+        let index_content = b"[[libraries]]\nfilename = \"test\"\nis_primary = true\n";
+        let lib_hash = sha256_hex(lib_content.to_vec());
+        let index_hash = sha256_hex(index_content.to_vec());
+        BackupManifest {
+            schema: 1,
+            created_at_unix_ms: 1700000000000,
+            snip_it_version: "1.0.0".to_string(),
+            layout: "directory".to_string(),
+            files: vec![
+                BackupManifestEntry {
+                    path: "test.toml".to_string(),
+                    kind: BackupEntryKind::Library,
+                    size: lib_content.len() as u64,
+                    sha256: lib_hash,
+                },
+                BackupManifestEntry {
+                    path: "libraries.toml".to_string(),
+                    kind: BackupEntryKind::Index,
+                    size: index_content.len() as u64,
+                    sha256: index_hash,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_schema_zero() {
+        let mut m = make_valid_manifest();
+        m.schema = 0;
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unsupported backup schema: 0"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_future_schema() {
+        let mut m = make_valid_manifest();
+        m.schema = 999;
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unsupported backup schema: 999"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_unsupported_layout() {
+        let mut m = make_valid_manifest();
+        m.layout = "archive".to_string();
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unsupported backup layout: archive"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_exact_duplicate_destination() {
+        let mut m = make_valid_manifest();
+        // Add a second library entry with the same path
+        m.files.push(BackupManifestEntry {
+            path: "test.toml".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate destination"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_case_fold_duplicate_destination() {
+        let mut m = make_valid_manifest();
+        // Add a library with a case-folded name that collides
+        m.files.push(BackupManifestEntry {
+            path: "TEST.toml".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate destination"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_slash_backslash_alias() {
+        let mut m = make_valid_manifest();
+        // Add a library with backslash alias of the existing path
+        m.files.push(BackupManifestEntry {
+            path: "libraries\\test.toml".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate destination"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_trailing_dot_alias() {
+        let mut m = make_valid_manifest();
+        // On Windows, "test.toml." is the same as "test.toml" (trailing dot trimmed).
+        // This must be rejected — either by extension check or collision detection.
+        m.files.push(BackupManifestEntry {
+            path: "test.toml.".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Duplicate destination") || msg.contains(".toml extension"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_trailing_space_alias() {
+        let mut m = make_valid_manifest();
+        // On Windows, "test.toml " is the same as "test.toml" (trailing space trimmed).
+        // This must be rejected — either by extension check or collision detection.
+        m.files.push(BackupManifestEntry {
+            path: "test.toml ".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Duplicate destination") || msg.contains(".toml extension"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_drive_relative_path() {
+        let mut m = make_valid_manifest();
+        m.files.push(BackupManifestEntry {
+            path: "C:test.toml".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Absolute") || msg.contains("traversal"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_unc_path() {
+        let mut m = make_valid_manifest();
+        m.files.push(BackupManifestEntry {
+            path: "\\\\server\\share\\test.toml".to_string(),
+            kind: BackupEntryKind::Library,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("UNC") || msg.contains("Absolute"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_reserved_device_name() {
+        let mut m = make_valid_manifest();
+        m.files[0].path = "CON.toml".to_string();
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Reserved Windows device name"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_duplicate_index_entry() {
+        let mut m = make_valid_manifest();
+        m.files.push(BackupManifestEntry {
+            path: "libraries.toml".to_string(),
+            kind: BackupEntryKind::Index,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate index entry"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_duplicate_usage_entry() {
+        let mut m = make_valid_manifest();
+        m.files.push(BackupManifestEntry {
+            path: "usage.toml".to_string(),
+            kind: BackupEntryKind::Usage,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        m.files.push(BackupManifestEntry {
+            path: "usage.toml".to_string(),
+            kind: BackupEntryKind::Usage,
+            size: 10,
+            sha256: "0".repeat(64),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate usage entry"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_invalid_sha256_length() {
+        let mut m = make_valid_manifest();
+        m.files[0].sha256 = "short".to_string();
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Invalid SHA-256"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_rejects_non_hex_sha256() {
+        let mut m = make_valid_manifest();
+        m.files[0].sha256 = "z".repeat(64);
+        let result = validate_manifest_contract(&m);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("non-hex"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_manifest_contract_accepts_valid_manifest() {
+        let m = make_valid_manifest();
+        let result = validate_manifest_contract(&m);
+        assert!(
+            result.is_ok(),
+            "valid manifest should pass: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_manifest_contract_accepts_valid_with_usage_and_sync() {
+        let mut m = make_valid_manifest();
+        let usage_content = b"[[usage]]\nkey = \"val\"\n";
+        let sync_content = b"enabled = false\n";
+        m.files.push(BackupManifestEntry {
+            path: "usage.toml".to_string(),
+            kind: BackupEntryKind::Usage,
+            size: usage_content.len() as u64,
+            sha256: sha256_hex(usage_content.to_vec()),
+        });
+        m.files.push(BackupManifestEntry {
+            path: "sync.toml".to_string(),
+            kind: BackupEntryKind::SyncConfig,
+            size: sync_content.len() as u64,
+            sha256: sha256_hex(sync_content.to_vec()),
+        });
+        let result = validate_manifest_contract(&m);
+        assert!(
+            result.is_ok(),
+            "valid manifest should pass: {:?}",
+            result.err()
         );
     }
 

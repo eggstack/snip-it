@@ -573,6 +573,8 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
 
     crate::utils::atomic::write_private_atomic(&path, &content_with_integrity, "sync")?;
 
+    crate::test_failpoints::mutation_barrier("sync-config-update-before-cache-invalidate");
+
     invalidate_toml_cache(&path);
     crate::clipboard::invalidate_clipboard_settings_cache();
 

@@ -471,6 +471,9 @@ enum Commands {
         /// State directory
         #[arg(long)]
         state_dir: std::path::PathBuf,
+        /// Pending generation to clear after successful remote acknowledgement
+        #[arg(long)]
+        generation: u64,
     },
 }
 
@@ -1185,8 +1188,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 _ => {}
             }
         }
-        Some(Commands::AutoSyncExecute { state_dir }) => {
-            let exit_code = snip_it::auto_sync::executor::run_executor(&state_dir);
+        Some(Commands::AutoSyncExecute {
+            state_dir,
+            generation,
+        }) => {
+            let exit_code = snip_it::auto_sync::executor::run_executor(&state_dir, generation);
             std::process::exit(exit_code);
         }
     }

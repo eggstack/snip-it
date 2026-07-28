@@ -67,6 +67,27 @@ impl BackupRelativePath {
             ));
         }
 
+        // Reject Windows drive letters and UNC paths (cross-platform check)
+        // On Unix, "C:test.toml" is a valid filename but a Windows drive-relative
+        // path that could cause issues on Windows. Reject on all platforms.
+        if input.len() >= 2 && input.chars().nth(1) == Some(':') {
+            let drive = input.chars().next().unwrap();
+            if drive.is_ascii_alphabetic() {
+                return Err(SnipError::runtime_error(
+                    "Windows drive-relative path in backup manifest",
+                    Some(&format!("Path contains Windows drive letter: {input}")),
+                ));
+            }
+        }
+
+        // Reject UNC paths (\\server\share or //server/share)
+        if input.starts_with("\\\\") || input.starts_with("//") {
+            return Err(SnipError::runtime_error(
+                "UNC path in backup manifest",
+                Some(&format!("Path is a UNC path: {input}")),
+            ));
+        }
+
         let path = Path::new(input);
 
         // Reject absolute paths

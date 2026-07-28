@@ -261,10 +261,10 @@ The detached worker:
 
 - Acquires the `SyncExecutionLock` itself (or exits with `NothingToDo` if another sync holds it). **Phase 01 invariant:** the worker is the *only* component that holds this lock during a detached cycle.
 - Reads pending state, then runs a **debounce loop**: it reloads the marker every ≤250ms, restarts the deadline if a newer generation has appeared, and waits up to `policy.debounce + max_lifetime` (default 5 minutes).
-- Spawns an executor subprocess (`snp auto-sync-execute`) that **does not acquire the execution lock** — the worker is already holding it for the cycle. The executor simply invokes the canonical sync operation (`crate::sync_commands::run_sync`).
+- Spawns an executor subprocess (`snp auto-sync-execute --state-dir <path> --generation <u64>`) that **does not acquire the execution lock** — the worker is already holding it for the cycle. The executor simply invokes the canonical sync operation (`crate::sync_commands::run_sync`). After `run_sync` returns `Ok(())` (remote acknowledgement), the executor clears pending via `clear_if_generation_matches(state_dir, generation)`. **Phase 11E:** only the executor owns pending clear — the worker does not clear pending based on child exit status alone.
 - Supervises the executor with `wait_child_with_timeout(policy.sync_timeout)` (default 30s). On timeout, sends SIGTERM, waits 2 seconds, then SIGKILL. **Phase 01 invariant:** the executor is reaped before the lock is released.
-- Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Phase 01 invariant:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state.
-- On failure, the marker is preserved for `startup_recover_pending`; the worker exits with `Failed`.
+- Clears pending on success via `pending::clear_if_generation_matches(state_dir, observed_generation)`. **Phase 01 invariant:** clearing is conditional on the observed generation, so a stale worker cannot clobber newer state. **Phase 11E:** the worker no longer clears pending — only the executor clears pending after remote acknowledgement via `run_sync` returning `Ok(())`. The worker observes the executor exit code but does not clear pending based on child exit status alone.
+- On success, the worker records status but **does not clear pending** — the executor clears pending after remote acknowledgement. **Phase 11E:** the worker observes the executor exit code but does not clear pending based on child exit status alone. The executor clears pending only after `run_sync` returns `Ok(())`.
 - On `NothingToDo` (no pending state, lock contention, max-lifetime exceeded, or policy disabled), the marker is preserved — pending is only cleared on a real successful comparison.
 - A newer generation that appears during sync is detected on the next loop iteration and triggers a follow-up cycle.
 - Exits with `WorkerOutcome::{Success, Failed, NothingToDo}` mapped to internal exit codes (0/0/0).
@@ -687,7 +687,7 @@ Diagnostics emitted:
 19. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
 20. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
 21. **Release 5F / Phase 10:** Startup recovery suppressed for sync-related commands (`sync`, `cron`, `register`, internal subprocesses) and extended to read-only and configuration commands via `StartupRecoveryPolicy`.
-22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`.
+22. **Phase 01:** Worker `NothingToDo` never clears the pending marker; only `Success` performs `clear_if_generation_matches`. **Phase 11E:** the worker does not clear pending at all — clearing is moved to the executor after remote acknowledgement.
 23. **Phase 01:** Disabled-policy worker exits with `NothingToDo` *before* touching pending state.
 24. **Phase 01:** Executor subprocess never references the execution lock; the worker owns it for the entire cycle.
 25. **Phase 02:** Startup recovery never increments generation and schedules a worker for valid pending work regardless of age — unless the execution lock is already held (active sync in progress), in which case scheduling is skipped.

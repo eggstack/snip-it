@@ -37,6 +37,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Build a backup directory with one library snippet and an index.
 fn make_backup(tmp: &std::path::Path) -> PathBuf {
+    make_backup_multi_file(tmp)
+}
+
+/// Build a backup directory with two files (library + index) so that
+/// rollback has at least two actions to perform.
+fn make_backup_multi_file(tmp: &std::path::Path) -> PathBuf {
     let backup_dir = tmp.join("backup");
     let libraries_dir = backup_dir.join("libraries");
     fs::create_dir_all(&libraries_dir).unwrap();
@@ -81,6 +87,23 @@ sha256 = "{index_hash}"
     fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
 
     backup_dir
+}
+
+/// Find all transaction journal files in a directory.
+fn find_journals(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut journals = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("txn-") && name.ends_with(".toml") {
+            journals.push(entry.path());
+        }
+    }
+    journals
 }
 
 /// Count pending generations in the canonical config directory.
@@ -165,11 +188,10 @@ fn run_restore(config_dir: &std::path::Path, backup_dir: &std::path::Path) -> st
         .unwrap()
 }
 
-/// Run `snp repair` for recovery.
-#[allow(dead_code)]
+/// Run `snp repair --apply` for recovery.
 fn run_repair(config_dir: &std::path::Path) -> std::process::Output {
     let mut cmd = snp_in(config_dir);
-    cmd.args(["repair"]);
+    cmd.args(["repair", "--apply"]);
     cmd.env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred");
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -407,56 +429,225 @@ fn test_crash_after_journal_pending_before_cleanup() {
 fn test_crash_during_first_rollback() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (_env_tmp, config_dir) = setup_test_env();
-    let backup_dir = make_backup(tmp.path());
+    let backup_dir = make_backup_multi_file(tmp.path());
 
-    // Pre-state: create an existing library file that will be replaced.
+    // Pre-state: create existing library files that will be replaced.
+    // We need at least two files so rollback has at least two actions.
     let libraries_dir = config_dir.join("libraries");
     fs::create_dir_all(&libraries_dir).unwrap();
-    let old_content = r#"[[snippets]]
+
+    let old_lib_content = r#"[[snippets]]
 id = "old-snippet"
 description = "old snippet"
 command = "echo old"
 "#;
-    fs::write(libraries_dir.join("crash-test.toml"), old_content).unwrap();
+    fs::write(libraries_dir.join("crash-test.toml"), old_lib_content).unwrap();
 
-    let index = r#"[[libraries]]
+    let old_index_content = r#"[[libraries]]
 filename = "crash-test"
 is_primary = true
 "#;
-    fs::write(config_dir.join("libraries.toml"), index).unwrap();
+    fs::write(config_dir.join("libraries.toml"), old_index_content).unwrap();
 
-    // Force a rollback by making the restore fail. We do this by
-    // corrupting the backup after the journal is created but before
-    // the install. Since we can't easily inject a failure mid-restore,
-    // we test the rollback failpoint path by using a backup that will
-    // cause a checksum mismatch during staging.
-    //
-    // Instead, we test that the rollback failpoint mechanism works by
-    // verifying that a crash during rollback is recoverable.
-    // We simulate this by creating a scenario where rollback is triggered.
+    // Compute expected hashes for verification.
+    let old_lib_hash = sha256_hex(old_lib_content.as_bytes());
+    let old_index_hash = sha256_hex(old_index_content.as_bytes());
 
-    // First, do a successful restore to establish state.
-    let restore = run_restore(&config_dir, &backup_dir);
-    assert!(restore.status.success(), "initial restore should succeed");
+    // Phase 1: Start restore with injected error after second install.
+    // This triggers rollback. The rollback failpoint aborts before the
+    // first rollback action completes.
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["restore", backup_dir.to_str().unwrap()]);
+    cmd.env("SNP_TEST_INJECT_ERROR", "restore-after-second-install");
+    cmd.env("SNP_TEST_FAILPOINT", "restore-during-first-rollback");
+    cmd.env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred");
+    let output = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "process should have aborted during first rollback"
+    );
 
-    // Now corrupt the staged file to force a rollback failure.
-    // Actually, we can't easily do this. Instead, let's verify that
-    // the rollback failpoint is at least wired up correctly by
-    // checking that the production build ignores it.
-    //
-    // For a full crash-during-rollback test, we would need to:
-    // 1. Create a backup that causes a mid-restore failure
-    // 2. Have the failpoint trigger during the rollback phase
-    //
-    // This is tested in the production-seam tests below.
+    // Verify journal is in RollingBack state with next_rollback_position: 0.
+    let txn_dir = config_dir.join(".transaction");
+    let journals = find_journals(&txn_dir);
+    assert_eq!(journals.len(), 1, "exactly one journal should exist");
+    let journal_content = fs::read_to_string(&journals[0]).unwrap();
+    assert!(
+        journal_content.contains("RollingBack"),
+        "journal should be in RollingBack state"
+    );
+    assert!(
+        journal_content.contains("next_rollback_position = 0"),
+        "journal should show position 0 (first rollback not completed)"
+    );
+
+    // No pending marker should exist.
+    assert_eq!(count_pending_generations(&config_dir), 0);
+
+    // Phase 2: Recovery — run `snp repair` to complete the interrupted rollback.
+    // This restores the original content without starting a new restore.
+    let recovery = run_repair(&config_dir);
+    eprintln!(
+        "REPAIR STDERR: {}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+    eprintln!(
+        "REPAIR STDOUT: {}",
+        String::from_utf8_lossy(&recovery.stdout)
+    );
+    assert!(
+        recovery.status.success(),
+        "repair should succeed: {}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+
+    // Verify exact original bytes were restored.
+    let lib_path = libraries_dir.join("crash-test.toml");
+    let index_path = config_dir.join("libraries.toml");
+    let recovered_lib = fs::read_to_string(&lib_path).unwrap();
+    let recovered_index = fs::read_to_string(&index_path).unwrap();
+    assert_eq!(
+        sha256_hex(recovered_lib.as_bytes()),
+        old_lib_hash,
+        "library content should be restored to original"
+    );
+    assert_eq!(
+        sha256_hex(recovered_index.as_bytes()),
+        old_index_hash,
+        "index content should be restored to original"
+    );
+
+    // No pending marker after recovery.
+    assert_eq!(count_pending_generations(&config_dir), 0);
+
+    // No journals after recovery.
+    let journals_after = find_journals(&txn_dir);
+    assert_eq!(
+        journals_after.len(),
+        0,
+        "no journals should remain after recovery"
+    );
+
+    // Phase 3: Repeat recovery to prove idempotence.
+    let recovery2 = run_repair(&config_dir);
+    assert!(
+        recovery2.status.success(),
+        "second recovery should succeed: {}",
+        String::from_utf8_lossy(&recovery2.stderr)
+    );
+    assert_eq!(count_pending_generations(&config_dir), 0);
+    assert_eq!(find_journals(&txn_dir).len(), 0);
 }
 
 // === Crash during second rollback ===
 
 #[test]
 fn test_crash_during_second_rollback() {
-    // Similar to test_crash_during_first_rollback, this tests the
-    // second rollback position. See the comment in that test.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_env_tmp, config_dir) = setup_test_env();
+    let backup_dir = make_backup_multi_file(tmp.path());
+
+    // Pre-state: create existing library files.
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+
+    let old_lib_content = r#"[[snippets]]
+id = "old-snippet"
+description = "old snippet"
+command = "echo old"
+"#;
+    fs::write(libraries_dir.join("crash-test.toml"), old_lib_content).unwrap();
+
+    let old_index_content = r#"[[libraries]]
+filename = "crash-test"
+is_primary = true
+"#;
+    fs::write(config_dir.join("libraries.toml"), old_index_content).unwrap();
+
+    let old_lib_hash = sha256_hex(old_lib_content.as_bytes());
+    let old_index_hash = sha256_hex(old_index_content.as_bytes());
+
+    // Phase 1: Start restore with injected error after second install.
+    // The rollback failpoint aborts before the second rollback action
+    // completes (after the first rollback action has completed and
+    // progress is persisted).
+    let mut cmd = snp_in(&config_dir);
+    cmd.args(["restore", backup_dir.to_str().unwrap()]);
+    cmd.env("SNP_TEST_INJECT_ERROR", "restore-after-second-install");
+    cmd.env("SNP_TEST_FAILPOINT", "restore-during-second-rollback");
+    cmd.env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred");
+    let output = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "process should have aborted during second rollback"
+    );
+
+    // Verify journal is in RollingBack state with next_rollback_position: 1.
+    let txn_dir = config_dir.join(".transaction");
+    let journals = find_journals(&txn_dir);
+    assert_eq!(journals.len(), 1, "exactly one journal should exist");
+    let journal_content = fs::read_to_string(&journals[0]).unwrap();
+    assert!(
+        journal_content.contains("RollingBack"),
+        "journal should be in RollingBack state"
+    );
+    assert!(
+        journal_content.contains("next_rollback_position = 1"),
+        "journal should show position 1 (first rollback completed, second not started)"
+    );
+
+    // No pending marker should exist.
+    assert_eq!(count_pending_generations(&config_dir), 0);
+
+    // Phase 2: Recovery — run `snp repair` to complete the interrupted rollback.
+    let recovery = run_repair(&config_dir);
+    assert!(
+        recovery.status.success(),
+        "repair should succeed: {}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+
+    // Verify exact original bytes were restored.
+    let lib_path = libraries_dir.join("crash-test.toml");
+    let index_path = config_dir.join("libraries.toml");
+    let recovered_lib = fs::read_to_string(&lib_path).unwrap();
+    let recovered_index = fs::read_to_string(&index_path).unwrap();
+    assert_eq!(
+        sha256_hex(recovered_lib.as_bytes()),
+        old_lib_hash,
+        "library content should be restored to original"
+    );
+    assert_eq!(
+        sha256_hex(recovered_index.as_bytes()),
+        old_index_hash,
+        "index content should be restored to original"
+    );
+
+    // No pending marker after recovery.
+    assert_eq!(count_pending_generations(&config_dir), 0);
+
+    // No journals after recovery.
+    assert_eq!(find_journals(&txn_dir).len(), 0);
+
+    // Phase 3: Repeat recovery to prove idempotence.
+    let recovery2 = run_repair(&config_dir);
+    assert!(
+        recovery2.status.success(),
+        "second recovery should succeed: {}",
+        String::from_utf8_lossy(&recovery2.stderr)
+    );
+    assert_eq!(count_pending_generations(&config_dir), 0);
+    assert_eq!(find_journals(&txn_dir).len(), 0);
 }
 
 // === Production seam: failpoint variable is ignored in production builds ===

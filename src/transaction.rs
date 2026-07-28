@@ -171,6 +171,23 @@ pub struct TransactionJournal {
     pub state: TransactionState,
 }
 
+/// Original destination file metadata captured before live writes.
+///
+/// Used to preserve relevant file permissions across commit and rollback.
+/// Only the metadata contract documented here is preserved — ACLs and
+/// ownership are not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OriginalFileMetadata {
+    /// Unix file mode (permission bits), if observable.
+    /// Only the lower 12 bits (permission + setuid/setgid/sticky) are
+    /// meaningful. Setuid/setgid/sticky bits are stripped on restore.
+    #[serde(default)]
+    pub unix_mode: Option<u32>,
+    /// Whether the file was marked read-only.
+    #[serde(default)]
+    pub readonly: Option<bool>,
+}
+
 /// A file staged within a transaction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StagedFile {
@@ -204,6 +221,10 @@ pub struct StagedFile {
     /// ensuring the journal always references a complete, durable copy.
     #[serde(default)]
     pub durable_staged_path: Option<PathBuf>,
+    /// Original destination file metadata captured before live writes.
+    /// Used to preserve permission bits across commit and rollback.
+    #[serde(default)]
+    pub original_metadata: OriginalFileMetadata,
 }
 
 fn default_action() -> StagedAction {
@@ -586,6 +607,11 @@ pub fn begin_transaction(
                 original_hash,
                 new_hash: String::new(),
                 durable_staged_path: None,
+                original_metadata: if existed {
+                    capture_original_metadata(p)
+                } else {
+                    OriginalFileMetadata::default()
+                },
             }
         })
         .collect();
@@ -674,26 +700,350 @@ pub fn advance_to_committed_local(
 
 /// Commit a transaction (atomic multi-file commit).
 ///
-/// Marks the journal as `Committed` and removes backup files.
-/// The caller is responsible for actually writing the staged files
-/// before calling this function.
+/// Marks the journal as `Committed` and removes all transaction artifacts
+/// via `finalize_transaction_cleanup`. The caller is responsible for
+/// actually writing the staged files before calling this function.
 pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
     let mut committed = journal.clone();
     committed.state = TransactionState::Committed;
 
     persist_journal(state_dir, &committed)?;
 
-    // Clean up backup files
-    for staged in &committed.staged_files {
+    // Clean up all transaction artifacts (staged files, backups, journal).
+    finalize_transaction_cleanup(state_dir, &committed)
+}
+
+/// Validate that all artifact paths in the journal remain contained within
+/// the transaction artifact root, and that no artifact path is a symlink.
+///
+/// This prevents path-traversal and symlink attacks during cleanup.
+pub fn validate_artifact_containment(
+    state_dir: &Path,
+    journal: &TransactionJournal,
+) -> SnipResult<()> {
+    let artifact_root = transaction_artifact_dir(state_dir, &journal.id);
+
+    for staged in &journal.staged_files {
+        // Check backup path containment.
         if let Some(ref backup) = staged.backup_path {
-            let _ = fs::remove_file(backup);
+            validate_contained_path(&artifact_root, backup, "backup_path")?;
+        }
+        // Check durable staged path containment.
+        if let Some(ref staged_path) = staged.durable_staged_path {
+            validate_contained_path(&artifact_root, staged_path, "durable_staged_path")?;
         }
     }
 
-    // Remove the journal file itself (transaction complete)
-    let jpath = journal_path(state_dir, &committed.id);
-    let _ = fs::remove_file(&jpath);
+    Ok(())
+}
 
+/// Validate that `path` is contained within `root` and is not a symlink.
+fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<()> {
+    // Reject symlinks — they could escape the artifact root.
+    if path.is_symlink() {
+        return Err(SnipError::runtime_error(
+            "symlinked transaction artifact",
+            Some(&format!(
+                "Artifact {} at {} is a symlink; refusing to follow. Root: {}",
+                label,
+                path.display(),
+                root.display()
+            )),
+        ));
+    }
+
+    // Verify the path is within the root.
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(SnipError::runtime_error(
+            "transaction artifact path traversal",
+            Some(&format!(
+                "Artifact {} at {} is outside the transaction artifact root {}",
+                label,
+                path.display(),
+                canonical_root.display()
+            )),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Compute the per-transaction artifact directory path.
+///
+/// Artifacts are stored under `artifacts/<id>/` within the state directory,
+/// ensuring each transaction has its own isolated namespace.
+pub fn transaction_artifact_dir(state_dir: &Path, txn_id: &str) -> PathBuf {
+    state_dir.join("artifacts").join(txn_id)
+}
+
+/// Create a directory with private permissions (0o700 on Unix).
+///
+/// Used for transaction artifact directories that may contain plaintext
+/// snippet commands or sync configuration.
+pub fn create_private_dir(path: &Path) -> SnipResult<()> {
+    fs::create_dir_all(path)
+        .map_err(|e| SnipError::io_error("create private directory", path, e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o700);
+        if let Err(e) = fs::set_permissions(path, perms) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to set private permissions on directory"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove all staged files from the journal.
+fn remove_all_staged_files(journal: &TransactionJournal) -> SnipResult<()> {
+    for staged in &journal.staged_files {
+        if let Some(ref staged_path) = staged.durable_staged_path
+            && staged_path.exists()
+            && !staged_path.is_symlink()
+        {
+            fs::remove_file(staged_path).map_err(|e| {
+                SnipError::io_error("remove staged file during cleanup", staged_path.clone(), e)
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove all backup files from the journal.
+fn remove_all_backup_files(journal: &TransactionJournal) -> SnipResult<()> {
+    for staged in &journal.staged_files {
+        if let Some(ref backup) = staged.backup_path
+            && backup.exists()
+            && !backup.is_symlink()
+        {
+            fs::remove_file(backup).map_err(|e| {
+                SnipError::io_error("remove backup file during cleanup", backup.clone(), e)
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove the transaction artifact directory (backups/, staged/ subdirs).
+fn remove_empty_transaction_artifact_dir(state_dir: &Path, txn_id: &str) -> SnipResult<()> {
+    let artifact_dir = transaction_artifact_dir(state_dir, txn_id);
+    if artifact_dir.exists() {
+        // Remove the entire artifact directory tree.
+        // On Windows, use bounded retries for delete-pending behavior.
+        remove_dir_all_with_retry(&artifact_dir)?;
+    }
+    Ok(())
+}
+
+/// Remove a directory tree with bounded retries (for Windows delete-pending).
+fn remove_dir_all_with_retry(path: &Path) -> SnipResult<()> {
+    const MAX_RETRIES: u32 = 5;
+    const RETRY_DELAY_MS: u64 = 50;
+
+    for attempt in 0..MAX_RETRIES {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(_e) if attempt < MAX_RETRIES - 1 => {
+                std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                continue;
+            }
+            Err(e) => {
+                return Err(SnipError::io_error(
+                    "remove transaction artifact directory",
+                    path.to_path_buf(),
+                    e,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Finalize transaction cleanup: remove all artifacts and the journal last.
+///
+/// This is the canonical cleanup path used by commit, rollback, and
+/// CommittedLocal recovery. It ensures:
+///
+/// 1. Artifact containment is validated before any deletion;
+/// 2. Staged files are removed first;
+/// 3. Backup files are removed second;
+/// 4. The artifact directory is removed third;
+/// 5. The journal is removed last;
+/// 6. The parent directory is fsync'd after journal removal.
+///
+/// Cleanup errors are propagated rather than discarded.
+pub fn finalize_transaction_cleanup(
+    state_dir: &Path,
+    journal: &TransactionJournal,
+) -> SnipResult<()> {
+    // 1. Validate artifact containment before any deletion.
+    validate_artifact_containment(state_dir, journal)?;
+
+    // 2. Remove staged files.
+    remove_all_staged_files(journal)?;
+
+    // 3. Remove backup files.
+    remove_all_backup_files(journal)?;
+
+    // 4. Remove the artifact directory.
+    remove_empty_transaction_artifact_dir(state_dir, &journal.id)?;
+
+    // 5. Remove the journal file last.
+    let jpath = journal_path(state_dir, &journal.id);
+    if jpath.exists() {
+        fs::remove_file(&jpath).map_err(|e| {
+            SnipError::io_error(
+                "remove transaction journal during cleanup",
+                jpath.clone(),
+                e,
+            )
+        })?;
+    }
+
+    // 6. Fsync the parent directory to durably record the removal.
+    fsync_parent_dir(&jpath)?;
+
+    Ok(())
+}
+
+/// Fsync the parent directory of a file to durably record directory changes.
+fn fsync_parent_dir(path: &Path) -> SnipResult<()> {
+    let parent = path.parent().unwrap_or(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_RDONLY)
+            .open(parent)
+            .map_err(|e| {
+                SnipError::io_error("open parent dir for fsync", parent.to_path_buf(), e)
+            })?;
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, use the fd-based fsync.
+            use std::os::fd::AsRawFd;
+            unsafe {
+                let _ = libc::fsync(dir.as_raw_fd());
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On macOS, use fsync on the directory fd.
+            use std::os::fd::AsRawFd;
+            unsafe {
+                let _ = libc::fsync(dir.as_raw_fd());
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // On Windows, directory fsync is not directly available; the
+        // OS handles directory durability through the file system.
+        // This is a no-op on Windows.
+    }
+    Ok(())
+}
+
+/// Capture original destination file metadata before live writes.
+///
+/// On Unix, captures the file mode. Strips setuid/setgid/sticky bits
+/// from the captured mode so they are not propagated on restore.
+pub fn capture_original_metadata(path: &Path) -> OriginalFileMetadata {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = fs::metadata(path) {
+            let mode = metadata.mode() & 0o7777;
+            // Strip setuid, setgid, and sticky bits — they are security-
+            // sensitive and should not be propagated by restore.
+            let sanitized_mode = mode & 0o777;
+            return OriginalFileMetadata {
+                unix_mode: Some(sanitized_mode),
+                readonly: Some(metadata.permissions().readonly()),
+            };
+        }
+    }
+    OriginalFileMetadata::default()
+}
+
+/// Apply captured metadata to a destination file after content installation.
+///
+/// On Unix, restores the permission bits (excluding setuid/setgid/sticky).
+/// The readonly state is incorporated into the mode computation rather than
+/// applied as a separate `set_permissions` call, which would clobber the
+/// mode by adding all write bits via `set_readonly(false)`.
+///
+/// Does not claim ACL or ownership preservation.
+pub fn apply_original_metadata(path: &Path, metadata: &OriginalFileMetadata) -> SnipResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Compute the final mode in a single pass: start from the captured
+        // mode (or a safe default), strip setuid/setgid/sticky, then apply
+        // the readonly state by clearing write bits if the file was readonly.
+        let mut mode = metadata.unix_mode.unwrap_or(0o644);
+        mode &= 0o777; // strip setuid/setgid/sticky
+
+        if metadata.readonly == Some(true) {
+            // Remove all write bits to honor the readonly state.
+            mode &= !0o222;
+        }
+
+        let perms = fs::Permissions::from_mode(mode);
+        fs::set_permissions(path, perms).map_err(|e| {
+            SnipError::io_error("set permissions after restore", path.to_path_buf(), e)
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, readonly behavior is tested where relevant.
+        if let Some(readonly) = metadata.readonly {
+            if let Ok(perms) = fs::metadata(path).map(|m| m.permissions()) {
+                let mut perms = perms;
+                perms.set_readonly(readonly);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verify that a destination file's metadata matches the expected values.
+///
+/// On Unix, compares `mode & 0o777` to the expected sanitized value.
+pub fn verify_metadata(path: &Path, metadata: &OriginalFileMetadata) -> SnipResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(expected_mode) = metadata.unix_mode {
+            let actual_mode = fs::metadata(path).map(|m| m.mode() & 0o777).map_err(|e| {
+                SnipError::io_error("stat file for metadata verification", path.to_path_buf(), e)
+            })?;
+            if actual_mode != expected_mode {
+                return Err(SnipError::runtime_error(
+                    "metadata verification failed",
+                    Some(&format!(
+                        "File {} mode mismatch after restore: expected {:o}, got {:o}",
+                        path.display(),
+                        expected_mode,
+                        actual_mode
+                    )),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -785,6 +1135,11 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                     );
                     crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
 
+                    // Apply original metadata (permissions) after content
+                    // is restored. This preserves the file mode across
+                    // rollback, excluding setuid/setgid/sticky bits.
+                    apply_original_metadata(&staged.original_path, &staged.original_metadata)?;
+
                     // Verify hash from the LIVE destination, not the backup
                     // buffer. This proves the installed content matches the
                     // original.
@@ -802,6 +1157,9 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                             ));
                         }
                     }
+
+                    // Verify metadata after content installation.
+                    verify_metadata(&staged.original_path, &staged.original_metadata)?;
                 } else if !staged.existed_before {
                     // No backup and file didn't exist before — verify absence
                     if staged.original_path.exists() {
@@ -827,16 +1185,8 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
     rb_journal.state = TransactionState::RolledBack;
     persist_journal(state_dir, &rb_journal)?;
 
-    // Remove backups and journal
-    for staged in &rb_journal.staged_files {
-        if let Some(ref backup) = staged.backup_path {
-            let _ = fs::remove_file(backup);
-        }
-    }
-    let jpath = journal_path(state_dir, &rb_journal.id);
-    let _ = fs::remove_file(&jpath);
-
-    Ok(())
+    // Clean up all transaction artifacts and the journal last.
+    finalize_transaction_cleanup(state_dir, &rb_journal)
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.
@@ -856,6 +1206,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// ensures the content is durably on disk before returning, and verifies
 /// the hash from the reopened file (not from the source buffer).
 ///
+/// On Unix, the file is created with `0o600` permissions so that transaction
+/// artifacts (which may contain plaintext snippet commands) are not briefly
+/// world-readable.
+///
 /// Returns the verified SHA-256 hex digest.
 pub fn write_sync_verify(path: &Path, bytes: &[u8]) -> SnipResult<String> {
     use std::io::Write;
@@ -870,6 +1224,21 @@ pub fn write_sync_verify(path: &Path, bytes: &[u8]) -> SnipResult<String> {
     file.sync_all()
         .map_err(|e| SnipError::io_error("sync staged file", path, e))?;
     drop(file);
+
+    // Apply private permissions to the artifact file so that staged
+    // content (which may contain snippet commands) is not world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        if let Err(e) = fs::set_permissions(path, perms) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to set private permissions on transaction artifact"
+            );
+        }
+    }
 
     // Reopen and verify from disk.
     let read_back = fs::read(path)
@@ -969,8 +1338,7 @@ pub fn gate_mutation_on_interrupted_transactions(
         let journal = &interrupted[0];
 
         // Handle CommittedLocal finalization state: clean up without rollback.
-        if let TransactionState::CommittedLocal { pending } = &journal.state
-        {
+        if let TransactionState::CommittedLocal { pending } = &journal.state {
             tracing::info!(
                 txn_id = %journal.id,
                 pending = ?pending,
@@ -998,9 +1366,13 @@ pub fn gate_mutation_on_interrupted_transactions(
                     match pending_result {
                         Ok(crate::auto_sync::pending::TransactionPendingResult::Created(state))
                         | Ok(crate::auto_sync::pending::TransactionPendingResult::Reused(state)) => {
-                            PendingFinalization::Recorded { generation: state.generation }
+                            PendingFinalization::Recorded {
+                                generation: state.generation,
+                            }
                         }
-                        Ok(crate::auto_sync::pending::TransactionPendingResult::Conflict(state)) => {
+                        Ok(crate::auto_sync::pending::TransactionPendingResult::Conflict(
+                            state,
+                        )) => {
                             // An unrelated newer pending generation exists.
                             // Per the conflict policy, preserve it — the
                             // restored state is covered by the existing
@@ -1011,7 +1383,9 @@ pub fn gate_mutation_on_interrupted_transactions(
                                 "Pending conflict during recovery: \
                                  preserving existing generation"
                             );
-                            PendingFinalization::CoveredByExisting { generation: state.generation }
+                            PendingFinalization::CoveredByExisting {
+                                generation: state.generation,
+                            }
                         }
                         Err(e) => {
                             // Fail closed: preserve journal and artifacts.
@@ -1028,9 +1402,8 @@ pub fn gate_mutation_on_interrupted_transactions(
                     }
                 }
                 // Already recorded — no action needed.
-                PendingFinalization::Recorded { .. } | PendingFinalization::CoveredByExisting { .. } => {
-                    pending.clone()
-                }
+                PendingFinalization::Recorded { .. }
+                | PendingFinalization::CoveredByExisting { .. } => pending.clone(),
             };
 
             // Persist the finalized pending state durably.
@@ -1258,14 +1631,17 @@ mod tests {
 
         // Create the file and a backup
         fs::write(&file1, "original").unwrap();
-        let backup_dir = dir.path().join("backups");
-        fs::create_dir_all(&backup_dir).unwrap();
-        let backup_path = backup_dir.join("file1.toml.bak");
-        fs::copy(&file1, &backup_path).unwrap();
-
         let _lock = acquire_transaction_lock(state_dir, "test_op").unwrap();
         let mut journal =
             begin_transaction(state_dir, "test_op", std::slice::from_ref(&file1)).unwrap();
+
+        // Place backup inside the per-transaction artifact directory so
+        // containment validation passes during cleanup.
+        let artifact_dir = transaction_artifact_dir(state_dir, &journal.id);
+        let backup_dir = artifact_dir.join("backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let backup_path = backup_dir.join("0.bak");
+        fs::copy(&file1, &backup_path).unwrap();
         journal.staged_files[0].backup_path = Some(backup_path.clone());
 
         rollback_transaction(state_dir, &journal).unwrap();

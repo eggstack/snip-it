@@ -254,13 +254,13 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
 
                 match outcome {
                     WorkerOutcome::Success => {
-                        let _ = pending::clear_if_generation_matches(
-                            state_dir,
-                            sync_observed.generation,
-                        );
+                        // The worker does NOT clear pending — only the
+                        // executor clears pending after remote acknowledgement.
+                        // A child exit code of 0 does not imply remote
+                        // success; the executor owns the pending clear.
                         tracing::info!(
                             generation = sync_observed.generation,
-                            "auto-sync worker cycle completed"
+                            "auto-sync worker cycle completed; pending preserved for executor"
                         );
                     }
                     WorkerOutcome::Failed => {
@@ -461,7 +461,7 @@ fn execute_sync(
         None,
     );
 
-    let mut child = match spawn::spawn_executor(state_dir) {
+    let mut child = match spawn::spawn_executor(state_dir, observed_generation) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "failed to spawn sync executor");
@@ -488,14 +488,14 @@ fn execute_sync(
                     let _ = status::record_success(
                         state_dir,
                         observed_generation,
-                        "sync completed successfully",
+                        "executor exited successfully; pending clear is executor-owned",
                     );
                     crate::auto_sync::test_events::emit(
                         "worker",
                         "sync_completed",
                         std::process::id(),
                         Some(observed_generation),
-                        Some(r#"{"success":true}"#.into()),
+                        Some(r#"{"success":false,"reason":"executor_exit_only_pending_not_cleared"}"#.into()),
                     );
                     WorkerOutcome::Success
                 }

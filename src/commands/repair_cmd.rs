@@ -300,13 +300,15 @@ fn apply_repair(item: &RepairItem) -> SnipResult<()> {
             let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
             let interrupted = crate::transaction::check_interrupted_transactions(&state_dir)?;
             for journal in &interrupted {
-                if let Err(e) = crate::transaction::rollback_transaction(&state_dir, journal) {
-                    tracing::warn!(
-                        txn_id = %journal.id,
-                        error = %e,
-                        "Failed to rollback interrupted transaction"
-                    );
-                }
+                crate::transaction::rollback_transaction(&state_dir, journal).map_err(|e| {
+                    SnipError::runtime_error(
+                        "rollback interrupted transaction",
+                        Some(&format!(
+                            "Failed to rollback transaction '{}': {e}",
+                            &journal.id[..8]
+                        )),
+                    )
+                })?;
             }
         }
         "ids" | "timestamps" | "primary" => {
@@ -364,7 +366,7 @@ fn create_repair_backup() -> SnipResult<PathBuf> {
         .map_err(|e| SnipError::io_error("create backup directory", backup_root.clone(), e))?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup_dir = backup_root.join(format!("repair-{timestamp}"));
+    let backup_dir = backup_root.join(format!("repair-{timestamp}-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&backup_dir).map_err(|e| {
         SnipError::io_error("create repair backup directory", backup_dir.clone(), e)
     })?;

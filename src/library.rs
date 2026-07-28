@@ -18,6 +18,7 @@
 
 use crate::config::{cached_read_toml, invalidate_toml_cache};
 use crate::error::{SnipError, SnipResult};
+use crate::test_failpoints::mutation_barrier;
 use crate::utils::config::{get_config_dir, get_snippets_path};
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
@@ -421,6 +422,8 @@ snippets = []
 
         write_library_file(&path, default_content, filename)?;
 
+        mutation_barrier("library-create-after-file-before-index");
+
         let is_first = self.config.libraries.is_empty();
         let mut meta = LibraryMeta::new(filename);
         meta.is_primary = is_first;
@@ -480,6 +483,8 @@ snippets = []
 
         self.bump_generation();
         self.save_config()?;
+
+        mutation_barrier("library-delete-after-index-before-file");
 
         if path.exists() {
             fs::remove_file(&path)
@@ -860,6 +865,8 @@ pub fn save_library_internal(
         .and_then(|s| s.to_str())
         .unwrap_or("snippets");
     crate::utils::atomic::write_private_atomic(path, &toml_str, temp_prefix)?;
+
+    mutation_barrier("snippet-save-after-write-before-cache-invalidate");
 
     invalidate_toml_cache(path);
 

@@ -67,7 +67,14 @@ pub fn spawn_worker(state_dir: &Path) -> Result<u32, SpawnError> {
 /// The executor is NOT detached — the worker (or caller) waits on it
 /// and can kill it if needed. stdin/stdout/stderr are routed to null
 /// (or the log file via `SNP_AUTO_SYNC_WORKER_LOG`).
-pub fn spawn_executor(state_dir: &Path) -> Result<std::process::Child, SpawnError> {
+///
+/// The `generation` is passed as a `--generation` argument so the
+/// executor can clear pending only after remote acknowledgement,
+/// preserving the exact-generation clear rule.
+pub fn spawn_executor(
+    state_dir: &Path,
+    generation: u64,
+) -> Result<std::process::Child, SpawnError> {
     let exe = std::env::current_exe().map_err(SpawnError::Spawn)?;
     let exe_path = exe.to_string_lossy().to_string();
 
@@ -75,6 +82,8 @@ pub fn spawn_executor(state_dir: &Path) -> Result<std::process::Child, SpawnErro
     cmd.arg(EXECUTOR_SUBCOMMAND);
     cmd.arg("--state-dir");
     cmd.arg(state_dir.as_os_str());
+    cmd.arg("--generation");
+    cmd.arg(generation.to_string());
 
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
