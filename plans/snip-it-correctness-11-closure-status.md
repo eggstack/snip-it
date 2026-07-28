@@ -1,65 +1,172 @@
 # Phase 11 Closure Status
 
 Phase 11 status: INCOMPLETE
+
 Correctness program status: REOPENED
-Blocking plan: plans/snip-it-correctness-11e-test-boundary-pending-recovery-and-evidence-closure.md
-Corrective baseline: 52563f9dcdc1c4bb681e3ce6f5d8404a0957fb22
+
+Blocking plan: `plans/snip-it-correctness-11f-finalization-security-and-evidence-closure.md`
+
+Corrective baseline: `8cd06654c586e74efe288a13de9cdae3602bdf77`
+
+Final implementation commit: pending
+
+Final workflow evidence: pending
 
 ## Summary
 
-Phase 11 implemented substantial crash-correctness and verification improvements. Phase 11B applied corrective fixes for repair path, credential gating, execution exit code, and CI. Phase 11C addressed many remaining correctness gaps. Phase 11D reopens the program because the Phase 11C closure status overstated the repository state in several areas.
+Phase 11E materially improved compile-time test isolation, typed pending finalization, durable restore staging, rollback failpoints, manifest path validation, concurrency coverage, telemetry scaffolding, CI structure, and repository hygiene.
 
-Phase 11E is the authoritative corrective handoff for the defects remaining after the partial Phase 11D implementation. It is intentionally narrow and does not reopen the product architecture, the one-shot subprocess model, or work that is already materially correct.
+Phase 11E is not correctness-closed. The repository still contains production correctness, security, recovery, and evidence gaps. Phase 11F is the authoritative remaining-work handoff and supersedes Phase 11E for closure decisions.
 
-Phase 11E workstreams A–N are now **implemented**. All code changes and documentation updates are in place. The program remains open until the full workspace test suite passes on Linux, macOS, and Windows CI on the same final commit.
+The architecture remains intentionally unchanged:
 
-### Phase 11E Workstream Completion
+- one installed `snp` binary;
+- one-shot detached worker and executor subprocesses;
+- no daemon or resident helper;
+- TOML remains authoritative local storage;
+- pending clear remains executor-owned and generation-conditional.
 
-| Workstream | Subject | Status |
-|------------|---------|--------|
-| A | Reopen closure evidence accurately | ✅ Complete |
-| B | Compile-time test boundary (feature-gated seams) | ✅ Complete |
-| C | Typed pending finalization state model | ✅ Complete |
-| D | CommittedLocal recovery fail-closed | ✅ Complete |
-| E | Correct failpoint boundaries (10 named failpoints) | ✅ Complete |
-| F | Real crash-during-rollback subprocess tests | ✅ Complete |
-| G | Per-transaction artifact directories + orphan scanning | ✅ Complete |
-| H | Private transaction artifact permissions | ✅ Complete |
-| I | Manifest semantic validation before artifact access | ✅ Complete |
-| J | Barrier-controlled backup concurrency tests | ✅ Complete |
-| K | Executor-owned pending clear (remote acknowledgement) | ✅ Complete |
-| L | Recording-server telemetry assertions | ✅ Complete |
-| M | CI with production-seam, transaction, release-blocking jobs | ✅ Complete |
-| N | Repository hygiene + security documentation | ✅ Complete |
+## Materially completed work
 
-### Resolved Defects (Phase 11E)
+The following areas are materially implemented and should not be redesigned:
 
-1. **Test-only behavior is production-accessible** — `SNP_TEST_FAILPOINT`, `SNP_TEST_EXECUTOR_MODE`, `SNP_SKIP_WORKER_SPAWN`, `SNP_TEST_EVENTS_DIR`, `SNP_TEST_MUTATION_BARRIER_DIR` are now gated behind `#[cfg(feature = "test-support")]`. Production builds are compile-time no-ops. Production seam proof script verifies all 5 test seams are ignored.
-2. **`CommittedLocal` recovery discards pending failures** — `ensure_pending_for_transaction` result is now matched explicitly; errors preserve journal/artifacts and return nonzero with repair guidance.
-3. **Generation `0` used as unknown sentinel** — Replaced with typed `PendingFinalization` enum (`NotRecorded`, `Recorded { generation }`, `CoveredByExisting { generation }`).
-4. **Failpoint names and placement disagree** — All 10 failpoint boundaries corrected and placed after the exact invariant they claim.
-5. **Rollback failpoint tests are placeholders** — Real crash-during-rollback subprocess tests added with `SNP_TEST_INJECT_ERROR` and `SNP_TEST_FAILPOINT` seams. Both `test_crash_during_first_rollback` and `test_crash_during_second_rollback` assert exact byte restoration and idempotence.
-6. **Durable staged content retained indefinitely** — `finalize_transaction_cleanup` removes artifacts in order: staged → backup → directory → journal-last.
-7. **Transaction artifact permissions are implicit** — `write_sync_verify` applies `0o600` to files; `create_private_dir` applies `0o700` to directories.
-8. **Destination permission metadata absent** — `OriginalFileMetadata` captured in journal, applied after commit/rollback, verified with `verify_metadata`.
-9. **Manifest contract validation permissive** — `validate_manifest_contract` enforces schema, layout, cardinality, collision, and index consistency before artifact access. 15 negative tests use single-fault fixtures.
-10. **Barrier tests are sequential** — `local_data_lock_barriers` uses real barrier-controlled concurrency with `SNP_TEST_MUTATION_BARRIER_DIR` and overlapping real processes.
-11. **False-success executor not tested through worker** — `test_false_success_executor_leaves_pending_intact` proves pending remains after noop-success executor exits 0 with zero server requests.
-12. **Server telemetry unused** — `test_recording_server_telemetry_exact_evidence` retains recording handle and asserts exact request count, snippet description/command/device_id, user count, auth header, and quiet-period no-duplicate.
-13. **Machine-local configuration tracked** — `.poolside/settings.local.yaml` removed.
-14. **Same-commit CI evidence absent** — CI workflow updated with production-seam, transaction, release-blocking, and package jobs. No global `SNP_SKIP_WORKER_SPAWN`.
-15. **Orphan artifact directories unreported** — `repair --dry-run` now scans `.transaction/artifacts/` for directories without a matching journal and reports them as repair candidates.
-16. **Security docs lack compile-time test isolation** — `THREAT_MODEL.md` adds T14 (test seam activation); `SECURITY_AUDIT.md` adds Section K (compile-time test seam isolation).
+1. test failpoints, executor modes, event sinks, worker suppression, and mutation barriers are compile-time gated behind `test-support` in production code;
+2. transaction pending finalization uses typed states rather than generation zero as an unknown sentinel;
+3. transaction lock ownership observes the existing PID and process start token conservatively;
+4. restore uses per-transaction staged and backup artifact directories;
+5. live destination progress is persisted after verified writes;
+6. rollback progress uses rollback-order coordinates and has real subprocess crash tests;
+7. pending clear occurs in the executor after `run_sync` returns success;
+8. manifest schema, layout, path shape, portable collision, size, and hash-shape checks are substantially improved;
+9. machine-local Poolside configuration was removed and ignored;
+10. the CI workflow contains Linux, macOS, Windows, production-seam, transaction, release-blocking, and packaging jobs.
 
-## Release Decision
+## Remaining release blockers
+
+### 1. Sync status truthfulness
+
+The worker still records durable success from executor exit code zero even when the exact pending generation remains unchanged. A false-success executor therefore preserves pending but can still write a successful status.
+
+Required closure:
+
+- classify exit-zero completion using observed pending disposition;
+- record success only when acknowledgement-compatible evidence exists;
+- preserve newer generations;
+- record non-success when generation `G` remains unchanged.
+
+### 2. Restartable transaction cleanup
+
+Commit and rollback persist terminal state before cleanup. `CommittedLocal` recovery bypasses canonical cleanup, ignores removal failures, and can leave staged files or artifact directories while returning success.
+
+Required closure:
+
+- add explicit cleanup-pending progress;
+- route commit, rollback, recovery, and repair through one canonical cleanup path;
+- propagate cleanup errors;
+- remove journal last;
+- recover from a second crash during cleanup;
+- detect terminal journals with remaining artifacts.
+
+### 3. Fail-closed artifact permissions
+
+Transaction directories and files are currently created before private modes are applied, and permission failures are logged rather than returned.
+
+Required closure:
+
+- create Unix directories with `0700` at creation time;
+- create Unix artifact files with `0600` at creation time;
+- verify modes before sensitive data is accepted as durable;
+- fail the transaction when privacy policy cannot be established.
+
+### 4. Restored destination permission policy
+
+New destinations inherit an implicit `0644` fallback. This can downgrade a newly restored `sync.toml` after sensitive persistence.
+
+Required closure:
+
+- define explicit destination security classes;
+- preserve sanitized modes for existing files;
+- apply private documented defaults for new files;
+- verify new and existing destination metadata.
+
+### 5. Manifest semantic validation
+
+The index consistency block does not parse index content. Duplicate index library names, multiple primaries, missing library references, and authoritative index/library agreement are not fully enforced. Several negative fixtures still contain placeholder hashes or multiple unrelated defects.
+
+Required closure:
+
+- split structural and semantic validation;
+- parse index and libraries before transaction creation;
+- enforce exact index/library relationships;
+- replace every negative fixture with an otherwise-valid single-fault fixture;
+- assert no journal, artifact, pending marker, or live write on rejection.
+
+### 6. Production-seam proof validity
+
+The production-seam scripts do not currently traverse the guarded code paths. The executor proof also omits the required generation argument.
+
+Required closure:
+
+- run a real restore for failpoint proof;
+- invoke executor with `--generation` and valid configuration;
+- run a real mutation for worker-suppression and barrier proofs;
+- run worker/executor logic for event-sink proof;
+- provide equivalent Bash and PowerShell evidence.
+
+### 7. Exact lock-blocking proof
+
+Barrier tests overlap writer and backup processes but do not assert that backup remains blocked before writer release.
+
+Required closure:
+
+- observe backup still running while the writer owns `LocalDataLock`;
+- release the writer only after this assertion;
+- verify exact manifest hashes and index/library coherence afterward.
+
+### 8. Exact sanitized request telemetry
+
+Current evidence relies primarily on server database rows and a captured authorization header. It does not directly prove exact request count, route, expected identities, revision transition, payload properties, or maximum in-flight requests.
+
+Required closure:
+
+- retain bounded sanitized request records;
+- assert exact request count and max concurrency;
+- assert expected user, device, and library identities;
+- assert revision transition and payload hash/length;
+- prove plaintext sentinel absence;
+- prove pending clear occurs after acknowledgement.
+
+### 9. Typed repair and cleanup recovery
+
+Repair currently derives some behavior from human-readable problem strings and can report overall success after individual repair failures.
+
+Required closure:
+
+- use typed repair actions;
+- resume cleanup-pending transactions rather than rolling them back;
+- validate orphan containment immediately before deletion;
+- return nonzero on partial apply failure.
+
+### 10. Same-commit cross-platform evidence
+
+No final same-commit evidence is recorded.
+
+Required closure:
+
+- Linux, macOS, and Windows release-blocking jobs pass on one commit;
+- production-seam jobs pass on Linux and Windows;
+- packaging passes on all three platforms;
+- exact workflow and job URLs are recorded here;
+- all status claims match the demonstrated assertions.
+
+## Release decision
 
 **Phase 11 status: INCOMPLETE**
+
 **Correctness program status: REOPENED**
 
-All Phase 11E workstreams are implemented. The program remains open until:
+The repository is not correctness-closed and is not release-ready.
 
-1. The full workspace test suite passes on Linux, macOS, and Windows CI on the same final commit.
-2. Every release-blocking criterion in `plans/snip-it-correctness-11e-test-boundary-pending-recovery-and-evidence-closure.md` is supported by production code, adversarial tests, and successful CI jobs.
-3. CI evidence is recorded and retrievable.
+Phase 11 may be marked complete only after every release-blocking criterion in `plans/snip-it-correctness-11f-finalization-security-and-evidence-closure.md` is implemented, tested adversarially, and evidenced by successful Linux, macOS, and Windows jobs on the same final commit.
 
-No final commit value or test counts are presented as current until all CI gates pass.
+Do not replace `pending` final commit or workflow fields with guessed values. Do not mark individual workstreams complete solely because code was committed.
