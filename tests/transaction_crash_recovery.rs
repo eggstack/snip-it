@@ -169,6 +169,21 @@ fn count_items_by_category(json: &serde_json::Value, category: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Find a transaction item in the JSON report by transaction ID prefix.
+fn find_item_by_txn_id<'a>(
+    json: &'a serde_json::Value,
+    txn_id_prefix: &str,
+) -> Option<&'a serde_json::Value> {
+    json["items"].as_array().and_then(|items| {
+        items.iter().find(|i| {
+            i["transaction_id"]
+                .as_str()
+                .map(|id| id.starts_with(txn_id_prefix))
+                .unwrap_or(false)
+        })
+    })
+}
+
 // =============================================================================
 // Interrupted transaction detection tests
 // =============================================================================
@@ -234,11 +249,11 @@ fn test_interrupted_rolling_back_journal_detected() {
 }
 
 // =============================================================================
-// Terminal state tests (should NOT be detected as interrupted)
+// Terminal state tests
 // =============================================================================
 
 #[test]
-fn test_committed_journal_not_detected() {
+fn test_committed_journal_generates_remove_terminal() {
     let (_tmp, config_dir) = setup_test_env();
     write_journal(
         &config_dir,
@@ -246,15 +261,24 @@ fn test_committed_journal_not_detected() {
         "Committed",
     );
     let json = repair_dry_run_json(&config_dir);
-    assert_eq!(
-        count_items_by_category(&json, "transaction"),
-        0,
-        "Committed journal must NOT be detected as interrupted: {json}"
+    // Committed without artifacts generates a RemoveTerminalJournal action.
+    let items = count_items_by_category(&json, "transaction");
+    assert!(
+        items >= 1,
+        "Committed terminal journal must generate RemoveTerminalJournal: {json}"
+    );
+    let item = find_item_by_txn_id(&json, "eeee5555").unwrap();
+    assert!(
+        item["action"]
+            .as_str()
+            .unwrap()
+            .contains("RemoveTerminalJournal"),
+        "must be RemoveTerminalJournal action"
     );
 }
 
 #[test]
-fn test_rolled_back_journal_not_detected() {
+fn test_rolled_back_journal_generates_remove_terminal() {
     let (_tmp, config_dir) = setup_test_env();
     write_journal(
         &config_dir,
@@ -262,15 +286,24 @@ fn test_rolled_back_journal_not_detected() {
         "RolledBack",
     );
     let json = repair_dry_run_json(&config_dir);
-    assert_eq!(
-        count_items_by_category(&json, "transaction"),
-        0,
-        "RolledBack journal must NOT be detected as interrupted: {json}"
+    // RolledBack without artifacts generates a RemoveTerminalJournal action.
+    let items = count_items_by_category(&json, "transaction");
+    assert!(
+        items >= 1,
+        "RolledBack terminal journal must generate RemoveTerminalJournal: {json}"
+    );
+    let item = find_item_by_txn_id(&json, "ffff6666").unwrap();
+    assert!(
+        item["action"]
+            .as_str()
+            .unwrap()
+            .contains("RemoveTerminalJournal"),
+        "must be RemoveTerminalJournal action"
     );
 }
 
 #[test]
-fn test_failed_journal_not_detected() {
+fn test_failed_journal_reported_as_unsafe() {
     let (_tmp, config_dir) = setup_test_env();
     write_journal(
         &config_dir,
@@ -278,11 +311,15 @@ fn test_failed_journal_not_detected() {
         "Failed",
     );
     let json = repair_dry_run_json(&config_dir);
-    assert_eq!(
-        count_items_by_category(&json, "transaction"),
-        0,
-        "Failed journal must NOT be detected as interrupted: {json}"
+    // Failed journals are now reported as unsafe items — they block
+    // mutation and require manual investigation.
+    let item = find_item_by_txn_id(&json, "aaaa7777");
+    assert!(
+        item.is_some(),
+        "Failed journal must appear in repair output as unsafe: {json}"
     );
+    let safe = item.unwrap()["safe"].as_bool().unwrap_or(true);
+    assert!(!safe, "Failed journal must be classified as unsafe");
 }
 
 // =============================================================================
