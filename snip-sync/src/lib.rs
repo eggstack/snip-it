@@ -786,6 +786,14 @@ impl SnippetSync for SnipSyncService {
             req.library_id
         };
 
+        // Update observer with authenticated identity after resolution.
+        self.update_request_ids(
+            "get_snippets",
+            Some(user_id.clone()),
+            None,
+            Some(library_id.clone()),
+        );
+
         let limit = if req.limit > 0 {
             req.limit.clamp(1, MAX_REQUEST_LIMIT)
         } else {
@@ -880,6 +888,14 @@ impl SnippetSync for SnipSyncService {
             }
             req.library_id
         };
+
+        // Update observer with authenticated identity after resolution.
+        self.update_request_ids(
+            "push_snippets",
+            Some(user_id.clone()),
+            req.snippets.first().map(|s| s.device_id.clone()),
+            Some(library_id.clone()),
+        );
 
         if req.snippets.len() > DEFAULT_MAX_SYNC_SNIPPETS {
             self.record_request_duration("push_snippets", start);
@@ -1014,6 +1030,14 @@ impl SnippetSync for SnipSyncService {
             }
             req.library_id
         };
+
+        // Update observer with authenticated identity after resolution.
+        self.update_request_ids(
+            "sync",
+            Some(user_id.clone()),
+            req.local_snippets.first().map(|s| s.device_id.clone()),
+            Some(library_id.clone()),
+        );
 
         let mut skipped_ids = Vec::new();
 
