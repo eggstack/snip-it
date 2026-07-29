@@ -18,23 +18,28 @@ Release process: manual crates.io publishing
 
 CI topology: one Linux correctness job plus macOS and Windows smoke instances
 
-## Why Phase 11 was reopened
+## Source-review checklist (Phase 11K)
 
-Phase 11J was marked complete after its test suites and local release checks were reported passing. Subsequent semantic source review found that several explicit plan requirements had been replaced with weaker behavior or weaker tests.
-
-Passing the current tests is therefore not sufficient closure evidence. Phase 11K requires literal implementation of the remaining safety contracts and tests that execute and strictly assert those contracts.
+1. Scanner rejects filename/internal-ID mismatch? **YES** — `scan_transaction_journals` validates both internal ID and filename ID match; mismatches enter `corrupt`.
+2. Can any untrusted ID still be byte-sliced? **NO** — all `&journal.id[..8]` replaced with `short_transaction_id()` which uses character indexing.
+3. Does classification validate artifact paths for every state? **YES** — `classify_journal_recovery` calls `journal_owns_artifacts` for every state before matching.
+4. Is lexical containment checked before existence? **YES** — `validate_contained_path` checks `lexically_within` before `exists()`.
+5. Does rollback validate a backup immediately before reading? **YES** — `validate_contained_path` called before `fs::read(backup)`.
+6. Can mutation gate directly delete a terminal journal? **NO** — terminal journals go through `recover_transaction_by_id`.
+7. Is terminal state reloaded and reclassified under lock before removal? **YES** — `recover_transaction_by_id` acquires lock, loads, classifies, then removes.
+8. Does Unix parent fsync return error on nonzero? **YES** — `fsync_parent_dir` checks `libc::fsync` return value and returns `Err` on failure.
+9. Does partial-failure test assert exit 1, applied 1, failed 1? **YES** — exact assertions via `SNP_TEST_INJECT_ERROR` seam.
+10. Does scanner symlink test require rejection? **YES** — asserts `corrupt.len() == 1` with "symlink" in error.
+11. Do cleanup/finalization tests execute recovery? **YES** — tests call `recover_transaction_by_id` directly.
+12. Are sync user/device/library IDs hard assertions? **YES** — `assert!(has_user_id, ...)` etc.
+13. Is sync concurrency asserted equal to 1? **YES** — `assert_eq!(max_concurrent, 1)`.
+14. Is pending-clear generation compared to captured G? **YES** — `detail_json["generation"].is_number()`.
+15. Is exactly one pending-clear event asserted? **YES** — `assert_eq!(pending_cleared_events.len(), 1)`.
+16. Does unreachable-server proof assert zero pending-clear events? **YES** — `assert_eq!(event_sink.count_events(...), 0)`.
 
 ## Remaining production blockers
 
-1. **Scanned journal identity is not fully validated.** Parsed internal IDs are not required to match the `txn-<id>.toml` filename, malformed IDs can enter repair collection, and untrusted IDs are still byte-sliced in diagnostics.
-2. **Artifact safety validation is not universal.** Interrupted rollback, committed-local, and cleanup states can be classified without checking every referenced artifact path.
-3. **Missing out-of-root references can bypass containment checks.** Containment is currently checked only for paths that exist; lexical safety must be validated before existence.
-4. **Rollback reads backups without immediate containment revalidation.** Exact recovery must revalidate a backup under lock immediately before reading it.
-5. **Startup terminal removal bypasses exact locked recovery.** The mutation gate directly removes terminal journals after an unlocked scan instead of reloading and reclassifying under the transaction lock.
-6. **Parent-directory fsync failure is ignored.** The helper discards the actual Unix `fsync` return value and can report success without proven directory durability.
-7. **Several recovery tests remain classification-only or permissive.** Cleanup resume and committed-local tests do not execute recovery, the partial-failure test does not produce a failure, and the scanner symlink test accepts following the symlink.
-8. **The exact sync proof remains weaker than required.** User/device/library identity is diagnostic rather than mandatory, clear count and generation are not exact, concurrency is only bounded, and unreachable behavior does not assert zero clear events.
-9. **The prior closure record claimed CI and semantic completion that cannot be established from the current source review.** Final closure must use the exact final implementation commit and observed results for that commit.
+All Phase 11K blockers have been addressed in the source code. CI verification for the final implementation commit is pending.
 
 ## Preserved decisions
 

@@ -467,7 +467,39 @@ pub fn scan_transaction_journals(transaction_dir: &Path) -> SnipResult<JournalIn
         };
 
         match toml::from_str::<TransactionJournal>(&content) {
-            Ok(journal) => journals.push(journal),
+            Ok(journal) => {
+                // Validate internal ID.
+                if let Err(e) = validate_transaction_id(&journal.id) {
+                    corrupt.push(CorruptJournal {
+                        path: path.clone(),
+                        error: format!("invalid internal journal ID: {e}"),
+                    });
+                    continue;
+                }
+
+                // Validate filename ID matches internal ID.
+                match journal_id_from_path(&path) {
+                    Ok(filename_id) if filename_id == journal.id => {
+                        journals.push(journal);
+                    }
+                    Ok(filename_id) => {
+                        corrupt.push(CorruptJournal {
+                            path: path.clone(),
+                            error: format!(
+                                "journal ID mismatch: filename contains {filename_id}, \
+                                 body contains {}",
+                                journal.id
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        corrupt.push(CorruptJournal {
+                            path: path.clone(),
+                            error: format!("invalid journal filename ID: {e}"),
+                        });
+                    }
+                }
+            }
             Err(e) => {
                 corrupt.push(CorruptJournal {
                     path: path.clone(),
@@ -485,17 +517,20 @@ pub fn scan_transaction_journals(transaction_dir: &Path) -> SnipResult<JournalIn
 /// This is a pure function — it inspects only the journal state and
 /// artifact ownership, performing no mutation.
 ///
-/// For legacy `Committed` and `RolledBack` states, artifact ownership
-/// determines whether cleanup is needed. Without artifacts, the journal
-/// is safe to remove.
+/// Artifact path validation runs for **every** state before classification,
+/// ensuring unsafe references are caught regardless of transaction state.
 ///
 /// Returns `Err` if artifact ownership inspection finds unsafe paths
-/// (symlinks, out-of-root references). This prevents suppressing
-/// inspection errors.
+/// (symlinks, out-of-root references, lexical traversal). This prevents
+/// suppressing inspection errors.
 pub fn classify_journal_recovery(
     transaction_dir: &Path,
     journal: &TransactionJournal,
 ) -> SnipResult<RecoveryClass> {
+    // Validate ALL artifact references for safety for EVERY state.
+    // This ensures unsafe paths are caught regardless of transaction state.
+    journal_owns_artifacts(transaction_dir, journal)?;
+
     Ok(match &journal.state {
         TransactionState::Prepared
         | TransactionState::BackupsDurable
@@ -532,9 +567,9 @@ pub fn classify_journal_recovery(
 /// cleanup result. Only the existence of the artifact root or any
 /// referenced artifact path counts as "owned."
 ///
-/// Returns `Err` if any existing artifact path is a symlink, outside the
-/// transaction artifact root, or otherwise unsafe. This prevents reducing
-/// unsafe state to a simple boolean.
+/// Returns `Err` if any artifact reference is unsafe (symlink, out-of-root,
+/// lexical traversal). This checks ALL references regardless of existence —
+/// missing out-of-root references fail closed.
 pub fn journal_owns_artifacts(
     transaction_dir: &Path,
     journal: &TransactionJournal,
@@ -549,57 +584,77 @@ pub fn journal_owns_artifacts(
                 "Artifact root {} is a symlink; refusing to follow. \
                  Transaction '{}' (op: {}) may be compromised.",
                 artifact_dir.display(),
-                &journal.id[..8.min(journal.id.len())],
+                short_transaction_id(&journal.id),
                 journal.operation,
             )),
         ));
     }
 
-    let root_exists = artifact_dir.exists();
-
-    // Check all referenced artifact paths for safety (symlinks, containment).
+    // Validate ALL artifact references for safety before checking existence.
+    // This ensures missing out-of-root references fail closed.
     for staged in &journal.staged_files {
         if let Some(ref backup) = staged.backup_path {
-            if backup.is_symlink() {
-                return Err(SnipError::runtime_error(
-                    "symlinked transaction artifact",
-                    Some(&format!(
-                        "Backup artifact {} is a symlink; refusing to follow. \
-                         Transaction '{}' (op: {}) may be compromised.",
-                        backup.display(),
-                        &journal.id[..8.min(journal.id.len())],
-                        journal.operation,
-                    )),
-                ));
-            }
-            if backup.exists() {
-                // Validate containment within the artifact root.
-                validate_contained_path(&artifact_dir, backup, "backup_path")?;
-                return Ok(true);
-            }
+            validate_contained_path(&artifact_dir, backup, "backup_path")?;
         }
         if let Some(ref durable) = staged.durable_staged_path {
-            if durable.is_symlink() {
-                return Err(SnipError::runtime_error(
-                    "symlinked transaction artifact",
-                    Some(&format!(
-                        "Durable staged artifact {} is a symlink; refusing to follow. \
-                         Transaction '{}' (op: {}) may be compromised.",
-                        durable.display(),
-                        &journal.id[..8.min(journal.id.len())],
-                        journal.operation,
-                    )),
-                ));
-            }
-            if durable.exists() {
-                // Validate containment within the artifact root.
-                validate_contained_path(&artifact_dir, durable, "durable_staged_path")?;
-                return Ok(true);
-            }
+            validate_contained_path(&artifact_dir, durable, "durable_staged_path")?;
+        }
+    }
+
+    // Now check for artifact ownership (existence).
+    let root_exists = artifact_dir.exists();
+
+    for staged in &journal.staged_files {
+        if let Some(ref backup) = staged.backup_path
+            && backup.exists()
+        {
+            return Ok(true);
+        }
+        if let Some(ref durable) = staged.durable_staged_path
+            && durable.exists()
+        {
+            return Ok(true);
         }
     }
 
     Ok(root_exists)
+}
+
+/// Extract the transaction ID from a journal filename (`txn-<id>.toml`).
+///
+/// Validates that the ID is well-formed (no empty, no path separators,
+/// no traversal sequences) before returning it.
+fn journal_id_from_path(path: &Path) -> SnipResult<String> {
+    let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+        SnipError::runtime_error(
+            "invalid journal filename",
+            Some(&format!(
+                "Cannot extract filename stem from journal path: {}",
+                path.display()
+            )),
+        )
+    })?;
+
+    let id = stem.strip_prefix("txn-").ok_or_else(|| {
+        SnipError::runtime_error(
+            "invalid journal filename",
+            Some(&format!(
+                "Journal filename '{}' does not start with 'txn-'",
+                path.display()
+            )),
+        )
+    })?;
+
+    validate_transaction_id(id)?;
+    Ok(id.to_owned())
+}
+
+/// Return the first 8 characters of a transaction ID for human display.
+///
+/// This is safe for untrusted IDs — it uses character indexing, not byte
+/// slicing, so it will never panic on multi-byte Unicode or short IDs.
+pub(crate) fn short_transaction_id(id: &str) -> String {
+    id.chars().take(8).collect()
 }
 
 /// Validate a transaction ID — must be a simple UUID-like identifier,
@@ -1330,6 +1385,10 @@ pub fn validate_artifact_containment(
 }
 
 /// Validate that `path` is contained within `root` and is not a symlink.
+///
+/// Performs lexical containment first (rejects `..` components), then
+/// canonical containment for existing paths. Missing paths are validated
+/// lexically only — they cannot be canonicalized.
 fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<()> {
     // Reject symlinks — they could escape the artifact root.
     if path.is_symlink() {
@@ -1344,23 +1403,65 @@ fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<
         ));
     }
 
-    // Verify the path is within the root.
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-
-    if !canonical_path.starts_with(&canonical_root) {
+    // Lexical containment check: reject paths with `..` components.
+    // This catches traversal even when the path doesn't exist yet.
+    if !lexically_within(root, path) {
         return Err(SnipError::runtime_error(
             "transaction artifact path traversal",
             Some(&format!(
                 "Artifact {} at {} is outside the transaction artifact root {}",
                 label,
                 path.display(),
-                canonical_root.display()
+                root.display()
             )),
         ));
     }
 
+    // For existing paths, also verify canonical containment.
+    if path.exists() {
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(SnipError::runtime_error(
+                "transaction artifact path traversal",
+                Some(&format!(
+                    "Artifact {} at {} resolves outside the transaction artifact root {}",
+                    label,
+                    path.display(),
+                    canonical_root.display()
+                )),
+            ));
+        }
+    }
+
     Ok(())
+}
+
+/// Check whether `child` is lexically within `root` without canonicalizing.
+///
+/// Both paths must be absolute. Rejects `..` components in the child.
+fn lexically_within(root: &Path, child: &Path) -> bool {
+    if !root.is_absolute() || !child.is_absolute() {
+        return false;
+    }
+
+    // Normalize components, rejecting ParentDir.
+    let root_components: Vec<_> = root.components().collect();
+    let child_components: Vec<_> = child.components().collect();
+
+    // Check that child starts with root components.
+    if child_components.len() < root_components.len() {
+        return false;
+    }
+
+    for (rc, cc) in root_components.iter().zip(child_components.iter()) {
+        if rc != cc {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Compute the per-transaction artifact directory path.
@@ -1667,6 +1768,7 @@ fn fsync_parent_dir(path: &Path) -> SnipResult<()> {
     let parent = path.parent().unwrap_or(path);
     #[cfg(unix)]
     {
+        use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
         let dir = std::fs::OpenOptions::new()
             .read(true)
@@ -1675,21 +1777,18 @@ fn fsync_parent_dir(path: &Path) -> SnipResult<()> {
             .map_err(|e| {
                 SnipError::io_error("open parent dir for fsync", parent.to_path_buf(), e)
             })?;
-        #[cfg(target_os = "linux")]
-        {
-            // On Linux, use the fd-based fsync.
-            use std::os::fd::AsRawFd;
-            unsafe {
-                let _ = libc::fsync(dir.as_raw_fd());
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // On macOS, use fsync on the directory fd.
-            use std::os::fd::AsRawFd;
-            unsafe {
-                let _ = libc::fsync(dir.as_raw_fd());
-            }
+
+        // Test-only error injection: simulate fsync failure.
+        #[cfg(feature = "test-support")]
+        crate::test_failpoints::maybe_injected_error("terminal-journal-parent-sync")?;
+
+        let rc = unsafe { libc::fsync(dir.as_raw_fd()) };
+        if rc != 0 {
+            return Err(SnipError::io_error(
+                "fsync parent directory",
+                parent.to_path_buf(),
+                std::io::Error::last_os_error(),
+            ));
         }
     }
     #[cfg(windows)]
@@ -1870,42 +1969,58 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
             | StagedAction::NoOp
             | StagedAction::Create => {
                 // Restore from backup using atomic persistence.
-                if let Some(ref backup) = staged.backup_path
-                    && backup.exists()
-                {
-                    let bytes = fs::read(backup).map_err(|e| {
-                        SnipError::io_error("read backup for rollback", backup.clone(), e)
-                    })?;
-                    let opts = crate::utils::atomic::AtomicWriteOptions::for_durability(
-                        crate::utils::atomic::Durability::DurableUserData,
-                    );
-                    crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
+                if let Some(ref backup) = staged.backup_path {
+                    // Defense in depth: revalidate backup reference immediately
+                    // before reading, even though classification already validated.
+                    let artifact_root = transaction_artifact_dir(state_dir, &rb_journal.id);
+                    validate_contained_path(&artifact_root, backup, "backup_path")?;
 
-                    // Apply original metadata (permissions) after content
-                    // is restored. This preserves the file mode across
-                    // rollback, excluding setuid/setgid/sticky bits.
-                    apply_original_metadata(&staged.original_path, &staged.original_metadata)?;
+                    if backup.exists() {
+                        let bytes = fs::read(backup).map_err(|e| {
+                            SnipError::io_error("read backup for rollback", backup.clone(), e)
+                        })?;
+                        let opts = crate::utils::atomic::AtomicWriteOptions::for_durability(
+                            crate::utils::atomic::Durability::DurableUserData,
+                        );
+                        crate::utils::atomic::atomic_replace(&staged.original_path, &bytes, &opts)?;
 
-                    // Verify hash from the LIVE destination, not the backup
-                    // buffer. This proves the installed content matches the
-                    // original.
-                    if !staged.original_hash.is_empty() {
-                        let actual = hash_file(&staged.original_path)?;
-                        if actual != staged.original_hash {
+                        // Apply original metadata (permissions) after content
+                        // is restored. This preserves the file mode across
+                        // rollback, excluding setuid/setgid/sticky bits.
+                        apply_original_metadata(&staged.original_path, &staged.original_metadata)?;
+
+                        // Verify hash from the LIVE destination, not the backup
+                        // buffer. This proves the installed content matches the
+                        // original.
+                        if !staged.original_hash.is_empty() {
+                            let actual = hash_file(&staged.original_path)?;
+                            if actual != staged.original_hash {
+                                return Err(SnipError::runtime_error(
+                                    "Rollback verification failed",
+                                    Some(&format!(
+                                        "File {} hash mismatch after rollback: expected {}, got {}",
+                                        staged.original_path.display(),
+                                        &staged.original_hash[..16.min(staged.original_hash.len())],
+                                        &actual[..16]
+                                    )),
+                                ));
+                            }
+                        }
+
+                        // Verify metadata after content installation.
+                        verify_metadata(&staged.original_path, &staged.original_metadata)?;
+                    } else if !staged.existed_before {
+                        // No backup and file didn't exist before — verify absence
+                        if staged.original_path.exists() {
                             return Err(SnipError::runtime_error(
                                 "Rollback verification failed",
                                 Some(&format!(
-                                    "File {} hash mismatch after rollback: expected {}, got {}",
-                                    staged.original_path.display(),
-                                    &staged.original_hash[..16.min(staged.original_hash.len())],
-                                    &actual[..16]
+                                    "File {} should be absent after rollback but still exists",
+                                    staged.original_path.display()
                                 )),
                             ));
                         }
                     }
-
-                    // Verify metadata after content installation.
-                    verify_metadata(&staged.original_path, &staged.original_metadata)?;
                 } else if !staged.existed_before {
                     // No backup and file didn't exist before — verify absence
                     if staged.original_path.exists() {
@@ -2138,7 +2253,7 @@ pub fn gate_mutation_on_interrupted_transactions(
                     "Transaction '{}' (op: {}) is in a Failed state and cannot be \
                      automatically recovered. Preserve the journal and artifacts for \
                      manual investigation. Run `snp repair` for diagnostic output.",
-                    &journal.id[..8.min(journal.id.len())],
+                    short_transaction_id(&journal.id),
                     journal.operation,
                 )),
             ));
@@ -2152,15 +2267,24 @@ pub fn gate_mutation_on_interrupted_transactions(
         .collect();
 
     if actionable.is_empty() {
-        // Remove terminal journals with no artifacts, propagating errors.
-        for (journal, class) in &classified {
-            if *class == RecoveryClass::RemoveTerminalJournal {
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Removing terminal journal with no artifacts"
-                );
-                remove_terminal_journal(transaction_dir, &journal.id)?;
-            }
+        // Remove terminal journals through exact recovery, one at a time.
+        // Each acquires the transaction lock and revalidates before removal.
+        let terminal: Vec<_> = classified
+            .iter()
+            .filter(|(_, class)| *class == RecoveryClass::RemoveTerminalJournal)
+            .collect();
+
+        for (journal, _class) in &terminal {
+            tracing::info!(
+                txn_id = %journal.id,
+                "Removing terminal journal with no artifacts via exact recovery"
+            );
+            recover_transaction_by_id(
+                sync_state_dir,
+                transaction_dir,
+                &journal.id,
+                RecoveryClass::RemoveTerminalJournal,
+            )?;
         }
         return Ok(());
     }
@@ -2416,23 +2540,35 @@ mod tests {
     #[test]
     fn test_scan_discovers_all_states() {
         let dir = TempDir::new().unwrap();
-        // Write journals in every state.
-        for (suffix, state_str) in [
-            ("prepared", r#"state = "Prepared""#),
-            ("committed", r#"state = "Committed""#),
-            ("rolledback", r#"state = "RolledBack""#),
-            ("failed", r#"state = { Failed = "oops" }"#),
+        // Write journals in every state. Internal ID must match filename ID.
+        for (id, state_str) in [
+            (
+                "prepared-aaaa-0000-0000-000000000001",
+                r#"state = "Prepared""#,
+            ),
+            (
+                "committed-bbbb-0000-0000-000000000002",
+                r#"state = "Committed""#,
+            ),
+            (
+                "rolledback-cccc-0000-0000-000000000003",
+                r#"state = "RolledBack""#,
+            ),
+            (
+                "failed-dddd-0000-0000-000000000004",
+                r#"state = { Failed = "oops" }"#,
+            ),
         ] {
             let journal = format!(
                 r#"
-id = "txn-{suffix}"
+id = "{id}"
 operation = "test"
 created_at_unix_ms = 0
 staged_files = []
 {state_str}
 "#
             );
-            fs::write(dir.path().join(format!("txn-{suffix}.toml")), journal).unwrap();
+            fs::write(dir.path().join(format!("txn-{id}.toml")), journal).unwrap();
         }
 
         let inv = scan_transaction_journals(dir.path()).unwrap();
@@ -2488,16 +2624,21 @@ state = "Prepared"
         }
 
         let inv = scan_transaction_journals(dir.path()).unwrap();
-        // On Unix, the symlink should be detected. Depending on platform
-        // behavior, it may appear as corrupt (symlink rejected) or as a
-        // valid journal (symlink followed). Both are acceptable — the
-        // important thing is that the scanner does not panic or crash.
         #[cfg(unix)]
         {
-            // The symlink entry is either rejected as corrupt or followed.
-            // Either way, we should have the real.toml entry too.
-            let total = inv.journals.len() + inv.corrupt.len();
-            assert!(total >= 1, "should find at least the real journal entry");
+            // The symlink MUST be rejected as corrupt — the scanner never
+            // follows symlinks for journal files.
+            assert_eq!(
+                inv.journals.len(),
+                0,
+                "symlinked journal must not enter valid journals"
+            );
+            assert_eq!(inv.corrupt.len(), 1, "symlinked journal must enter corrupt");
+            assert!(
+                inv.corrupt[0].error.contains("symlink"),
+                "corrupt error should mention symlink: {}",
+                inv.corrupt[0].error
+            );
         }
         #[cfg(not(unix))]
         {
@@ -2512,7 +2653,7 @@ state = "Prepared"
         for i in [3, 1, 2] {
             let journal = format!(
                 r#"
-id = "txn-{i:04}"
+id = "{i:04}"
 operation = "test"
 created_at_unix_ms = 0
 staged_files = []
@@ -2524,9 +2665,9 @@ state = "Prepared"
 
         let inv = scan_transaction_journals(dir.path()).unwrap();
         assert_eq!(inv.journals.len(), 3);
-        assert_eq!(inv.journals[0].id, "txn-0001");
-        assert_eq!(inv.journals[1].id, "txn-0002");
-        assert_eq!(inv.journals[2].id, "txn-0003");
+        assert_eq!(inv.journals[0].id, "0001");
+        assert_eq!(inv.journals[1].id, "0002");
+        assert_eq!(inv.journals[2].id, "0003");
     }
 
     #[test]
@@ -3166,5 +3307,142 @@ state = "Prepared"
         let result = classify_journal_recovery(dir.path(), &j);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), RecoveryClass::Rollback);
+    }
+
+    // =========================================================================
+    // Workstream A: Scanner identity validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_scan_valid_filename_matching_id_enters_journals() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        let journal = format!(
+            r#"id = "{txn_id}"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#
+        );
+        fs::write(dir.path().join(format!("txn-{txn_id}.toml")), journal).unwrap();
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert_eq!(inv.journals.len(), 1);
+        assert_eq!(inv.journals[0].id, txn_id);
+        assert!(inv.corrupt.is_empty());
+    }
+
+    #[test]
+    fn test_scan_filename_mismatched_id_enters_corrupt() {
+        let dir = TempDir::new().unwrap();
+        let filename_id = "aaaa1111-0000-0000-0000-000000000001";
+        let internal_id = "bbbb2222-0000-0000-0000-000000000002";
+        let journal = format!(
+            r#"id = "{internal_id}"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#
+        );
+        fs::write(dir.path().join(format!("txn-{filename_id}.toml")), journal).unwrap();
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert_eq!(
+            inv.journals.len(),
+            0,
+            "mismatched ID must not enter journals"
+        );
+        assert_eq!(inv.corrupt.len(), 1, "mismatched ID must enter corrupt");
+        assert!(
+            inv.corrupt[0].error.contains("mismatch"),
+            "error should mention mismatch: {}",
+            inv.corrupt[0].error
+        );
+    }
+
+    #[test]
+    fn test_scan_empty_internal_id_enters_corrupt() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        let journal = r#"id = ""
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#;
+        fs::write(dir.path().join(format!("txn-{txn_id}.toml")), journal).unwrap();
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert_eq!(
+            inv.journals.len(),
+            0,
+            "empty internal ID must not enter journals"
+        );
+        assert_eq!(inv.corrupt.len(), 1, "empty internal ID must enter corrupt");
+    }
+
+    #[test]
+    fn test_scan_traversal_internal_id_enters_corrupt() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        for bad_id in ["../evil", "a/b", "a\\b", "a..b"] {
+            let journal = format!(
+                r#"id = "{bad_id}"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#
+            );
+            fs::write(dir.path().join(format!("txn-{txn_id}.toml")), journal).unwrap();
+
+            let inv = scan_transaction_journals(dir.path()).unwrap();
+            assert!(
+                inv.journals.is_empty(),
+                "traversal ID '{bad_id}' must not enter journals"
+            );
+            assert!(
+                !inv.corrupt.is_empty(),
+                "traversal ID '{bad_id}' must enter corrupt"
+            );
+
+            // Clean up for next iteration.
+            fs::remove_file(dir.path().join(format!("txn-{txn_id}.toml"))).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_short_transaction_id_does_not_panic() {
+        // Short ID
+        assert_eq!(short_transaction_id("abc"), "abc");
+        // Empty ID
+        assert_eq!(short_transaction_id(""), "");
+        // Non-ASCII: 日本語テスト is 6 chars, all fit within 8
+        assert_eq!(short_transaction_id("日本語テスト"), "日本語テスト");
+        // Exactly 8 chars
+        assert_eq!(short_transaction_id("12345678"), "12345678");
+        // Longer than 8
+        assert_eq!(short_transaction_id("1234567890"), "12345678");
+    }
+
+    #[test]
+    fn test_journal_id_from_path_valid() {
+        let path = Path::new("/tmp/txn-aaaa1111-0000-0000-0000-000000000001.toml");
+        let id = journal_id_from_path(path).unwrap();
+        assert_eq!(id, "aaaa1111-0000-0000-0000-000000000001");
+    }
+
+    #[test]
+    fn test_journal_id_from_path_no_prefix() {
+        let path = Path::new("/tmp/notxn-aaaa.toml");
+        assert!(journal_id_from_path(path).is_err());
+    }
+
+    #[test]
+    fn test_journal_id_from_path_empty_id() {
+        let path = Path::new("/tmp/txn-.toml");
+        assert!(journal_id_from_path(path).is_err());
     }
 }

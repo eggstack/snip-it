@@ -81,6 +81,12 @@ cargo test --test cleanup_crash_failpoints --features test-support -- --test-thr
 cargo test --test deterministic_e2e --features test-support -- --test-threads=1
 cargo test --lib transaction --all-features -- --test-threads=1
 
+# Run Phase 11K focused verification
+cargo test --lib transaction --all-features -- --test-threads=1
+cargo test --test repair_transactions --features test-support -- --test-threads=1
+cargo test --test deterministic_e2e --features test-support test_observer_headline_sync_e2e -- --exact --test-threads=1
+cargo test --test deterministic_e2e --features test-support test_unreachable_server_preserves_pending -- --exact --test-threads=1
+
 # Run production seam proof (no test-support feature)
 bash scripts/ci/test-production-seams.sh
 
@@ -217,6 +223,9 @@ The transaction lock (`transaction.lock`) is a structured TOML record containing
 `recover_transaction_by_id` acquires the transaction lock BEFORE loading or classifying the journal, eliminating the TOCTOU window. Classification is now fallible (`SnipResult<RecoveryClass>`) — artifact ownership inspection rejects symlinked roots, symlinked backups, and out-of-root paths. `UnsafeFailed` journals block the mutation gate. Terminal journal removal uses `remove_terminal_journal` helper with fsync. Repair JSON is emitted after all work completes with stable `exit_status` field. The `transaction` module is `pub` under `test-support` feature for integration tests that exercise recovery APIs directly.
 
 **Phase 11C fix**: Lock ownership verification now uses `ProcessIdentity::observe(existing.pid)` to compare the observed owner's start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse.
+
+### Phase 11K: Literal safety and proof closure
+Scanner validates filename/internal journal ID match — mismatches enter `corrupt`, never `journals`. `short_transaction_id()` replaces all byte-slicing of untrusted IDs. Artifact path validation runs for every transaction state before classification, with lexical containment checked before existence. Rollback revalidates backup references immediately before reading. Mutation gate routes all terminal journal removal through `recover_transaction_by_id` (no direct deletion). `fsync_parent_dir` propagates Unix fsync errors. Test-only repair failure injection via `SNP_TEST_INJECT_ERROR=repair-transaction-{id}`. Observer tests use hard assertions for identity fields, exact concurrency of 1, and exact pending-clear event count.
 
 ### Local-data lock (backup snapshot coordination)
 `LocalDataLock` (`src/local_data.rs`) is a short-lived exclusive file lock in the `.transaction` directory that serializes backup snapshot capture against all local TOML mutations. Backup acquires the lock during file enumeration and byte capture; `save_library` acquires it during writes. This ensures backup captures either the complete before-state or complete after-state, never a mixed state. The lock retries with exponential backoff (up to 30s) when contended.

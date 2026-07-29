@@ -461,7 +461,7 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
                         category: "unsafe".to_string(),
                         problem: format!(
                             "Transaction '{}' (op: {}) has unsafe artifacts: {e}",
-                            &journal.id[..8.min(journal.id.len())],
+                            crate::transaction::short_transaction_id(&journal.id),
                             journal.operation,
                         ),
                         fix: "Requires manual investigation — preserve journal and artifacts"
@@ -508,7 +508,7 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
                     category: "unsafe".to_string(),
                     problem: format!(
                         "Transaction '{}' (op: {}) is in a Failed state",
-                        &journal.id[..8],
+                        crate::transaction::short_transaction_id(&journal.id),
                         journal.operation,
                     ),
                     fix: "Requires manual investigation — preserve journal and artifacts"
@@ -537,7 +537,7 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
             category: "transaction".to_string(),
             problem: format!(
                 "Transaction '{}' (op: {}, state: {:?})",
-                &journal.id[..8],
+                crate::transaction::short_transaction_id(&journal.id),
                 journal.operation,
                 journal.state
             ),
@@ -626,6 +626,12 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
 
 /// Apply a single safe repair.
 fn apply_repair(item: &RepairItem) -> SnipResult<()> {
+    // Test-only failure injection: fail for a specific transaction ID.
+    #[cfg(feature = "test-support")]
+    if let Some(tid) = item.action.transaction_id() {
+        crate::test_failpoints::maybe_injected_error(&format!("repair-transaction-{tid}"))?;
+    }
+
     match &item.action {
         RepairAction::PruneOrphanedUsage => {
             // Prune orphaned usage entries

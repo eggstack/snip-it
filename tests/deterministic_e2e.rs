@@ -977,8 +977,8 @@ fn test_observer_headline_sync_e2e() {
 
     // 11. Assert identity fields are mandatory on the most recent push start.
     //     The observer updates IDs after the handler completes via
-    //     update_request_ids. If the handler doesn't call it, IDs may
-    //     be None — record this as a diagnostic, not a hard failure.
+    //     update_request_ids. These are hard assertions — diagnostic fallback
+    //     is not acceptable for the headline proof.
     let latest_push_starts: Vec<_> = observer
         .starts()
         .into_iter()
@@ -990,7 +990,6 @@ fn test_observer_headline_sync_e2e() {
     );
     let latest_push = latest_push_starts.last().unwrap();
 
-    // Diagnostic: record whether IDs were populated.
     let has_user_id = latest_push
         .authenticated_user_id
         .as_deref()
@@ -1004,13 +1003,18 @@ fn test_observer_headline_sync_e2e() {
         .as_deref()
         .is_some_and(|id| !id.is_empty());
 
-    if !has_user_id || !has_device_id || !has_library_id {
-        eprintln!(
-            "NOTE: sync start IDs not populated (user={has_user_id}, \
-             device={has_device_id}, library={has_library_id}). \
-             Server handler may not call update_request_ids."
-        );
-    }
+    assert!(
+        has_user_id,
+        "authenticated_user_id must be populated on sync start"
+    );
+    assert!(
+        has_device_id,
+        "authenticated_device_id must be populated on sync start"
+    );
+    assert!(
+        has_library_id,
+        "target_library_id must be populated on sync start"
+    );
 
     // 12. Assert server state: exactly 1 snippet (R0 → R1).
     let server_count = rt.block_on(server_total_snippet_count_all_users(server.db()));
@@ -1019,11 +1023,11 @@ fn test_observer_headline_sync_e2e() {
         "server should have exactly 1 snippet after observer E2E (R1)"
     );
 
-    // 13. Assert concurrency: max in-flight is at most 1.
+    // 13. Assert concurrency: max in-flight is exactly 1.
     let max_concurrent = observer.max_concurrent();
-    assert!(
-        max_concurrent <= 1,
-        "observer max concurrent requests should be <= 1, got {max_concurrent}"
+    assert_eq!(
+        max_concurrent, 1,
+        "observer max concurrent requests must be exactly 1, got {max_concurrent}"
     );
 
     // 14. Prove finish precedes pending clear via the event sink.
@@ -1032,14 +1036,15 @@ fn test_observer_headline_sync_e2e() {
     let event_sink = support::event_sink::EventSink::new(config_dir);
     let events = event_sink.read_all();
 
-    // Find the pending_cleared event.
+    // Find the pending_cleared event — must be exactly one.
     let pending_cleared_events: Vec<_> = events
         .iter()
         .filter(|e| e.component == "executor" && e.event == "pending_cleared")
         .collect();
-    assert!(
-        !pending_cleared_events.is_empty(),
-        "executor must emit a pending_cleared event after successful sync"
+    assert_eq!(
+        pending_cleared_events.len(),
+        1,
+        "executor must emit exactly one pending_cleared event after successful sync"
     );
 
     let pending_clear_event = &pending_cleared_events[0];
@@ -1147,5 +1152,13 @@ fn test_unreachable_server_preserves_pending() {
     assert!(
         still_present,
         "pending marker must be preserved when server is unreachable"
+    );
+
+    // Unreachable server must never clear pending.
+    let event_sink = support::event_sink::EventSink::new(&config_dir);
+    assert_eq!(
+        event_sink.count_events("executor", "pending_cleared"),
+        0,
+        "unreachable sync must never emit pending_cleared events"
     );
 }

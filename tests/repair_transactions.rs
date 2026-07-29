@@ -785,80 +785,55 @@ fn test_stale_action_causes_failure() {
     assert!(msg.contains("stale"), "error should mention stale: {msg}");
 }
 
-// C8: One success plus one failure exits 1 (deterministic via exact API)
+// C8: One success plus one failure exits 1 (deterministic via test seam)
 #[test]
 fn test_one_success_one_failure_exits_1() {
     let (_tmp, config_dir) = setup_test_env();
     let txn_success = "aaaa1111-0000-0000-0000-000000000001";
     let txn_fail = "bbbb2222-0000-0000-0000-000000000002";
-    // This journal will succeed (legacy committed with artifacts).
+    // Both journals will be valid safe actions.
     write_journal(&config_dir, txn_success, "Committed");
     create_artifacts(&config_dir, txn_success);
-    // This journal will fail (stale state after snapshot).
-    write_journal(&config_dir, txn_fail, "Prepared");
-
-    // Use the exact API to attempt recovery of txn_success — should succeed.
-    let state_dir = txn_dir(&config_dir);
-    let sync_dir = config_dir.parent().unwrap();
-    let result_ok = snip_it::transaction::recover_transaction_by_id(
-        sync_dir,
-        &state_dir,
-        txn_success,
-        snip_it::transaction::RecoveryClass::CleanupLegacyCommitted,
-    );
-    assert!(
-        result_ok.is_ok(),
-        "legacy committed cleanup should succeed: {result_ok:?}"
-    );
-
-    // Now mutate txn_fail to a different state.
     write_journal(&config_dir, txn_fail, "Committed");
-
-    // Use the exact API to attempt recovery of txn_fail with stale expected class.
-    let result_fail = snip_it::transaction::recover_transaction_by_id(
-        sync_dir,
-        &state_dir,
-        txn_fail,
-        snip_it::transaction::RecoveryClass::Rollback,
-    );
-    assert!(result_fail.is_err(), "stale rollback should fail");
-
-    // Also verify the CLI path produces partial failure (exit 1).
-    // Create a fresh pair: one that will succeed, one that will fail.
-    let txn_ok2 = "cccc3333-0000-0000-0000-000000000003";
-    let txn_fail2 = "dddd4444-0000-0000-0000-000000000004";
-    write_journal(&config_dir, txn_ok2, "Committed");
-    create_artifacts(&config_dir, txn_ok2);
-    write_journal(&config_dir, txn_fail2, "Prepared");
-
-    // Snapshot, then mutate txn_fail2 to Committed (no artifacts).
-    let _json_snapshot = repair_dry_run_json(&config_dir);
-    write_journal(&config_dir, txn_fail2, "Committed");
+    create_artifacts(&config_dir, txn_fail);
 
     let output = snp_in(&config_dir)
         .args(["repair", "--apply", "--json"])
+        .env(
+            "SNP_TEST_INJECT_ERROR",
+            format!("repair-transaction-{txn_fail}"),
+        )
         .output()
         .unwrap();
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
-    let applied = result["applied"].as_u64().unwrap_or(0);
-    let failed = result["failed"].as_u64().unwrap_or(0);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let result: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("repair must emit valid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let applied = result["applied"]
+        .as_u64()
+        .expect("applied field must be present");
+    let failed = result["failed"]
+        .as_u64()
+        .expect("failed field must be present");
+    let exit_status = result["exit_status"]
+        .as_str()
+        .expect("exit_status field must be present");
 
-    // txn_ok2 (Committed with artifacts) should be cleaned up successfully.
-    // txn_fail2 (Committed without artifacts after rescan) is also a legacy committed
-    // cleanup that succeeds. Both are safe actions.
+    assert_eq!(code, 1, "partial failure must exit 1, got {code}");
+    assert_eq!(applied, 1, "exactly one repair must succeed");
+    assert_eq!(failed, 1, "exactly one repair must fail");
+    assert_eq!(exit_status, "partial_failure");
+    // txn_success should be cleaned up.
     assert!(
-        applied >= 1,
-        "at least one repair should succeed, got applied={applied}"
+        !journal_exists(&config_dir, txn_success),
+        "successful journal should be removed"
     );
-    assert_eq!(
-        failed, 0,
-        "no repair should fail when both are valid legacy committed"
-    );
+    // txn_fail should still exist (failed).
     assert!(
-        code == 0 || code == 1,
-        "exit code must be 0 (all succeed) or 1 (partial failure), got {code}"
+        journal_exists(&config_dir, txn_fail),
+        "failed journal should still exist"
     );
 }
 
