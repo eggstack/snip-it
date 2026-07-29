@@ -1,51 +1,65 @@
 # Phase 11 Closure Status
 
-Phase 11 status: COMPLETE
+Phase 11 status: INCOMPLETE
 
-Correctness program status: CLOSED
+Correctness program status: REOPENED
 
-Blocking plan: `plans/snip-it-correctness-11k-literal-safety-and-proof-closure.md`
+Blocking plan: `plans/snip-it-correctness-11l-lexical-containment-exact-recovery-proof-and-evidence-closure.md`
 
-Corrective baseline: `bf6f941842728888afd9609d8f8e8872f1796a82`
+Corrective baseline: `9427a5766c70624a49f14682d3c68d55a6faa93c`
 
-Phase 11K plan commit: `214991df0fe36ebf928d14879d1ac737dd6e008e`
+Phase 11L plan commit: `5592da1dff44c3dc81f409e602b08d73d5d8f192`
 
-Candidate implementation commit: `ec87344`
+Candidate implementation commit: pending
 
-Final implementation commit: `ec87344`
+Final implementation commit: pending
 
-CI verification: **PASSED** — Linux correctness (4m7s), macOS smoke (3m52s), Windows smoke (5m16s) all green for `a94ec9f` (closure status commit on top of `ec87344`).
+Prior Phase 11K implementation commit: `ec87344dac409dd0a4ef75eba9f51c42f520c78e`
 
-Publish dry-runs: **PASSED** — snip-proto, snip-sync, snip-it all verified.
+Prior closure commit: `9427a5766c70624a49f14682d3c68d55a6faa93c`
 
 Release process: manual crates.io publishing
 
 CI topology: one Linux correctness job plus macOS and Windows smoke instances
 
-## Source-review checklist (Phase 11K)
+## Why Phase 11 was reopened
 
-1. Scanner rejects filename/internal-ID mismatch? **YES** — `scan_transaction_journals` validates both internal ID and filename ID match; mismatches enter `corrupt`.
-2. Can any untrusted ID still be byte-sliced? **NO** — all `&journal.id[..8]` replaced with `short_transaction_id()` which uses character indexing.
-3. Does classification validate artifact paths for every state? **YES** — `classify_journal_recovery` calls `journal_owns_artifacts` for every state before matching.
-4. Is lexical containment checked before existence? **YES** — `validate_contained_path` checks `lexically_within` before `exists()`.
-5. Does rollback validate a backup immediately before reading? **YES** — `validate_contained_path` called before `fs::read(backup)`.
-6. Can mutation gate directly delete a terminal journal? **NO** — terminal journals go through `recover_transaction_by_id`.
-7. Is terminal state reloaded and reclassified under lock before removal? **YES** — `recover_transaction_by_id` acquires lock, loads, classifies, then removes.
-8. Does Unix parent fsync return error on nonzero? **YES** — `fsync_parent_dir` checks `libc::fsync` return value and returns `Err` on failure.
-9. Does partial-failure test assert exit 1, applied 1, failed 1? **YES** — exact assertions via `SNP_TEST_INJECT_ERROR` seam.
-10. Does scanner symlink test require rejection? **YES** — asserts `corrupt.len() == 1` with "symlink" in error.
-11. Do cleanup/finalization tests execute recovery? **YES** — tests call `recover_transaction_by_id` directly.
-12. Are sync user/device/library IDs hard assertions? **YES** — `assert!(has_user_id, ...)` etc.
-13. Is sync concurrency asserted equal to 1? **YES** — `assert_eq!(max_concurrent, 1)`.
-14. Is pending-clear generation compared to captured G? **YES** — `event_generation == captured_generation` hard assertion.
-15. Is exactly one pending-clear event asserted? **YES** — `assert_eq!(pending_cleared_events.len(), 1)`.
-16. Does unreachable-server proof assert zero pending-clear events? **YES** — `assert_eq!(event_sink.count_events(...), 0)`.
+A post-closure semantic source review found that Phase 11K was marked complete before all literal safety and proof requirements were satisfied.
 
-## Remaining production blockers
+The remaining work is narrow and does not require restoring the removed CI, release, evidence, or orchestration complexity.
 
-None. All Phase 11K acceptance criteria are satisfied.
+## Current production and proof blockers
 
-## Preserved decisions
+1. **Lexical parent traversal is not actually rejected.** `src/transaction.rs::lexically_within` checks that the child component sequence starts with the root component sequence, but it never rejects a later `Component::ParentDir`. A missing path such as `<artifact-root>/../../outside.bin` can therefore pass lexical containment and skip canonical containment because it does not exist.
+2. **Missing children below symlinked intermediate paths are not proven safe.** The current final-path `is_symlink()` check and existing-final-path canonicalization do not reject `<artifact-root>/link-to-outside/missing.bin` when the final file is absent.
+3. **Restore crash-recovery JSON proof is optional.** Required assertions are inside `if let Ok(...)`; malformed or non-JSON output can fall through to a permissive exit-code check.
+4. **Successful focused recovery accepts multiple process outcomes.** The tests accept exit code `0` or `1` through `exit <= 1`, despite the fixture being expected to prove a clean successful recovery.
+5. **Recovery action counts are approximate.** `applied > 0` does not prove exactly one interrupted transaction rollback was applied.
+6. **Idempotent second recovery does not require JSON to parse.** If parsing fails, no report assertions run.
+7. **The recorded CI evidence does not identify the declared final implementation commit as its exact head SHA.** Phase 11L must establish and verify one exact implementation SHA before closure.
+
+## Preserved Phase 11K accomplishments
+
+The following work remains valid and must not be reverted:
+
+- scanner filename/internal journal identity validation;
+- Unicode-safe transaction ID formatting;
+- artifact validation invoked for every recovery state;
+- rollback revalidation immediately before backup reads;
+- exact locked recovery for terminal journal removal;
+- propagated Unix parent-directory `fsync` errors;
+- deterministic repair partial-failure seam;
+- exact partial-failure contract: exit 1, applied 1, failed 1;
+- strict scanner symlink rejection;
+- sync observer identity wiring;
+- exact sync concurrency assertion;
+- exact pending-clear count and generation assertion;
+- unreachable-server proof with zero pending-clear events;
+- simplified CI topology;
+- local deep verification;
+- manual dependency-ordered crates.io release.
+
+## Preserved architecture and scope decisions
 
 - one `snp` client binary;
 - one `snip-sync` server binary;
@@ -58,32 +72,47 @@ None. All Phase 11K acceptance criteria are satisfied.
 - macOS and Windows smoke-only jobs;
 - deep crash and protocol verification performed locally;
 - manual dependency-ordered crates.io publishing;
-- no automated publish or GitHub release workflow;
-- no new evidence registry, daemon, database, or orchestration framework.
+- no automated publish or GitHub Release workflow;
+- no new evidence registry, daemon, database, queue, or orchestration framework.
 
-## Closure requirements
+## Phase 11L closure requirements
 
-Phase 11 may be marked `COMPLETE` and the correctness program `CLOSED` only when all Phase 11K acceptance criteria are literally satisfied, including:
+Phase 11 may be marked `COMPLETE` and the correctness program `CLOSED` only when every requirement in the Phase 11L plan is literally satisfied, including:
 
-- scanner filename/internal journal identity validation;
-- safe Unicode-aware transaction ID formatting;
-- artifact validation for every recovery state;
-- lexical containment checks before existence checks;
-- rollback revalidation immediately before backup reads;
-- exact locked recovery for every terminal journal removal;
-- propagated Unix parent-directory fsync errors;
-- deterministic CLI partial failure with exit 1, applied 1, and failed 1;
-- execution-based isolation tests for rollback, cleanup resume, committed-local finalization, legacy cleanup, and terminal removal;
-- strict symlink rejection tests;
-- exactly one identified sync start and matching successful finish;
-- exactly one matching pending-clear event for captured generation G;
-- exact concurrency of one for the measured sync;
-- unreachable-server proof with zero pending-clear events;
-- semantic source-review checklist completed with no negative answers;
-- `scripts/check.sh` and `scripts/release-check.sh verify` passing from a clean checkout;
-- per-crate publish dry-runs passing for changed crates;
+- `Component::ParentDir` explicitly rejected during lexical normalization;
+- component-based containment retained without lossy string-prefix comparison;
+- safe missing in-root references accepted as absent;
+- missing traversal and out-of-root references rejected before existence checks;
+- existing symlinked intermediate components rejected for missing descendants on Unix;
+- unsafe-path errors preserving journals and artifacts;
+- rollback using the corrected validation helper immediately before reads;
+- `snp repair --apply --json` invoked explicitly in restore crash proof;
+- mandatory JSON deserialization with no fallback branch;
+- first recovery exiting exactly 0 and reporting exactly `repaired`, applied 1, failed 0;
+- the applied action proven to be the interrupted transaction rollback;
+- repeated recovery exiting exactly 0 and reporting exactly `clean`, applied 0, failed 0;
+- exact original bytes restored for both rollback interruption points;
+- no pending marker or journal remaining;
+- no `> 0`, `>= 1`, `<= 1`, optional parsing, or multiple accepted exit codes in required recovery proof;
+- deterministic partial-failure proof remaining exit 1, applied 1, failed 1;
+- focused transaction, repair, and restore crash tests passing;
+- `scripts/check.sh` passing from a clean checkout;
+- `scripts/release-check.sh verify` passing from a clean checkout;
+- locked publish dry-runs passing for `snip-proto`, `snip-sync`, and `snip-it`;
 - Linux correctness, macOS smoke, and Windows smoke observed passing for the exact final implementation commit;
+- final status recording that exact SHA and only observed evidence;
 - actual crates.io publishing remaining manual;
-- no automated release workflow.
+- no automated release workflow or expanded CI/evidence machinery.
 
-Until then, the repository is not correctness-closed or release-ready.
+## Current evidence state
+
+- Phase 11L implementation: not started
+- Focused verification for Phase 11L: pending
+- Local check: pending for final Phase 11L SHA
+- Release verification: pending for final Phase 11L SHA
+- Publish dry-runs: pending for final Phase 11L SHA
+- Linux correctness: pending for final Phase 11L SHA
+- macOS smoke: pending for final Phase 11L SHA
+- Windows smoke: pending for final Phase 11L SHA
+
+Until all Phase 11L closure requirements are met and verified for one exact implementation SHA, the repository is not correctness-closed or release-ready under Phase 11.
