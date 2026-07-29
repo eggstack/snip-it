@@ -488,11 +488,15 @@ pub fn scan_transaction_journals(transaction_dir: &Path) -> SnipResult<JournalIn
 /// For legacy `Committed` and `RolledBack` states, artifact ownership
 /// determines whether cleanup is needed. Without artifacts, the journal
 /// is safe to remove.
+///
+/// Returns `Err` if artifact ownership inspection finds unsafe paths
+/// (symlinks, out-of-root references). This prevents suppressing
+/// inspection errors.
 pub fn classify_journal_recovery(
     transaction_dir: &Path,
     journal: &TransactionJournal,
-) -> RecoveryClass {
-    match &journal.state {
+) -> SnipResult<RecoveryClass> {
+    Ok(match &journal.state {
         TransactionState::Prepared
         | TransactionState::BackupsDurable
         | TransactionState::Committing { .. }
@@ -500,21 +504,21 @@ pub fn classify_journal_recovery(
         TransactionState::CommittedLocal { .. } => RecoveryClass::FinalizeCommittedLocal,
         TransactionState::CleaningUp { .. } => RecoveryClass::ResumeCleanup,
         TransactionState::Committed => {
-            if journal_owns_artifacts(transaction_dir, journal) {
+            if journal_owns_artifacts(transaction_dir, journal)? {
                 RecoveryClass::CleanupLegacyCommitted
             } else {
                 RecoveryClass::RemoveTerminalJournal
             }
         }
         TransactionState::RolledBack => {
-            if journal_owns_artifacts(transaction_dir, journal) {
+            if journal_owns_artifacts(transaction_dir, journal)? {
                 RecoveryClass::CleanupLegacyRolledBack
             } else {
                 RecoveryClass::RemoveTerminalJournal
             }
         }
         TransactionState::Failed(_) => RecoveryClass::UnsafeFailed,
-    }
+    })
 }
 
 /// Check whether a transaction journal still owns artifacts that require cleanup.
@@ -527,26 +531,75 @@ pub fn classify_journal_recovery(
 /// A missing artifact is not an error — absence is a valid idempotent
 /// cleanup result. Only the existence of the artifact root or any
 /// referenced artifact path counts as "owned."
-pub fn journal_owns_artifacts(transaction_dir: &Path, journal: &TransactionJournal) -> bool {
+///
+/// Returns `Err` if any existing artifact path is a symlink, outside the
+/// transaction artifact root, or otherwise unsafe. This prevents reducing
+/// unsafe state to a simple boolean.
+pub fn journal_owns_artifacts(
+    transaction_dir: &Path,
+    journal: &TransactionJournal,
+) -> SnipResult<bool> {
     let artifact_dir = transaction_artifact_dir(transaction_dir, &journal.id);
-    if artifact_dir.exists() {
-        return true;
+
+    // Reject a symlinked artifact root.
+    if artifact_dir.is_symlink() {
+        return Err(SnipError::runtime_error(
+            "symlinked transaction artifact root",
+            Some(&format!(
+                "Artifact root {} is a symlink; refusing to follow. \
+                 Transaction '{}' (op: {}) may be compromised.",
+                artifact_dir.display(),
+                &journal.id[..8.min(journal.id.len())],
+                journal.operation,
+            )),
+        ));
     }
 
+    let root_exists = artifact_dir.exists();
+
+    // Check all referenced artifact paths for safety (symlinks, containment).
     for staged in &journal.staged_files {
-        if let Some(ref backup) = staged.backup_path
-            && backup.exists()
-        {
-            return true;
+        if let Some(ref backup) = staged.backup_path {
+            if backup.is_symlink() {
+                return Err(SnipError::runtime_error(
+                    "symlinked transaction artifact",
+                    Some(&format!(
+                        "Backup artifact {} is a symlink; refusing to follow. \
+                         Transaction '{}' (op: {}) may be compromised.",
+                        backup.display(),
+                        &journal.id[..8.min(journal.id.len())],
+                        journal.operation,
+                    )),
+                ));
+            }
+            if backup.exists() {
+                // Validate containment within the artifact root.
+                validate_contained_path(&artifact_dir, backup, "backup_path")?;
+                return Ok(true);
+            }
         }
-        if let Some(ref durable) = staged.durable_staged_path
-            && durable.exists()
-        {
-            return true;
+        if let Some(ref durable) = staged.durable_staged_path {
+            if durable.is_symlink() {
+                return Err(SnipError::runtime_error(
+                    "symlinked transaction artifact",
+                    Some(&format!(
+                        "Durable staged artifact {} is a symlink; refusing to follow. \
+                         Transaction '{}' (op: {}) may be compromised.",
+                        durable.display(),
+                        &journal.id[..8.min(journal.id.len())],
+                        journal.operation,
+                    )),
+                ));
+            }
+            if durable.exists() {
+                // Validate containment within the artifact root.
+                validate_contained_path(&artifact_dir, durable, "durable_staged_path")?;
+                return Ok(true);
+            }
         }
     }
 
-    false
+    Ok(root_exists)
 }
 
 /// Validate a transaction ID — must be a simple UUID-like identifier,
@@ -665,7 +718,7 @@ pub fn recover_transaction_by_id(
     let journal = load_exact_journal(transaction_dir, transaction_id)?;
 
     // Classify under lock — the authoritative classification.
-    let actual = classify_journal_recovery(transaction_dir, &journal);
+    let actual = classify_journal_recovery(transaction_dir, &journal)?;
     if actual != expected {
         return Err(SnipError::runtime_error(
             "stale repair action",
@@ -2070,10 +2123,10 @@ pub fn gate_mutation_on_interrupted_transactions(
         .journals
         .iter()
         .map(|j| {
-            let class = classify_journal_recovery(transaction_dir, j);
-            (j.clone(), class)
+            let class = classify_journal_recovery(transaction_dir, j)?;
+            Ok((j.clone(), class))
         })
-        .collect();
+        .collect::<SnipResult<Vec<_>>>()?;
 
     // Fail closed on UnsafeFailed journals — they must block mutation
     // and remain preserved for manual investigation.
@@ -2487,14 +2540,14 @@ state = "Prepared"
             state: TransactionState::Prepared,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &base),
+            classify_journal_recovery(dir.path(), &base).unwrap(),
             RecoveryClass::Rollback
         );
 
         let mut j = base.clone();
         j.state = TransactionState::BackupsDurable;
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::Rollback
         );
 
@@ -2502,7 +2555,7 @@ state = "Prepared"
             next_commit_position: 0,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::Rollback
         );
 
@@ -2510,7 +2563,7 @@ state = "Prepared"
             next_rollback_position: 0,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::Rollback
         );
     }
@@ -2528,7 +2581,7 @@ state = "Prepared"
             },
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::FinalizeCommittedLocal
         );
     }
@@ -2547,7 +2600,7 @@ state = "Prepared"
             },
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::ResumeCleanup
         );
     }
@@ -2565,7 +2618,7 @@ state = "Prepared"
             state: TransactionState::Committed,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::CleanupLegacyCommitted
         );
     }
@@ -2581,7 +2634,7 @@ state = "Prepared"
             state: TransactionState::Committed,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::RemoveTerminalJournal
         );
     }
@@ -2599,7 +2652,7 @@ state = "Prepared"
             state: TransactionState::RolledBack,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::CleanupLegacyRolledBack
         );
     }
@@ -2615,7 +2668,7 @@ state = "Prepared"
             state: TransactionState::RolledBack,
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::RemoveTerminalJournal
         );
     }
@@ -2631,7 +2684,7 @@ state = "Prepared"
             state: TransactionState::Failed("oops".into()),
         };
         assert_eq!(
-            classify_journal_recovery(dir.path(), &j),
+            classify_journal_recovery(dir.path(), &j).unwrap(),
             RecoveryClass::UnsafeFailed
         );
     }
@@ -2646,17 +2699,19 @@ state = "Prepared"
             staged_files: vec![],
             state: TransactionState::Committed,
         };
-        assert!(!journal_owns_artifacts(dir.path(), &j));
+        assert!(!journal_owns_artifacts(dir.path(), &j).unwrap());
 
         let artifact_dir = transaction_artifact_dir(dir.path(), "test");
         fs::create_dir_all(&artifact_dir).unwrap();
-        assert!(journal_owns_artifacts(dir.path(), &j));
+        assert!(journal_owns_artifacts(dir.path(), &j).unwrap());
     }
 
     #[test]
     fn test_journal_owns_artifacts_backup_path() {
         let dir = TempDir::new().unwrap();
-        let backup = dir.path().join("backup.bak");
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        let backup = artifact_dir.join("backup.bak");
         fs::write(&backup, "data").unwrap();
         let j = TransactionJournal {
             id: "test".to_string(),
@@ -2676,13 +2731,15 @@ state = "Prepared"
             }],
             state: TransactionState::Committed,
         };
-        assert!(journal_owns_artifacts(dir.path(), &j));
+        assert!(journal_owns_artifacts(dir.path(), &j).unwrap());
     }
 
     #[test]
     fn test_journal_owns_artifacts_durable_staged_path() {
         let dir = TempDir::new().unwrap();
-        let staged = dir.path().join("staged.toml");
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        let staged = artifact_dir.join("staged.toml");
         fs::write(&staged, "data").unwrap();
         let j = TransactionJournal {
             id: "test".to_string(),
@@ -2702,7 +2759,7 @@ state = "Prepared"
             }],
             state: TransactionState::Committed,
         };
-        assert!(journal_owns_artifacts(dir.path(), &j));
+        assert!(journal_owns_artifacts(dir.path(), &j).unwrap());
     }
 
     #[test]
@@ -2944,5 +3001,172 @@ state = "Prepared"
         let result = remove_terminal_journal(dir.path(), txn_id);
         assert!(result.is_ok());
         assert!(!journal_path(dir.path(), txn_id).exists());
+    }
+
+    // =========================================================================
+    // Workstream C: Fallible artifact ownership inspection tests
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_journal_owns_artifacts_rejects_symlinked_root() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let real_dir = dir.path().join("real_artifacts");
+        fs::create_dir_all(&real_dir).unwrap();
+        // Create the parent "artifacts" directory so the symlink can be placed.
+        fs::create_dir_all(dir.path().join("artifacts")).unwrap();
+        let symlink_dir = transaction_artifact_dir(dir.path(), "test");
+        symlink(&real_dir, &symlink_dir).unwrap();
+
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Committed,
+        };
+        let result = journal_owns_artifacts(dir.path(), &j);
+        assert!(result.is_err(), "symlinked artifact root should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_journal_owns_artifacts_rejects_symlinked_backup() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+
+        // Create a real backup file, then symlink to it.
+        let real_backup = dir.path().join("real_backup.bak");
+        fs::write(&real_backup, "data").unwrap();
+        let symlink_backup = artifact_dir.join("backup.bak");
+        symlink(&real_backup, &symlink_backup).unwrap();
+
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: PathBuf::from("/fake"),
+                backup_path: Some(symlink_backup),
+                staged_path: PathBuf::from("/fake"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: None,
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Committed,
+        };
+        let result = journal_owns_artifacts(dir.path(), &j);
+        assert!(result.is_err(), "symlinked backup should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_journal_owns_artifacts_rejects_symlinked_durable_staged() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+
+        let real_staged = dir.path().join("real_staged.bin");
+        fs::write(&real_staged, "data").unwrap();
+        let symlink_staged = artifact_dir.join("staged.bin");
+        symlink(&real_staged, &symlink_staged).unwrap();
+
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: PathBuf::from("/fake"),
+                backup_path: None,
+                staged_path: PathBuf::from("/fake"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: Some(symlink_staged),
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Committed,
+        };
+        let result = journal_owns_artifacts(dir.path(), &j);
+        assert!(result.is_err(), "symlinked durable staged should be rejected");
+    }
+
+    #[test]
+    fn test_journal_owns_artifacts_rejects_out_of_root_backup() {
+        let dir = TempDir::new().unwrap();
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+
+        // Backup outside the artifact root.
+        let outside_backup = dir.path().join("outside.bak");
+        fs::write(&outside_backup, "data").unwrap();
+
+        // Verify containment directly to debug.
+        let result = validate_contained_path(&artifact_dir, &outside_backup, "backup_path");
+        assert!(
+            result.is_err(),
+            "validate_contained_path should reject out-of-root backup: artifact_dir={}, outside={}",
+            artifact_dir.display(),
+            outside_backup.display()
+        );
+
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: PathBuf::from("/fake"),
+                backup_path: Some(outside_backup),
+                staged_path: PathBuf::from("/fake"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: None,
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Committed,
+        };
+        let result = journal_owns_artifacts(dir.path(), &j);
+        assert!(result.is_err(), "out-of-root backup should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("outside") || msg.contains("traversal"),
+            "error should mention containment: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_classify_journal_recovery_is_fallible() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Prepared,
+        };
+        // Simple state — no artifact inspection needed.
+        let result = classify_journal_recovery(dir.path(), &j);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RecoveryClass::Rollback);
     }
 }
