@@ -155,6 +155,9 @@ pub struct RepairReport {
 /// - `dry_run=true`: Analyse and print planned repairs without changes.
 /// - `apply=true`: Create pre-repair backup, apply safe repairs, emit report.
 /// - Neither: Print validation summary only.
+///
+/// The report is emitted exactly once, after all work is complete. This
+/// ensures JSON counters and exit status reflect the final result.
 pub fn run(
     dry_run: bool,
     apply: bool,
@@ -169,20 +172,19 @@ pub fn run(
     // Step 2: Handle interrupted transactions
     collect_transaction_repairs(&mut report)?;
 
-    // Step 3: Output report
-    if json {
-        emit_json_report(&report)?;
-    } else {
-        emit_human_report(&report);
-    }
-
-    // Step 4: Apply if requested
+    // Step 3: Apply if requested (before emitting the report)
     if apply && !report.items.is_empty() {
         let safe_items: Vec<RepairItem> = report.items.iter().filter(|i| i.safe).cloned().collect();
 
         if safe_items.is_empty() {
-            eprintln!("\nNo safe repairs to apply.");
             report.exit_status = RepairExitStatus::UnsafeOnly;
+            // Emit exactly one final report.
+            if json {
+                emit_json_report(&report)?;
+            } else {
+                eprintln!("\nNo safe repairs to apply.");
+                emit_human_report(&report);
+            }
             return Ok(report.exit_status);
         }
 
@@ -221,6 +223,13 @@ pub fn run(
 
     if dry_run {
         eprintln!("\n(dry run — no changes made)");
+    }
+
+    // Step 4: Emit exactly one final report (after all work is complete)
+    if json {
+        emit_json_report(&report)?;
+    } else {
+        emit_human_report(&report);
     }
 
     Ok(report.exit_status)
@@ -953,10 +962,10 @@ fn emit_json_report(report: &RepairReport) -> SnipResult<()> {
         applied: usize,
         skipped: usize,
         failed: usize,
-        exit_classification: String,
+        exit_status: String,
     }
 
-    let exit_classification = match report.exit_status {
+    let exit_status = match report.exit_status {
         RepairExitStatus::Clean => "clean",
         RepairExitStatus::Repaired => "repaired",
         RepairExitStatus::PartialFailure => "partial_failure",
@@ -985,7 +994,7 @@ fn emit_json_report(report: &RepairReport) -> SnipResult<()> {
         applied: report.applied,
         skipped: report.skipped,
         failed: report.failed,
-        exit_classification: exit_classification.to_string(),
+        exit_status: exit_status.to_string(),
     };
 
     let output = serde_json::to_string_pretty(&json)
