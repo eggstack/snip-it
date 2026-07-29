@@ -549,27 +549,15 @@ pub fn journal_owns_artifacts(transaction_dir: &Path, journal: &TransactionJourn
     false
 }
 
-/// Recover exactly one transaction by ID and expected recovery class.
-///
-/// This is the canonical transaction-specific recovery API. It:
-/// 1. validates the transaction ID as a journal identifier (not an arbitrary path);
-/// 2. derives `txn-<id>.toml` internally;
-/// 3. rejects symlinked journal files;
-/// 4. loads exactly that journal;
-/// 5. classifies its current state at execution time;
-/// 6. compares actual classification with `expected`;
-/// 7. returns a stale-action error if state changed incompatibly;
-/// 8. acquires the established lock hierarchy;
-/// 9. invokes the canonical state-specific recovery function;
-/// 10. returns only after that exact journal is recovered or a precise error is produced.
-pub fn recover_transaction_by_id(
-    sync_state_dir: &Path,
-    transaction_dir: &Path,
-    transaction_id: &str,
-    expected: RecoveryClass,
-) -> SnipResult<()> {
-    // Validate transaction ID — must be a simple UUID-like identifier,
-    // not a path component that could escape the directory.
+/// Validate a transaction ID — must be a simple UUID-like identifier,
+/// not a path component that could escape the directory.
+fn validate_transaction_id(transaction_id: &str) -> SnipResult<()> {
+    if transaction_id.is_empty() {
+        return Err(SnipError::runtime_error(
+            "invalid transaction ID",
+            Some("Transaction ID must not be empty"),
+        ));
+    }
     if transaction_id.contains('/')
         || transaction_id.contains('\\')
         || transaction_id.contains("..")
@@ -581,7 +569,30 @@ pub fn recover_transaction_by_id(
             )),
         ));
     }
+    Ok(())
+}
 
+/// Derive the human-readable operation name for a recovery class.
+fn recovery_operation_name(class: RecoveryClass) -> &'static str {
+    match class {
+        RecoveryClass::Rollback => "repair-rollback",
+        RecoveryClass::FinalizeCommittedLocal => "repair-finalize",
+        RecoveryClass::ResumeCleanup => "repair-cleanup",
+        RecoveryClass::CleanupLegacyCommitted => "repair-legacy-commit",
+        RecoveryClass::CleanupLegacyRolledBack => "repair-legacy-rollback",
+        RecoveryClass::RemoveTerminalJournal => "repair-remove-journal",
+        RecoveryClass::UnsafeFailed => "repair-unsafe-failed",
+    }
+}
+
+/// Load exactly one journal under the established lock.
+///
+/// Derives `txn-<id>.toml`, rejects symlinks, reads and parses the journal,
+/// and verifies the journal's internal ID matches the requested ID.
+fn load_exact_journal(
+    transaction_dir: &Path,
+    transaction_id: &str,
+) -> SnipResult<TransactionJournal> {
     let jpath = transaction_dir.join(format!("txn-{transaction_id}.toml"));
 
     // Reject symlinked journal files.
@@ -610,7 +621,50 @@ pub fn recover_transaction_by_id(
     let journal: TransactionJournal = toml::from_str(&content)
         .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
 
-    // Re-classify at execution time.
+    // Verify the journal's internal ID matches the requested ID.
+    if journal.id != transaction_id {
+        return Err(SnipError::runtime_error(
+            "transaction ID mismatch",
+            Some(&format!(
+                "Requested transaction {transaction_id} but journal contains ID {}. \
+                 The journal file may have been replaced.",
+                journal.id
+            )),
+        ));
+    }
+
+    Ok(journal)
+}
+
+/// Recover exactly one transaction by ID and expected recovery class.
+///
+/// This is the canonical transaction-specific recovery API. It:
+/// 1. validates the transaction ID;
+/// 2. acquires the transaction lock FIRST;
+/// 3. loads and classifies the journal UNDER the lock;
+/// 4. compares actual classification with expected under the lock;
+/// 5. executes the exact recovery path while holding the lock;
+/// 6. returns only after that exact journal is recovered or a precise error is produced.
+///
+/// The lock prevents TOCTOU races where the journal state could change between
+/// classification and execution.
+pub fn recover_transaction_by_id(
+    sync_state_dir: &Path,
+    transaction_dir: &Path,
+    transaction_id: &str,
+    expected: RecoveryClass,
+) -> SnipResult<()> {
+    validate_transaction_id(transaction_id)?;
+
+    // Acquire the transaction lock BEFORE loading or classifying the journal.
+    // This eliminates the TOCTOU window where state could change between
+    // classification and lock acquisition.
+    let lock = acquire_transaction_lock(transaction_dir, recovery_operation_name(expected))?;
+
+    // Load the exact journal under the established lock.
+    let journal = load_exact_journal(transaction_dir, transaction_id)?;
+
+    // Classify under lock — the authoritative classification.
     let actual = classify_journal_recovery(transaction_dir, &journal);
     if actual != expected {
         return Err(SnipError::runtime_error(
@@ -624,39 +678,31 @@ pub fn recover_transaction_by_id(
     }
 
     // Dispatch to the state-specific recovery function.
+    // The lock is held for the entire duration — no recursive acquisition.
     match expected {
         RecoveryClass::Rollback => {
-            let lock = acquire_transaction_lock(transaction_dir, "repair-rollback")?;
-            let result = rollback_transaction(transaction_dir, &journal);
-            drop(lock);
-            result?;
+            rollback_transaction(transaction_dir, &journal)?;
         }
         RecoveryClass::FinalizeCommittedLocal => {
-            finalize_committed_local_transaction(sync_state_dir, transaction_dir, &journal)?;
+            finalize_committed_local_transaction_locked(
+                sync_state_dir,
+                transaction_dir,
+                &journal,
+                &lock,
+            )?;
         }
         RecoveryClass::ResumeCleanup => {
-            let lock = acquire_transaction_lock(transaction_dir, "repair-cleanup")?;
             let mut journal = journal;
-            let result = resume_cleanup(transaction_dir, &mut journal);
-            drop(lock);
-            result?;
+            resume_cleanup(transaction_dir, &mut journal)?;
         }
         RecoveryClass::CleanupLegacyCommitted => {
-            let lock = acquire_transaction_lock(transaction_dir, "repair-legacy-commit")?;
-            let result = begin_cleanup(transaction_dir, &journal, CleanupOutcome::Commit);
-            drop(lock);
-            result?;
+            begin_cleanup(transaction_dir, &journal, CleanupOutcome::Commit)?;
         }
         RecoveryClass::CleanupLegacyRolledBack => {
-            let lock = acquire_transaction_lock(transaction_dir, "repair-legacy-rollback")?;
-            let result = begin_cleanup(transaction_dir, &journal, CleanupOutcome::Rollback);
-            drop(lock);
-            result?;
+            begin_cleanup(transaction_dir, &journal, CleanupOutcome::Rollback)?;
         }
         RecoveryClass::RemoveTerminalJournal => {
-            let lock = acquire_transaction_lock(transaction_dir, "repair-remove-journal")?;
-            let _ = fs::remove_file(&jpath);
-            drop(lock);
+            remove_terminal_journal(transaction_dir, transaction_id)?;
         }
         RecoveryClass::UnsafeFailed => {
             return Err(SnipError::runtime_error(
@@ -670,6 +716,35 @@ pub fn recover_transaction_by_id(
         }
     }
 
+    // Lock is released when dropped.
+    drop(lock);
+    Ok(())
+}
+
+/// Remove a terminal journal file durably.
+///
+/// Validates the journal path internally, rejects symlinks, removes the
+/// file, and fsyncs the parent directory.
+fn remove_terminal_journal(transaction_dir: &Path, transaction_id: &str) -> SnipResult<()> {
+    validate_transaction_id(transaction_id)?;
+    let jpath = transaction_dir.join(format!("txn-{transaction_id}.toml"));
+
+    if jpath.is_symlink() {
+        return Err(SnipError::runtime_error(
+            "symlinked transaction journal",
+            Some(&format!(
+                "Journal file {} is a symlink; refusing to follow",
+                jpath.display()
+            )),
+        ));
+    }
+
+    if jpath.exists() {
+        fs::remove_file(&jpath)
+            .map_err(|e| SnipError::io_error("remove terminal journal", jpath.clone(), e))?;
+        // Fsync the parent directory to durably record the removal.
+        fsync_parent_dir(&jpath)?;
+    }
     Ok(())
 }
 
@@ -677,14 +752,26 @@ pub fn recover_transaction_by_id(
 ///
 /// Completes the pending sync intent and runs canonical cleanup.
 /// Both startup recovery and repair call this API. It affects no
-/// other journal.
+/// other journal. Acquires the transaction lock internally.
+#[allow(dead_code)]
 pub fn finalize_committed_local_transaction(
     sync_state_dir: &Path,
     transaction_dir: &Path,
     journal: &TransactionJournal,
 ) -> SnipResult<()> {
     let lock = acquire_transaction_lock(transaction_dir, "repair-finalize")?;
+    finalize_committed_local_transaction_locked(sync_state_dir, transaction_dir, journal, &lock)
+}
 
+/// Finalize a CommittedLocal transaction while the caller holds the lock.
+///
+/// Does NOT acquire the transaction lock — the caller must already hold it.
+fn finalize_committed_local_transaction_locked(
+    sync_state_dir: &Path,
+    transaction_dir: &Path,
+    journal: &TransactionJournal,
+    _lock: &TransactionLock,
+) -> SnipResult<()> {
     tracing::info!(
         txn_id = %journal.id,
         "Finalizing CommittedLocal transaction"
@@ -728,7 +815,6 @@ pub fn finalize_committed_local_transaction(
                             }
                         }
                         Err(e) => {
-                            drop(lock);
                             return Err(SnipError::runtime_error(
                                 "Committed restore requires pending recovery",
                                 Some(&format!(
@@ -749,7 +835,6 @@ pub fn finalize_committed_local_transaction(
             persist_journal(transaction_dir, &finalized_journal)?;
         }
         _ => {
-            drop(lock);
             return Err(SnipError::runtime_error(
                 "invalid state for finalize",
                 Some(&format!(
@@ -760,10 +845,8 @@ pub fn finalize_committed_local_transaction(
         }
     }
 
-    // Run canonical cleanup.
-    let result = finalize_transaction_cleanup(transaction_dir, &mut finalized_journal);
-    drop(lock);
-    result
+    // Run canonical cleanup — lock is held by caller, not reacquired.
+    finalize_transaction_cleanup(transaction_dir, &mut finalized_journal)
 }
 
 /// Transaction lock record persisted inside the lock file.
@@ -1992,27 +2075,38 @@ pub fn gate_mutation_on_interrupted_transactions(
         })
         .collect();
 
+    // Fail closed on UnsafeFailed journals — they must block mutation
+    // and remain preserved for manual investigation.
+    for (journal, class) in &classified {
+        if *class == RecoveryClass::UnsafeFailed {
+            return Err(SnipError::runtime_error(
+                "unsafe transaction state blocks mutation",
+                Some(&format!(
+                    "Transaction '{}' (op: {}) is in a Failed state and cannot be \
+                     automatically recovered. Preserve the journal and artifacts for \
+                     manual investigation. Run `snp repair` for diagnostic output.",
+                    &journal.id[..8.min(journal.id.len())],
+                    journal.operation,
+                )),
+            ));
+        }
+    }
+
     // Collect actionable journals (those needing recovery).
     let actionable: Vec<_> = classified
         .iter()
-        .filter(|(_, class)| {
-            !matches!(
-                class,
-                RecoveryClass::RemoveTerminalJournal | RecoveryClass::UnsafeFailed
-            )
-        })
+        .filter(|(_, class)| !matches!(class, RecoveryClass::RemoveTerminalJournal))
         .collect();
 
     if actionable.is_empty() {
-        // Remove terminal journals with no artifacts (idempotent).
+        // Remove terminal journals with no artifacts, propagating errors.
         for (journal, class) in &classified {
             if *class == RecoveryClass::RemoveTerminalJournal {
-                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
                 tracing::info!(
                     txn_id = %journal.id,
                     "Removing terminal journal with no artifacts"
                 );
-                let _ = fs::remove_file(&jpath);
+                remove_terminal_journal(transaction_dir, &journal.id)?;
             }
         }
         return Ok(());
@@ -2633,5 +2727,222 @@ state = "Prepared"
             after_metadata.modified().unwrap()
         );
         assert_eq!(before_metadata.len(), after_metadata.len());
+    }
+
+    // =========================================================================
+    // Workstream A: recover_transaction_by_id under lock tests
+    // =========================================================================
+
+    /// Helper: write a journal directly into the transaction directory.
+    fn write_test_journal(dir: &Path, txn_id: &str, state: TransactionState) {
+        let journal = TransactionJournal {
+            id: txn_id.to_string(),
+            operation: "test_op".to_string(),
+            created_at_unix_ms: 1000000,
+            staged_files: vec![],
+            state,
+        };
+        let jpath = journal_path(dir, txn_id);
+        let content = toml::to_string_pretty(&journal).unwrap();
+        fs::write(&jpath, content).unwrap();
+    }
+
+    #[test]
+    fn test_recover_prepared_as_rollback_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        write_test_journal(dir.path(), txn_id, TransactionState::Prepared);
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            txn_id,
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_ok(), "Prepared→Rollback should succeed: {result:?}");
+
+        // Journal should have been cleaned up (removed after rollback+cleanup).
+        assert!(
+            !journal_path(dir.path(), txn_id).exists(),
+            "journal should be removed after rollback cleanup"
+        );
+    }
+
+    #[test]
+    fn test_recover_stale_action_rejected() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        write_test_journal(dir.path(), txn_id, TransactionState::Prepared);
+
+        // Write a new journal with the same ID but Committed state,
+        // simulating a state change after classification.
+        write_test_journal(dir.path(), txn_id, TransactionState::Committed);
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            txn_id,
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "stale action should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("stale"),
+            "error should mention stale: {msg}"
+        );
+        assert!(
+            msg.contains("Rollback"),
+            "error should mention expected class: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_recover_id_mismatch_rejected() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+        // Create journal with internal ID "real-id" but request "wrong-id".
+        write_test_journal(dir.path(), "real-id", TransactionState::Prepared);
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            "wrong-id",
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "ID mismatch should be rejected");
+    }
+
+    #[test]
+    fn test_recover_empty_id_rejected() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            "",
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "empty ID should be rejected");
+    }
+
+    #[test]
+    fn test_recover_traversal_id_rejected() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            "../etc/passwd",
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "traversal ID should be rejected");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_recover_symlinked_journal_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+
+        // Create a real journal, then symlink to it.
+        write_test_journal(dir.path(), txn_id, TransactionState::Prepared);
+        let real_jpath = journal_path(dir.path(), txn_id);
+        let symlink_path = dir.path().join(format!("txn-{txn_id}.toml.bak"));
+        fs::copy(&real_jpath, &symlink_path).unwrap();
+        fs::remove_file(&real_jpath).unwrap();
+        symlink(&symlink_path, &real_jpath).unwrap();
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            txn_id,
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "symlinked journal should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+    }
+
+    #[test]
+    fn test_recover_two_journals_isolates_a_from_b() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+        let txn_a = "aaaa1111-0000-0000-0000-000000000001";
+        let txn_b = "bbbb2222-0000-0000-0000-000000000002";
+
+        write_test_journal(dir.path(), txn_a, TransactionState::Prepared);
+        write_test_journal(dir.path(), txn_b, TransactionState::Prepared);
+
+        let b_before = fs::read_to_string(journal_path(dir.path(), txn_b)).unwrap();
+
+        // Recover only A.
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            txn_a,
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_ok(), "recovering A should succeed: {result:?}");
+
+        // A should be removed (rolled back and cleaned up).
+        assert!(
+            !journal_path(dir.path(), txn_a).exists(),
+            "A's journal should be removed"
+        );
+
+        // B should be byte-for-byte unchanged.
+        let b_after = fs::read_to_string(journal_path(dir.path(), txn_b)).unwrap();
+        assert_eq!(b_before, b_after, "B's journal must not be altered");
+    }
+
+    #[test]
+    fn test_recover_not_found_rejected() {
+        let dir = TempDir::new().unwrap();
+        let sync_dir = TempDir::new().unwrap();
+
+        let result = recover_transaction_by_id(
+            sync_dir.path(),
+            dir.path(),
+            "nonexistent-0000-0000-0000-000000000000",
+            RecoveryClass::Rollback,
+        );
+        assert!(result.is_err(), "nonexistent ID should be rejected");
+    }
+
+    #[test]
+    fn test_validate_transaction_id_cases() {
+        assert!(validate_transaction_id("valid-uuid-123").is_ok());
+        assert!(validate_transaction_id("").is_err());
+        assert!(validate_transaction_id("../x").is_err());
+        assert!(validate_transaction_id("a/b").is_err());
+        assert!(validate_transaction_id("a\\b").is_err());
+    }
+
+    #[test]
+    fn test_remove_terminal_journal_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        // Remove when no journal exists — should be idempotent success.
+        let result = remove_terminal_journal(dir.path(), txn_id);
+        assert!(result.is_ok(), "removing nonexistent journal should be idempotent");
+    }
+
+    #[test]
+    fn test_remove_terminal_journal_removes_file() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        write_test_journal(dir.path(), txn_id, TransactionState::Committed);
+        assert!(journal_path(dir.path(), txn_id).exists());
+
+        let result = remove_terminal_journal(dir.path(), txn_id);
+        assert!(result.is_ok());
+        assert!(!journal_path(dir.path(), txn_id).exists());
     }
 }
