@@ -769,6 +769,10 @@ pub fn recover_transaction_by_id(
     // classification and lock acquisition.
     let lock = acquire_transaction_lock(transaction_dir, recovery_operation_name(expected))?;
 
+    // Test-only barrier: allows concurrent tests to mutate the journal
+    // between lock acquisition and load/classification.
+    crate::test_failpoints::mutation_barrier("recover-after-lock-before-load");
+
     // Load the exact journal under the established lock.
     let journal = load_exact_journal(transaction_dir, transaction_id)?;
 

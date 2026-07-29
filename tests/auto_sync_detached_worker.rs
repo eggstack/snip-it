@@ -477,9 +477,8 @@ auto_sync_failure = "ignore"
     new_snippet(&config_dir, "zero debounce worker");
     // Wait for the detached worker to finish. We don't assert on the
     // exact outcome (it depends on network timing), but the worker must
-    // not crash the parent process and the pending marker may either
-    // exist (sync failed) or be cleared (sync succeeded against
-    // port 1). Both are acceptable behaviors under Release 5.
+    // not crash the parent process. The pending marker may exist (sync
+    // failed) or be cleared (sync succeeded against port 1).
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         if config_dir.join("auto-sync-status.toml").exists() {

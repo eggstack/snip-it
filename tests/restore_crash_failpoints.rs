@@ -491,9 +491,7 @@ is_primary = true
 
     // Phase 2: Recovery — run `snp repair` to complete the interrupted rollback.
     // This restores the original content without starting a new restore.
-    // Exit 0 = all repairs succeeded; exit 1 = partial failure (transaction
-    // rollback succeeded but unrelated repairs like timestamps failed).
-    // Both are acceptable — the key invariant is the transaction rollback.
+    // The repair should complete the rollback successfully (exit 0).
     let recovery = run_repair(&config_dir);
     eprintln!(
         "REPAIR STDERR: {}",
@@ -504,9 +502,10 @@ is_primary = true
         String::from_utf8_lossy(&recovery.stdout)
     );
     let exit = recovery.status.code().unwrap_or(1);
-    assert!(
-        exit == 0 || exit == 1,
-        "repair should exit 0 (clean) or 1 (partial failure), got {exit}: {}",
+    assert_eq!(
+        exit,
+        0,
+        "repair should exit 0 after completing interrupted rollback, got {exit}: {}",
         String::from_utf8_lossy(&recovery.stderr)
     );
 

@@ -258,6 +258,17 @@ impl InMemoryObserver {
         inner.next_seq += 1;
         inner.next_seq
     }
+
+    /// Reset observer state after registration and before the measured
+    /// mutation. Clears starts, finishes, in-flight count, and max
+    /// concurrency. The sequence generator remains monotonic.
+    pub fn reset(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.starts.clear();
+        inner.finishes.clear();
+        inner.in_flight = 0;
+        inner.max_in_flight = 0;
+    }
 }
 
 /// Wall-clock millis since UNIX epoch.

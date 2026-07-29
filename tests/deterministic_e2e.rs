@@ -36,6 +36,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use snip_sync::test_helpers::{build_test_service, start_test_server};
+use snip_sync::test_observer::TestRequestObserver;
 use support::environment::TestEnvironment;
 use support::event_sink::EventSink;
 
@@ -917,22 +918,36 @@ fn test_observer_headline_sync_e2e() {
     register_with_binary(config_dir, &server_url);
     enable_auto_sync(config_dir, 2);
 
-    // 4. Record pre-mutation server state (R0).
+    // 4. Capture registration evidence BEFORE resetting the observer.
+    //    Registration is expected to emit start/finish events.
+    let register_start_count_before_reset = observer.started_count();
+    let register_finish_count_before_reset = observer.finished_count();
+
+    // 5. Reset observer after registration to isolate post-mutation
+    //    sync operations from registration traffic.
+    observer.reset();
+
+    // 5. Record pre-mutation server state (R0).
     let server_count_before = rt.block_on(server_total_snippet_count_all_users(server.db()));
     assert_eq!(
         server_count_before, 0,
         "server must start with 0 snippets (R0)"
     );
 
-    // 5. Record observer baseline AFTER registration to isolate
-    //    post-mutation sync operations from registration traffic.
-    let _registration_starts = observer.started_count();
-    let _registration_finishes = observer.finished_count();
-
     // 6. Perform a mutation.
     new_snippet(config_dir, "observer-e2e-snippet");
 
-    // 7. Wait for pending to be cleared (proves executor completed sync).
+    // 7. Capture the exact pending generation G from the pending marker
+    //    before it is cleared. This is the generation we expect in the
+    //    pending_cleared event detail.
+    let generation_g = wait_until(Duration::from_secs(10), || {
+        read_pending_generation(config_dir).is_some()
+    });
+    assert!(generation_g, "pending marker must appear after mutation");
+    let captured_generation =
+        read_pending_generation(config_dir).expect("pending generation must be readable");
+
+    // 8. Wait for pending to be cleared (proves executor completed sync).
     let cleared = wait_until(Duration::from_secs(15), || {
         !pending_marker(config_dir).exists()
     });
@@ -1057,14 +1072,19 @@ fn test_observer_headline_sync_e2e() {
         "sync finish ({finish_timestamp}) must precede pending clear ({clear_timestamp})"
     );
 
-    // 15. Verify the pending-clear event references the expected generation.
+    // 16. Verify the pending-clear event references the captured generation G.
     if let Some(ref detail) = pending_clear_event.detail {
         let detail_json: serde_json::Value =
             serde_json::from_str(detail).expect("pending_cleared detail must be valid JSON");
-        assert!(
-            detail_json["generation"].is_number(),
-            "pending_cleared must include generation"
+        let event_generation = detail_json["generation"]
+            .as_u64()
+            .expect("pending_cleared must include generation as u64");
+        assert_eq!(
+            event_generation, captured_generation,
+            "pending_cleared generation must match captured G={captured_generation}"
         );
+    } else {
+        panic!("pending_cleared event must include detail with generation");
     }
 
     // 16. Quiet period: no duplicate operations.
@@ -1082,28 +1102,136 @@ fn test_observer_headline_sync_e2e() {
 
     // 17. Verify registration traffic did not satisfy or break the assertion.
     //     Registration emits its own start/finish events with different operations.
-    let register_starts: Vec<_> = observer
+    //     We check the counts captured before the observer reset.
+    assert!(
+        register_start_count_before_reset > 0,
+        "registration should have emitted at least one register start before reset"
+    );
+    assert!(
+        register_finish_count_before_reset > 0,
+        "registration should have emitted at least one register finish before reset"
+    );
+
+    server.shutdown();
+}
+
+// ── F8: Failed unrelated request cannot satisfy sync pairing ───────
+
+/// Proves that sequence-based pairing isolates only the sync finish.
+/// A failed unrelated request finish must not match a sync start's
+/// sequence, even if the operation names overlap.
+#[test]
+fn test_failed_unrelated_request_does_not_satisfy_sync_pairing() {
+    if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
+        eprintln!("SKIP: SNP_SKIP_WORKER_SPAWN is set (workers won't run)");
+        return;
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let server = rt.block_on(support::recording_server::RecordingServer::start());
+    let server_url = server.url();
+    let observer = server.observer().clone();
+
+    let env = TestEnvironment::builder()
+        .with_server_url(&server_url)
+        .with_debounce(2)
+        .build()
+        .unwrap();
+    let config_dir = &env.config_dir;
+
+    let cred_path = config_dir.parent().unwrap().join("test-credential.txt");
+    std::fs::write(&cred_path, &env.api_key).unwrap();
+
+    create_library(config_dir, "e2e");
+    let _ = std::fs::remove_file(pending_marker(config_dir));
+
+    register_with_binary(config_dir, &server_url);
+    enable_auto_sync(config_dir, 2);
+
+    // Reset observer after registration to isolate measured traffic.
+    observer.reset();
+
+    // Record a failed unrelated request finish with a distinct sequence.
+    // This simulates a failed registration or other unrelated handler
+    // that should NOT satisfy sync pairing.
+    let unrelated_seq = observer.next_sequence();
+    observer.request_started(snip_sync::test_observer::RequestStarted {
+        sequence: unrelated_seq,
+        started_at_unix_ms: snip_sync::test_observer::now_millis(),
+        method: "register".to_string(),
+        operation: "register".to_string(),
+        authenticated_user_id: None,
+        authenticated_device_id: None,
+        target_library_id: None,
+        request_revision: None,
+        payload_len: 0,
+        payload_sha256: String::new(),
+        payload_contains_plaintext_sentinel: false,
+        concurrent_at_start: 0,
+    });
+    observer.request_finished(snip_sync::test_observer::RequestFinished {
+        sequence: unrelated_seq,
+        finished_at_unix_ms: snip_sync::test_observer::now_millis(),
+        success: false,
+        response_revision: None,
+    });
+
+    // Perform a mutation that triggers a real sync.
+    new_snippet(config_dir, "pairing-test-snippet");
+
+    let cleared = wait_until(Duration::from_secs(15), || {
+        !pending_marker(config_dir).exists()
+    });
+    assert!(cleared, "pending marker must be cleared after real sync");
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Find the real sync/push start (must have a DIFFERENT sequence
+    // than the failed unrelated request).
+    let sync_starts: Vec<_> = observer
         .starts()
         .into_iter()
-        .filter(|s| s.operation == "register")
+        .filter(|s| s.operation == "sync" || s.operation == "push")
         .collect();
-    assert!(
-        !register_starts.is_empty(),
-        "registration should have emitted at least one register start"
+    assert_eq!(
+        sync_starts.len(),
+        1,
+        "must have exactly one sync/push start"
     );
-    // Registration finishes must not have the sync/push operation.
-    let register_finishes: Vec<_> = observer
+    let sync_start = &sync_starts[0];
+    assert_ne!(
+        sync_start.sequence, unrelated_seq,
+        "sync start must not share sequence with failed unrelated request"
+    );
+
+    // Pairing by sequence must find exactly one matching successful finish.
+    let sync_finishes: Vec<_> = observer
         .finishes()
         .into_iter()
-        .filter(|f| f.sequence != start_seq)
+        .filter(|f| f.sequence == sync_start.sequence && f.success)
         .collect();
-    // All non-sync finishes should be registration-related.
-    for f in &register_finishes {
-        assert!(
-            f.sequence != start_seq,
-            "non-sync finish must not share the sync start sequence"
-        );
-    }
+    assert_eq!(
+        sync_finishes.len(),
+        1,
+        "exactly one successful finish must match the sync start sequence"
+    );
+
+    // The failed unrelated finish must NOT match.
+    let unrelated_finishes: Vec<_> = observer
+        .finishes()
+        .into_iter()
+        .filter(|f| f.sequence == unrelated_seq)
+        .collect();
+    assert_eq!(
+        unrelated_finishes.len(),
+        1,
+        "the failed unrelated finish must exist"
+    );
+    assert!(
+        !unrelated_finishes[0].success,
+        "the unrelated finish must be a failure"
+    );
 
     server.shutdown();
 }

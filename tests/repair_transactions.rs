@@ -1120,3 +1120,102 @@ fn test_all_transaction_actions_carry_transaction_ids() {
         );
     }
 }
+
+// C21: Stale-action race test — concurrent mutation during recovery
+//
+// Proves that if a journal is mutated from terminal (no artifacts) to
+// owning artifacts between lock acquisition and classification, the
+// exact recovery API rejects the stale action and preserves the
+// journal and artifacts.
+//
+// Uses the `SNP_TEST_MUTATION_BARRIER_DIR` mechanism to coordinate
+// timing: the recovery thread blocks after acquiring the lock but
+// before loading the journal, while the main thread writes artifacts.
+#[test]
+fn test_stale_action_race_concurrent_mutation() {
+    use std::sync::{Arc, Barrier};
+
+    let (_tmp, config_dir) = setup_test_env();
+    let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+
+    // Start with a terminal journal (no artifacts).
+    write_journal(&config_dir, txn_id, "Committed");
+    let state_dir = txn_dir(&config_dir);
+    let sync_dir = config_dir.parent().unwrap().to_path_buf();
+    let config_dir2 = config_dir.clone();
+    let txn_id2 = txn_id.to_string();
+
+    // Set up the mutation barrier directory and point file.
+    let barrier_dir = _tmp.path().join("barrier");
+    fs::create_dir_all(&barrier_dir).unwrap();
+    fs::write(barrier_dir.join("point"), "recover-after-lock-before-load").unwrap();
+
+    // Barrier to coordinate test setup with recovery thread start.
+    let setup_barrier = Arc::new(Barrier::new(2));
+    let setup_barrier2 = setup_barrier.clone();
+    let barrier_dir2 = barrier_dir.clone();
+
+    let handle = std::thread::spawn(move || {
+        // Set the mutation barrier env var in the child thread so the
+        // recovery function can read it. SAFETY: this is the only thread
+        // calling set_var, and mutation_barrier reads it after this point.
+        unsafe {
+            std::env::set_var("SNP_TEST_MUTATION_BARRIER_DIR", barrier_dir2);
+        }
+        // Signal that the recovery thread is about to start.
+        setup_barrier2.wait();
+        // Attempt recovery — will block at the mutation barrier.
+        snip_it::transaction::recover_transaction_by_id(
+            &sync_dir,
+            &state_dir,
+            &txn_id2,
+            snip_it::transaction::RecoveryClass::RemoveTerminalJournal,
+        )
+    });
+
+    // Wait for recovery thread to start, then write artifacts.
+    setup_barrier.wait();
+
+    // Wait until the recovery thread enters the barrier (blocked after
+    // lock acquisition but before loading the journal).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !barrier_dir.join("entered").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "recovery thread did not enter the barrier"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Write artifacts while recovery is blocked.
+    create_artifacts(&config_dir2, txn_id);
+
+    // Release the barrier so recovery proceeds with stale classification.
+    fs::write(barrier_dir.join("release"), "go").unwrap();
+
+    let result = handle.join().unwrap();
+
+    // The recovery must fail — the journal now has artifacts, changing
+    // the classification from RemoveTerminalJournal to
+    // CleanupLegacyCommitted. The stale expected class is rejected.
+    assert!(
+        result.is_err(),
+        "stale-action race must be rejected when artifacts appear during recovery"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("stale"),
+        "error must mention stale action: {msg}"
+    );
+
+    // Journal and artifacts must remain untouched.
+    assert!(
+        journal_exists(&config_dir, txn_id),
+        "journal must survive stale-action rejection"
+    );
+    let artifact_dir = txn_dir(&config_dir).join("artifacts").join(txn_id);
+    assert!(
+        artifact_dir.exists(),
+        "artifacts must survive stale-action rejection"
+    );
+}
