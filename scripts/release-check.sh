@@ -21,12 +21,11 @@ usage() {
 }
 
 require_clean_tree() {
-    if ! git diff --quiet HEAD 2>/dev/null; then
+    local status
+    status="$(git status --porcelain=v1 --untracked-files=all 2>/dev/null || true)"
+    if [[ -n "$status" ]]; then
         echo "ERROR: Working tree is not clean. Commit or stash changes first."
-        exit 1
-    fi
-    if ! git diff --cached --quiet 2>/dev/null; then
-        echo "ERROR: Staged changes exist. Commit or unstage them first."
+        echo "$status"
         exit 1
     fi
 }
