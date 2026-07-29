@@ -379,13 +379,15 @@ fn test_stale_repair_action_rejected() {
 
     // Verify the journal was not rolled back — it should still exist
     // in its mutated state (Committed), not in a rolled-back state.
-    if journal_exists(&config_dir, txn_id) {
-        let state = read_journal_state(&config_dir, txn_id);
-        assert!(
-            !state.contains("state = \"Prepared\""),
-            "stale rollback should not have reverted journal to Prepared"
-        );
-    }
+    assert!(
+        journal_exists(&config_dir, txn_id),
+        "journal must still exist after stale-action rejection"
+    );
+    let state = read_journal_state(&config_dir, txn_id);
+    assert!(
+        !state.contains("state = \"Prepared\""),
+        "stale rollback should not have reverted journal to Prepared"
+    );
 }
 
 // B5: Unknown transaction ID is rejected without touching other journals
@@ -416,7 +418,6 @@ fn test_unknown_transaction_id_rejected() {
 
 // B6: Malformed transaction ID cannot escape the transaction directory
 #[test]
-#[allow(clippy::collapsible_if)]
 fn test_malformed_transaction_id_rejected() {
     let (_tmp, config_dir) = setup_test_env();
 
@@ -443,19 +444,19 @@ state = "Prepared"
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // The repair scanner should either not include the malicious journal
-    // or classify it as unsafe.
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        if let Some(items) = json["items"].as_array() {
-            for item in items {
-                if let Some(tid) = item["transaction_id"].as_str() {
-                    assert!(
-                        tid != "../../etc/passwd",
-                        "path-traversal transaction ID must not appear in report"
-                    );
-                }
-            }
-        }
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("repair --dry-run --json must emit valid JSON");
+    let items = json["items"]
+        .as_array()
+        .expect("JSON must contain items array");
+    for item in items {
+        let tid = item["transaction_id"]
+            .as_str()
+            .expect("every item must have transaction_id");
+        assert!(
+            tid != "../../etc/passwd",
+            "path-traversal transaction ID must not appear in report"
+        );
     }
 }
 
@@ -491,9 +492,17 @@ fn test_idempotent_cleanup_on_second_invocation() {
     // The journal should be cleaned up (either removed or in terminal state).
     // Second apply should be a no-op (idempotent) — no crash, no error.
     let (code2, json2) = repair_apply_json(&config_dir);
-    assert!(
-        code2 == 0 || json2["items"].as_array().is_none_or(|a| a.is_empty()),
+    assert_eq!(
+        code2, 0,
         "second repair should be idempotent, got code={code2}"
+    );
+    let has_items = json2["items"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    assert!(
+        !has_items,
+        "second repair should produce no actionable items"
     );
 }
 
@@ -625,10 +634,19 @@ fn test_applying_one_repair_leaves_unrelated_journals_unchanged() {
 
     // Apply — only safe items are applied.
     let (_, apply_json) = repair_apply_json(&config_dir);
-    let failed = apply_json["failed"].as_u64().unwrap_or(0);
     // The Committed cleanup should succeed; the Failed journal should not be touched.
+    assert_eq!(
+        apply_json["applied"].as_u64().unwrap_or(0),
+        1,
+        "exactly one repair (Committed cleanup) should be applied"
+    );
+    assert_eq!(
+        apply_json["failed"].as_u64().unwrap_or(0),
+        0,
+        "no repair should fail"
+    );
     assert!(
-        !journal_exists(&config_dir, txn_a) || apply_json["applied"].as_u64().unwrap_or(0) > 0,
+        !journal_exists(&config_dir, txn_a),
         "legacy committed journal should be cleaned up"
     );
     // Failed journal must still exist (unsafe, not auto-applied).
@@ -636,7 +654,6 @@ fn test_applying_one_repair_leaves_unrelated_journals_unchanged() {
         journal_exists(&config_dir, txn_b),
         "Failed journal must remain (unsafe, not auto-applied)"
     );
-    let _ = failed;
 }
 
 // C3: Legacy committed cleanup action is generated and succeeds
@@ -828,14 +845,21 @@ fn test_one_success_one_failure_exits_1() {
     let applied = result["applied"].as_u64().unwrap_or(0);
     let failed = result["failed"].as_u64().unwrap_or(0);
 
-    // At least the legacy committed cleanup should succeed.
+    // txn_ok2 (Committed with artifacts) should be cleaned up successfully.
+    // txn_fail2 (Committed without artifacts after rescan) is also a legacy committed
+    // cleanup that succeeds. Both are safe actions.
     assert!(
         applied >= 1,
         "at least one repair should succeed, got applied={applied}"
     );
-    // The CLI may rescan and find different actions, so we can't guarantee
-    // failed > 0 from CLI. But the exact API test above proves stale rejection.
-    let _ = (failed, code);
+    assert_eq!(
+        failed, 0,
+        "no repair should fail when both are valid legacy committed"
+    );
+    assert!(
+        code == 0 || code == 1,
+        "exit code must be 0 (all succeed) or 1 (partial failure), got {code}"
+    );
 }
 
 // C9: Unsafe-only exits 2 when --apply has no safe item
