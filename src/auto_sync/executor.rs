@@ -294,6 +294,22 @@ pub fn run_executor(state_dir: &Path, generation: u64) -> i32 {
                         generation,
                         "executor: pending cleared after remote acknowledgement"
                     );
+                    // Emit test event proving the generation-conditional clear
+                    // succeeded. This is used by E2E tests to prove finish
+                    // precedes pending clear.
+                    crate::auto_sync::test_events::emit(
+                        "executor",
+                        "pending_cleared",
+                        std::process::id(),
+                        Some(generation),
+                        Some(
+                            serde_json::json!({
+                                "generation": generation,
+                                "cleared_at_unix_ms": chrono::Utc::now().timestamp_millis(),
+                            })
+                            .to_string(),
+                        ),
+                    );
                 }
                 Ok(crate::auto_sync::pending::ConditionalClearResult::GenerationChanged {
                     current,
