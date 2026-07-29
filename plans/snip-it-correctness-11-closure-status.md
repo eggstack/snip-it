@@ -8,7 +8,7 @@ Blocking plan: `plans/snip-it-correctness-11i-legacy-recovery-repair-and-verific
 
 Corrective baseline: `98acbbce29c357ae4440600dccb45a9402393e91`
 
-Final implementation commit: `6da5181` (pending verification)
+Final implementation commit: `b135fed` (pending verification)
 
 Release process: manual crates.io publishing
 
