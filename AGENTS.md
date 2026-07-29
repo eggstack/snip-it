@@ -87,6 +87,10 @@ cargo test --test repair_transactions --features test-support -- --test-threads=
 cargo test --test deterministic_e2e --features test-support test_observer_headline_sync_e2e -- --exact --test-threads=1
 cargo test --test deterministic_e2e --features test-support test_unreachable_server_preserves_pending -- --exact --test-threads=1
 
+# Run Phase 11L focused verification (requires test-support feature)
+cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
+cargo test --lib transaction --all-features -- --test-threads=1
+
 # Run production seam proof (no test-support feature)
 bash scripts/ci/test-production-seams.sh
 
@@ -107,7 +111,7 @@ bash scripts/release-check.sh  # exhaustive pre-release verification
 
 **Key gotcha:** The main `snip-it` crate is binary-only — `cargo test --lib -p snip-it` does not work. Use `cargo test -p snip-it` (binary + integration tests) or `cargo test --workspace`.
 
-**Key gotcha:** Some test suites (`deterministic_e2e`, `process_lifecycle`, `debounce_matrix`, `mutual_exclusion`, `restore_security`, `restore_transactions`, `backup_contracts`, `execution_outcomes`, `update_archive_security`, `readonly_no_recovery`, `canary_nonexecution`) require `--features test-support` to compile.
+**Key gotcha:** Some test suites (`deterministic_e2e`, `process_lifecycle`, `debounce_matrix`, `mutual_exclusion`, `restore_security`, `restore_transactions`, `backup_contracts`, `execution_outcomes`, `update_archive_security`, `readonly_no_recovery`, `canary_nonexecution`, `restore_crash_failpoints`) require `--features test-support` to compile.
 
 ## Toolchain
 
@@ -213,6 +217,15 @@ Production code uses `src/auto_sync/test_events.rs` which checks the env var at 
 ### Transaction journals
 Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
 
+### Transaction artifact path validation
+`src/transaction.rs::validate_contained_path` rejects every `Component::ParentDir`
+during lexical normalization and walks existing intermediate components with
+`symlink_metadata` to reject missing children below symlinked prefixes.
+Missing out-of-root and traversal paths return `Err` before existence checks.
+Unsafe-path errors leave journals and artifacts untouched. Apply the helper
+in every recovery state (not just on disk existence), and revalidate
+backup references immediately before reading them in rollback.
+
 ### Transaction cleanup state machine (Phase 11H)
 New transactions enter `CleaningUp { outcome, next_step }` before any terminal state. The `CleanupOutcome` enum (`Commit` or `Rollback`) records whether the transaction committed or rolled back. The `CleanupStep` enum (`Validate`, `RemoveBackups`, `RemoveArtifactRoot`, `RemoveJournal`) tracks progress. Journal removal is the last step — absence of a journal is the true terminal indicator. Legacy `Committed` and `RolledBack` journals from older versions are handled as `CleaningUp` with the appropriate outcome during recovery.
 
@@ -226,6 +239,18 @@ The transaction lock (`transaction.lock`) is a structured TOML record containing
 
 ### Phase 11K: Literal safety and proof closure
 Scanner validates filename/internal journal ID match — mismatches enter `corrupt`, never `journals`. `short_transaction_id()` replaces all byte-slicing of untrusted IDs. Artifact path validation runs for every transaction state before classification, with lexical containment checked before existence. Rollback revalidates backup references immediately before reading. Mutation gate routes all terminal journal removal through `recover_transaction_by_id` (no direct deletion). `fsync_parent_dir` propagates Unix fsync errors. Test-only repair failure injection via `SNP_TEST_INJECT_ERROR=repair-transaction-{id}`. Observer tests use hard assertions for identity fields, exact concurrency of 1, and exact pending-clear event count.
+
+### Phase 11L: Lexical containment and exact recovery proof
+Corrected two production defects. `lexically_within` now explicitly rejects `Component::ParentDir` during normalization via `normalize_absolute_without_parent` — previously a missing path like `<artifact-root>/../../outside.bin` could pass lexical containment because the prefix check only compared component sequences. A new `reject_symlinked_existing_prefixes` helper walks existing intermediate components with `symlink_metadata` to reject missing children below symlinked prefixes (e.g. `<root>/link/missing.bin` where `link` is a symlink). The recovery proof in `tests/restore_crash_failpoints.rs` is now exact: `run_repair` passes `--apply --json` explicitly, JSON parsing is mandatory (`unwrap_or_else` with panic on error), and permissive patterns (`> 0`, `>= 1`, optional parsing, multiple exit codes) have been eliminated. The fixture uses non-zero timestamps so the dry-run has zero pre-existing items.
+
+### Restore crash-recovery proof is exact
+`tests/restore_crash_failpoints.rs` uses mandatory JSON parsing of
+`repair --apply --json` output. First recovery must exit exactly 0 with
+report `repaired`, `applied == 1`, `failed == 0`. Second recovery must
+exit exactly 0 with report `clean`, `applied == 0`, `failed == 0`. The
+fixture uses non-zero timestamps so the dry-run has zero pre-existing
+items. No permissive patterns (`> 0`, `>= 1`, `<= 1`, optional parsing,
+multiple exit codes) are allowed in required recovery proof.
 
 ### Local-data lock (backup snapshot coordination)
 `LocalDataLock` (`src/local_data.rs`) is a short-lived exclusive file lock in the `.transaction` directory that serializes backup snapshot capture against all local TOML mutations. Backup acquires the lock during file enumeration and byte capture; `save_library` acquires it during writes. This ensures backup captures either the complete before-state or complete after-state, never a mixed state. The lock retries with exponential backoff (up to 30s) when contended.

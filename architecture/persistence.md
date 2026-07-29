@@ -209,6 +209,16 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 
 `RollingBack { next_rollback_position }` uses rollback-order coordinates: `rollback_order = (0..files.len()).rev()`. `next_rollback_position == N` means positions `0..N` have been rolled back. Each rollback action verifies the pre-transaction bytes or expected absence after completion.
 
+### Artifact Path Validation (Phase 11L)
+
+All transaction artifact paths (backup, staged, destination) are validated by `validate_contained_path` before use. The validation has three layers:
+
+1. **Lexical containment** (`lexically_within`): Both paths must be absolute. `Component::ParentDir` is explicitly rejected during normalization via `normalize_absolute_without_parent` — any `..` component causes immediate rejection. This catches traversal even when the path doesn't exist yet (e.g. `<artifact-root>/../../outside.bin`).
+2. **Symlinked prefix rejection** (`reject_symlinked_existing_prefixes`): Walks from root toward child using `symlink_metadata` (not `fs::metadata`, so symlinks are not followed). If any existing intermediate component is a symlink, the path is rejected. This catches `<root>/link/missing.bin` where `link` is a symlink to outside and the final file is absent.
+3. **Canonical containment**: For existing paths, canonicalize both root and path and verify containment as defense in depth.
+
+The helper runs for every transaction state (not just on disk existence), and backup references are revalidated immediately before reading in rollback.
+
 ### CommittedLocal State
 
 `CommittedLocal { pending_generation, pending_recorded }` eliminates the crash window between durable restore commit and pending-sync intent recording. After all live writes are committed, the journal transitions to `CommittedLocal` with the pending generation number. The pending sync intent is then recorded. If a crash occurs between `CommittedLocal` and `Committed`, recovery completes the pending intent recording.
@@ -564,6 +574,7 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 - Lock files use O_EXCL (create_new) for atomic acquisition
 - Auto-sync lock ownership verified via nonce (pid-nanos-seq) to prevent PID reuse theft; transaction lock also uses nonce + PID liveness check for ownership verification and stale-lock reclaim
 - Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
+- Transaction artifact path validation rejects `Component::ParentDir` during lexical normalization and rejects missing children below symlinked intermediate components
 - Transaction journals use UUID-based filenames and O_EXCL locks
 - Backup checksums: SHA-256 per file, verified before restore
 - Backup redaction: API keys stripped from sync.toml copies
