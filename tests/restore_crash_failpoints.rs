@@ -41,7 +41,9 @@ fn make_backup(tmp: &std::path::Path) -> PathBuf {
 }
 
 /// Build a backup directory with two files (library + index) so that
-/// rollback has at least two actions to perform.
+/// rollback has at least two actions to perform. Timestamps are non-zero
+/// so the fixture has no unrelated safe repairs that would inflate the
+/// applied count after a restore-then-rollback cycle.
 fn make_backup_multi_file(tmp: &std::path::Path) -> PathBuf {
     let backup_dir = tmp.join("backup");
     let libraries_dir = backup_dir.join("libraries");
@@ -51,6 +53,8 @@ fn make_backup_multi_file(tmp: &std::path::Path) -> PathBuf {
 id = "crash-test-1"
 description = "crash test snippet"
 command = "echo crash-test"
+created_at = 1
+updated_at = 1
 "#;
     fs::write(libraries_dir.join("crash-test.toml"), content).unwrap();
 
@@ -188,16 +192,36 @@ fn run_restore(config_dir: &std::path::Path, backup_dir: &std::path::Path) -> st
         .unwrap()
 }
 
-/// Run `snp repair --apply` for recovery.
+/// Run `snp repair --apply --json` for recovery.
 fn run_repair(config_dir: &std::path::Path) -> std::process::Output {
     let mut cmd = snp_in(config_dir);
-    cmd.args(["repair", "--apply"]);
+    cmd.args(["repair", "--apply", "--json"]);
     cmd.env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred");
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
         .unwrap()
+}
+
+/// Typed repair apply report — the only shape the focused recovery proof accepts.
+#[derive(Debug, serde::Deserialize)]
+struct RepairApplyReport {
+    exit_status: String,
+    applied: u64,
+    failed: u64,
+    #[serde(default)]
+    items: Vec<serde_json::Value>,
+}
+
+/// Parse the repair apply JSON. Panics if the output does not parse —
+/// the focused recovery proof requires exact JSON output.
+fn parse_repair_report(output: &std::process::Output) -> RepairApplyReport {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    serde_json::from_str(&stdout).unwrap_or_else(|error| {
+        panic!("repair JSON must parse: {error}; stdout={stdout}; stderr={stderr}")
+    })
 }
 
 /// Assert that no pending marker exists in .transaction (the canonical bug).
@@ -433,6 +457,8 @@ fn test_crash_during_first_rollback() {
 
     // Pre-state: create existing library files that will be replaced.
     // We need at least two files so rollback has at least two actions.
+    // Timestamps must be non-zero so the fixture has no unrelated safe
+    // repairs that would inflate the applied count below.
     let libraries_dir = config_dir.join("libraries");
     fs::create_dir_all(&libraries_dir).unwrap();
 
@@ -440,6 +466,8 @@ fn test_crash_during_first_rollback() {
 id = "old-snippet"
 description = "old snippet"
 command = "echo old"
+created_at = 1
+updated_at = 1
 "#;
     fs::write(libraries_dir.join("crash-test.toml"), old_lib_content).unwrap();
 
@@ -452,6 +480,40 @@ is_primary = true
     // Compute expected hashes for verification.
     let old_lib_hash = sha256_hex(old_lib_content.as_bytes());
     let old_index_hash = sha256_hex(old_index_content.as_bytes());
+
+    // Phase 0: Fixture hygiene. Run a read-only repair dry-run to confirm
+    // the fixture has no unrelated safe repairs. Any pre-existing safe
+    // repairs would otherwise add to the applied count and invalidate the
+    // exact one-action proof below.
+    let preflight_output = snp_in(&config_dir)
+        .args(["repair", "--dry-run", "--json"])
+        .env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred")
+        .output()
+        .unwrap();
+    let preflight_stdout = String::from_utf8_lossy(&preflight_output.stdout);
+    let preflight_stderr = String::from_utf8_lossy(&preflight_output.stderr);
+    let preflight_json: RepairApplyReport =
+        serde_json::from_str(&preflight_stdout).unwrap_or_else(|error| {
+            panic!(
+                "preflight repair --dry-run --json must parse: {error}; \
+                 stdout={preflight_stdout}; stderr={preflight_stderr}"
+            )
+        });
+    assert_eq!(
+        preflight_json.applied, 0,
+        "fixture must have zero pre-existing safe repairs (got applied={}): {preflight_stdout}",
+        preflight_json.applied
+    );
+    assert_eq!(
+        preflight_json.failed, 0,
+        "fixture must have zero pre-existing failed repairs (got failed={}): {preflight_stdout}",
+        preflight_json.failed
+    );
+    assert_eq!(
+        preflight_json.items.len(),
+        0,
+        "fixture must have zero pre-existing repair items: {preflight_stdout}"
+    );
 
     // Phase 1: Start restore with injected error after second install.
     // This triggers rollback. The rollback failpoint aborts before the
@@ -489,11 +551,10 @@ is_primary = true
     // No pending marker should exist.
     assert_eq!(count_pending_generations(&config_dir), 0);
 
-    // Phase 2: Recovery — run `snp repair` to complete the interrupted rollback.
-    // This restores the original content without starting a new restore.
-    // The exit code may be 0 (clean) or 1 (partial failure from unrelated
-    // timestamp repairs). The critical invariant is that the transaction
-    // rollback itself completed — verified by file hash and journal absence.
+    // Phase 2: Recovery — run `snp repair --apply --json` to complete the
+    // interrupted rollback. The first recovery must exit exactly 0 and
+    // report exactly one applied action (the interrupted transaction
+    // rollback) with zero failures.
     let recovery = run_repair(&config_dir);
     eprintln!(
         "REPAIR STDERR: {}",
@@ -503,19 +564,28 @@ is_primary = true
         "REPAIR STDOUT: {}",
         String::from_utf8_lossy(&recovery.stdout)
     );
-    let exit = recovery.status.code().unwrap_or(1);
-    // Parse the JSON output to verify the rollback was applied.
-    let stdout = String::from_utf8_lossy(&recovery.stdout);
-    if let Ok(result) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        let applied = result["applied"].as_u64().unwrap_or(0);
-        assert!(
-            applied > 0,
-            "repair must have applied at least one rollback action, got applied={applied}"
-        );
-    } else {
-        // If JSON parsing fails, the repair still must have run.
-        assert!(exit <= 1, "repair should exit 0 or 1, got {exit}");
-    }
+    assert_eq!(
+        recovery.status.code(),
+        Some(0),
+        "first repair must exit exactly 0, got {:?}",
+        recovery.status.code()
+    );
+    let report = parse_repair_report(&recovery);
+    assert_eq!(
+        report.exit_status, "repaired",
+        "first recovery must report exit_status=repaired, got {}",
+        report.exit_status
+    );
+    assert_eq!(
+        report.applied, 1,
+        "first recovery must apply exactly one action, got {}",
+        report.applied
+    );
+    assert_eq!(
+        report.failed, 0,
+        "first recovery must report zero failures, got {}",
+        report.failed
+    );
 
     // Verify exact original bytes were restored.
     let lib_path = libraries_dir.join("crash-test.toml");
@@ -545,16 +615,31 @@ is_primary = true
     );
 
     // Phase 3: Repeat recovery to prove idempotence.
-    // No journals remain, so the second repair should be a clean no-op.
+    // No journals remain, so the second repair must exit exactly 0 with
+    // an exact no-op (applied=0, failed=0).
     let recovery2 = run_repair(&config_dir);
-    let stdout2 = String::from_utf8_lossy(&recovery2.stdout);
-    if let Ok(result2) = serde_json::from_str::<serde_json::Value>(&stdout2) {
-        let applied2 = result2["applied"].as_u64().unwrap_or(0);
-        assert_eq!(
-            applied2, 0,
-            "second repair should be a no-op (no journals to recover)"
-        );
-    }
+    assert_eq!(
+        recovery2.status.code(),
+        Some(0),
+        "second repair must exit exactly 0, got {:?}",
+        recovery2.status.code()
+    );
+    let report2 = parse_repair_report(&recovery2);
+    assert_eq!(
+        report2.exit_status, "clean",
+        "second recovery must report exit_status=clean, got {}",
+        report2.exit_status
+    );
+    assert_eq!(
+        report2.applied, 0,
+        "second recovery must be a no-op (applied=0), got {}",
+        report2.applied
+    );
+    assert_eq!(
+        report2.failed, 0,
+        "second recovery must report zero failures, got {}",
+        report2.failed
+    );
     assert_eq!(count_pending_generations(&config_dir), 0);
     assert_eq!(find_journals(&txn_dir).len(), 0);
 }
@@ -567,7 +652,8 @@ fn test_crash_during_second_rollback() {
     let (_env_tmp, config_dir) = setup_test_env();
     let backup_dir = make_backup_multi_file(tmp.path());
 
-    // Pre-state: create existing library files.
+    // Pre-state: create existing library files. Timestamps must be
+    // non-zero so the fixture has no unrelated safe repairs.
     let libraries_dir = config_dir.join("libraries");
     fs::create_dir_all(&libraries_dir).unwrap();
 
@@ -575,6 +661,8 @@ fn test_crash_during_second_rollback() {
 id = "old-snippet"
 description = "old snippet"
 command = "echo old"
+created_at = 1
+updated_at = 1
 "#;
     fs::write(libraries_dir.join("crash-test.toml"), old_lib_content).unwrap();
 
@@ -586,6 +674,29 @@ is_primary = true
 
     let old_lib_hash = sha256_hex(old_lib_content.as_bytes());
     let old_index_hash = sha256_hex(old_index_content.as_bytes());
+
+    // Phase 0: Fixture hygiene — see test_crash_during_first_rollback.
+    let preflight_output = snp_in(&config_dir)
+        .args(["repair", "--dry-run", "--json"])
+        .env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred")
+        .output()
+        .unwrap();
+    let preflight_json: RepairApplyReport = parse_repair_report(&preflight_output);
+    assert_eq!(
+        preflight_json.applied, 0,
+        "fixture must have zero pre-existing safe repairs (got applied={})",
+        preflight_json.applied
+    );
+    assert_eq!(
+        preflight_json.failed, 0,
+        "fixture must have zero pre-existing failed repairs (got failed={})",
+        preflight_json.failed
+    );
+    assert_eq!(
+        preflight_json.items.len(),
+        0,
+        "fixture must have zero pre-existing repair items"
+    );
 
     // Phase 1: Start restore with injected error after second install.
     // The rollback failpoint aborts before the second rollback action
@@ -624,21 +735,32 @@ is_primary = true
     // No pending marker should exist.
     assert_eq!(count_pending_generations(&config_dir), 0);
 
-    // Phase 2: Recovery — run `snp repair` to complete the interrupted rollback.
-    // Verify the rollback was applied via JSON output; exit code may be 0 or 1
-    // due to unrelated timestamp repairs.
+    // Phase 2: Recovery — run `snp repair --apply --json`. The first
+    // recovery must exit exactly 0, report exactly one applied action,
+    // and report zero failures.
     let recovery = run_repair(&config_dir);
-    let stdout = String::from_utf8_lossy(&recovery.stdout);
-    if let Ok(result) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        let applied = result["applied"].as_u64().unwrap_or(0);
-        assert!(
-            applied > 0,
-            "repair must have applied at least one rollback action, got applied={applied}"
-        );
-    } else {
-        let exit = recovery.status.code().unwrap_or(1);
-        assert!(exit <= 1, "repair should exit 0 or 1, got {exit}");
-    }
+    assert_eq!(
+        recovery.status.code(),
+        Some(0),
+        "first repair must exit exactly 0, got {:?}",
+        recovery.status.code()
+    );
+    let report = parse_repair_report(&recovery);
+    assert_eq!(
+        report.exit_status, "repaired",
+        "first recovery must report exit_status=repaired, got {}",
+        report.exit_status
+    );
+    assert_eq!(
+        report.applied, 1,
+        "first recovery must apply exactly one action, got {}",
+        report.applied
+    );
+    assert_eq!(
+        report.failed, 0,
+        "first recovery must report zero failures, got {}",
+        report.failed
+    );
 
     // Verify exact original bytes were restored.
     let lib_path = libraries_dir.join("crash-test.toml");
@@ -663,16 +785,29 @@ is_primary = true
     assert_eq!(find_journals(&txn_dir).len(), 0);
 
     // Phase 3: Repeat recovery to prove idempotence.
-    // No journals remain, so the second repair should be a clean no-op.
     let recovery2 = run_repair(&config_dir);
-    let stdout2 = String::from_utf8_lossy(&recovery2.stdout);
-    if let Ok(result2) = serde_json::from_str::<serde_json::Value>(&stdout2) {
-        let applied2 = result2["applied"].as_u64().unwrap_or(0);
-        assert_eq!(
-            applied2, 0,
-            "second repair should be a no-op (no journals to recover)"
-        );
-    }
+    assert_eq!(
+        recovery2.status.code(),
+        Some(0),
+        "second repair must exit exactly 0, got {:?}",
+        recovery2.status.code()
+    );
+    let report2 = parse_repair_report(&recovery2);
+    assert_eq!(
+        report2.exit_status, "clean",
+        "second recovery must report exit_status=clean, got {}",
+        report2.exit_status
+    );
+    assert_eq!(
+        report2.applied, 0,
+        "second recovery must be a no-op (applied=0), got {}",
+        report2.applied
+    );
+    assert_eq!(
+        report2.failed, 0,
+        "second recovery must report zero failures, got {}",
+        report2.failed
+    );
     assert_eq!(count_pending_generations(&config_dir), 0);
     assert_eq!(find_journals(&txn_dir).len(), 0);
 }

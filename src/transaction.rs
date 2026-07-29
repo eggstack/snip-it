@@ -33,7 +33,7 @@ use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Process identity for lock ownership verification.
 ///
@@ -1394,20 +1394,7 @@ pub fn validate_artifact_containment(
 /// canonical containment for existing paths. Missing paths are validated
 /// lexically only — they cannot be canonicalized.
 fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<()> {
-    // Reject symlinks — they could escape the artifact root.
-    if path.is_symlink() {
-        return Err(SnipError::runtime_error(
-            "symlinked transaction artifact",
-            Some(&format!(
-                "Artifact {} at {} is a symlink; refusing to follow. Root: {}",
-                label,
-                path.display(),
-                root.display()
-            )),
-        ));
-    }
-
-    // Lexical containment check: reject paths with `..` components.
+    // Lexical containment check: explicitly rejects `Component::ParentDir`.
     // This catches traversal even when the path doesn't exist yet.
     if !lexically_within(root, path) {
         return Err(SnipError::runtime_error(
@@ -1421,10 +1408,43 @@ fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<
         ));
     }
 
-    // For existing paths, also verify canonical containment.
+    // Reject a symlinked artifact root — it could escape the root before
+    // any deeper check runs. Uses symlink_metadata so we don't follow links.
+    if let Ok(meta) = fs::symlink_metadata(root)
+        && meta.file_type().is_symlink()
+    {
+        return Err(SnipError::runtime_error(
+            "symlinked transaction artifact root",
+            Some(&format!(
+                "Artifact root {} is a symlink; refusing to follow. Path: {} ({label})",
+                root.display(),
+                path.display()
+            )),
+        ));
+    }
+
+    // Reject existing intermediate components that are symlinks — even
+    // when the final path is missing. Catches `<root>/link/missing.bin`
+    // where `link` is a symlink to outside.
+    reject_symlinked_existing_prefixes(root, path)?;
+
+    // For existing paths, also verify canonical containment as defense in
+    // depth (catches reparse/junction behavior on supported platforms).
     if path.exists() {
-        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical_root = root.canonicalize().map_err(|e| {
+            SnipError::io_error(
+                "canonicalize transaction artifact root",
+                root.to_path_buf(),
+                e,
+            )
+        })?;
+        let canonical_path = path.canonicalize().map_err(|e| {
+            SnipError::io_error(
+                "canonicalize transaction artifact path",
+                path.to_path_buf(),
+                e,
+            )
+        })?;
 
         if !canonical_path.starts_with(&canonical_root) {
             return Err(SnipError::runtime_error(
@@ -1444,17 +1464,21 @@ fn validate_contained_path(root: &Path, path: &Path, label: &str) -> SnipResult<
 
 /// Check whether `child` is lexically within `root` without canonicalizing.
 ///
-/// Both paths must be absolute. Rejects `..` components in the child.
+/// Both paths must be absolute. Any `Component::ParentDir` in either path
+/// is explicitly rejected — the path is treated as unsafe and the function
+/// returns `false`. `Component::CurDir` is normalized away.
 fn lexically_within(root: &Path, child: &Path) -> bool {
     if !root.is_absolute() || !child.is_absolute() {
         return false;
     }
 
-    // Normalize components, rejecting ParentDir.
-    let root_components: Vec<_> = root.components().collect();
-    let child_components: Vec<_> = child.components().collect();
+    let Some(root_components) = normalize_absolute_without_parent(root) else {
+        return false;
+    };
+    let Some(child_components) = normalize_absolute_without_parent(child) else {
+        return false;
+    };
 
-    // Check that child starts with root components.
     if child_components.len() < root_components.len() {
         return false;
     }
@@ -1466,6 +1490,120 @@ fn lexically_within(root: &Path, child: &Path) -> bool {
     }
 
     true
+}
+
+/// Normalize an absolute path, explicitly rejecting `Component::ParentDir`.
+///
+/// Returns `None` if the path is not absolute or contains any `..` component.
+/// `Component::CurDir` is dropped silently. `Component::Prefix` and
+/// `Component::RootDir` are preserved so cross-platform prefix semantics
+/// are retained.
+fn normalize_absolute_without_parent(path: &Path) -> Option<Vec<Component<'_>>> {
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let mut normalized: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => normalized.push(component),
+            Component::CurDir => {}
+            Component::Normal(_) => normalized.push(component),
+            Component::ParentDir => return None,
+        }
+    }
+    Some(normalized)
+}
+
+/// Reject existing intermediate path components that are symlinks.
+///
+/// Walks from `root` toward `child`, stopping at the first missing
+/// component. Each existing component is inspected with `symlink_metadata`
+/// so symlinks are not followed. Used to catch references like
+/// `<root>/link/missing.bin` where `link` is a symlink to outside and the
+/// final file is absent.
+fn reject_symlinked_existing_prefixes(root: &Path, child: &Path) -> SnipResult<()> {
+    // Reject a symlinked artifact root.
+    match fs::symlink_metadata(root) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(SnipError::runtime_error(
+                "symlinked transaction artifact root",
+                Some(&format!(
+                    "Artifact root {} is a symlink; refusing to follow",
+                    root.display()
+                )),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Root absent — the walk below will see only missing components.
+        }
+        Err(error) => {
+            return Err(SnipError::io_error(
+                "stat transaction artifact root",
+                root.to_path_buf(),
+                error,
+            ));
+        }
+    }
+
+    let relative = child.strip_prefix(root).map_err(|_| {
+        SnipError::runtime_error(
+            "transaction artifact path traversal",
+            Some(&format!(
+                "Artifact path {} is not within root {}",
+                child.display(),
+                root.display()
+            )),
+        )
+    })?;
+
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::Normal(_) => {
+                current.push(component.as_os_str());
+                match fs::symlink_metadata(&current) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        return Err(SnipError::runtime_error(
+                            "symlinked transaction artifact prefix",
+                            Some(&format!(
+                                "Existing component {} is a symlink; refusing to follow",
+                                current.display()
+                            )),
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        // Missing component — stop walking; the final path is absent.
+                        break;
+                    }
+                    Err(error) => {
+                        return Err(SnipError::io_error(
+                            "stat transaction artifact prefix",
+                            current.clone(),
+                            error,
+                        ));
+                    }
+                }
+            }
+            Component::ParentDir => {
+                return Err(SnipError::runtime_error(
+                    "transaction artifact path traversal",
+                    Some(&format!(
+                        "Artifact path {} contains parent traversal",
+                        child.display()
+                    )),
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Compute the per-transaction artifact directory path.
@@ -3448,5 +3586,423 @@ state = "Prepared"
     fn test_journal_id_from_path_empty_id() {
         let path = Path::new("/tmp/txn-.toml");
         assert!(journal_id_from_path(path).is_err());
+    }
+
+    // =========================================================================
+    // Workstream A (Phase 11L): Lexical containment exact tests
+    //
+    // Pin the `Component::ParentDir` lexical-traversal defect and prove
+    // the complete missing-path safety contract:
+    //
+    // - `Component::ParentDir` is rejected during normalization.
+    // - lexical containment compares components, not strings.
+    // - missing in-root paths are accepted as absent.
+    // - missing out-of-root and traversal paths are rejected.
+    // - missing child below an existing symlinked prefix is rejected.
+    //
+    // These tests intentionally fail against the pre-fix implementation
+    // because the prior `lexically_within` accepted paths that begin with
+    // the root components and later contain `..`.
+    // =========================================================================
+
+    #[test]
+    fn lexical_containment_accepts_missing_normal_child() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        let child = root.join("missing.bin");
+        assert!(
+            !child.exists(),
+            "missing child must not exist before validation"
+        );
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(
+            result.is_ok(),
+            "missing in-root child must be accepted as absent: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn lexical_containment_accepts_existing_normal_child() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        fs::create_dir_all(&root).unwrap();
+        let child = root.join("present.bin");
+        fs::write(&child, "data").unwrap();
+
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(
+            result.is_ok(),
+            "existing in-root child must be accepted: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn lexical_containment_rejects_parent_dir_after_matching_root_prefix() {
+        // Baseline defect reproduction: child starts with all root
+        // components, then contains `..` after the root prefix.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        // Do NOT create `root` — child references root but escapes through `..`.
+        let child = root.join("..").join("..").join("outside.bin");
+
+        assert!(!child.exists(), "child must not exist for this test");
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(
+            result.is_err(),
+            "parent traversal after root prefix must be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("outside") || msg.contains("traversal"),
+            "error must mention traversal/outside, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn lexical_containment_rejects_nested_parent_escape() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        let child = root.join("sub").join("..").join("..").join("outside.bin");
+        assert!(!child.exists(), "child must not exist for this test");
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(
+            result.is_err(),
+            "nested parent escape must be rejected: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn lexical_containment_rejects_sibling_path() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifacts");
+        let sibling = dir.path().join("artifacts-other").join("file.bin");
+        fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        fs::write(&sibling, "x").unwrap();
+
+        let result = validate_contained_path(&root, &sibling, "backup_path");
+        assert!(
+            result.is_err(),
+            "sibling path with shared prefix must be rejected"
+        );
+    }
+
+    #[test]
+    fn lexical_containment_rejects_relative_paths() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let child = PathBuf::from("relative/child");
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(result.is_err(), "relative child must be rejected");
+    }
+
+    #[test]
+    fn lexical_containment_rejects_relative_root() {
+        let dir = TempDir::new().unwrap();
+        let root = PathBuf::from("relative/root");
+        let child = dir.path().to_path_buf();
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(result.is_err(), "relative root must be rejected");
+    }
+
+    #[test]
+    fn lexical_containment_rejects_child_shorter_than_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        let child = dir.path().to_path_buf();
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(result.is_err(), "child shorter than root must be rejected");
+    }
+
+    #[test]
+    fn lexical_containment_accepts_curdir_normalization() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("artifact-root");
+        let child = root.join("sub").join(".").join("file.bin");
+        // Child does not exist — should still pass lexical containment
+        // after `CurDir` normalization.
+        let result = validate_contained_path(&root, &child, "backup_path");
+        assert!(
+            result.is_ok(),
+            "CurDir normalization must accept the path: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn validate_artifact_containment_rejects_traversal_backup_path_for_every_state() {
+        // For every transaction state, an unsafe missing backup path
+        // must produce Err, leave the journal file untouched, and never
+        // touch any external path.
+        let states = [
+            ("Prepared", TransactionState::Prepared),
+            ("BackupsDurable", TransactionState::BackupsDurable),
+            (
+                "Committing",
+                TransactionState::Committing {
+                    next_commit_position: 0,
+                },
+            ),
+            (
+                "CommittedLocal",
+                TransactionState::CommittedLocal {
+                    pending: PendingFinalization::NotRecorded,
+                },
+            ),
+            (
+                "RollingBack",
+                TransactionState::RollingBack {
+                    next_rollback_position: 0,
+                },
+            ),
+            (
+                "CleaningUp_Commit",
+                TransactionState::CleaningUp {
+                    outcome: CleanupOutcome::Commit,
+                    next_step: CleanupStep::Validate,
+                },
+            ),
+            ("Committed", TransactionState::Committed),
+            ("RolledBack", TransactionState::RolledBack),
+        ];
+
+        for (label, state) in states {
+            let dir = TempDir::new().unwrap();
+            let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+            let artifact_root = transaction_artifact_dir(dir.path(), txn_id);
+            fs::create_dir_all(&artifact_root).unwrap();
+
+            // Missing backup path that escapes via `..`.
+            let unsafe_backup = artifact_root.join("..").join("..").join("outside.bin");
+            assert!(
+                !unsafe_backup.exists(),
+                "{label}: unsafe backup must not exist"
+            );
+
+            let journal = TransactionJournal {
+                id: txn_id.to_string(),
+                operation: "test".to_string(),
+                created_at_unix_ms: 0,
+                staged_files: vec![StagedFile {
+                    original_path: artifact_root.join("dest.toml"),
+                    backup_path: Some(unsafe_backup.clone()),
+                    staged_path: artifact_root.join("dest.toml"),
+                    sha256: String::new(),
+                    existed_before: true,
+                    action: StagedAction::Replace,
+                    original_hash: String::new(),
+                    new_hash: String::new(),
+                    durable_staged_path: None,
+                    original_metadata: OriginalFileMetadata::default(),
+                }],
+                state: state.clone(),
+            };
+            let jpath = dir.path().join(format!("txn-{txn_id}.toml"));
+            fs::write(&jpath, toml::to_string_pretty(&journal).unwrap()).unwrap();
+            let journal_after = fs::read_to_string(&jpath).unwrap();
+
+            let result = journal_owns_artifacts(dir.path(), &journal);
+            assert!(
+                result.is_err(),
+                "{label}: unsafe missing backup must produce Err"
+            );
+            // Journal file untouched.
+            assert_eq!(
+                fs::read_to_string(&jpath).unwrap(),
+                journal_after,
+                "{label}: journal must be untouched on unsafe-path error"
+            );
+            // External path never created.
+            assert!(
+                !unsafe_backup.exists(),
+                "{label}: unsafe external path must not be created"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_journal_recovery_rejects_durable_staged_traversal_for_committed_local() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        let artifact_root = transaction_artifact_dir(dir.path(), txn_id);
+        fs::create_dir_all(&artifact_root).unwrap();
+
+        let unsafe_durable = artifact_root
+            .join("..")
+            .join("..")
+            .join("outside-staged.bin");
+        assert!(!unsafe_durable.exists());
+
+        let journal = TransactionJournal {
+            id: txn_id.to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: artifact_root.join("dest.toml"),
+                backup_path: None,
+                staged_path: artifact_root.join("dest.toml"),
+                sha256: String::new(),
+                existed_before: false,
+                action: StagedAction::Create,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: Some(unsafe_durable.clone()),
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::CommittedLocal {
+                pending: PendingFinalization::NotRecorded,
+            },
+        };
+        let result = classify_journal_recovery(dir.path(), &journal);
+        assert!(
+            result.is_err(),
+            "CommittedLocal with traversal must be rejected: {:?}",
+            result.err()
+        );
+        assert!(
+            !unsafe_durable.exists(),
+            "unsafe external path must not be created"
+        );
+    }
+
+    #[test]
+    fn safe_missing_in_root_backup_remains_classifiable() {
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        let artifact_root = transaction_artifact_dir(dir.path(), txn_id);
+        fs::create_dir_all(&artifact_root).unwrap();
+
+        // Missing in-root backup should remain classifiable.
+        let safe_backup = artifact_root.join("missing.bak");
+        assert!(!safe_backup.exists());
+
+        let journal = TransactionJournal {
+            id: txn_id.to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: artifact_root.join("dest.toml"),
+                backup_path: Some(safe_backup),
+                staged_path: artifact_root.join("dest.toml"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: None,
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Prepared,
+        };
+        let result = classify_journal_recovery(dir.path(), &journal);
+        assert!(
+            result.is_ok(),
+            "safe missing in-root backup must be classifiable: {:?}",
+            result.err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_existing_prefix_rejects_missing_child() {
+        // `<artifact-root>/link/missing.bin` where `link` is an existing
+        // symlink to outside and `missing.bin` does not exist. The path
+        // must be rejected even though the final file is absent.
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let artifact_root = dir.path().join("artifact-root");
+        fs::create_dir_all(&artifact_root).unwrap();
+
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("marker.txt"), "do-not-touch").unwrap();
+
+        let link = artifact_root.join("link");
+        symlink(&outside, &link).unwrap();
+
+        let missing_under_link = artifact_root.join("link").join("missing.bin");
+        assert!(
+            !missing_under_link.exists(),
+            "missing.bin under symlink must not exist"
+        );
+
+        let result = validate_contained_path(&artifact_root, &missing_under_link, "backup_path");
+        assert!(
+            result.is_err(),
+            "missing child under symlinked prefix must be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("symlink"),
+            "error must mention symlink, got: {msg}"
+        );
+
+        // Outside marker must be untouched.
+        assert!(
+            outside.join("marker.txt").exists(),
+            "external symlink target must not be touched"
+        );
+        // The symlink itself must be untouched.
+        assert!(link.is_symlink(), "symlink must remain in place");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_owns_artifacts_rejects_symlinked_existing_prefix() {
+        // The journal-level invariant: an unsafe missing reference
+        // through a symlinked prefix must produce Err, and the journal
+        // file and external target must be untouched.
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let txn_id = "aaaa1111-0000-0000-0000-000000000001";
+        let artifact_root = transaction_artifact_dir(dir.path(), txn_id);
+        fs::create_dir_all(&artifact_root).unwrap();
+
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("evidence.bin"), "must-remain").unwrap();
+
+        let link = artifact_root.join("link");
+        symlink(&outside, &link).unwrap();
+
+        let unsafe_backup = artifact_root.join("link").join("missing.bin");
+        assert!(!unsafe_backup.exists());
+
+        let journal = TransactionJournal {
+            id: txn_id.to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: artifact_root.join("dest.toml"),
+                backup_path: Some(unsafe_backup.clone()),
+                staged_path: artifact_root.join("dest.toml"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: None,
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Prepared,
+        };
+        let jpath = dir.path().join(format!("txn-{txn_id}.toml"));
+        let journal_content = toml::to_string_pretty(&journal).unwrap();
+        fs::write(&jpath, &journal_content).unwrap();
+
+        let result = journal_owns_artifacts(dir.path(), &journal);
+        assert!(
+            result.is_err(),
+            "journal_owns_artifacts must reject symlinked-prefix reference"
+        );
+
+        // Journal must remain untouched.
+        assert_eq!(fs::read_to_string(&jpath).unwrap(), journal_content);
+        // External target must remain untouched.
+        assert!(outside.join("evidence.bin").exists());
     }
 }
