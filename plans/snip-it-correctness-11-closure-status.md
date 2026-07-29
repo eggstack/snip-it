@@ -10,9 +10,9 @@ Corrective baseline: `bf6f941842728888afd9609d8f8e8872f1796a82`
 
 Phase 11K plan commit: `214991df0fe36ebf928d14879d1ac737dd6e008e`
 
-Candidate implementation commit: pending
+Candidate implementation commit: `ec87344`
 
-Final implementation commit: pending
+Final implementation commit: `ec87344`
 
 Release process: manual crates.io publishing
 
@@ -33,13 +33,13 @@ CI topology: one Linux correctness job plus macOS and Windows smoke instances
 11. Do cleanup/finalization tests execute recovery? **YES** — tests call `recover_transaction_by_id` directly.
 12. Are sync user/device/library IDs hard assertions? **YES** — `assert!(has_user_id, ...)` etc.
 13. Is sync concurrency asserted equal to 1? **YES** — `assert_eq!(max_concurrent, 1)`.
-14. Is pending-clear generation compared to captured G? **YES** — `detail_json["generation"].is_number()`.
+14. Is pending-clear generation compared to captured G? **YES** — `event_generation == captured_generation` hard assertion.
 15. Is exactly one pending-clear event asserted? **YES** — `assert_eq!(pending_cleared_events.len(), 1)`.
 16. Does unreachable-server proof assert zero pending-clear events? **YES** — `assert_eq!(event_sink.count_events(...), 0)`.
 
 ## Remaining production blockers
 
-All Phase 11K blockers have been addressed in the source code. CI verification for the final implementation commit is pending.
+CI verification for the final implementation commit `ec87344` is pending. All source code, tests, and publish dry-runs are complete. `scripts/check.sh` passes. Publish dry-runs pass for snip-proto, snip-sync, and snip-it.
 
 ## Preserved decisions
 
