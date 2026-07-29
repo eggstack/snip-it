@@ -8,7 +8,7 @@ automated publish workflow and no crates.io token in GitHub Actions.
 - Rust 1.94+ with `cargo` on `PATH`
 - `crates.io` login: `cargo login <token>` (token stored in `~/.cargo/credentials.toml`)
 - All changes committed and pushed to `main`
-- `scripts/release-check.sh` passes locally
+- `scripts/release-check.sh verify` passes locally from a clean checkout
 
 ## Crates and dependency order
 
@@ -31,9 +31,9 @@ The workspace contains three crates published in dependency order:
 
 ## Pre-release checklist
 
-1. Run the full release check:
+1. Run the full release verification:
    ```bash
-   bash scripts/release-check.sh
+   bash scripts/release-check.sh verify
    ```
 2. Verify `cargo package --list` shows the expected files.
 3. Verify no secrets, credentials, or test-only environment variables
@@ -43,6 +43,15 @@ The workspace contains three crates published in dependency order:
 
 Publish in dependency order. Wait for each crate to resolve from
 crates.io before publishing the next.
+
+### Step-by-step flow
+
+1. Run `bash scripts/release-check.sh verify` once.
+2. For each changed crate in dependency order:
+   a. Bump and commit the version.
+   b. Run `bash scripts/release-check.sh dry-run <crate>`.
+   c. Run `cargo publish -p <crate>` manually.
+   d. Wait until crates.io indexes that version before publishing dependents.
 
 ### If only snip-it changed
 
@@ -68,13 +77,16 @@ cargo publish -p snip-it
 
 ## Dry-run validation
 
-Before publishing, validate packages locally:
+Before publishing, validate each crate with the script:
 
 ```bash
-cargo publish -p snip-proto --dry-run
-cargo publish -p snip-sync --dry-run
-cargo publish -p snip-it --dry-run
+bash scripts/release-check.sh dry-run snip-proto
+bash scripts/release-check.sh dry-run snip-sync
+bash scripts/release-check.sh dry-run snip-it
 ```
+
+The dry-run mode requires a clean working tree and runs
+`cargo publish --dry-run --locked`.
 
 ## Git tags (optional)
 

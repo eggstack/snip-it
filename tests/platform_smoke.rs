@@ -188,24 +188,32 @@ fn test_backup_and_dry_run_restore() {
     );
 }
 
-/// snip-sync --help succeeds (if binary is available in workspace build).
+/// snip-sync --help succeeds and produces useful output.
 #[test]
 fn test_snip_sync_help() {
     let (_tmp, _config_dir) = setup_test_env();
     let output = std::process::Command::new("cargo")
-        .args(["run", "--bin", "snip-sync", "--", "--help"])
+        .args([
+            "run",
+            "-p",
+            "snip-sync",
+            "--bin",
+            "snip-sync",
+            "--",
+            "--help",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
-    // snip-sync may not be built in all configurations; just check it
-    // doesn't panic. A non-zero exit is acceptable if the binary isn't built.
-    if output.status.code() != Some(101) {
-        // Not a panic
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stdout.contains("sync") || stderr.contains("sync") || !output.status.success(),
-            "snip-sync --help should produce useful output"
-        );
-    }
+    assert!(
+        output.status.success(),
+        "snip-sync --help must succeed (exit {:?}). stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("sync") || stdout.contains("Usage"),
+        "snip-sync --help should produce useful help output"
+    );
 }

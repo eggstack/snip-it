@@ -57,23 +57,19 @@ cargo run -- sync
 ### Testing
 
 ```bash
-# Run all tests (unit + integration)
-cargo test
+# Focused developer verification (same as CI runs on Linux)
+bash scripts/check.sh
 
-# Run only integration tests
-cargo test --test integration
+# Run all tests including deep integration suites
+cargo test --workspace --all-features -- --test-threads=1
 
 # Run server tests
 cargo test -p snip-sync
-
-# Format check
-cargo fmt --check
-
-# Lint
-cargo clippy --all-targets -- -D warnings
 ```
 
-CI runs the same matrix on Ubuntu, macOS, and Windows.
+CI runs `scripts/check.sh` on Linux and smoke tests on macOS/Windows.
+Deep crash, restore, and protocol suites run in `release-check.sh` before
+releases, not on every push.
 
 ### Error Handling
 
@@ -150,22 +146,28 @@ automated publish workflow and no crates.io token in GitHub Actions.
 2. **Update `CHANGELOG.md`**: move `[Unreleased]` entries under a new
    dated version heading; add a link reference at the bottom.
 3. **Open a PR** with both changes; get review and merge.
-4. **Run release checks** locally:
+4. **Run release checks** locally from a clean checkout:
    ```bash
-   bash scripts/release-check.sh
+   bash scripts/release-check.sh verify
    ```
-5. **Publish** in dependency order (see [RELEASING.md](RELEASING.md)):
+5. **Dry-run each changed crate** in dependency order:
+   ```bash
+   bash scripts/release-check.sh dry-run snip-proto   # only if changed
+   bash scripts/release-check.sh dry-run snip-sync    # only if changed
+   bash scripts/release-check.sh dry-run snip-it
+   ```
+6. **Publish** manually in dependency order (see [RELEASING.md](RELEASING.md)):
    ```bash
    cargo publish -p snip-proto   # only if snip-proto changed
    cargo publish -p snip-sync    # only if snip-sync changed
    cargo publish -p snip-it
    ```
-6. **Tag** (optional):
+7. **Tag** (optional):
    ```bash
    git tag -a vX.Y.Z -m "snip-it vX.Y.Z"
    git push origin vX.Y.Z
    ```
-7. **Verify** from a clean machine:
+8. **Verify** from a clean machine:
    ```bash
    cargo install snp --version X.Y.Z --locked
    snp --version

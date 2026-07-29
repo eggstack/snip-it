@@ -33,14 +33,8 @@ jobs:
         env:
           PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Build
-        run: cargo build --workspace --all-features
-      - name: Test
-        run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Linux checks
+        run: bash scripts/check.sh
 
   platform-smoke:
     name: Platform smoke (${{ matrix.os }})

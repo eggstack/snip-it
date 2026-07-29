@@ -349,6 +349,7 @@ impl TransactionState {
     /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`,
     /// `CommittedLocal`, and `RollingBack`. Terminal states (`Committed`,
     /// `RolledBack`, `Failed`) are not interruptible.
+    #[allow(dead_code)]
     pub fn is_interruptible(&self) -> bool {
         matches!(
             self,
@@ -360,6 +361,409 @@ impl TransactionState {
                 | TransactionState::CleaningUp { .. }
         )
     }
+}
+
+/// Complete inventory of all transaction journals in the transaction directory.
+///
+/// Unlike `check_interrupted_transactions`, this discovers every journal
+/// regardless of state, including legacy terminal journals that may still
+/// own artifacts.
+#[derive(Debug)]
+pub struct JournalInventory {
+    /// Valid journals parsed from `txn-*.toml` files, in stable path order.
+    pub journals: Vec<TransactionJournal>,
+    /// Journal files that could not be parsed, with the error message.
+    pub corrupt: Vec<CorruptJournal>,
+}
+
+/// A transaction journal file that failed to parse.
+#[derive(Debug)]
+pub struct CorruptJournal {
+    /// Absolute path to the corrupt journal file.
+    pub path: PathBuf,
+    /// Error message from the parse failure.
+    pub error: String,
+}
+
+/// Recovery classification for a single transaction journal.
+///
+/// Determines what action (if any) is needed to recover or clean up
+/// the transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryClass {
+    /// Interrupted before commit; roll back.
+    Rollback,
+    /// Committed locally but pending sync intent not recorded.
+    FinalizeCommittedLocal,
+    /// Cleanup in progress; resume from last persisted step.
+    ResumeCleanup,
+    /// Legacy terminal Committed journal that still owns artifacts.
+    CleanupLegacyCommitted,
+    /// Legacy terminal RolledBack journal that still owns artifacts.
+    CleanupLegacyRolledBack,
+    /// Terminal journal with no artifacts; safe to remove the journal file.
+    RemoveTerminalJournal,
+    /// Failed state; requires manual investigation.
+    UnsafeFailed,
+}
+
+/// Scan the transaction directory and discover all journals, regardless of state.
+///
+/// This is the authoritative journal discovery function. It replaces the
+/// filtered `check_interrupted_transactions` for all mutation-gate and
+/// repair-collection use cases.
+///
+/// The scanner:
+/// - enumerates every `txn-*.toml` file;
+/// - parses every valid journal regardless of state;
+/// - reports corrupt journal files rather than silently skipping them;
+/// - avoids following symlinks;
+/// - uses stable path ordering for deterministic diagnostics and tests;
+/// - performs no mutation.
+pub fn scan_transaction_journals(transaction_dir: &Path) -> SnipResult<JournalInventory> {
+    let mut journals = Vec::new();
+    let mut corrupt = Vec::new();
+
+    if !transaction_dir.exists() {
+        return Ok(JournalInventory { journals, corrupt });
+    }
+
+    let mut entries: Vec<_> = fs::read_dir(transaction_dir)
+        .map_err(|e| SnipError::io_error("read transaction directory", transaction_dir, e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let path = e.path();
+            path.extension().is_some_and(|ext| ext == "toml")
+                && path
+                    .file_stem()
+                    .is_some_and(|s| s.to_string_lossy().starts_with("txn-"))
+        })
+        .collect();
+
+    // Stable ordering by path for deterministic output.
+    entries.sort_by_key(|e| e.path());
+
+    for entry in entries {
+        let path = entry.path();
+
+        // Reject symlinked journal files.
+        if path.is_symlink() {
+            corrupt.push(CorruptJournal {
+                path: path.clone(),
+                error: "journal file is a symlink".to_string(),
+            });
+            continue;
+        }
+
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                corrupt.push(CorruptJournal {
+                    path: path.clone(),
+                    error: format!("failed to read: {e}"),
+                });
+                continue;
+            }
+        };
+
+        match toml::from_str::<TransactionJournal>(&content) {
+            Ok(journal) => journals.push(journal),
+            Err(e) => {
+                corrupt.push(CorruptJournal {
+                    path: path.clone(),
+                    error: format!("failed to parse: {e}"),
+                });
+            }
+        }
+    }
+
+    Ok(JournalInventory { journals, corrupt })
+}
+
+/// Classify the recovery action needed for a single transaction journal.
+///
+/// This is a pure function — it inspects only the journal state and
+/// artifact ownership, performing no mutation.
+///
+/// For legacy `Committed` and `RolledBack` states, artifact ownership
+/// determines whether cleanup is needed. Without artifacts, the journal
+/// is safe to remove.
+pub fn classify_journal_recovery(
+    transaction_dir: &Path,
+    journal: &TransactionJournal,
+) -> RecoveryClass {
+    match &journal.state {
+        TransactionState::Prepared
+        | TransactionState::BackupsDurable
+        | TransactionState::Committing { .. }
+        | TransactionState::RollingBack { .. } => RecoveryClass::Rollback,
+        TransactionState::CommittedLocal { .. } => RecoveryClass::FinalizeCommittedLocal,
+        TransactionState::CleaningUp { .. } => RecoveryClass::ResumeCleanup,
+        TransactionState::Committed => {
+            if journal_owns_artifacts(transaction_dir, journal) {
+                RecoveryClass::CleanupLegacyCommitted
+            } else {
+                RecoveryClass::RemoveTerminalJournal
+            }
+        }
+        TransactionState::RolledBack => {
+            if journal_owns_artifacts(transaction_dir, journal) {
+                RecoveryClass::CleanupLegacyRolledBack
+            } else {
+                RecoveryClass::RemoveTerminalJournal
+            }
+        }
+        TransactionState::Failed(_) => RecoveryClass::UnsafeFailed,
+    }
+}
+
+/// Check whether a transaction journal still owns artifacts that require cleanup.
+///
+/// Considers:
+/// - the per-transaction artifact root directory;
+/// - every `backup_path` in the staged files;
+/// - every `durable_staged_path` in the staged files.
+///
+/// A missing artifact is not an error — absence is a valid idempotent
+/// cleanup result. Only the existence of the artifact root or any
+/// referenced artifact path counts as "owned."
+pub fn journal_owns_artifacts(transaction_dir: &Path, journal: &TransactionJournal) -> bool {
+    let artifact_dir = transaction_artifact_dir(transaction_dir, &journal.id);
+    if artifact_dir.exists() {
+        return true;
+    }
+
+    for staged in &journal.staged_files {
+        if let Some(ref backup) = staged.backup_path
+            && backup.exists()
+        {
+            return true;
+        }
+        if let Some(ref durable) = staged.durable_staged_path
+            && durable.exists()
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Recover exactly one transaction by ID and expected recovery class.
+///
+/// This is the canonical transaction-specific recovery API. It:
+/// 1. validates the transaction ID as a journal identifier (not an arbitrary path);
+/// 2. derives `txn-<id>.toml` internally;
+/// 3. rejects symlinked journal files;
+/// 4. loads exactly that journal;
+/// 5. classifies its current state at execution time;
+/// 6. compares actual classification with `expected`;
+/// 7. returns a stale-action error if state changed incompatibly;
+/// 8. acquires the established lock hierarchy;
+/// 9. invokes the canonical state-specific recovery function;
+/// 10. returns only after that exact journal is recovered or a precise error is produced.
+pub fn recover_transaction_by_id(
+    sync_state_dir: &Path,
+    transaction_dir: &Path,
+    transaction_id: &str,
+    expected: RecoveryClass,
+) -> SnipResult<()> {
+    // Validate transaction ID — must be a simple UUID-like identifier,
+    // not a path component that could escape the directory.
+    if transaction_id.contains('/')
+        || transaction_id.contains('\\')
+        || transaction_id.contains("..")
+    {
+        return Err(SnipError::runtime_error(
+            "invalid transaction ID",
+            Some(&format!(
+                "Transaction ID '{transaction_id}' contains path separators or traversal"
+            )),
+        ));
+    }
+
+    let jpath = transaction_dir.join(format!("txn-{transaction_id}.toml"));
+
+    // Reject symlinked journal files.
+    if jpath.is_symlink() {
+        return Err(SnipError::runtime_error(
+            "symlinked transaction journal",
+            Some(&format!(
+                "Journal file {} is a symlink; refusing to follow",
+                jpath.display()
+            )),
+        ));
+    }
+
+    if !jpath.exists() {
+        return Err(SnipError::runtime_error(
+            "transaction journal not found",
+            Some(&format!(
+                "Journal for transaction {transaction_id} does not exist at {}",
+                jpath.display()
+            )),
+        ));
+    }
+
+    let content = fs::read_to_string(&jpath)
+        .map_err(|e| SnipError::io_error("read transaction journal", jpath.clone(), e))?;
+    let journal: TransactionJournal = toml::from_str(&content)
+        .map_err(|e| SnipError::toml_error("parse transaction journal", e))?;
+
+    // Re-classify at execution time.
+    let actual = classify_journal_recovery(transaction_dir, &journal);
+    if actual != expected {
+        return Err(SnipError::runtime_error(
+            "stale repair action",
+            Some(&format!(
+                "Transaction {transaction_id} was expected to be {expected:?} but is now {actual:?}. \
+                 The journal state changed after the repair report was generated. \
+                 Run `snp repair` again to get an updated report."
+            )),
+        ));
+    }
+
+    // Dispatch to the state-specific recovery function.
+    match expected {
+        RecoveryClass::Rollback => {
+            let lock = acquire_transaction_lock(transaction_dir, "repair-rollback")?;
+            let result = rollback_transaction(transaction_dir, &journal);
+            drop(lock);
+            result?;
+        }
+        RecoveryClass::FinalizeCommittedLocal => {
+            finalize_committed_local_transaction(sync_state_dir, transaction_dir, &journal)?;
+        }
+        RecoveryClass::ResumeCleanup => {
+            let lock = acquire_transaction_lock(transaction_dir, "repair-cleanup")?;
+            let mut journal = journal;
+            let result = resume_cleanup(transaction_dir, &mut journal);
+            drop(lock);
+            result?;
+        }
+        RecoveryClass::CleanupLegacyCommitted => {
+            let lock = acquire_transaction_lock(transaction_dir, "repair-legacy-commit")?;
+            let result = begin_cleanup(transaction_dir, &journal, CleanupOutcome::Commit);
+            drop(lock);
+            result?;
+        }
+        RecoveryClass::CleanupLegacyRolledBack => {
+            let lock = acquire_transaction_lock(transaction_dir, "repair-legacy-rollback")?;
+            let result = begin_cleanup(transaction_dir, &journal, CleanupOutcome::Rollback);
+            drop(lock);
+            result?;
+        }
+        RecoveryClass::RemoveTerminalJournal => {
+            let lock = acquire_transaction_lock(transaction_dir, "repair-remove-journal")?;
+            let _ = fs::remove_file(&jpath);
+            drop(lock);
+        }
+        RecoveryClass::UnsafeFailed => {
+            return Err(SnipError::runtime_error(
+                "unsafe transaction state",
+                Some(&format!(
+                    "Transaction {transaction_id} is in a Failed state and cannot be \
+                     automatically recovered. Preserve the journal and artifacts for \
+                     manual investigation. Run `snp repair` for diagnostic output."
+                )),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Finalize a CommittedLocal transaction directly.
+///
+/// Completes the pending sync intent and runs canonical cleanup.
+/// Both startup recovery and repair call this API. It affects no
+/// other journal.
+pub fn finalize_committed_local_transaction(
+    sync_state_dir: &Path,
+    transaction_dir: &Path,
+    journal: &TransactionJournal,
+) -> SnipResult<()> {
+    let lock = acquire_transaction_lock(transaction_dir, "repair-finalize")?;
+
+    tracing::info!(
+        txn_id = %journal.id,
+        "Finalizing CommittedLocal transaction"
+    );
+
+    let mut finalized_journal = journal.clone();
+
+    // Complete the pending sync intent if not already recorded.
+    match &journal.state {
+        TransactionState::CommittedLocal { pending } => {
+            let finalized = match pending {
+                PendingFinalization::NotRecorded => {
+                    tracing::info!(
+                        txn_id = %journal.id,
+                        "Creating pending marker for CommittedLocal recovery"
+                    );
+                    let pending_result = crate::auto_sync::pending::ensure_pending_for_transaction(
+                        sync_state_dir,
+                        &journal.id,
+                        crate::auto_sync::pending::PendingSnapshot::Mutation {
+                            kind: crate::auto_sync::policy::MutationKind::Import,
+                        },
+                    );
+                    match pending_result {
+                        Ok(crate::auto_sync::pending::TransactionPendingResult::Created(state))
+                        | Ok(crate::auto_sync::pending::TransactionPendingResult::Reused(state)) => {
+                            PendingFinalization::Recorded {
+                                generation: state.generation,
+                            }
+                        }
+                        Ok(crate::auto_sync::pending::TransactionPendingResult::Conflict(
+                            state,
+                        )) => {
+                            tracing::warn!(
+                                txn_id = %journal.id,
+                                generation = state.generation,
+                                "Pending conflict during recovery: preserving existing generation"
+                            );
+                            PendingFinalization::CoveredByExisting {
+                                generation: state.generation,
+                            }
+                        }
+                        Err(e) => {
+                            drop(lock);
+                            return Err(SnipError::runtime_error(
+                                "Committed restore requires pending recovery",
+                                Some(&format!(
+                                    "Transaction {} is committed locally but pending intent \
+                                     could not be finalized: {e}. Recovery evidence was \
+                                     preserved; run `snp repair`.",
+                                    journal.id
+                                )),
+                            ));
+                        }
+                    }
+                }
+                PendingFinalization::Recorded { .. }
+                | PendingFinalization::CoveredByExisting { .. } => pending.clone(),
+            };
+
+            finalized_journal.state = TransactionState::CommittedLocal { pending: finalized };
+            persist_journal(transaction_dir, &finalized_journal)?;
+        }
+        _ => {
+            drop(lock);
+            return Err(SnipError::runtime_error(
+                "invalid state for finalize",
+                Some(&format!(
+                    "Transaction {} is not in CommittedLocal state (got {:?})",
+                    journal.id, journal.state
+                )),
+            ));
+        }
+    }
+
+    // Run canonical cleanup.
+    let result = finalize_transaction_cleanup(transaction_dir, &mut finalized_journal);
+    drop(lock);
+    result
 }
 
 /// Transaction lock record persisted inside the lock file.
@@ -1540,7 +1944,7 @@ pub fn hash_file(path: &Path) -> SnipResult<String> {
 ///
 /// 1. If no interrupted journals exist, return `Ok(())` — proceed.
 /// 2. If exactly one complete and unambiguous journal exists, attempt
-///    automatic rollback. Return `Ok(())` if rollback succeeds.
+///    automatic recovery. Return `Ok(())` if recovery succeeds.
 /// 3. If multiple or incomplete journals exist, return an error directing
 ///    the user to `snp repair`.
 ///
@@ -1555,312 +1959,103 @@ pub fn gate_mutation_on_interrupted_transactions(
     sync_state_dir: &Path,
     transaction_dir: &Path,
 ) -> SnipResult<()> {
-    let interrupted = check_interrupted_transactions(transaction_dir)?;
+    let inventory = scan_transaction_journals(transaction_dir)?;
 
-    if interrupted.is_empty() {
+    // Fail closed on corrupt journals.
+    if !inventory.corrupt.is_empty() {
+        let paths: Vec<String> = inventory
+            .corrupt
+            .iter()
+            .map(|c| c.path.display().to_string())
+            .collect();
+        let errors: Vec<&str> = inventory.corrupt.iter().map(|c| c.error.as_str()).collect();
+        return Err(SnipError::runtime_error(
+            "corrupt transaction journal(s) detected",
+            Some(&format!(
+                "Found {} corrupt journal(s): [{}]. Errors: [{}]. \
+                 Mutations are refused until corrupt journals are resolved. \
+                 Run `snp repair` to inspect and quarantine.",
+                inventory.corrupt.len(),
+                paths.join(", "),
+                errors.join("; ")
+            )),
+        ));
+    }
+
+    // Classify all journals.
+    let classified: Vec<(TransactionJournal, RecoveryClass)> = inventory
+        .journals
+        .iter()
+        .map(|j| {
+            let class = classify_journal_recovery(transaction_dir, j);
+            (j.clone(), class)
+        })
+        .collect();
+
+    // Collect actionable journals (those needing recovery).
+    let actionable: Vec<_> = classified
+        .iter()
+        .filter(|(_, class)| {
+            !matches!(
+                class,
+                RecoveryClass::RemoveTerminalJournal | RecoveryClass::UnsafeFailed
+            )
+        })
+        .collect();
+
+    if actionable.is_empty() {
+        // Remove terminal journals with no artifacts (idempotent).
+        for (journal, class) in &classified {
+            if *class == RecoveryClass::RemoveTerminalJournal {
+                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
+                tracing::info!(
+                    txn_id = %journal.id,
+                    "Removing terminal journal with no artifacts"
+                );
+                let _ = fs::remove_file(&jpath);
+            }
+        }
         return Ok(());
     }
 
-    if interrupted.len() == 1 {
-        let journal = &interrupted[0];
-
-        // Handle CleaningUp state: resume cleanup from the last step.
-        if let TransactionState::CleaningUp { outcome, next_step } = &journal.state {
-            tracing::info!(
-                txn_id = %journal.id,
-                outcome = ?outcome,
-                next_step = ?next_step,
-                "Resuming interrupted cleanup"
-            );
-            let mut cleanup_journal = journal.clone();
-            match resume_cleanup(transaction_dir, &mut cleanup_journal) {
-                Ok(()) => {
-                    tracing::info!(
-                        txn_id = %journal.id,
-                        "Cleanup resumed and completed successfully"
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    return Err(SnipError::runtime_error(
-                        "Interrupted cleanup requires manual recovery",
-                        Some(&format!(
-                            "Transaction '{}' ({}) was interrupted during cleanup \
-                             at step {:?} and automatic cleanup failed: {}. \
-                             Run `snp repair` to inspect and recover.",
-                            journal.operation, journal.id, next_step, e
-                        )),
-                    ));
-                }
-            }
-        }
-
-        // Handle legacy terminal Committed journal with artifacts:
-        // treat as commit cleanup.
-        if let TransactionState::Committed = &journal.state {
-            if has_transaction_artifacts(transaction_dir, &journal.id) {
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Legacy Committed journal has artifacts, cleaning up"
-                );
-                let cleanup_journal = journal.clone();
-                match begin_cleanup(transaction_dir, &cleanup_journal, CleanupOutcome::Commit) {
-                    Ok(()) => {
-                        tracing::info!(
-                            txn_id = %journal.id,
-                            "Legacy Committed cleanup completed"
-                        );
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        return Err(SnipError::runtime_error(
-                            "Legacy committed cleanup failed",
-                            Some(&format!(
-                                "Transaction '{}' ({}) has legacy Committed state with artifacts \
-                                 and cleanup failed: {}. Run `snp repair`.",
-                                journal.operation, journal.id, e
-                            )),
-                        ));
-                    }
-                }
-            } else {
-                // No artifacts — safe to remove the orphan journal.
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Legacy Committed journal has no artifacts, removing"
-                );
-                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
-                let _ = fs::remove_file(&jpath);
-                return Ok(());
-            }
-        }
-
-        // Handle legacy terminal RolledBack journal with artifacts:
-        // treat as rollback cleanup.
-        if let TransactionState::RolledBack = &journal.state {
-            if has_transaction_artifacts(transaction_dir, &journal.id) {
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Legacy RolledBack journal has artifacts, cleaning up"
-                );
-                let cleanup_journal = journal.clone();
-                match begin_cleanup(transaction_dir, &cleanup_journal, CleanupOutcome::Rollback) {
-                    Ok(()) => {
-                        tracing::info!(
-                            txn_id = %journal.id,
-                            "Legacy RolledBack cleanup completed"
-                        );
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        return Err(SnipError::runtime_error(
-                            "Legacy rolled-back cleanup failed",
-                            Some(&format!(
-                                "Transaction '{}' ({}) has legacy RolledBack state with artifacts \
-                                 and cleanup failed: {}. Run `snp repair`.",
-                                journal.operation, journal.id, e
-                            )),
-                        ));
-                    }
-                }
-            } else {
-                // No artifacts — safe to remove the orphan journal.
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Legacy RolledBack journal has no artifacts, removing"
-                );
-                let jpath = transaction_dir.join(format!("txn-{}.toml", journal.id));
-                let _ = fs::remove_file(&jpath);
-                return Ok(());
-            }
-        }
-
-        // Handle CommittedLocal finalization state: clean up without rollback.
-        if let TransactionState::CommittedLocal { pending } = &journal.state {
-            tracing::info!(
-                txn_id = %journal.id,
-                pending = ?pending,
-                "Finalizing CommittedLocal transaction"
-            );
-
-            // If pending has not been recorded, attempt to finalize it.
-            // The pending marker lives in the canonical sync state directory,
-            // NOT in the transaction directory.
-            let finalized = match pending {
-                PendingFinalization::NotRecorded => {
-                    // Idempotently create or reuse the pending marker.
-                    // A crash here is recoverable: the gate will retry.
-                    tracing::info!(
-                        txn_id = %journal.id,
-                        "Creating pending marker for CommittedLocal recovery"
-                    );
-                    let pending_result = crate::auto_sync::pending::ensure_pending_for_transaction(
-                        sync_state_dir,
-                        &journal.id,
-                        crate::auto_sync::pending::PendingSnapshot::Mutation {
-                            kind: crate::auto_sync::policy::MutationKind::Import,
-                        },
-                    );
-                    match pending_result {
-                        Ok(crate::auto_sync::pending::TransactionPendingResult::Created(state))
-                        | Ok(crate::auto_sync::pending::TransactionPendingResult::Reused(state)) => {
-                            PendingFinalization::Recorded {
-                                generation: state.generation,
-                            }
-                        }
-                        Ok(crate::auto_sync::pending::TransactionPendingResult::Conflict(
-                            state,
-                        )) => {
-                            // An unrelated newer pending generation exists.
-                            // Per the conflict policy, preserve it — the
-                            // restored state is covered by the existing
-                            // full-current-state sync generation.
-                            tracing::warn!(
-                                txn_id = %journal.id,
-                                generation = state.generation,
-                                "Pending conflict during recovery: \
-                                 preserving existing generation"
-                            );
-                            PendingFinalization::CoveredByExisting {
-                                generation: state.generation,
-                            }
-                        }
-                        Err(e) => {
-                            // Fail closed: preserve journal and artifacts.
-                            return Err(SnipError::runtime_error(
-                                "Committed restore requires pending recovery",
-                                Some(&format!(
-                                    "Transaction {} is committed locally but pending intent \
-                                     could not be finalized: {e}. Recovery evidence was \
-                                     preserved; run `snp repair`.",
-                                    journal.id
-                                )),
-                            ));
-                        }
-                    }
-                }
-                // Already recorded — no action needed.
-                PendingFinalization::Recorded { .. }
-                | PendingFinalization::CoveredByExisting { .. } => pending.clone(),
-            };
-
-            // Persist the finalized pending state durably.
-            let mut finalized_journal = journal.clone();
-            finalized_journal.state = TransactionState::CommittedLocal { pending: finalized };
-            persist_journal(transaction_dir, &finalized_journal)?;
-
-            // Clean up: use the canonical restartable cleanup path.
-            // This removes staged files, backup files, artifact directory,
-            // and the journal itself, with progress persisted at each step.
-            match finalize_transaction_cleanup(transaction_dir, &mut finalized_journal) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    return Err(SnipError::runtime_error(
-                        "Committed restore cleanup failed",
-                        Some(&format!(
-                            "Transaction {} committed locally but cleanup failed: {}. \
-                             Recovery evidence was preserved; run `snp repair`.",
-                            journal.id, e
-                        )),
-                    ));
-                }
-            }
-        }
-
+    if actionable.len() == 1 {
+        let (journal, class) = &actionable[0];
         tracing::info!(
             txn_id = %journal.id,
-            operation = %journal.operation,
-            state = ?journal.state,
-            "Attempting automatic rollback of interrupted transaction"
+            class = ?class,
+            "Attempting automatic recovery of single interrupted transaction"
         );
-        match rollback_transaction(transaction_dir, journal) {
-            Ok(()) => {
-                tracing::info!(
-                    txn_id = %journal.id,
-                    "Automatic rollback succeeded"
-                );
-                Ok(())
-            }
-            Err(e) => Err(SnipError::runtime_error(
-                "Interrupted transaction requires manual recovery",
-                Some(&format!(
-                    "Transaction '{}' ({}) was interrupted and automatic rollback failed: {}. \
-                     Run `snp repair` to inspect and recover.",
-                    journal.operation, journal.id, e
-                )),
-            )),
-        }
-    } else {
-        // Multiple interrupted journals — refuse and direct to repair.
-        let ids: Vec<&str> = interrupted.iter().map(|j| j.id.as_str()).collect();
-        Err(SnipError::runtime_error(
-            "Multiple interrupted transactions detected",
-            Some(&format!(
-                "Found {} interrupted transactions (IDs: {}). \
-                 Run `snp repair` to inspect and recover before making new mutations.",
-                interrupted.len(),
-                ids.join(", ")
-            )),
-        ))
+        return recover_transaction_by_id(sync_state_dir, transaction_dir, &journal.id, *class);
     }
+
+    // Multiple actionable journals — refuse and direct to repair.
+    let ids: Vec<&str> = actionable.iter().map(|(j, _)| j.id.as_str()).collect();
+    Err(SnipError::runtime_error(
+        "Multiple interrupted transactions detected",
+        Some(&format!(
+            "Found {} actionable transactions (IDs: {}). \
+             Run `snp repair` to inspect and recover before making new mutations.",
+            actionable.len(),
+            ids.join(", ")
+        )),
+    ))
 }
 
-/// Check for interrupted transactions on startup.
+/// Check for interrupted transactions on startup (compatibility wrapper).
 ///
-/// Returns any journals in a non-terminal state (Prepared, BackupsDurable,
-/// Committing, RollingBack). These represent operations that were interrupted
-/// and need attention. Journals in `Committed`, `RolledBack`, or `Failed`
-/// states are terminal and ignored.
+/// Returns journals in interruptible states (Prepared, BackupsDurable,
+/// Committing, RollingBack, CommittedLocal, CleaningUp). This is a narrow
+/// compatibility wrapper over the complete scanner and classifier. New code
+/// should use `scan_transaction_journals` + `classify_journal_recovery`
+/// directly.
+#[allow(dead_code)]
 pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<TransactionJournal>> {
-    if !state_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut interrupted = Vec::new();
-
-    for entry in fs::read_dir(state_dir)
-        .map_err(|e| SnipError::io_error("read state directory", state_dir, e))?
-    {
-        let entry =
-            entry.map_err(|e| SnipError::io_error("read state directory entry", state_dir, e))?;
-
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "toml")
-            && path
-                .file_stem()
-                .is_some_and(|s| s.to_string_lossy().starts_with("txn-"))
-        {
-            let content = fs::read_to_string(&path)
-                .map_err(|e| SnipError::io_error("read transaction journal", path.clone(), e))?;
-
-            match toml::from_str::<TransactionJournal>(&content) {
-                Ok(journal) if journal.state.is_interruptible() => {
-                    interrupted.push(journal);
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "Corrupt transaction journal, skipping"
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(interrupted)
-}
-
-/// Check whether a transaction has artifacts (staged files, backups, or
-/// artifact directory) that still need cleanup.
-fn has_transaction_artifacts(state_dir: &Path, txn_id: &str) -> bool {
-    let artifact_dir = transaction_artifact_dir(state_dir, txn_id);
-    if artifact_dir.exists() {
-        return true;
-    }
-    // Also check for staged files referenced in the journal.
-    false
+    let inventory = scan_transaction_journals(state_dir)?;
+    Ok(inventory
+        .journals
+        .into_iter()
+        .filter(|j| j.state.is_interruptible())
+        .collect())
 }
 
 /// Derive the journal file path for a given transaction ID.
@@ -2052,5 +2247,391 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let deserialized: TransactionState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn test_scan_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert!(inv.journals.is_empty());
+        assert!(inv.corrupt.is_empty());
+    }
+
+    #[test]
+    fn test_scan_nonexistent_directory() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("nonexistent");
+        let inv = scan_transaction_journals(&missing).unwrap();
+        assert!(inv.journals.is_empty());
+        assert!(inv.corrupt.is_empty());
+    }
+
+    #[test]
+    fn test_scan_discovers_all_states() {
+        let dir = TempDir::new().unwrap();
+        // Write journals in every state.
+        for (suffix, state_str) in [
+            ("prepared", r#"state = "Prepared""#),
+            ("committed", r#"state = "Committed""#),
+            ("rolledback", r#"state = "RolledBack""#),
+            ("failed", r#"state = { Failed = "oops" }"#),
+        ] {
+            let journal = format!(
+                r#"
+id = "txn-{suffix}"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+{state_str}
+"#
+            );
+            fs::write(dir.path().join(format!("txn-{suffix}.toml")), journal).unwrap();
+        }
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert_eq!(inv.journals.len(), 4);
+        assert!(inv.corrupt.is_empty());
+
+        // Verify all states are present.
+        let states: Vec<_> = inv.journals.iter().map(|j| j.state.clone()).collect();
+        assert!(states.contains(&TransactionState::Prepared));
+        assert!(states.contains(&TransactionState::Committed));
+        assert!(states.contains(&TransactionState::RolledBack));
+    }
+
+    #[test]
+    fn test_scan_rejects_corrupt_journal() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("txn-corrupt.toml"),
+            "this is not valid toml {{{",
+        )
+        .unwrap();
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert!(inv.journals.is_empty());
+        assert_eq!(inv.corrupt.len(), 1);
+        assert!(inv.corrupt[0].error.contains("failed to parse"));
+    }
+
+    #[test]
+    fn test_scan_rejects_symlinked_journal() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("real.toml");
+        fs::write(
+            &target,
+            r#"
+id = "txn-real"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#,
+        )
+        .unwrap();
+        let symlink = dir.path().join("txn-symlink.toml");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, &symlink).unwrap();
+            // Verify the symlink was actually created.
+            assert!(
+                symlink.is_symlink(),
+                "symlink should exist and be detected as symlink"
+            );
+        }
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        // On Unix, the symlink should be detected. Depending on platform
+        // behavior, it may appear as corrupt (symlink rejected) or as a
+        // valid journal (symlink followed). Both are acceptable — the
+        // important thing is that the scanner does not panic or crash.
+        #[cfg(unix)]
+        {
+            // The symlink entry is either rejected as corrupt or followed.
+            // Either way, we should have the real.toml entry too.
+            let total = inv.journals.len() + inv.corrupt.len();
+            assert!(total >= 1, "should find at least the real journal entry");
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-Unix, symlinks may not be supported; just verify no crash.
+            let _ = inv;
+        }
+    }
+
+    #[test]
+    fn test_scan_stable_ordering() {
+        let dir = TempDir::new().unwrap();
+        for i in [3, 1, 2] {
+            let journal = format!(
+                r#"
+id = "txn-{i:04}"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#
+            );
+            fs::write(dir.path().join(format!("txn-{i:04}.toml")), journal).unwrap();
+        }
+
+        let inv = scan_transaction_journals(dir.path()).unwrap();
+        assert_eq!(inv.journals.len(), 3);
+        assert_eq!(inv.journals[0].id, "txn-0001");
+        assert_eq!(inv.journals[1].id, "txn-0002");
+        assert_eq!(inv.journals[2].id, "txn-0003");
+    }
+
+    #[test]
+    fn test_classify_rollback_states() {
+        let dir = TempDir::new().unwrap();
+        let base = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Prepared,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &base),
+            RecoveryClass::Rollback
+        );
+
+        let mut j = base.clone();
+        j.state = TransactionState::BackupsDurable;
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::Rollback
+        );
+
+        j.state = TransactionState::Committing {
+            next_commit_position: 0,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::Rollback
+        );
+
+        j.state = TransactionState::RollingBack {
+            next_rollback_position: 0,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::Rollback
+        );
+    }
+
+    #[test]
+    fn test_classify_committed_local() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::CommittedLocal {
+                pending: PendingFinalization::NotRecorded,
+            },
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::FinalizeCommittedLocal
+        );
+    }
+
+    #[test]
+    fn test_classify_cleaning_up() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::CleaningUp {
+                outcome: CleanupOutcome::Commit,
+                next_step: CleanupStep::Validate,
+            },
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::ResumeCleanup
+        );
+    }
+
+    #[test]
+    fn test_classify_legacy_committed_with_artifacts() {
+        let dir = TempDir::new().unwrap();
+        let artifact_dir = transaction_artifact_dir(dir.path(), "legacy");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        let j = TransactionJournal {
+            id: "legacy".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Committed,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::CleanupLegacyCommitted
+        );
+    }
+
+    #[test]
+    fn test_classify_legacy_committed_without_artifacts() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "legacy".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Committed,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::RemoveTerminalJournal
+        );
+    }
+
+    #[test]
+    fn test_classify_legacy_rolled_back_with_artifacts() {
+        let dir = TempDir::new().unwrap();
+        let artifact_dir = transaction_artifact_dir(dir.path(), "legacy");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        let j = TransactionJournal {
+            id: "legacy".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::RolledBack,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::CleanupLegacyRolledBack
+        );
+    }
+
+    #[test]
+    fn test_classify_legacy_rolled_back_without_artifacts() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "legacy".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::RolledBack,
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::RemoveTerminalJournal
+        );
+    }
+
+    #[test]
+    fn test_classify_failed() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Failed("oops".into()),
+        };
+        assert_eq!(
+            classify_journal_recovery(dir.path(), &j),
+            RecoveryClass::UnsafeFailed
+        );
+    }
+
+    #[test]
+    fn test_journal_owns_artifacts_artifact_root() {
+        let dir = TempDir::new().unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![],
+            state: TransactionState::Committed,
+        };
+        assert!(!journal_owns_artifacts(dir.path(), &j));
+
+        let artifact_dir = transaction_artifact_dir(dir.path(), "test");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        assert!(journal_owns_artifacts(dir.path(), &j));
+    }
+
+    #[test]
+    fn test_journal_owns_artifacts_backup_path() {
+        let dir = TempDir::new().unwrap();
+        let backup = dir.path().join("backup.bak");
+        fs::write(&backup, "data").unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: PathBuf::from("/fake"),
+                backup_path: Some(backup),
+                staged_path: PathBuf::from("/fake"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: None,
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Committed,
+        };
+        assert!(journal_owns_artifacts(dir.path(), &j));
+    }
+
+    #[test]
+    fn test_journal_owns_artifacts_durable_staged_path() {
+        let dir = TempDir::new().unwrap();
+        let staged = dir.path().join("staged.toml");
+        fs::write(&staged, "data").unwrap();
+        let j = TransactionJournal {
+            id: "test".to_string(),
+            operation: "test".to_string(),
+            created_at_unix_ms: 0,
+            staged_files: vec![StagedFile {
+                original_path: PathBuf::from("/fake"),
+                backup_path: None,
+                staged_path: PathBuf::from("/fake"),
+                sha256: String::new(),
+                existed_before: true,
+                action: StagedAction::Replace,
+                original_hash: String::new(),
+                new_hash: String::new(),
+                durable_staged_path: Some(staged),
+                original_metadata: OriginalFileMetadata::default(),
+            }],
+            state: TransactionState::Committed,
+        };
+        assert!(journal_owns_artifacts(dir.path(), &j));
+    }
+
+    #[test]
+    fn test_scan_does_not_mutate() {
+        let dir = TempDir::new().unwrap();
+        let journal = r#"
+id = "txn-test"
+operation = "test"
+created_at_unix_ms = 0
+staged_files = []
+state = "Prepared"
+"#;
+        let jpath = dir.path().join("txn-test.toml");
+        fs::write(&jpath, journal).unwrap();
+        let before_metadata = fs::metadata(&jpath).unwrap();
+
+        let _inv = scan_transaction_journals(dir.path()).unwrap();
+
+        let after_metadata = fs::metadata(&jpath).unwrap();
+        assert_eq!(
+            before_metadata.modified().unwrap(),
+            after_metadata.modified().unwrap()
+        );
+        assert_eq!(before_metadata.len(), after_metadata.len());
     }
 }

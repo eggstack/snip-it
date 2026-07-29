@@ -3,12 +3,15 @@
 ## Build & Test Commands
 
 ```bash
+# Focused developer verification (same as Linux CI)
+bash scripts/check.sh
+
 # Build the entire workspace (snip-it, snip-proto, snip-sync)
 cargo build --workspace
 cargo build --release
 
 # Run all tests across the workspace (unit + integration + server)
-cargo test --workspace
+cargo test --workspace --all-features -- --test-threads=1
 
 # Run only CLI integration tests
 cargo test --test integration
