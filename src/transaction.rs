@@ -2811,13 +2811,12 @@ state = "Prepared"
         let txn_id = "aaaa1111-0000-0000-0000-000000000001";
         write_test_journal(dir.path(), txn_id, TransactionState::Prepared);
 
-        let result = recover_transaction_by_id(
-            sync_dir.path(),
-            dir.path(),
-            txn_id,
-            RecoveryClass::Rollback,
+        let result =
+            recover_transaction_by_id(sync_dir.path(), dir.path(), txn_id, RecoveryClass::Rollback);
+        assert!(
+            result.is_ok(),
+            "Prepared→Rollback should succeed: {result:?}"
         );
-        assert!(result.is_ok(), "Prepared→Rollback should succeed: {result:?}");
 
         // Journal should have been cleaned up (removed after rollback+cleanup).
         assert!(
@@ -2837,18 +2836,11 @@ state = "Prepared"
         // simulating a state change after classification.
         write_test_journal(dir.path(), txn_id, TransactionState::Committed);
 
-        let result = recover_transaction_by_id(
-            sync_dir.path(),
-            dir.path(),
-            txn_id,
-            RecoveryClass::Rollback,
-        );
+        let result =
+            recover_transaction_by_id(sync_dir.path(), dir.path(), txn_id, RecoveryClass::Rollback);
         assert!(result.is_err(), "stale action should be rejected");
         let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("stale"),
-            "error should mention stale: {msg}"
-        );
+        assert!(msg.contains("stale"), "error should mention stale: {msg}");
         assert!(
             msg.contains("Rollback"),
             "error should mention expected class: {msg}"
@@ -2876,12 +2868,8 @@ state = "Prepared"
         let dir = TempDir::new().unwrap();
         let sync_dir = TempDir::new().unwrap();
 
-        let result = recover_transaction_by_id(
-            sync_dir.path(),
-            dir.path(),
-            "",
-            RecoveryClass::Rollback,
-        );
+        let result =
+            recover_transaction_by_id(sync_dir.path(), dir.path(), "", RecoveryClass::Rollback);
         assert!(result.is_err(), "empty ID should be rejected");
     }
 
@@ -2916,15 +2904,14 @@ state = "Prepared"
         fs::remove_file(&real_jpath).unwrap();
         symlink(&symlink_path, &real_jpath).unwrap();
 
-        let result = recover_transaction_by_id(
-            sync_dir.path(),
-            dir.path(),
-            txn_id,
-            RecoveryClass::Rollback,
-        );
+        let result =
+            recover_transaction_by_id(sync_dir.path(), dir.path(), txn_id, RecoveryClass::Rollback);
         assert!(result.is_err(), "symlinked journal should be rejected");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+        assert!(
+            msg.contains("symlink"),
+            "error should mention symlink: {msg}"
+        );
     }
 
     #[test]
@@ -2940,12 +2927,8 @@ state = "Prepared"
         let b_before = fs::read_to_string(journal_path(dir.path(), txn_b)).unwrap();
 
         // Recover only A.
-        let result = recover_transaction_by_id(
-            sync_dir.path(),
-            dir.path(),
-            txn_a,
-            RecoveryClass::Rollback,
-        );
+        let result =
+            recover_transaction_by_id(sync_dir.path(), dir.path(), txn_a, RecoveryClass::Rollback);
         assert!(result.is_ok(), "recovering A should succeed: {result:?}");
 
         // A should be removed (rolled back and cleaned up).
@@ -2988,7 +2971,10 @@ state = "Prepared"
         let txn_id = "aaaa1111-0000-0000-0000-000000000001";
         // Remove when no journal exists — should be idempotent success.
         let result = remove_terminal_journal(dir.path(), txn_id);
-        assert!(result.is_ok(), "removing nonexistent journal should be idempotent");
+        assert!(
+            result.is_ok(),
+            "removing nonexistent journal should be idempotent"
+        );
     }
 
     #[test]
@@ -3028,9 +3014,15 @@ state = "Prepared"
             state: TransactionState::Committed,
         };
         let result = journal_owns_artifacts(dir.path(), &j);
-        assert!(result.is_err(), "symlinked artifact root should be rejected");
+        assert!(
+            result.is_err(),
+            "symlinked artifact root should be rejected"
+        );
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+        assert!(
+            msg.contains("symlink"),
+            "error should mention symlink: {msg}"
+        );
     }
 
     #[cfg(unix)]
@@ -3069,7 +3061,10 @@ state = "Prepared"
         let result = journal_owns_artifacts(dir.path(), &j);
         assert!(result.is_err(), "symlinked backup should be rejected");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("symlink"), "error should mention symlink: {msg}");
+        assert!(
+            msg.contains("symlink"),
+            "error should mention symlink: {msg}"
+        );
     }
 
     #[cfg(unix)]
@@ -3105,7 +3100,10 @@ state = "Prepared"
             state: TransactionState::Committed,
         };
         let result = journal_owns_artifacts(dir.path(), &j);
-        assert!(result.is_err(), "symlinked durable staged should be rejected");
+        assert!(
+            result.is_err(),
+            "symlinked durable staged should be rejected"
+        );
     }
 
     #[test]

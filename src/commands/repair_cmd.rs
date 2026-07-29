@@ -449,28 +449,29 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
     }
 
     for journal in &inventory.journals {
-        let recovery_class = match crate::transaction::classify_journal_recovery(&state_dir, journal) {
-            Ok(class) => class,
-            Err(e) => {
-                // Unsafe artifact inspection failure — report as unsafe/manual.
-                report.items.push(RepairItem {
-                    action: RepairAction::RollbackTransaction {
-                        transaction_id: journal.id.clone(),
-                    },
-                    category: "unsafe".to_string(),
-                    problem: format!(
-                        "Transaction '{}' (op: {}) has unsafe artifacts: {e}",
-                        &journal.id[..8.min(journal.id.len())],
-                        journal.operation,
-                    ),
-                    fix: "Requires manual investigation — preserve journal and artifacts"
-                        .to_string(),
-                    safe: false,
-                    target_path: None,
-                });
-                continue;
-            }
-        };
+        let recovery_class =
+            match crate::transaction::classify_journal_recovery(&state_dir, journal) {
+                Ok(class) => class,
+                Err(e) => {
+                    // Unsafe artifact inspection failure — report as unsafe/manual.
+                    report.items.push(RepairItem {
+                        action: RepairAction::RollbackTransaction {
+                            transaction_id: journal.id.clone(),
+                        },
+                        category: "unsafe".to_string(),
+                        problem: format!(
+                            "Transaction '{}' (op: {}) has unsafe artifacts: {e}",
+                            &journal.id[..8.min(journal.id.len())],
+                            journal.operation,
+                        ),
+                        fix: "Requires manual investigation — preserve journal and artifacts"
+                            .to_string(),
+                        safe: false,
+                        target_path: None,
+                    });
+                    continue;
+                }
+            };
 
         let action = match recovery_class {
             crate::transaction::RecoveryClass::Rollback => RepairAction::RollbackTransaction {

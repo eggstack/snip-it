@@ -1054,8 +1054,8 @@ fn test_observer_headline_sync_e2e() {
 
     // 15. Verify the pending-clear event references the expected generation.
     if let Some(ref detail) = pending_clear_event.detail {
-        let detail_json: serde_json::Value = serde_json::from_str(detail)
-            .expect("pending_cleared detail must be valid JSON");
+        let detail_json: serde_json::Value =
+            serde_json::from_str(detail).expect("pending_cleared detail must be valid JSON");
         assert!(
             detail_json["generation"].is_number(),
             "pending_cleared must include generation"

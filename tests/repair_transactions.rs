@@ -804,10 +804,7 @@ fn test_one_success_one_failure_exits_1() {
         txn_fail,
         snip_it::transaction::RecoveryClass::Rollback,
     );
-    assert!(
-        result_fail.is_err(),
-        "stale rollback should fail"
-    );
+    assert!(result_fail.is_err(), "stale rollback should fail");
 
     // Also verify the CLI path produces partial failure (exit 1).
     // Create a fresh pair: one that will succeed, one that will fail.
