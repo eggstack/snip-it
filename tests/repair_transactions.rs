@@ -229,28 +229,6 @@ fn repair_apply_json(config_dir: &Path) -> (i32, serde_json::Value) {
     (code, json)
 }
 
-/// Run `snp repair --dry-run` (human output) and return (exit_code, stderr).
-fn repair_dry_run_human(config_dir: &Path) -> (i32, String) {
-    let output = snp_in(config_dir)
-        .args(["repair", "--dry-run"])
-        .output()
-        .unwrap();
-    let code = output.status.code().unwrap_or(1);
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    (code, stderr)
-}
-
-/// Run `snp repair --apply` (human output) and return (exit_code, stderr).
-fn repair_apply_human(config_dir: &Path) -> (i32, String) {
-    let output = snp_in(config_dir)
-        .args(["repair", "--apply"])
-        .output()
-        .unwrap();
-    let code = output.status.code().unwrap_or(1);
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    (code, stderr)
-}
-
 /// Check if a journal file exists for the given transaction ID.
 fn journal_exists(config_dir: &Path, txn_id: &str) -> bool {
     txn_dir(config_dir)
@@ -264,39 +242,19 @@ fn read_journal_state(config_dir: &Path, txn_id: &str) -> String {
     fs::read_to_string(&path).unwrap_or_default()
 }
 
-/// Count items with the given action type in the JSON report.
-fn count_action(json: &serde_json::Value, action_type: &str) -> usize {
-    json["items"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter(|i| {
-                    i["action"]
-                        .as_str()
-                        .map(|a| a.contains(action_type))
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
-
 /// Find a transaction item in the JSON report by transaction ID prefix.
 fn find_item_by_txn_id<'a>(
     json: &'a serde_json::Value,
     txn_id_prefix: &str,
 ) -> Option<&'a serde_json::Value> {
-    json["items"]
-        .as_array()
-        .and_then(|items| {
-            items.iter().find(|i| {
-                i["transaction_id"]
-                    .as_str()
-                    .map(|id| id.starts_with(txn_id_prefix))
-                    .unwrap_or(false)
-            })
+    json["items"].as_array().and_then(|items| {
+        items.iter().find(|i| {
+            i["transaction_id"]
+                .as_str()
+                .map(|id| id.starts_with(txn_id_prefix))
+                .unwrap_or(false)
         })
+    })
 }
 
 // =============================================================================
@@ -317,14 +275,20 @@ fn test_exact_rollback_isolates_selected_journal() {
     let item_a = find_item_by_txn_id(&json, txn_a);
     assert!(item_a.is_some(), "txn_a should appear in repair report");
     assert!(
-        item_a.unwrap()["action"].as_str().unwrap().contains("Rollback"),
+        item_a.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("Rollback"),
         "txn_a (Prepared) should be classified as rollback"
     );
 
     let item_b = find_item_by_txn_id(&json, txn_b);
     assert!(item_b.is_some(), "txn_b should appear in repair report");
     assert!(
-        item_b.unwrap()["action"].as_str().unwrap().contains("Rollback"),
+        item_b.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("Rollback"),
         "txn_b (BackupsDurable) should be classified as rollback"
     );
 
@@ -332,7 +296,10 @@ fn test_exact_rollback_isolates_selected_journal() {
     assert_ne!(txn_a, txn_b, "journal IDs must be distinct");
     let id_a = item_a.unwrap()["transaction_id"].as_str().unwrap();
     let id_b = item_b.unwrap()["transaction_id"].as_str().unwrap();
-    assert_ne!(id_a, id_b, "repair items must reference distinct transactions");
+    assert_ne!(
+        id_a, id_b,
+        "repair items must reference distinct transactions"
+    );
 }
 
 // B2: Exact cleanup resume with two journals changes only the selected
@@ -348,7 +315,10 @@ fn test_exact_cleanup_resume_isolates_selected_journal() {
     let item_a = find_item_by_txn_id(&json, txn_a);
     assert!(item_a.is_some(), "cleanup journal should be detected");
     assert!(
-        item_a.unwrap()["action"].as_str().unwrap().contains("ResumeCleanup"),
+        item_a.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("ResumeCleanup"),
         "cleanup journal should be classified as resume cleanup"
     );
 }
@@ -364,9 +334,15 @@ fn test_committed_local_finalization_with_second_journal() {
 
     let json = repair_dry_run_json(&config_dir);
     let item_a = find_item_by_txn_id(&json, txn_a);
-    assert!(item_a.is_some(), "committed-local journal should be detected");
     assert!(
-        item_a.unwrap()["action"].as_str().unwrap().contains("FinalizeCommittedLocal"),
+        item_a.is_some(),
+        "committed-local journal should be detected"
+    );
+    assert!(
+        item_a.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("FinalizeCommittedLocal"),
         "should be classified as finalize committed-local"
     );
 }
@@ -429,12 +405,16 @@ fn test_unknown_transaction_id_rejected() {
             .map(|id| id == "nonexistent-9999-9999-999999999999")
             .unwrap_or(false)
     });
-    assert!(unknown.is_none(), "unknown transaction ID should not appear");
+    assert!(
+        unknown.is_none(),
+        "unknown transaction ID should not appear"
+    );
     assert_eq!(read_journal_state(&config_dir, txn_real), before);
 }
 
 // B6: Malformed transaction ID cannot escape the transaction directory
 #[test]
+#[allow(clippy::collapsible_if)]
 fn test_malformed_transaction_id_rejected() {
     let (_tmp, config_dir) = setup_test_env();
 
@@ -510,7 +490,7 @@ fn test_idempotent_cleanup_on_second_invocation() {
     // Second apply should be a no-op (idempotent) — no crash, no error.
     let (code2, json2) = repair_apply_json(&config_dir);
     assert!(
-        code2 == 0 || json2["items"].as_array().map_or(true, |a| a.is_empty()),
+        code2 == 0 || json2["items"].as_array().is_none_or(|a| a.is_empty()),
         "second repair should be idempotent, got code={code2}"
     );
 }
@@ -523,9 +503,15 @@ fn test_legacy_committed_recovery_removes_artifacts_and_journal() {
     write_journal(&config_dir, txn_id, "Committed");
     create_artifacts(&config_dir, txn_id);
 
-    assert!(journal_exists(&config_dir, txn_id), "journal should exist before repair");
+    assert!(
+        journal_exists(&config_dir, txn_id),
+        "journal should exist before repair"
+    );
     let artifact_dir = txn_dir(&config_dir).join("artifacts").join(txn_id);
-    assert!(artifact_dir.exists(), "artifacts should exist before repair");
+    assert!(
+        artifact_dir.exists(),
+        "artifacts should exist before repair"
+    );
 
     let (code, _) = repair_apply_json(&config_dir);
     assert_eq!(code, 0, "legacy committed cleanup should succeed");
@@ -550,9 +536,15 @@ fn test_legacy_rolled_back_recovery_removes_artifacts_and_journal() {
     write_journal(&config_dir, txn_id, "RolledBack");
     create_artifacts(&config_dir, txn_id);
 
-    assert!(journal_exists(&config_dir, txn_id), "journal should exist before repair");
+    assert!(
+        journal_exists(&config_dir, txn_id),
+        "journal should exist before repair"
+    );
     let artifact_dir = txn_dir(&config_dir).join("artifacts").join(txn_id);
-    assert!(artifact_dir.exists(), "artifacts should exist before repair");
+    assert!(
+        artifact_dir.exists(),
+        "artifacts should exist before repair"
+    );
 
     let (code, _) = repair_apply_json(&config_dir);
     assert_eq!(code, 0, "legacy rolled-back cleanup should succeed");
@@ -723,7 +715,10 @@ fn test_cleanup_resume_starts_at_recorded_step() {
     let item = find_item_by_txn_id(&json, txn_id);
     assert!(item.is_some());
     assert!(
-        item.unwrap()["action"].as_str().unwrap().contains("ResumeCleanup"),
+        item.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("ResumeCleanup"),
         "should generate ResumeCleanup action"
     );
 
@@ -746,7 +741,10 @@ fn test_stale_action_causes_exit_1() {
     let json = repair_dry_run_json(&config_dir);
     let item = find_item_by_txn_id(&json, txn_id).unwrap();
     assert!(
-        item["action"].as_str().unwrap().contains("RollbackTransaction"),
+        item["action"]
+            .as_str()
+            .unwrap()
+            .contains("RollbackTransaction"),
         "should be rollback at this point"
     );
 
@@ -796,8 +794,7 @@ fn test_one_success_one_failure_exits_1() {
         .unwrap();
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value =
-        serde_json::from_str(&stdout).unwrap_or_default();
+    let result: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
     let applied = result["applied"].as_u64().unwrap_or(0);
     let failed = result["failed"].as_u64().unwrap_or(0);
 
@@ -872,7 +869,8 @@ fn test_json_output_has_required_fields() {
         // Transaction items must have a transaction_id.
         if item["category"].as_str() == Some("transaction") {
             assert!(
-                item["transaction_id"].is_string() || item["action"].as_str().unwrap().contains("RemoveOrphaned"),
+                item["transaction_id"].is_string()
+                    || item["action"].as_str().unwrap().contains("RemoveOrphaned"),
                 "transaction items must have a transaction_id or be orphan cleanup"
             );
         }
@@ -980,9 +978,7 @@ fn test_corrupt_journal_appears_in_repair_output() {
     let items = json["items"].as_array().unwrap();
     let corrupt = items.iter().find(|i| {
         i["category"].as_str() == Some("unsafe")
-            || i["problem"]
-                .as_str()
-                .map_or(false, |p| p.contains("Corrupt"))
+            || i["problem"].as_str().is_some_and(|p| p.contains("Corrupt"))
     });
     assert!(
         corrupt.is_some(),
@@ -1075,7 +1071,10 @@ fn test_cleanup_resume_rollback_state() {
     let item = find_item_by_txn_id(&json, txn_id);
     assert!(item.is_some(), "CleaningUp_Rollback should be detected");
     assert!(
-        item.unwrap()["action"].as_str().unwrap().contains("ResumeCleanup"),
+        item.unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .contains("ResumeCleanup"),
         "should generate ResumeCleanup for CleaningUp state"
     );
 }

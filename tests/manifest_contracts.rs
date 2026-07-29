@@ -682,7 +682,7 @@ sha256 = "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
 #[test]
 fn test_rejects_case_folded_duplicate_destinations() {
     let (_tmp, _config_dir) = setup_test_env();
-    let mut fixture = BackupFixture::valid_replace();
+    let fixture = BackupFixture::valid_replace();
 
     // Create a second library file with distinct content so hashes differ.
     let content_b = r#"[[snippets]]
@@ -1267,8 +1267,7 @@ command = "echo mutated"
     fixture.write_manifest();
 
     // Verify the manifest contains the correct hash for the new content.
-    let manifest_content =
-        fs::read_to_string(fixture.backup_dir.join("manifest.toml")).unwrap();
+    let manifest_content = fs::read_to_string(fixture.backup_dir.join("manifest.toml")).unwrap();
     let expected_hash = sha256_hex(new_content.as_bytes());
     assert!(
         manifest_content.contains(&expected_hash),

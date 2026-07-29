@@ -974,12 +974,20 @@ fn test_observer_headline_sync_e2e() {
     let start = &sync_starts[0];
     assert!(
         start.authenticated_user_id.is_some()
-            && !start.authenticated_user_id.as_deref().unwrap_or("").is_empty(),
+            && !start
+                .authenticated_user_id
+                .as_deref()
+                .unwrap_or("")
+                .is_empty(),
         "sync start must include authenticated user ID"
     );
     assert!(
         start.authenticated_device_id.is_some()
-            && !start.authenticated_device_id.as_deref().unwrap_or("").is_empty(),
+            && !start
+                .authenticated_device_id
+                .as_deref()
+                .unwrap_or("")
+                .is_empty(),
         "sync start must include authenticated device ID"
     );
     assert!(
@@ -998,10 +1006,7 @@ fn test_observer_headline_sync_e2e() {
     // 13. Assert successful finish timestamp is before or equal to pending clear.
     //     The finish must have occurred before we observed the pending clear.
     let finish_ts = sync_finishes[0].finished_at_unix_ms;
-    assert!(
-        finish_ts > 0,
-        "finish timestamp must be valid (non-zero)"
-    );
+    assert!(finish_ts > 0, "finish timestamp must be valid (non-zero)");
 
     // 14. Assert concurrency: max in-flight is at most 1.
     let max_concurrent = observer.max_concurrent();
