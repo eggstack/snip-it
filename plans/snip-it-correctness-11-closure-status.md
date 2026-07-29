@@ -8,7 +8,7 @@ Blocking plan: `plans/snip-it-correctness-11i-legacy-recovery-repair-and-verific
 
 Corrective baseline: `98acbbce29c357ae4440600dccb45a9402393e91`
 
-Final implementation commit: pending
+Final implementation commit: `6da5181` (pending verification)
 
 Release process: manual crates.io publishing
 
@@ -26,10 +26,13 @@ Phase 11I addressed the remaining correctness defects identified at the 11H base
 6. **Mutation gate refactor** — `gate_mutation_on_interrupted_transactions` uses complete scanner/classifier, fails closed on corrupt journals, and dispatches through `recover_transaction_by_id`.
 7. **Repair collection rewired** — `collect_transaction_repairs` uses the complete scanner/classifier, produces typed actions for all recovery classes.
 8. **Repair application exact** — all transaction repair variants delegate to `recover_transaction_by_id`.
-9. **Semantic fixtures computed** — four multi-fault semantic tests migrated to `BackupFixture` with recomputed hashes.
+9. **Semantic fixtures computed** — four multi-fault semantic tests migrated to `BackupFixture` with recomputed hashes; case-folded duplicate test migrated to computed hashes.
 10. **CI/local split complete** — Linux CI runs `scripts/check.sh` (focused); deep suites in `scripts/release-check.sh`.
 11. **Publish dry-run enforced** — `release-check.sh` has `verify` and `dry-run <crate>` modes; `--allow-dirty` removed.
 12. **Platform smoke strict** — `snip-sync --help` test requires success and useful output.
+13. **Repair integration tests** — `tests/repair_transactions.rs` with 20 tests proving exact recovery isolation, stale-action rejection, legacy cleanup, terminal journal removal, and JSON output contracts.
+14. **Exact sync E2E** — `test_observer_headline_sync_e2e` rewritten with exact counts (`== 1`), sequence-paired start/finish, mandatory identity fields, and ordering proof.
+15. **Fixture integrity** — two self-tests prove valid fixture reaches dry-run and modified bytes produce matching hashes.
 
 ## Closure rule
 
