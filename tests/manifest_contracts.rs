@@ -681,15 +681,28 @@ sha256 = "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
 
 #[test]
 fn test_rejects_case_folded_duplicate_destinations() {
-    let (tmp, _config_dir) = setup_test_env();
-    let backup_dir = tmp.path().join("bad-backup");
-    let libraries_dir = backup_dir.join("libraries");
-    fs::create_dir_all(&libraries_dir).unwrap();
+    let (_tmp, _config_dir) = setup_test_env();
+    let mut fixture = BackupFixture::valid_replace();
 
-    fs::write(libraries_dir.join("Default.toml"), "content-a").unwrap();
-    fs::write(libraries_dir.join("default.toml"), "content-b").unwrap();
+    // Create a second library file with distinct content so hashes differ.
+    let content_b = r#"[[snippets]]
+id = "test-2"
+description = "second snippet"
+command = "echo second"
+"#;
+    let libraries_dir = fixture.backup_dir.join("libraries");
+    fs::write(libraries_dir.join("Default.toml"), content_b).unwrap();
 
-    let dummy_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+    // Compute hashes for both files using the same sha256_hex the fixture uses.
+    let content_a = fixture.lib_content.clone();
+    let hash_a = sha256_hex(content_a.as_bytes());
+    let hash_b = sha256_hex(content_b.as_bytes());
+
+    // Manually write a manifest that declares both paths.
+    // On case-insensitive filesystems only one file exists on disk, but
+    // the manifest still declares both entries — the validator rejects
+    // the case-folded duplicate.
+    let index_hash = sha256_hex(fixture.index_content.as_bytes());
     let manifest = format!(
         r#"schema = 1
 created_at_unix_ms = 1700000000000
@@ -697,31 +710,38 @@ snip_it_version = "1.0.0"
 layout = "directory"
 
 [[files]]
-path = "Default.toml"
-kind = "library"
-size = 9
-sha256 = "{dummy_hash}"
-
-[[files]]
 path = "default.toml"
 kind = "library"
-size = 9
-sha256 = "{dummy_hash}"
+size = {}
+sha256 = "{hash_a}"
+
+[[files]]
+path = "Default.toml"
+kind = "library"
+size = {}
+sha256 = "{hash_b}"
+
+[[files]]
+path = "libraries.toml"
+kind = "index"
+size = {}
+sha256 = "{index_hash}"
 "#,
+        content_a.len(),
+        content_b.len(),
+        fixture.index_content.len(),
     );
-    fs::write(backup_dir.join("manifest.toml"), manifest).unwrap();
+    fs::write(fixture.backup_dir.join("manifest.toml"), manifest).unwrap();
 
     let output = snp_in(&_config_dir)
-        .args(["restore", backup_dir.to_str().unwrap(), "--mode", "dry-run"])
+        .args([
+            "restore",
+            fixture.path().to_str().unwrap(),
+            "--mode",
+            "dry-run",
+        ])
         .output()
         .unwrap();
-    // On case-insensitive filesystems (macOS default, Windows), "Default.toml"
-    // and "default.toml" resolve to the same path. The restore implementation
-    // may reject this as a duplicate destination even in dry-run mode.
-    // The key invariant: the operation must not succeed with ambiguous state.
-    // Either it rejects the duplicate or it treats them as the same file.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_lower = stderr.to_lowercase();
     // Dry-run must reject — case-folded duplicates must be unconditionally
     // rejected on every platform (the plan requires this test never accepts
     // success).
@@ -729,6 +749,8 @@ sha256 = "{dummy_hash}"
         !output.status.success(),
         "Case-folded duplicate destinations must be rejected, but dry-run succeeded"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lower = stderr.to_lowercase();
     assert!(
         stderr_lower.contains("duplicate")
             || stderr_lower.contains("already")
@@ -1192,4 +1214,86 @@ sha256 = "4097889236a2af26c293033feb964c4cf118c0224e0d063fec0a89e9d0569ef2"
     );
 
     assert_no_side_effects(&config_dir, &backup_dir);
+}
+
+// === 24. Fixture integrity: valid fixture reaches dry-run validation ===
+
+/// Proves that a freshly built BackupFixture produces valid manifest metadata
+/// that passes the restore validator's source-file checks in dry-run mode.
+#[test]
+fn test_fixture_valid_reaches_dry_run() {
+    let (_tmp, config_dir) = setup_test_env();
+    let fixture = BackupFixture::valid_replace();
+
+    let output = snp_in(&config_dir)
+        .args([
+            "restore",
+            fixture.path().to_str().unwrap(),
+            "--mode",
+            "dry-run",
+        ])
+        .output()
+        .unwrap();
+    // A valid fixture must pass source-file validation. It may still fail
+    // at a later stage (e.g., semantic validation), but it must not fail
+    // at size/checksum validation.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("size mismatch") && !stderr.contains("checksum mismatch"),
+        "valid fixture must not fail at size/checksum validation, got: {stderr}"
+    );
+}
+
+// === 25. Fixture integrity: modified bytes produce matching hashes ===
+
+/// Proves that modifying fixture bytes and rebuilding the manifest produces
+/// correct size and SHA-256 values that match the actual file content.
+#[test]
+fn test_fixture_rebuild_computes_correct_hashes() {
+    let (_tmp, config_dir) = setup_test_env();
+    let mut fixture = BackupFixture::valid_replace();
+
+    // Mutate the library content.
+    let new_content = r#"[[snippets]]
+id = "mutated-1"
+description = "mutated snippet"
+command = "echo mutated"
+"#;
+    let libraries_dir = fixture.backup_dir.join("libraries");
+    fs::write(libraries_dir.join("default.toml"), new_content).unwrap();
+    fixture.lib_content = new_content.to_string();
+
+    // Rebuild the manifest (write_manifest recomputes all hashes).
+    fixture.write_manifest();
+
+    // Verify the manifest contains the correct hash for the new content.
+    let manifest_content =
+        fs::read_to_string(fixture.backup_dir.join("manifest.toml")).unwrap();
+    let expected_hash = sha256_hex(new_content.as_bytes());
+    assert!(
+        manifest_content.contains(&expected_hash),
+        "manifest must contain the computed hash for mutated content"
+    );
+
+    // Verify the size matches.
+    assert!(
+        manifest_content.contains(&format!("size = {}", new_content.len())),
+        "manifest must contain the correct size for mutated content"
+    );
+
+    // The restore must pass source-file checks with the rebuilt manifest.
+    let output = snp_in(&config_dir)
+        .args([
+            "restore",
+            fixture.path().to_str().unwrap(),
+            "--mode",
+            "dry-run",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("size mismatch") && !stderr.contains("checksum mismatch"),
+        "rebuilt manifest must match actual file content, got: {stderr}"
+    );
 }

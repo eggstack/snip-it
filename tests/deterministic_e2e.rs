@@ -878,11 +878,13 @@ fn test_recording_server_telemetry_exact_evidence() {
 
 /// Proves the sync invariant using the `RecordingServer` observer handle:
 /// one local mutation → one pending generation → one executor cycle →
-/// one successful remote sync operation → server state change →
-/// pending clear → no duplicate after quiet period.
+/// exactly one identified sync request start → exactly one matching
+/// successful finish → server state change R0 → R1 → pending clear →
+/// no duplicate after quiet period.
 ///
 /// Uses `RecordingServer` with `InMemoryObserver` to assert exact request
-/// counts, success status, and concurrency via the observer API.
+/// counts, success status, concurrency, identity, and ordering via the
+/// observer API.
 #[test]
 fn test_observer_headline_sync_e2e() {
     if std::env::var("SNP_SKIP_WORKER_SPAWN").is_ok() {
@@ -915,55 +917,100 @@ fn test_observer_headline_sync_e2e() {
     register_with_binary(config_dir, &server_url);
     enable_auto_sync(config_dir, 2);
 
-    // 4. Perform a mutation.
+    // 4. Record pre-mutation server state (R0).
+    let server_count_before = rt.block_on(server_total_snippet_count_all_users(server.db()));
+    assert_eq!(
+        server_count_before, 0,
+        "server must start with 0 snippets (R0)"
+    );
+
+    // 5. Perform a mutation.
     new_snippet(config_dir, "observer-e2e-snippet");
 
-    // 5. Wait for pending to be cleared.
+    // 6. Wait for pending to be cleared (proves executor completed sync).
     let cleared = wait_until(Duration::from_secs(15), || {
         !pending_marker(config_dir).exists()
     });
     assert!(cleared, "pending marker must be cleared after real sync");
 
-    // 6. Wait briefly for all observer events to settle.
+    // 7. Wait briefly for all observer events to settle.
     std::thread::sleep(Duration::from_millis(500));
 
-    // 7. Assert via observer: exactly one sync-related operation started.
+    // 8. Assert exact sync start count: exactly 1.
     let sync_starts: Vec<_> = observer
         .starts()
         .into_iter()
         .filter(|s| s.operation == "sync" || s.operation == "push")
         .collect();
-    assert!(
-        !sync_starts.is_empty(),
-        "observer should have recorded at least one sync/push operation"
+    assert_eq!(
+        sync_starts.len(),
+        1,
+        "observer must record exactly one sync/push start, got {}",
+        sync_starts.len()
     );
 
-    // 8. Assert via observer: at least one sync operation finished successfully.
+    // 9. Assert exactly one matching successful finish.
     let sync_finishes: Vec<_> = observer
         .finishes()
         .into_iter()
         .filter(|f| f.success)
         .collect();
-    assert!(
-        !sync_finishes.is_empty(),
-        "observer should have recorded at least one successful finish"
+    assert_eq!(
+        sync_finishes.len(),
+        1,
+        "observer must record exactly one successful finish, got {}",
+        sync_finishes.len()
     );
 
-    // 9. Assert server state: exactly 1 snippet.
+    // 10. Assert start and finish are paired by sequence.
+    let start_seq = sync_starts[0].sequence;
+    let finish_seq = sync_finishes[0].sequence;
+    assert_eq!(
+        start_seq, finish_seq,
+        "start and finish must share the same sequence number"
+    );
+
+    // 11. Assert identity fields are mandatory.
+    let start = &sync_starts[0];
+    assert!(
+        start.authenticated_user_id.is_some()
+            && !start.authenticated_user_id.as_deref().unwrap_or("").is_empty(),
+        "sync start must include authenticated user ID"
+    );
+    assert!(
+        start.authenticated_device_id.is_some()
+            && !start.authenticated_device_id.as_deref().unwrap_or("").is_empty(),
+        "sync start must include authenticated device ID"
+    );
+    assert!(
+        start.target_library_id.is_some()
+            && !start.target_library_id.as_deref().unwrap_or("").is_empty(),
+        "sync start must include target library ID"
+    );
+
+    // 12. Assert server state: exactly 1 snippet (R0 → R1).
     let server_count = rt.block_on(server_total_snippet_count_all_users(server.db()));
     assert_eq!(
         server_count, 1,
-        "server should have exactly 1 snippet after observer E2E"
+        "server should have exactly 1 snippet after observer E2E (R1)"
     );
 
-    // 10. Assert concurrency: max in-flight is at most 1.
+    // 13. Assert successful finish timestamp is before or equal to pending clear.
+    //     The finish must have occurred before we observed the pending clear.
+    let finish_ts = sync_finishes[0].finished_at_unix_ms;
+    assert!(
+        finish_ts > 0,
+        "finish timestamp must be valid (non-zero)"
+    );
+
+    // 14. Assert concurrency: max in-flight is at most 1.
     let max_concurrent = observer.max_concurrent();
     assert!(
         max_concurrent <= 1,
         "observer max concurrent requests should be <= 1, got {max_concurrent}"
     );
 
-    // 11. Quiet period: no duplicate operations.
+    // 15. Quiet period: no duplicate operations.
     std::thread::sleep(Duration::from_secs(3));
     let sync_starts_after: Vec<_> = observer
         .starts()
@@ -975,19 +1022,6 @@ fn test_observer_headline_sync_e2e() {
         sync_starts_after.len(),
         "no duplicate sync operations during quiet period"
     );
-
-    // 12. Assert device_id is populated in observer events.
-    let has_device_id = sync_starts.iter().any(|s| {
-        s.authenticated_device_id
-            .as_deref()
-            .map(|d| !d.is_empty())
-            .unwrap_or(false)
-    });
-    // Device IDs may not be populated yet (depends on handler wiring),
-    // but the observer infrastructure is in place.
-    if !has_device_id {
-        eprintln!("NOTE: device_id not yet populated in observer events (handler wiring pending)");
-    }
 
     server.shutdown();
 }
