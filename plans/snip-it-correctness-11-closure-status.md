@@ -1,58 +1,40 @@
 # Phase 11 Closure Status
 
-Phase 11 status: COMPLETE
+Phase 11 status: INCOMPLETE
 
-Correctness program status: CLOSED
+Correctness program status: REOPENED
 
-Blocking plan: `plans/snip-it-correctness-11j-recovery-serialization-proof-and-reporting-closure.md`
+Blocking plan: `plans/snip-it-correctness-11k-literal-safety-and-proof-closure.md`
 
-Corrective baseline: `36a142bbc0ae9340f83e177ef4b9252ce9c58145`
+Corrective baseline: `bf6f941842728888afd9609d8f8e8872f1796a82`
 
-Phase 11J plan commit: `dab3bcf0229cf99024e659f95af71e0b9bf7850a`
+Phase 11K plan commit: `214991df0fe36ebf928d14879d1ac737dd6e008e`
 
-Final implementation commit: `eaf0492`
+Candidate implementation commit: pending
+
+Final implementation commit: pending
 
 Release process: manual crates.io publishing
 
 CI topology: one Linux correctness job plus macOS and Windows smoke instances
 
-## Phase 11J implementation status
+## Why Phase 11 was reopened
 
-All eight workstreams (A–H) are implemented and committed. The final
-implementation commit is `eaf0492`.
+Phase 11J was marked complete after its test suites and local release checks were reported passing. Subsequent semantic source review found that several explicit plan requirements had been replaced with weaker behavior or weaker tests.
 
-### Verified locally
+Passing the current tests is therefore not sufficient closure evidence. Phase 11K requires literal implementation of the remaining safety contracts and tests that execute and strictly assert those contracts.
 
-- `bash scripts/check.sh` passes (fmt, clippy, build, unit tests, platform smoke, manifest contracts, destination permissions, executor noop)
-- `cargo test --test repair_transactions --features test-support` passes (40 tests)
-- `cargo test --test transaction_crash_recovery --features test-support` passes (26 tests)
-- `cargo test --test cleanup_crash_failpoints --features test-support` passes (19 tests)
-- `cargo test --test deterministic_e2e --features test-support` passes (18 tests)
-- `cargo test --lib transaction --all-features` passes (43 tests)
-- `cargo test --test restore_security --features test-support` passes (25 tests)
-- `bash scripts/release-check.sh verify` passes (all 6 phases)
-- `bash scripts/release-check.sh dry-run snip-proto` passes
-- `bash scripts/release-check.sh dry-run snip-sync` passes
-- `bash scripts/release-check.sh dry-run snip-it` passes
+## Remaining production blockers
 
-### Verified in CI
-
-- Linux correctness: PASS
-- macOS platform smoke: PASS
-- Windows platform smoke: PASS
-
-## Closure record
-
-All Phase 11J defects are resolved and all Section 12 verification gates pass:
-
-1. ~~Recovery is not authoritative under lock~~ — Resolved: lock acquired before journal load/classification
-2. ~~Failed journals do not block mutation~~ — Resolved: UnsafeFailed blocks mutation gate
-3. ~~Terminal journal deletion errors are ignored~~ — Resolved: `remove_terminal_journal` helper propagates errors
-4. ~~Artifact ownership inspection is not fail-closed~~ — Resolved: `journal_owns_artifacts` and `classify_journal_recovery` are fallible
-5. ~~Repair JSON is emitted before application~~ — Resolved: report emitted after all work completes
-6. ~~Exact recovery tests are classification-only or permissive~~ — Resolved: tests use exact recovery API with exact deterministic assertions
-7. ~~Headline sync proof is not operation-specific~~ — Resolved: paired by sequence, pending-clear event emitted and captured
-8. ~~Release clean-tree ignores untracked files~~ — Resolved: `git status --porcelain=v1 --untracked-files=all`
+1. **Scanned journal identity is not fully validated.** Parsed internal IDs are not required to match the `txn-<id>.toml` filename, malformed IDs can enter repair collection, and untrusted IDs are still byte-sliced in diagnostics.
+2. **Artifact safety validation is not universal.** Interrupted rollback, committed-local, and cleanup states can be classified without checking every referenced artifact path.
+3. **Missing out-of-root references can bypass containment checks.** Containment is currently checked only for paths that exist; lexical safety must be validated before existence.
+4. **Rollback reads backups without immediate containment revalidation.** Exact recovery must revalidate a backup under lock immediately before reading it.
+5. **Startup terminal removal bypasses exact locked recovery.** The mutation gate directly removes terminal journals after an unlocked scan instead of reloading and reclassifying under the transaction lock.
+6. **Parent-directory fsync failure is ignored.** The helper discards the actual Unix `fsync` return value and can report success without proven directory durability.
+7. **Several recovery tests remain classification-only or permissive.** Cleanup resume and committed-local tests do not execute recovery, the partial-failure test does not produce a failure, and the scanner symlink test accepts following the symlink.
+8. **The exact sync proof remains weaker than required.** User/device/library identity is diagnostic rather than mandatory, clear count and generation are not exact, concurrency is only bounded, and unreachable behavior does not assert zero clear events.
+9. **The prior closure record claimed CI and semantic completion that cannot be established from the current source review.** Final closure must use the exact final implementation commit and observed results for that commit.
 
 ## Preserved decisions
 
@@ -62,33 +44,37 @@ All Phase 11J defects are resolved and all Section 12 verification gates pass:
 - no resident client daemon;
 - TOML as authoritative local state;
 - typed restartable transaction cleanup;
-- complete transaction journal discovery;
 - generation-conditional executor-owned pending clear;
 - one focused Linux correctness job;
 - macOS and Windows smoke-only jobs;
 - deep crash and protocol verification performed locally;
 - manual dependency-ordered crates.io publishing;
 - no automated publish or GitHub release workflow;
-- no new evidence registry or orchestration framework.
+- no new evidence registry, daemon, database, or orchestration framework.
 
-## Closure verification
+## Closure requirements
 
-All criteria from Section 14 of the Phase 11J plan are satisfied:
+Phase 11 may be marked `COMPLETE` and the correctness program `CLOSED` only when all Phase 11K acceptance criteria are literally satisfied, including:
 
-- exact transaction recovery loads and classifies the selected journal under lock;
-- stale expected actions are rejected under lock without mutation;
-- unrelated journals remain unchanged during exact recovery;
-- any failed journal blocks new mutation and remains preserved;
-- terminal journal deletion errors propagate through one canonical durable helper;
-- artifact ownership inspection rejects symlinked and out-of-root paths;
-- repair JSON is emitted after application with truthful counters and status;
-- exact recovery, stale-action, and partial-failure tests deterministically execute their named scenarios;
-- one exact sync E2E pairs the sync start and finish by sequence and proves finish occurs before the matching pending generation is cleared;
-- unreachable-server behavior preserves pending work;
-- release verification rejects untracked files;
-- `scripts/check.sh` and `scripts/release-check.sh verify` pass on the same final commit;
-- Linux correctness, macOS smoke, and Windows smoke pass for that commit;
-- per-crate Cargo publish dry-runs pass for changed crates;
-- actual crates.io publishing remains manual;
-- no automated release workflow exists;
-- the final status records the actual final implementation commit and lists no unresolved production blocker.
+- scanner filename/internal journal identity validation;
+- safe Unicode-aware transaction ID formatting;
+- artifact validation for every recovery state;
+- lexical containment checks before existence checks;
+- rollback revalidation immediately before backup reads;
+- exact locked recovery for every terminal journal removal;
+- propagated Unix parent-directory fsync errors;
+- deterministic CLI partial failure with exit 1, applied 1, and failed 1;
+- execution-based isolation tests for rollback, cleanup resume, committed-local finalization, legacy cleanup, and terminal removal;
+- strict symlink rejection tests;
+- exactly one identified sync start and matching successful finish;
+- exactly one matching pending-clear event for captured generation G;
+- exact concurrency of one for the measured sync;
+- unreachable-server proof with zero pending-clear events;
+- semantic source-review checklist completed with no negative answers;
+- `scripts/check.sh` and `scripts/release-check.sh verify` passing from a clean checkout;
+- per-crate publish dry-runs passing for changed crates;
+- Linux correctness, macOS smoke, and Windows smoke observed passing for the exact final implementation commit;
+- actual crates.io publishing remaining manual;
+- no automated release workflow.
+
+Until then, the repository is not correctness-closed or release-ready.
