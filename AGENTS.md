@@ -74,6 +74,13 @@ cargo test --test executor_noop_success --features test-support -- --test-thread
 cargo test --test cleanup_crash_failpoints --features test-support -- --test-threads=1
 cargo test --test platform_smoke --features test-support -- --test-threads=1
 
+# Run Phase 11J test suites (requires test-support feature)
+cargo test --test repair_transactions --features test-support -- --test-threads=1
+cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
+cargo test --test cleanup_crash_failpoints --features test-support -- --test-threads=1
+cargo test --test deterministic_e2e --features test-support -- --test-threads=1
+cargo test --lib transaction --all-features -- --test-threads=1
+
 # Run production seam proof (no test-support feature)
 bash scripts/ci/test-production-seams.sh
 
@@ -205,6 +212,9 @@ New transactions enter `CleaningUp { outcome, next_step }` before any terminal s
 
 ### Transaction lock (PID/nonce/start_token)
 The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. On macOS, `proc_pidinfo` with `PROC_PIDTBSDINFO` is used for process start time. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
+
+### Phase 11J: Recovery serialization and artifact safety
+`recover_transaction_by_id` acquires the transaction lock BEFORE loading or classifying the journal, eliminating the TOCTOU window. Classification is now fallible (`SnipResult<RecoveryClass>`) — artifact ownership inspection rejects symlinked roots, symlinked backups, and out-of-root paths. `UnsafeFailed` journals block the mutation gate. Terminal journal removal uses `remove_terminal_journal` helper with fsync. Repair JSON is emitted after all work completes with stable `exit_status` field. The `transaction` module is `pub` under `test-support` feature for integration tests that exercise recovery APIs directly.
 
 **Phase 11C fix**: Lock ownership verification now uses `ProcessIdentity::observe(existing.pid)` to compare the observed owner's start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse.
 

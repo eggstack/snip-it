@@ -10,28 +10,49 @@ Corrective baseline: `36a142bbc0ae9340f83e177ef4b9252ce9c58145`
 
 Phase 11J plan commit: `dab3bcf0229cf99024e659f95af71e0b9bf7850a`
 
-Final implementation commit: pending
+Final implementation commit: `ee59fc0`
 
 Release process: manual crates.io publishing
 
 CI topology: one Linux correctness job plus macOS and Windows smoke instances
 
-## Current assessment
+## Phase 11J implementation status
 
-Phase 11I materially improved complete journal discovery, legacy terminal recovery, exact transaction identifiers in repair actions, semantic restore fixtures, focused CI, local deep verification, and per-crate publish dry-run handling.
+All eight workstreams (A–H) are implemented and committed. The candidate
+final implementation commit is `ee59fc0`.
 
-Direct review of the Phase 11I implementation found remaining correctness and proof defects. Phase 11J is now authoritative for remaining work.
+### Verified locally
+
+- `bash scripts/check.sh` passes (fmt, clippy, build, unit tests, platform smoke, manifest contracts, destination permissions, executor noop)
+- `cargo test --test repair_transactions --features test-support` passes (40 tests)
+- `cargo test --test transaction_crash_recovery --features test-support` passes (26 tests)
+- `cargo test --test cleanup_crash_failpoints --features test-support` passes (19 tests)
+- `cargo test --test deterministic_e2e --features test-support` passes (18 tests)
+
+### Verified in CI
+
+- Linux correctness: PASS
+- macOS platform smoke: PASS
+- Windows platform smoke: PASS
+
+### Remaining verification (not yet run)
+
+- `bash scripts/release-check.sh verify` — full local release verification
+- Per-crate publish dry-runs (`dry-run snip-proto`, `dry-run snip-sync`, `dry-run snip-it`)
+- Final closure status update (Phase 11 → COMPLETE, correctness program → CLOSED)
 
 ## Remaining blockers
 
-1. **Recovery is not authoritative under lock** — `recover_transaction_by_id` currently reads and classifies the journal before acquiring the transaction lock. The journal must be loaded, classified, and compared with the expected action under the established lock hierarchy.
-2. **Failed journals do not block mutation** — `UnsafeFailed` journals are excluded from actionable recovery and can coexist with a successful mutation gate. Any failed journal must fail closed and remain preserved for manual investigation.
-3. **Terminal journal deletion errors are ignored** — exact recovery and the mutation gate discard `remove_file` failures. One canonical durable removal helper must propagate errors.
-4. **Artifact ownership inspection is not fail-closed** — boolean existence checks do not reject symlinked, out-of-root, or otherwise unsafe artifact paths. Inspection and recovery classification must become fallible.
-5. **Repair JSON is emitted before application** — `repair --apply --json` can report stale zero counters because output occurs before repairs and final status computation.
-6. **Exact recovery tests are classification-only or permissive** — several tests inspect dry-run output rather than execute one selected recovery action. Stale-action and partial-failure tests do not deterministically exercise their named conditions.
-7. **The headline sync proof is not operation-specific or directly ordered** — registration finish events can be counted with sync events, and no matching pending-clear event is captured to prove successful finish precedes clear.
-8. **Release clean-tree enforcement ignores untracked files** — `scripts/release-check.sh` must reject tracked, staged, and untracked changes while allowing ignored build outputs.
+All Phase 11J defects are resolved:
+
+1. ~~Recovery is not authoritative under lock~~ — Resolved: lock acquired before journal load/classification
+2. ~~Failed journals do not block mutation~~ — Resolved: UnsafeFailed blocks mutation gate
+3. ~~Terminal journal deletion errors are ignored~~ — Resolved: `remove_terminal_journal` helper propagates errors
+4. ~~Artifact ownership inspection is not fail-closed~~ — Resolved: `journal_owns_artifacts` and `classify_journal_recovery` are fallible
+5. ~~Repair JSON is emitted before application~~ — Resolved: report emitted after all work completes
+6. ~~Exact recovery tests are classification-only or permissive~~ — Resolved: tests use exact recovery API
+7. ~~Headline sync proof is not operation-specific~~ — Resolved: paired by sequence, pending-clear event emitted and captured
+8. ~~Release clean-tree ignores untracked files~~ — Resolved: `git status --porcelain=v1 --untracked-files=all`
 
 ## Preserved decisions
 
