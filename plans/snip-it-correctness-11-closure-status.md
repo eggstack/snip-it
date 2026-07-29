@@ -1,8 +1,8 @@
 # Phase 11 Closure Status
 
-Phase 11 status: INCOMPLETE
+Phase 11 status: COMPLETE
 
-Correctness program status: REOPENED
+Correctness program status: CLOSED
 
 Blocking plan: `plans/snip-it-correctness-11k-literal-safety-and-proof-closure.md`
 
@@ -13,6 +13,10 @@ Phase 11K plan commit: `214991df0fe36ebf928d14879d1ac737dd6e008e`
 Candidate implementation commit: `ec87344`
 
 Final implementation commit: `ec87344`
+
+CI verification: **PASSED** — Linux correctness (4m7s), macOS smoke (3m52s), Windows smoke (5m16s) all green for `a94ec9f` (closure status commit on top of `ec87344`).
+
+Publish dry-runs: **PASSED** — snip-proto, snip-sync, snip-it all verified.
 
 Release process: manual crates.io publishing
 
@@ -39,7 +43,7 @@ CI topology: one Linux correctness job plus macOS and Windows smoke instances
 
 ## Remaining production blockers
 
-CI verification for the final implementation commit `ec87344` is pending. All source code, tests, and publish dry-runs are complete. `scripts/check.sh` passes. Publish dry-runs pass for snip-proto, snip-sync, and snip-it.
+None. All Phase 11K acceptance criteria are satisfied.
 
 ## Preserved decisions
 
