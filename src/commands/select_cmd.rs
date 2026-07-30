@@ -4,7 +4,8 @@ use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use crate::library::Snippet;
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq)]
 enum OutputMode {
@@ -12,12 +13,59 @@ enum OutputMode {
     Expanded,
 }
 
-/// Removes the output file on cancellation if it is a regular non-symlink file.
-/// Ignores cleanup errors — cancellation must not become a deletion primitive.
-fn cleanup_output_file_on_cancel(path: &PathBuf) {
-    if path.is_file() && !path.is_symlink() {
-        let _ = std::fs::remove_file(path);
+/// Writes `content` to `target` via a private temp file in the same directory
+/// and atomically renames it into place.
+///
+/// This avoids two distinct failure modes:
+/// - A pre-existing caller-owned file is never deleted or truncated by this
+///   command; the temp file is freshly created with `O_EXCL` and any failure
+///   before the final rename removes only that temp file.
+/// - A racing symlink swap at `target` cannot redirect the write, because the
+///   write happens to a fresh, `create_new`-created temp file (which fails on
+///   a symlink at the temp path) and the final `rename` replaces a symlink at
+///   `target` rather than following it.
+fn write_selection_atomically(target: &Path, content: &[u8]) -> SnipResult<()> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| {
+        crate::error::SnipError::io_error("create output file parent", parent.to_path_buf(), e)
+    })?;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = parent.join(format!(".snp-select-{pid}-{nanos}.tmp"));
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .truncate(false)
+            .open(&temp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(crate::error::SnipError::io_error(
+            "write selection to temp file",
+            temp_path,
+            e,
+        ));
     }
+
+    if let Err(e) = std::fs::rename(&temp_path, target) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(crate::error::SnipError::io_error(
+            "install selection to target",
+            target.to_path_buf(),
+            e,
+        ));
+    }
+    Ok(())
 }
 
 fn process_snippet(
@@ -45,6 +93,10 @@ fn process_snippet(
 ///
 /// When `output_file` is provided, writes the selection to that file instead
 /// of stdout. Used by shell integration functions for lossless transport.
+///
+/// The output file is written via an atomic temp-file rename so a
+/// pre-existing caller-owned file is preserved if the selection is
+/// cancelled, and a racing symlink at the target cannot redirect the write.
 pub fn run(
     filter: Option<String>,
     library: Option<String>,
@@ -78,12 +130,7 @@ pub fn run(
     )?;
 
     match (selection_outcome, cancelled.get(), selected_command.take()) {
-        (SelectionOutcome::Cancelled, _, _) | (_, true, _) => {
-            if let Some(path) = &output_file {
-                cleanup_output_file_on_cancel(path);
-            }
-            Ok(CommandOutcome::Cancelled)
-        }
+        (SelectionOutcome::Cancelled, _, _) | (_, true, _) => Ok(CommandOutcome::Cancelled),
         (SelectionOutcome::ExecutionFailed { .. }, _, _) => {
             Err(crate::error::SnipError::runtime_error(
                 "Internal contract error",
@@ -92,29 +139,7 @@ pub fn run(
         }
         (SelectionOutcome::Selected, false, Some(command)) => {
             if let Some(path) = output_file {
-                if path.is_symlink() {
-                    return Err(crate::error::SnipError::io_error(
-                        "write selection to file",
-                        path.clone(),
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "output file is a symlink; refusing to follow",
-                        ),
-                    ));
-                }
-                if path.is_dir() {
-                    return Err(crate::error::SnipError::io_error(
-                        "write selection to file",
-                        path.clone(),
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "output file path is a directory",
-                        ),
-                    ));
-                }
-                std::fs::write(&path, command).map_err(|e| {
-                    crate::error::SnipError::io_error("write selection to file", path.clone(), e)
-                })?;
+                write_selection_atomically(&path, command.as_bytes())?;
             } else {
                 println!("{command}");
             }
@@ -124,5 +149,84 @@ pub fn run(
             "Internal contract error",
             Some("SelectionOutcome::Selected but no command produced — this is a bug"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_write_selection_creates_file_with_content() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("out.txt");
+        write_selection_atomically(&target, b"selected-command").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"selected-command");
+    }
+
+    #[test]
+    fn test_write_selection_overwrites_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("out.txt");
+        std::fs::write(&target, "old content").unwrap();
+        write_selection_atomically(&target, b"new content").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new content");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_selection_replaces_symlink_with_regular_file() {
+        // A racing symlink at the target path must not redirect the write.
+        // rename(2) does not follow symlinks at the destination, so the
+        // symlink itself is replaced by our newly-written regular file.
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("out.txt");
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, b"sensitive data").unwrap();
+        std::os::unix::fs::symlink(&real, &target).unwrap();
+
+        write_selection_atomically(&target, b"new content").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new content");
+        assert_eq!(
+            std::fs::read(&real).unwrap(),
+            b"sensitive data",
+            "the symlink target must not be modified"
+        );
+        assert!(
+            !target.is_symlink(),
+            "target must be a regular file after the write, not a symlink"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_selection_does_not_follow_symlink_at_target() {
+        // If the target is a symlink to a file, rename(2) replaces the
+        // symlink itself rather than following it. Verify the destination
+        // file's content is preserved and only the symlink is replaced.
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("link.txt");
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, b"preserved-target-content").unwrap();
+        std::os::unix::fs::symlink(&real, &target).unwrap();
+
+        write_selection_atomically(&target, b"selection").unwrap();
+
+        // The target symlink is gone (replaced by a regular file).
+        assert!(!target.is_symlink());
+        assert_eq!(std::fs::read(&target).unwrap(), b"selection");
+        // The destination the symlink used to point at is untouched.
+        assert_eq!(std::fs::read(&real).unwrap(), b"preserved-target-content");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_selection_creates_parent_dirs() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("nested").join("sub").join("out.txt");
+        write_selection_atomically(&target, b"content").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"content");
     }
 }

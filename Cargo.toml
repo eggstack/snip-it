@@ -46,6 +46,15 @@ exclude = [
 name = "snp"
 path = "src/main.rs"
 
+# The repair_transactions integration test exercises the public transaction
+# recovery API, which is only re-exported under the `test-support` feature.
+# Gate the target so that `cargo test --workspace --all-targets` (without
+# `--all-features`) can compile cleanly.
+[[test]]
+name = "repair_transactions"
+path = "tests/repair_transactions.rs"
+required-features = ["test-support"]
+
 [package.metadata.docs.rs]
 all-features = false
 default-target = "x86_64-unknown-linux-gnu"

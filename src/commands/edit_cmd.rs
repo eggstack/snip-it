@@ -33,12 +33,23 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
 
     let resolved_editor = resolve_editor(&editor)?;
 
-    Command::new(&resolved_editor)
+    let status = Command::new(&resolved_editor)
         .arg(&path)
         .status()
         .map_err(|e| {
             SnipError::command_error(&resolved_editor, vec![path.display().to_string()], e)
         })?;
+
+    if !status.success() {
+        return Err(SnipError::runtime_error(
+            "Editor failed",
+            Some(&format!(
+                "EDITOR '{}' exited with non-zero status {:?}. The library was not modified.",
+                resolved_editor,
+                status.code()
+            )),
+        ));
+    }
 
     // Auto-sync trigger: notify after editor closes (Workstream B2).
     // Output-only edits (run_edit_output) are local-only and do not trigger sync.

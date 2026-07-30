@@ -69,27 +69,28 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let config = snip_sync::Config::load();
 
     // Check for stale PID file before starting
-    if let Some(old_pid) = snip_sync::process::read_pid() {
-        if snip_sync::process::is_running(old_pid) {
+    if let Some(old_record) = snip_sync::process::read_pid_record() {
+        if snip_sync::process::record_still_matches(&old_record) {
             return Err(format!(
                 "Server already running with PID {}. Use 'snip-sync stop' first.",
-                old_pid
+                old_record.pid
             )
             .into());
         }
-        tracing::warn!("Found stale PID file for process {}. Removing.", old_pid);
+        tracing::warn!(
+            "Found stale PID file for process {}. Removing.",
+            old_record.pid
+        );
         snip_sync::process::remove_pid();
     }
 
-    snip_sync::process::write_pid().map_err(|e| format!("Failed to write PID file: {}", e))?;
+    let _pid_guard =
+        snip_sync::process::write_pid().map_err(|e| format!("Failed to write PID file: {}", e))?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let result = rt.block_on(serve_inner(config));
-
-    // Clean up PID file on shutdown
-    snip_sync::process::remove_pid();
-
-    result
+    // PID file removal is owned by the guard; it only unlinks the file if
+    // the on-disk identity still matches the one we recorded at startup.
+    rt.block_on(serve_inner(config))
 }
 
 async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error::Error>> {
@@ -433,11 +434,16 @@ fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let pid = snip_sync::process::read_pid().ok_or("No PID file found. Is the server running?")?;
+    let record =
+        snip_sync::process::read_pid_record().ok_or("No PID file found. Is the server running?")?;
+    let pid = record.pid;
 
-    if !snip_sync::process::is_running(pid) {
+    // Refuse to signal unless the recorded identity still matches a live
+    // process. This guards against PID reuse — a recycled PID with a
+    // different start token is not the server which wrote the PID file.
+    if !snip_sync::process::record_still_matches(&record) {
         println!(
-            "Process {} is not running. Cleaning up stale PID file.",
+            "Process {} is not running (or its identity no longer matches the PID file). Cleaning up stale PID file.",
             pid
         );
         snip_sync::process::remove_pid();
@@ -487,9 +493,9 @@ fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    match snip_sync::process::read_pid() {
-        Some(pid) if snip_sync::process::is_running(pid) => {
-            println!("Stopping existing server (PID {})...", pid);
+    match snip_sync::process::read_pid_record() {
+        Some(record) if snip_sync::process::record_still_matches(&record) => {
+            println!("Stopping existing server (PID {})...", record.pid);
             cmd_stop(force)?;
         }
         _ => {

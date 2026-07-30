@@ -147,6 +147,15 @@ impl RateLimiter {
         // Lock released — allow() calls can proceed during DB writes.
 
         let now = now_secs();
+        // Batch all upserts in a single transaction. This avoids the
+        // fsync-per-row overhead of writing snapshot rows one at a time.
+        let mut tx = match pool.begin().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::warn!("Failed to begin rate-limit persistence transaction: {}", e);
+                return;
+            }
+        };
         for (key, window_start, count) in &snapshot {
             if let Err(e) = sqlx::query(
                 "INSERT INTO rate_limits (peer_ip, window_start, request_count) VALUES (?, ?, ?)
@@ -160,10 +169,12 @@ impl RateLimiter {
             .bind(key)
             .bind(*window_start as i64)
             .bind(*count as i64)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             {
                 tracing::warn!("Failed to save rate limit entry for {}: {}", key, e);
+                let _ = tx.rollback().await;
+                return;
             }
         }
 
@@ -171,10 +182,15 @@ impl RateLimiter {
         if let Err(e) = sqlx::query("DELETE FROM rate_limits WHERE ? - window_start > ?")
             .bind(now as i64)
             .bind((WINDOW_SECS * 2) as i64)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
         {
             tracing::warn!("Failed to prune expired rate limit entries: {}", e);
+            let _ = tx.rollback().await;
+            return;
+        }
+        if let Err(e) = tx.commit().await {
+            tracing::warn!("Failed to commit rate-limit persistence transaction: {}", e);
         }
     }
 
@@ -215,15 +231,19 @@ impl RateLimiter {
         if windows.len() >= MAX_ENTRIES {
             windows.retain(|_, entry| now.saturating_sub(entry.window_start) < window_secs);
         }
-        // If still over limit after eviction, drop oldest half
+        // If still over limit after eviction, drop oldest half. Using
+        // select_nth_unstable_by to find the median is O(n) instead of the
+        // O(n log n) full sort, avoiding a latency cliff during a
+        // high-cardinality request burst.
         if windows.len() >= MAX_ENTRIES {
-            let mut entries: Vec<_> = windows
+            let mut entries: Vec<(String, u64)> = windows
                 .iter()
                 .map(|(k, e)| (k.clone(), e.window_start))
                 .collect();
-            entries.sort_by_key(|(_, start)| *start);
-            let drop_count = entries.len() / 2;
-            for (k, _) in entries.into_iter().take(drop_count) {
+            let mid = entries.len() / 2;
+            entries.select_nth_unstable_by(mid, |a, b| a.1.cmp(&b.1));
+            // Drop the entries below the median (the oldest half).
+            for (k, _) in entries.drain(..mid) {
                 windows.remove(&k);
             }
         }

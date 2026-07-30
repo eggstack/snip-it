@@ -687,6 +687,7 @@ mod tests {
             pid: std::process::id(),
             started_at_unix_ms: 5000,
             nonce: "test".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(execution_lock_path(dir.path()), serialized).unwrap();
@@ -854,6 +855,7 @@ mod tests {
             pid: std::process::id(),
             started_at_unix_ms: 1000,
             nonce: "test-nonce".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(execution_lock_path(dir.path()), serialized).unwrap();
@@ -872,6 +874,7 @@ mod tests {
             pid: dead_pid,
             started_at_unix_ms: 1000,
             nonce: "dead".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(execution_lock_path(dir.path()), serialized).unwrap();
@@ -909,6 +912,7 @@ mod tests {
             pid: std::process::id(),
             started_at_unix_ms: 2000,
             nonce: "wnonce".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(lock_path(dir.path()), serialized).unwrap();
@@ -927,6 +931,7 @@ mod tests {
             pid: dead_pid,
             started_at_unix_ms: 2000,
             nonce: "dead".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(lock_path(dir.path()), serialized).unwrap();

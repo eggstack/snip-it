@@ -358,6 +358,30 @@ fn test_select_output_file_cancel_cleanup() {
 }
 
 #[test]
+fn test_select_output_file_cancel_preserves_caller_file() {
+    let (tmp, config_dir) = setup_test_env();
+    let output_path = tmp.path().join("test_output.txt");
+    let sentinel = b"caller-owned content that must not be deleted\n";
+    fs::write(&output_path, sentinel).unwrap();
+
+    let (code, _output) = run_snp_pty(
+        &["select", "--output-file", output_path.to_str().unwrap()],
+        &config_dir,
+        b"\x1bq",
+    );
+    assert_eq!(code, 4, "snp select --output-file with Esc+q should exit 4");
+    assert!(
+        output_path.exists(),
+        "pre-existing caller-owned output file must survive cancellation"
+    );
+    let preserved = fs::read(&output_path).unwrap();
+    assert_eq!(
+        preserved, sentinel,
+        "pre-existing caller-owned output file contents must be preserved byte-for-byte on cancel"
+    );
+}
+
+#[test]
 fn test_select_expanded_cancel_returns_exit_4() {
     let (_tmp, config_dir) = setup_test_env();
     let (code, output) = run_snp_pty(

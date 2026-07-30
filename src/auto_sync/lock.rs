@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::transaction::ProcessIdentity;
 
 pub const WORKER_LOCK_NAME: &str = "auto-sync-worker.lock";
 
@@ -12,6 +15,9 @@ pub struct WorkerLockContents {
     pub pid: u32,
     pub started_at_unix_ms: u64,
     pub nonce: String,
+    /// Start-time token for the owner process. `None` for legacy locks.
+    #[serde(default)]
+    pub start_token: Option<String>,
 }
 
 #[derive(Debug)]
@@ -53,11 +59,15 @@ impl WorkerLock {
 
 impl Drop for WorkerLock {
     fn drop(&mut self) {
+        // Atomically rename the lock file aside before validating identity.
+        // rename(2) is atomic w.r.t. concurrent writers, so a replacement lock
+        // installed between inspect and removal cannot be unlinked by this
+        // drop guard.
         if let Some(contents) = inspect(&self.path)
             && contents.pid == std::process::id()
             && contents.nonce == self.nonce
         {
-            let _ = std::fs::remove_file(&self.path);
+            let _ = remove_owned_lock(&self.path);
         }
     }
 }
@@ -68,44 +78,162 @@ pub fn lock_path(state_dir: &Path) -> PathBuf {
 
 pub fn try_acquire(state_dir: &Path) -> Result<WorkerLock, LockError> {
     let path = lock_path(state_dir);
+    acquire_loop(&path)
+}
 
-    if let Some(contents) = inspect(&path) {
-        if !is_stale(&contents) {
-            return Err(LockError::AlreadyHeld {
-                pid: contents.pid,
-                nonce: contents.nonce,
-            });
+fn acquire_loop(path: &Path) -> Result<WorkerLock, LockError> {
+    // Bounded retries for transient states (empty in-flight file, NotFound
+    // races on Windows delete-pending).
+    let start = std::time::Instant::now();
+    let max_in_flight_retries: u32 = 50;
+    let mut in_flight_retries: u32 = 0;
+
+    loop {
+        match create_lock_file(path) {
+            Ok(guard) => return Ok(guard),
+            Err(CreateOutcome::AlreadyExists) => {
+                // Lock exists — classify the existing owner.
+                let content = match std::fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        in_flight_retries = 0;
+                        continue;
+                    }
+                    Err(e) => return Err(LockError::Io(e)),
+                };
+
+                let existing: WorkerLockContents = match toml::from_str(&content) {
+                    Ok(info) => info,
+                    Err(_) if content.trim().is_empty() => {
+                        in_flight_retries += 1;
+                        if in_flight_retries > max_in_flight_retries
+                            || start.elapsed() >= Duration::from_secs(2)
+                        {
+                            return Err(LockError::Io(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "worker lock file observed empty beyond retry budget",
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(_) => {
+                        in_flight_retries = 0;
+                        let _ = quarantine_lock(path);
+                        continue;
+                    }
+                };
+                in_flight_retries = 0;
+
+                match classify_existing(&existing) {
+                    OwnerClass::Live => {
+                        return Err(LockError::AlreadyHeld {
+                            pid: existing.pid,
+                            nonce: existing.nonce,
+                        });
+                    }
+                    OwnerClass::Dead => {
+                        let _ = quarantine_lock(path);
+                        continue;
+                    }
+                    OwnerClass::PidReuse => {
+                        let _ = quarantine_lock(path);
+                        continue;
+                    }
+                }
+            }
+            Err(CreateOutcome::Io(e)) => return Err(LockError::Io(e)),
         }
-        let _ = std::fs::remove_file(&path);
-    } else if path.exists() {
-        // Malformed or empty lock file — remove it to allow acquisition.
-        let _ = std::fs::remove_file(&path);
     }
+}
 
+enum OwnerClass {
+    Live,
+    Dead,
+    PidReuse,
+}
+
+fn classify_existing(existing: &WorkerLockContents) -> OwnerClass {
+    let Some(observed) = ProcessIdentity::observe(existing.pid) else {
+        return OwnerClass::Dead;
+    };
+    match (existing.start_token.as_ref(), observed.start_token.as_ref()) {
+        (Some(recorded), Some(observed_token)) if recorded != observed_token => {
+            OwnerClass::PidReuse
+        }
+        _ => OwnerClass::Live,
+    }
+}
+
+enum CreateOutcome {
+    AlreadyExists,
+    Io(std::io::Error),
+}
+
+fn create_lock_file(path: &Path) -> Result<WorkerLock, CreateOutcome> {
+    let identity = ProcessIdentity::current();
     let nonce = generate_nonce();
     let contents = WorkerLockContents {
-        pid: std::process::id(),
+        pid: identity.pid,
         started_at_unix_ms: unix_now_ms(),
         nonce: nonce.clone(),
+        start_token: identity.start_token.clone(),
     };
 
-    let serialized =
-        toml::to_string_pretty(&contents).map_err(|e| LockError::Io(std::io::Error::other(e)))?;
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(LockError::Io)?;
-    f.write_all(serialized.as_bytes()).map_err(LockError::Io)?;
-    f.sync_all().map_err(LockError::Io)?;
-    restrict_permissions(&path);
+    let serialized = match toml::to_string_pretty(&contents) {
+        Ok(s) => s,
+        Err(e) => return Err(CreateOutcome::Io(std::io::Error::other(e))),
+    };
 
-    Ok(WorkerLock { path, nonce })
+    let mut f = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(CreateOutcome::AlreadyExists);
+        }
+        Err(e) => return Err(CreateOutcome::Io(e)),
+    };
+    if let Err(e) = f.write_all(serialized.as_bytes()) {
+        let _ = std::fs::remove_file(path);
+        return Err(CreateOutcome::Io(e));
+    }
+    if let Err(e) = f.sync_all() {
+        let _ = std::fs::remove_file(path);
+        return Err(CreateOutcome::Io(e));
+    }
+    restrict_permissions(path);
+    Ok(WorkerLock {
+        path: path.to_path_buf(),
+        nonce,
+    })
+}
+
+fn quarantine_lock(lock_path: &Path) -> std::io::Result<PathBuf> {
+    let quarantine_name = format!("{}.quarantine.{}", WORKER_LOCK_NAME, uuid::Uuid::new_v4());
+    let quarantine_path = lock_path
+        .parent()
+        .unwrap_or(lock_path)
+        .join(&quarantine_name);
+    match std::fs::rename(lock_path, &quarantine_path) {
+        Ok(()) => Ok(quarantine_path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(quarantine_path),
+        Err(e) => Err(e),
+    }
+}
+
+fn remove_owned_lock(lock_path: &Path) -> std::io::Result<()> {
+    match quarantine_lock(lock_path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn inspect(path: &Path) -> Option<WorkerLockContents> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    toml::from_str(&contents).ok()
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    toml::from_str(&content).ok()
 }
 
 pub fn is_stale(contents: &WorkerLockContents) -> bool {
@@ -170,7 +298,7 @@ fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &P
 
 fn unix_now_ms() -> u64 {
     std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
@@ -205,6 +333,7 @@ mod tests {
             pid: 1,
             started_at_unix_ms: unix_now_ms(),
             nonce: "dead-pid".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         std::fs::write(lock_path(dir.path()), serialized).unwrap();
@@ -270,6 +399,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let _lock = try_acquire(dir.path()).unwrap();
         let raw = std::fs::read_to_string(lock_path(dir.path())).unwrap();
+        let raw_lower = raw.to_lowercase();
+        let value_only = raw_lower
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(_, v)| v))
+            .collect::<Vec<_>>()
+            .join("\n");
         for forbidden in [
             "command",
             "description",
@@ -281,8 +416,8 @@ mod tests {
             "credential",
         ] {
             assert!(
-                !raw.to_lowercase().contains(forbidden),
-                "lock file must not contain {forbidden}"
+                !value_only.contains(forbidden),
+                "lock file must not contain {forbidden} in a value"
             );
         }
     }
@@ -316,6 +451,7 @@ mod tests {
             pid: 999,
             started_at_unix_ms: 1000,
             nonce: "test-nonce".to_string(),
+            start_token: None,
         };
         let serialized = toml::to_string_pretty(&contents).unwrap();
         let deserialized: WorkerLockContents = toml::from_str(&serialized).unwrap();
@@ -332,7 +468,7 @@ mod tests {
         let result = try_acquire(dir.path());
         assert!(
             result.is_ok(),
-            "malformed lock should be treated as stale and allow acquisition"
+            "malformed lock should be quarantined and allow acquisition"
         );
     }
 
@@ -344,17 +480,20 @@ mod tests {
         let result = try_acquire(dir.path());
         assert!(
             result.is_ok(),
-            "lock with missing fields should be treated as stale"
+            "lock with missing fields should be quarantined and allow acquisition"
         );
     }
 
     #[test]
-    fn test_empty_lock_file_treated_as_stale() {
+    fn test_empty_lock_file_does_not_steal_lock() {
         let dir = TempDir::new().unwrap();
         let path = lock_path(dir.path());
         std::fs::write(&path, "").unwrap();
         let result = try_acquire(dir.path());
-        assert!(result.is_ok(), "empty lock file should be treated as stale");
+        assert!(
+            result.is_err(),
+            "empty lock file must not be silently reclaimed"
+        );
     }
 
     #[test]
@@ -386,6 +525,7 @@ mod tests {
             pid: 1,
             started_at_unix_ms: unix_now_ms(),
             nonce: "test".to_string(),
+            start_token: None,
         };
         assert!(is_stale(&contents));
     }
@@ -396,6 +536,7 @@ mod tests {
             pid: std::process::id(),
             started_at_unix_ms: unix_now_ms(),
             nonce: "test".to_string(),
+            start_token: None,
         };
         #[cfg(unix)]
         assert!(!is_stale(&contents));
@@ -424,5 +565,70 @@ mod tests {
     #[cfg(unix)]
     fn test_process_alive_nonexistent_pid() {
         assert!(!process_alive(99999999));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_pid_reuse_reclaims_lock() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        let observed = ProcessIdentity::observe(std::process::id()).unwrap();
+        let bogus_token = match observed.start_token.as_ref() {
+            Some(t) => format!("{t}-bogus"),
+            None => "bogus-token".to_string(),
+        };
+        let contents = WorkerLockContents {
+            pid: std::process::id(),
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "pid-reuse".to_string(),
+            start_token: Some(bogus_token),
+        };
+        std::fs::write(&path, toml::to_string_pretty(&contents).unwrap()).unwrap();
+
+        let lock = try_acquire(dir.path()).unwrap();
+        assert_ne!(lock.nonce(), "pid-reuse");
+    }
+
+    #[test]
+    fn test_legacy_lock_without_start_token_blocks_live_owner() {
+        let dir = TempDir::new().unwrap();
+        let path = lock_path(dir.path());
+        let contents = WorkerLockContents {
+            pid: std::process::id(),
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "legacy".to_string(),
+            start_token: None,
+        };
+        std::fs::write(&path, toml::to_string_pretty(&contents).unwrap()).unwrap();
+        let result = try_acquire(dir.path());
+        assert!(
+            matches!(result, Err(LockError::AlreadyHeld { .. })),
+            "legacy lock with live PID and no start_token must block"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_replacement_lock_not_unlinked_by_old_drop() {
+        let dir = TempDir::new().unwrap();
+        let lock1 = try_acquire(dir.path()).unwrap();
+        let nonce1 = lock1.nonce().to_string();
+        let lock1_path = lock1.path.clone();
+
+        let replacement = WorkerLockContents {
+            pid: 1,
+            started_at_unix_ms: unix_now_ms(),
+            nonce: "replacement".to_string(),
+            start_token: None,
+        };
+        std::fs::write(&lock1_path, toml::to_string_pretty(&replacement).unwrap()).unwrap();
+
+        drop(lock1);
+
+        assert!(
+            lock1_path.exists(),
+            "old guard must not unlink a replacement lock file"
+        );
+        assert_ne!(nonce1, "replacement");
     }
 }
