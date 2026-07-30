@@ -31,6 +31,7 @@ pub(crate) mod library;
 pub(crate) mod local_data;
 pub(crate) mod migration;
 pub(crate) mod output;
+pub mod process_file_lock;
 pub mod proto;
 pub mod selector;
 pub(crate) mod status_snapshot;
