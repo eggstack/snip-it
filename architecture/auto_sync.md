@@ -297,6 +297,10 @@ integrity = "crc32:441c462e"
 
 ## Cross-Process Locking
 
+### Kernel-backed Authority
+
+All auto-sync locks and the `snip-sync` server singleton lock acquire mutual exclusion via the kernel. On Unix the kernel guarantees that `flock(LOCK_EX | LOCK_NB)` is granted to at most one process at a time; on Windows `LockFileEx` provides the same guarantee over a fixed byte range. The persistent lock file remains on disk and may contain stale metadata — file presence is not authoritative. See [persistence.md](persistence.md#process-file-lock) for the shared primitive.
+
 ### Pending Transaction Lock
 
 **File:** `~/.config/snp/auto-sync-pending.lock`
@@ -309,10 +313,9 @@ nonce = "abc-12345-def"
 created_at_unix_ms = 1700000000000
 ```
 
-- Atomic acquisition via `OpenOptions::create_new(true)`.
-- **Release 5E corrective:** ownership-checked drop — only removes lock if PID and nonce still match.
-- Dead-owner reclaim via `kill -0`; live owners never stolen regardless of age.
-- Bounded retry with 1-5ms jitter up to 500ms.
+- Kernel-backed acquisition (no `create_new` ownership primitive).
+- **Post-11L:** identity metadata is diagnostic only; no PID-liveness reclaim path runs against the lock.
+- Bounded retry (poll every 100 ms up to the caller-provided timeout).
 - 0o600 permissions on Unix.
 
 ### Worker Execution Lock
@@ -327,12 +330,12 @@ started_at_unix_ms = 1700000000000
 nonce = "abc-12345-def"
 ```
 
-- Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
-- **Release 5 corrective:** the parent never acquires the lock. The lock exists for the worker; the parent only inspects it (via `lock::process_alive`) to detect liveness.
-- Stale detection: `kill -0 pid` on Unix (process dead → stale). **Release 5E corrective:** live PID means owned regardless of age — no age-based stale classification.
-- **Release 5E corrective:** `Drop` reads the current lock record and removes it only when PID and nonce match the guard. An old guard never removes a replacement owner's lock.
+- Kernel-backed acquisition — only one worker wins.
+- **Post-11L:** `Drop` releases the kernel lock and closes the file. The persistent lock file is never unlinked or renamed; an old guard cannot remove a replacement owner's lock.
+- **Post-11L:** empty or malformed disk metadata is overwritten by the next acquirer without inspection.
+- **Release 5 corrective:** the parent never acquires the lock. The lock exists for the worker; the parent only inspects it (via `lock::process_alive` / `lock::inspect`) for status output.
 - Restrictive permissions (0o600 on Unix).
-- Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the lock and exactly one wins.
+- Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the kernel lock and exactly one wins.
 
 ### Sync Execution Lock (Release 5F)
 
@@ -346,11 +349,10 @@ started_at_unix_ms = 1700000000000
 nonce = "abc-12345-def"
 ```
 
-- Atomic acquisition via `OpenOptions::create_new(true)`.
+- Kernel-backed acquisition (no `create_new` ownership primitive).
 - **Worker:** uses `try_acquire` — if the lock is busy, exits with `NothingToDo` (preserves pending for later).
-- **Foreground callers** (`snp sync`, `--sync` flag): uses `wait_acquire` with a bounded timeout (default 30s) — polls every 250ms, returns `Timeout` error if still busy.
-- Ownership-checked `Drop`: only removes the lock file if PID and nonce match.
-- Stale detection: dead PIDs (via `kill -0`) are reclaimed automatically.
+- **Foreground callers** (`snp sync`, `--sync` flag): uses `wait_acquire` with a bounded timeout (default 30s) — polls every 100 ms, returns `Timeout` error if still busy.
+- **Post-11L:** no canonical-file deletion occurs during acquisition; stale metadata is overwritten by the next acquirer.
 - 0o600 permissions on Unix. No secrets, commands, or snippet content.
 
 ## Worker Lifecycle

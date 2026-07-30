@@ -6,6 +6,7 @@
 
 - [Overview](#overview)
 - [Atomic Write Primitive](#atomic-write-primitive)
+- [Process File Lock](#process-file-lock)
 - [Transaction Boundary](#transaction-boundary)
 - [Validation Framework](#validation-framework)
 - [Backup Format](#backup-format)
@@ -112,6 +113,60 @@ pub struct AtomicWriteReport {
 ### Tests
 
 `tests/persistence_unit.rs` exercises the full atomic write pipeline including durability classes, permission preservation, symlink rejection, and temp file cleanup on failure.
+
+---
+
+## Process File Lock
+
+### Location
+
+`src/process_file_lock.rs`
+
+### Purpose
+
+A single authoritative cross-process mutual-exclusion primitive built on the operating system's advisory file-lock facility. The post-11L corrective pass replaced the previous create-new / quarantine / PID-liveness reclaim model with a kernel-backed design so that:
+
+- Mutual exclusion is owned by the kernel, not by PID-file inspection.
+- The persistent lock file remains on disk and may contain stale metadata.
+- `Drop` releases the kernel lock and closes the file but does not unlink or rename.
+- A killed owner releases automatically through kernel process teardown.
+
+### Authority
+
+The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFileEx` over a fixed byte range on Windows guarantee that at most one process holds the lock at a time. Unsupported platforms return [`ProcessFileLockError::UnsupportedPlatform`](../../src/process_file_lock.rs) rather than silently weakening exclusion.
+
+### Acquisition Order
+
+1. Ensure the parent directory exists.
+2. Open the persistent lock file in read/write/create mode.
+3. Attempt the kernel lock nonblocking.
+4. If busy, read owner metadata best-effort for diagnostics and return `Busy`.
+5. After the kernel lock succeeds, truncate the file.
+6. Write the new identity record (PID, nonce, start token, acquired timestamp).
+7. `sync_all` and tighten permissions to `0o600` where supported.
+8. Return the guard.
+
+If metadata publication fails after kernel acquisition, the kernel lock is released before the error is returned, and no caller is left believing it owns the lock.
+
+### Identity Metadata
+
+[`LockIdentity`](../../src/process_file_lock.rs) is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
+
+### Wrappers
+
+Three thin wrappers in `src/auto_sync/` consume the primitive and preserve the existing public types and error variants:
+
+- `auto_sync::lock::WorkerLock` — wraps the worker lock acquisition.
+- `auto_sync::execution_lock::SyncExecutionLock` — wraps the sync execution lock with `try_acquire` and `wait_acquire` semantics.
+- `auto_sync::pending_lock::PendingTxnGuard` — short-lived pending-marker mutex.
+
+`snip-sync`'s `server_lock::ServerLock` provides the same primitive for the server singleton at `<state_dir>/snip-sync.server.lock`. The server holds it for the full runtime; a crash releases the kernel lock automatically.
+
+### Lifecycle Invariants
+
+- No `.quarantine.*` files are produced during normal ownership transitions.
+- The persistent file is never unlinked or renamed by `Drop`.
+- A repeated cycle of acquire/drop on the same path leaves only the canonical file.
 
 ---
 
@@ -571,8 +626,8 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 
 - All sensitive files created with 0o600 permissions
 - Config directory created with 0o700 permissions
-- Lock files use O_EXCL (create_new) for atomic acquisition
-- Auto-sync lock ownership verified via nonce (pid-nanos-seq) to prevent PID reuse theft; transaction lock also uses nonce + PID liveness check for ownership verification and stale-lock reclaim
+- Lock files use the kernel-backed process file lock for atomic acquisition; ownership is never reused based on PID liveness inspection
+- Auto-sync lock ownership uses start-token + nonce diagnostics only; the kernel state is the sole mutual-exclusion authority
 - Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
 - Transaction artifact path validation rejects `Component::ParentDir` during lexical normalization and rejects missing children below symlinked intermediate components
 - Transaction journals use UUID-based filenames and O_EXCL locks
@@ -584,6 +639,12 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 | File | Subject |
 |------|---------|
 | `src/utils/atomic.rs` | Atomic write primitive, durability classes, temp file guard |
+| `src/process_file_lock.rs` | Kernel-backed cross-process file lock primitive |
+| `src/auto_sync/lock.rs` | Auto-sync worker lock wrapper |
+| `src/auto_sync/execution_lock.rs` | Auto-sync execution lock wrapper |
+| `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
+| `snip-sync/src/server_lock.rs` | snip-sync server singleton kernel lock |
+| `snip-sync/src/process.rs` | PID record parser, atomic publication, identity-checked cleanup |
 | `src/transaction.rs` | Transaction boundary, journaling, lock, rollback |
 | `src/commands/validate_cmd.rs` | Validation framework, diagnostic model, 12+ check categories |
 | `src/commands/backup_cmd.rs` | Backup manifest, secret redaction, SHA-256 integrity |
@@ -592,4 +653,6 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 | `src/migration.rs` | Schema versioning, migration trait, TOML roundtripping |
 | `docs/IDENTITY_CONTRACT.md` | Snippet and library identity lifecycle rules |
 | `tests/persistence_unit.rs` | Atomic write and durability class tests |
+| `tests/process_lock_concurrency.rs` | Cross-process kernel-lock concurrency tests |
+| `tests/edit_mutation_notify.rs` | `snp edit` byte-change-driven mutation notification tests |
 | `tests/identity_contract.rs` | Identity lifecycle contract tests |

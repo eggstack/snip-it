@@ -359,9 +359,11 @@ auto-sync never rolls back or corrupts a successful local save.
 
 A durable pending marker (`auto-sync-pending.toml`) records the latest
 mutation generation; the worker only clears state matching its observed
-generation, preventing stale workers from clobbering fresh mutations. A
-PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness
-detection prevents concurrent worker executions across processes.
+generation, preventing stale workers from clobbering fresh mutations.
+Worker, execution, and pending locks (`auto-sync-worker.lock`,
+`auto-sync-execution.lock`, `auto-sync-pending.lock`) are backed by the
+kernel's advisory file-lock facility — the kernel alone arbitrates; lock
+files persist on disk and may contain stale metadata.
 
 ## CLI overview
 
