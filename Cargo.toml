@@ -46,6 +46,13 @@ exclude = [
 name = "snp"
 path = "src/main.rs"
 
+# Cross-process lock test helper binary. Only enabled under `test-support`
+# so production builds do not include this code path.
+[[bin]]
+name = "process_lock_helper"
+path = "tests/bin/process_lock_helper.rs"
+required-features = ["test-support"]
+
 # The repair_transactions integration test exercises the public transaction
 # recovery API, which is only re-exported under the `test-support` feature.
 # Gate the target so that `cargo test --workspace --all-targets` (without
@@ -53,6 +60,11 @@ path = "src/main.rs"
 [[test]]
 name = "repair_transactions"
 path = "tests/repair_transactions.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "process_lock_concurrency"
+path = "tests/process_lock_concurrency.rs"
 required-features = ["test-support"]
 
 [package.metadata.docs.rs]

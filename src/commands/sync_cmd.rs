@@ -766,9 +766,7 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
     if pending_txn_lock.exists() {
         let stale = match std::fs::read_to_string(&pending_txn_lock) {
             Ok(contents) => {
-                match toml::from_str::<crate::auto_sync::execution_lock::ExecutionLockContents>(
-                    &contents,
-                ) {
+                match toml::from_str::<crate::process_file_lock::LockIdentity>(&contents) {
                     Ok(c) => crate::auto_sync::execution_lock::is_stale(&c),
                     Err(_) => true,
                 }

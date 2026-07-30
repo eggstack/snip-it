@@ -4,32 +4,23 @@
 //! pending marker. It is intentionally distinct from the long-lived worker
 //! execution lock (`lock::WorkerLock`): parent mutation commands hold this
 //! guard only for the minimum time needed to read, compute, and write.
+//!
+//! Authority for mutual exclusion is the operating system kernel; the
+//! persistent lock file is diagnostic metadata only. See
+//! [`crate::process_file_lock`] for the underlying primitive.
 
-use serde::{Deserialize, Serialize};
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::transaction::ProcessIdentity;
+use crate::process_file_lock::{self, ProcessFileLock, ProcessFileLockError};
 
 pub const PENDING_TXN_LOCK_NAME: &str = "auto-sync-pending.lock";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingTxnLockContents {
-    pid: u32,
-    nonce: String,
-    created_at_unix_ms: u64,
-    /// Start-time token for the owner process. `None` for legacy locks.
-    #[serde(default)]
-    start_token: Option<String>,
-}
+pub const PENDING_TXN_LOCK_PURPOSE: &str = "auto-sync-pending";
 
 #[derive(Debug)]
 pub enum PendingTxnLockError {
     Io(std::io::Error),
     Busy { timeout_ms: u64 },
-    Corrupted(String),
 }
 
 impl std::fmt::Display for PendingTxnLockError {
@@ -39,35 +30,43 @@ impl std::fmt::Display for PendingTxnLockError {
             Self::Busy { timeout_ms } => {
                 write!(f, "pending transaction lock busy after {timeout_ms}ms")
             }
-            Self::Corrupted(msg) => write!(f, "corrupted pending txn lock: {msg}"),
         }
     }
 }
 
 impl std::error::Error for PendingTxnLockError {}
 
+impl From<ProcessFileLockError> for PendingTxnLockError {
+    fn from(err: ProcessFileLockError) -> Self {
+        match err {
+            ProcessFileLockError::Busy { .. } => Self::Busy { timeout_ms: 0 },
+            ProcessFileLockError::Timeout { .. } => Self::Busy { timeout_ms: 0 },
+            ProcessFileLockError::Io(e) => Self::Io(e),
+            ProcessFileLockError::UnsupportedPlatform => Self::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "process file lock is not supported on this platform",
+            )),
+        }
+    }
+}
+
+/// RAII guard for the pending transaction lock.
 pub struct PendingTxnGuard {
-    path: PathBuf,
-    nonce: String,
+    inner: ProcessFileLock,
 }
 
 impl PendingTxnGuard {
     pub fn nonce(&self) -> &str {
-        &self.nonce
+        self.inner.nonce()
     }
 }
 
-impl Drop for PendingTxnGuard {
-    fn drop(&mut self) {
-        // Atomically rename the lock file aside. rename(2) is atomic w.r.t.
-        // concurrent writers, so a replacement lock installed between
-        // inspect and removal cannot be unlinked by this drop guard.
-        if let Ok(Some(contents)) = read_lock_contents(&self.path)
-            && contents.pid == std::process::id()
-            && contents.nonce == self.nonce
-        {
-            let _ = remove_owned_lock(&self.path);
-        }
+impl std::fmt::Debug for PendingTxnGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingTxnGuard")
+            .field("path", &self.inner.path())
+            .field("nonce", &self.inner.nonce())
+            .finish()
     }
 }
 
@@ -77,180 +76,18 @@ pub fn pending_txn_lock_path(state_dir: &Path) -> PathBuf {
 
 /// Acquires the pending transaction lock with bounded retry.
 ///
-/// Retries up to `timeout` total, with 1-5ms random jitter between attempts.
-/// Live owners are never reclaimed regardless of age. Dead owners (PID not
-/// alive) are reclaimed immediately.
-///
-/// On Windows, `remove_file` is asynchronous (delete-pending). After a
-/// guard is dropped, the lock file may still appear to exist briefly. When
-/// `create_new` fails with `AlreadyExists`, we re-check: if `read_to_string`
-/// returns `NotFound` (file vanished between the failed create and the read),
-/// we immediately retry `create_new` instead of waiting for the full timeout.
+/// Polls the kernel lock every 100 ms up to `timeout`. Live owners are
+/// never reclaimed — the kernel alone arbitrates. Once the kernel lock is
+/// acquired the metadata is overwritten with the new acquirer's identity.
+/// An unreadable, empty, or malformed file does **not** block acquisition:
+/// it is overwritten by the next acquirer.
 pub fn acquire_pending_txn(
     state_dir: &Path,
     timeout: Duration,
 ) -> Result<PendingTxnGuard, PendingTxnLockError> {
     let path = pending_txn_lock_path(state_dir);
-    let deadline = std::time::Instant::now() + timeout;
-    let mut attempts = 0u64;
-
-    loop {
-        attempts += 1;
-
-        match read_lock_contents(&path)? {
-            None => {}
-            Some(contents) => match classify_owner(&contents) {
-                OwnerClass::Live => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(PendingTxnLockError::Busy {
-                            timeout_ms: timeout.as_millis() as u64,
-                        });
-                    }
-                    let jitter_ms = 1 + (attempts % 5);
-                    std::thread::sleep(Duration::from_millis(jitter_ms));
-                    continue;
-                }
-                OwnerClass::Dead => {
-                    // Atomically rename the stale lock aside — prevents a
-                    // racing owner from being deleted during reclaim.
-                    let _ = quarantine_lock(&path);
-                }
-                OwnerClass::PidReuse => {
-                    let _ = quarantine_lock(&path);
-                }
-            },
-        }
-
-        let identity = ProcessIdentity::current();
-        let nonce = generate_nonce();
-        let contents = PendingTxnLockContents {
-            pid: identity.pid,
-            nonce: nonce.clone(),
-            created_at_unix_ms: unix_now_ms(),
-            start_token: identity.start_token.clone(),
-        };
-
-        let serialized = toml::to_string_pretty(&contents)
-            .map_err(|e| PendingTxnLockError::Io(std::io::Error::other(e)))?;
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                f.write_all(serialized.as_bytes())
-                    .map_err(PendingTxnLockError::Io)?;
-                f.sync_all().map_err(PendingTxnLockError::Io)?;
-                restrict_permissions(&path);
-                return Ok(PendingTxnGuard { path, nonce });
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Windows delete-pending race: remove_file returned Ok but
-                // the file still exists. Re-check: if it's truly gone now,
-                // loop around immediately (no sleep) to retry create_new.
-                if !path.exists() {
-                    continue;
-                }
-                // File still exists — fall through to normal retry with backoff.
-                if std::time::Instant::now() >= deadline {
-                    return Err(PendingTxnLockError::Busy {
-                        timeout_ms: timeout.as_millis() as u64,
-                    });
-                }
-                let jitter_ms = 1 + (attempts % 5);
-                std::thread::sleep(Duration::from_millis(jitter_ms));
-                continue;
-            }
-            Err(e) => return Err(PendingTxnLockError::Io(e)),
-        }
-    }
-}
-
-fn read_lock_contents(path: &Path) -> Result<Option<PendingTxnLockContents>, PendingTxnLockError> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => {
-            // Empty file means another writer is in flight; refuse to
-            // classify as corrupted so the caller can retry instead of
-            // mistakenly stealing the lock.
-            if contents.trim().is_empty() {
-                return Ok(None);
-            }
-            let parsed: PendingTxnLockContents = toml::from_str(&contents)
-                .map_err(|e| PendingTxnLockError::Corrupted(e.to_string()))?;
-            Ok(Some(parsed))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(PendingTxnLockError::Io(e)),
-    }
-}
-
-enum OwnerClass {
-    Live,
-    Dead,
-    PidReuse,
-}
-
-fn classify_owner(existing: &PendingTxnLockContents) -> OwnerClass {
-    let Some(observed) = ProcessIdentity::observe(existing.pid) else {
-        return OwnerClass::Dead;
-    };
-    match (existing.start_token.as_ref(), observed.start_token.as_ref()) {
-        (Some(recorded), Some(observed_token)) if recorded != observed_token => {
-            OwnerClass::PidReuse
-        }
-        _ => OwnerClass::Live,
-    }
-}
-
-fn quarantine_lock(lock_path: &Path) -> std::io::Result<PathBuf> {
-    let quarantine_name = format!(
-        "{}.quarantine.{}",
-        PENDING_TXN_LOCK_NAME,
-        uuid::Uuid::new_v4()
-    );
-    let quarantine_path = lock_path
-        .parent()
-        .unwrap_or(lock_path)
-        .join(&quarantine_name);
-    match std::fs::rename(lock_path, &quarantine_path) {
-        Ok(()) => Ok(quarantine_path),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(quarantine_path),
-        Err(e) => Err(e),
-    }
-}
-
-fn remove_owned_lock(lock_path: &Path) -> std::io::Result<()> {
-    match quarantine_lock(lock_path) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-fn generate_nonce() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}-{:x}-{:x}", std::process::id(), nanos, seq)
-}
-
-fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            let _ = std::fs::set_permissions(path, perms);
-        }
-    }
-}
-
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    let inner = process_file_lock::wait_acquire(&path, PENDING_TXN_LOCK_PURPOSE, timeout)?;
+    Ok(PendingTxnGuard { inner })
 }
 
 /// Generates a unique temporary file path in the same directory as `final_path`.
@@ -327,6 +164,7 @@ pub fn fsync_parent_dir(path: &Path) {
     if let Some(parent) = path.parent() {
         #[cfg(unix)]
         {
+            use std::fs::OpenOptions;
             if let Ok(f) = OpenOptions::new().read(true).open(parent) {
                 let _ = f.sync_all();
             }
@@ -337,6 +175,8 @@ pub fn fsync_parent_dir(path: &Path) {
         }
     }
 }
+
+use std::io::Write;
 
 #[cfg(test)]
 mod tests {
@@ -351,7 +191,8 @@ mod tests {
             let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
             assert!(path.exists());
         }
-        assert!(!path.exists());
+        // Canonical file persists after release.
+        assert!(path.exists());
     }
 
     #[test]
@@ -363,32 +204,14 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_dead_owner_reclaim() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        let contents = PendingTxnLockContents {
-            pid: 1,
-            nonce: "dead-owner".to_string(),
-            created_at_unix_ms: unix_now_ms(),
-            start_token: None,
-        };
-        let serialized = toml::to_string_pretty(&contents).unwrap();
-        std::fs::write(&path, serialized).unwrap();
-
-        let guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
-        assert_ne!(guard.nonce, "dead-owner");
-    }
-
-    #[test]
     fn test_ownership_checked_drop() {
         let dir = TempDir::new().unwrap();
         let path = pending_txn_lock_path(dir.path());
         let guard1 = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
         let nonce1 = guard1.nonce().to_string();
         drop(guard1);
-        assert!(!path.exists());
-
+        // Canonical file persists after release.
+        assert!(path.exists());
         let guard2 = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
         let nonce2 = guard2.nonce().to_string();
         assert_ne!(nonce1, nonce2);
@@ -412,21 +235,18 @@ mod tests {
         let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
         let raw = std::fs::read_to_string(pending_txn_lock_path(dir.path())).unwrap();
         let raw_lower = raw.to_lowercase();
-        // Forbidden substrings are checked against TOML value contents only —
-        // field names like `start_token` are intentionally allowed because the
-        // word "token" in a field name does not imply credential exposure.
         let value_only = raw_lower
             .lines()
             .filter_map(|line| line.split_once('=').map(|(_, v)| v))
             .collect::<Vec<_>>()
             .join("\n");
-        for forbidden in &[
+        for forbidden in [
             "command",
             "description",
             "password",
             "secret",
             "api_key",
-            "token",
+            "apikey",
             "credential",
         ] {
             assert!(
@@ -454,86 +274,6 @@ mod tests {
         assert!(final_path.exists());
         assert_eq!(std::fs::read_to_string(&final_path).unwrap(), "hello");
         assert!(!tmp.exists());
-    }
-
-    #[test]
-    fn test_lock_contents_roundtrip() {
-        let contents = PendingTxnLockContents {
-            pid: 999,
-            nonce: "test-nonce".to_string(),
-            created_at_unix_ms: 12345,
-            start_token: None,
-        };
-        let serialized = toml::to_string_pretty(&contents).unwrap();
-        let deserialized: PendingTxnLockContents = toml::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.pid, 999);
-        assert_eq!(deserialized.nonce, "test-nonce");
-    }
-
-    #[test]
-    fn test_malformed_lock_file_triggers_corrupted_error() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        std::fs::write(&path, "this is not valid toml {{{").unwrap();
-        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
-        assert!(
-            matches!(result, Err(PendingTxnLockError::Corrupted(_))),
-            "malformed lock file should produce Corrupted error"
-        );
-    }
-
-    #[test]
-    fn test_malformed_lock_file_with_missing_fields() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        std::fs::write(&path, "pid = 999\n").unwrap();
-        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
-        assert!(
-            matches!(result, Err(PendingTxnLockError::Corrupted(_))),
-            "lock file with missing fields should produce Corrupted error"
-        );
-    }
-
-    #[test]
-    fn test_empty_lock_file_is_not_corrupted() {
-        // An empty lock file indicates another writer is in flight (has not
-        // yet published its content). It must NOT be treated as a corrupted
-        // lock record — that would let a contender steal an in-flight lock.
-        // The acquire loop must time out with Busy when no one completes.
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        std::fs::write(&path, "").unwrap();
-        let result = acquire_pending_txn(dir.path(), Duration::from_millis(50));
-        assert!(
-            !matches!(result, Err(PendingTxnLockError::Corrupted(_))),
-            "empty lock file must not be classified as corrupted (would steal in-flight lock)"
-        );
-    }
-
-    #[test]
-    fn test_malformed_lock_returns_corrupted_error() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        std::fs::write(&path, "garbage").unwrap();
-        let result = acquire_pending_txn(dir.path(), Duration::from_millis(100));
-        assert!(matches!(result, Err(PendingTxnLockError::Corrupted(_))));
-    }
-
-    #[test]
-    fn test_read_lock_contents_returns_none_for_missing_file() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        let result = read_lock_contents(&path).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_read_lock_contents_returns_error_for_corrupted() {
-        let dir = TempDir::new().unwrap();
-        let path = pending_txn_lock_path(dir.path());
-        std::fs::write(&path, "not toml").unwrap();
-        let result = read_lock_contents(&path);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -586,5 +326,26 @@ mod tests {
         let err: Box<dyn std::error::Error> =
             Box::new(PendingTxnLockError::Busy { timeout_ms: 100 });
         assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_empty_lock_file_does_not_block_acquisition() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "").unwrap();
+        let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
+        // Acquisition succeeded despite empty file.
+        let observed = crate::process_file_lock::read_owner(&path).unwrap();
+        assert_eq!(observed.purpose, PENDING_TXN_LOCK_PURPOSE);
+    }
+
+    #[test]
+    fn test_malformed_lock_file_does_not_block_acquisition() {
+        let dir = TempDir::new().unwrap();
+        let path = pending_txn_lock_path(dir.path());
+        std::fs::write(&path, "garbage data").unwrap();
+        let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
+        let observed = crate::process_file_lock::read_owner(&path).unwrap();
+        assert_eq!(observed.purpose, PENDING_TXN_LOCK_PURPOSE);
     }
 }

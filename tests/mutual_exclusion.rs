@@ -130,8 +130,10 @@ fn test_lock_released_after_drop() {
     let inspect1 = execution_lock::inspect(&execution_lock::execution_lock_path(dir.path()));
     assert!(inspect1.is_some());
     drop(lock);
-    let inspect2 = execution_lock::inspect(&execution_lock::execution_lock_path(dir.path()));
-    assert!(inspect2.is_none());
+    // The kernel lock is the authority for mutual exclusion; the file
+    // persists after release. Verify a new acquirer succeeds.
+    let lock2 = execution_lock::try_acquire(dir.path()).unwrap();
+    drop(lock2);
 }
 
 #[test]

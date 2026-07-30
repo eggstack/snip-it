@@ -5,8 +5,8 @@
 //! Captures a point-in-time snapshot of local libraries, sync state,
 //! pending operations, and execution status.
 
-use crate::auto_sync::execution_lock::{self, ExecutionLockContents};
-use crate::auto_sync::lock::{self, WorkerLockContents};
+use crate::auto_sync::execution_lock::{self};
+use crate::auto_sync::lock::{self};
 use crate::auto_sync::pending::{self, PendingError, PendingState};
 use crate::auto_sync::status::{self, AutoSyncStatus, StatusRead};
 use serde::{Deserialize, Serialize};
@@ -281,53 +281,45 @@ pub fn execution_state_view(state_dir: &Path) -> (ProcessStateView, ProcessState
 
 fn inspect_execution_lock(state_dir: &Path) -> ProcessStateView {
     let path = execution_lock::execution_lock_path(state_dir);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            if content.trim().is_empty() {
-                return ProcessStateView::Idle;
-            }
-            match toml::from_str::<ExecutionLockContents>(&content) {
-                Ok(contents) => {
-                    if execution_lock::process_alive(contents.pid) {
-                        ProcessStateView::Live {
-                            pid: contents.pid,
-                            started_at_unix_ms: contents.started_at_unix_ms,
-                        }
-                    } else {
-                        ProcessStateView::DeadStale { pid: contents.pid }
-                    }
+    match execution_lock::inspect(&path) {
+        Some(contents) => {
+            if execution_lock::process_alive(contents.pid) {
+                ProcessStateView::Live {
+                    pid: contents.pid,
+                    started_at_unix_ms: contents.acquired_at_unix_ms,
                 }
-                Err(_) => ProcessStateView::Malformed,
+            } else {
+                ProcessStateView::DeadStale { pid: contents.pid }
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProcessStateView::Idle,
-        Err(_) => ProcessStateView::Inaccessible,
+        None => match std::fs::read_to_string(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProcessStateView::Idle,
+            Err(_) => ProcessStateView::Inaccessible,
+            Ok(content) if content.trim().is_empty() => ProcessStateView::Idle,
+            Ok(_) => ProcessStateView::Malformed,
+        },
     }
 }
 
 fn inspect_worker_lock(state_dir: &Path) -> ProcessStateView {
     let path = lock::lock_path(state_dir);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            if content.trim().is_empty() {
-                return ProcessStateView::Idle;
-            }
-            match toml::from_str::<WorkerLockContents>(&content) {
-                Ok(contents) => {
-                    if execution_lock::process_alive(contents.pid) {
-                        ProcessStateView::Live {
-                            pid: contents.pid,
-                            started_at_unix_ms: contents.started_at_unix_ms,
-                        }
-                    } else {
-                        ProcessStateView::DeadStale { pid: contents.pid }
-                    }
+    match lock::inspect(&path) {
+        Some(contents) => {
+            if execution_lock::process_alive(contents.pid) {
+                ProcessStateView::Live {
+                    pid: contents.pid,
+                    started_at_unix_ms: contents.acquired_at_unix_ms,
                 }
-                Err(_) => ProcessStateView::Malformed,
+            } else {
+                ProcessStateView::DeadStale { pid: contents.pid }
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProcessStateView::Idle,
-        Err(_) => ProcessStateView::Inaccessible,
+        None => match std::fs::read_to_string(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProcessStateView::Idle,
+            Err(_) => ProcessStateView::Inaccessible,
+            Ok(content) if content.trim().is_empty() => ProcessStateView::Idle,
+            Ok(_) => ProcessStateView::Malformed,
+        },
     }
 }
 
@@ -576,11 +568,12 @@ fn count_snippets(mgr: &crate::library::LibraryManager) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auto_sync::execution_lock::{ExecutionLockContents, execution_lock_path};
-    use crate::auto_sync::lock::{WorkerLockContents, lock_path};
+    use crate::auto_sync::execution_lock::execution_lock_path;
+    use crate::auto_sync::lock::lock_path;
     use crate::auto_sync::pending::{PendingSnapshot, record_pending_mutation};
     use crate::auto_sync::policy::{FailureClass, MutationKind};
     use crate::auto_sync::status;
+    use crate::process_file_lock::LockIdentity;
     use tempfile::TempDir;
 
     fn make_empty_state_dir() -> TempDir {
@@ -683,9 +676,11 @@ mod tests {
             },
         )
         .unwrap();
-        let contents = ExecutionLockContents {
+        let contents = LockIdentity {
+            schema_version: 1,
+            purpose: crate::auto_sync::execution_lock::EXECUTION_LOCK_PURPOSE.to_string(),
             pid: std::process::id(),
-            started_at_unix_ms: 5000,
+            acquired_at_unix_ms: 5000,
             nonce: "test".to_string(),
             start_token: None,
         };
@@ -851,9 +846,11 @@ mod tests {
     #[test]
     fn test_live_execution_lock() {
         let dir = make_empty_state_dir();
-        let contents = ExecutionLockContents {
+        let contents = LockIdentity {
+            schema_version: 1,
+            purpose: crate::auto_sync::execution_lock::EXECUTION_LOCK_PURPOSE.to_string(),
             pid: std::process::id(),
-            started_at_unix_ms: 1000,
+            acquired_at_unix_ms: 1000,
             nonce: "test-nonce".to_string(),
             start_token: None,
         };
@@ -870,9 +867,11 @@ mod tests {
     fn test_dead_execution_lock() {
         let dir = make_empty_state_dir();
         let dead_pid = u32::MAX / 2;
-        let contents = ExecutionLockContents {
+        let contents = LockIdentity {
+            schema_version: 1,
+            purpose: crate::auto_sync::execution_lock::EXECUTION_LOCK_PURPOSE.to_string(),
             pid: dead_pid,
-            started_at_unix_ms: 1000,
+            acquired_at_unix_ms: 1000,
             nonce: "dead".to_string(),
             start_token: None,
         };
@@ -908,9 +907,11 @@ mod tests {
     #[test]
     fn test_worker_lock_live() {
         let dir = make_empty_state_dir();
-        let contents = WorkerLockContents {
+        let contents = LockIdentity {
+            schema_version: 1,
+            purpose: crate::auto_sync::lock::WORKER_LOCK_PURPOSE.to_string(),
             pid: std::process::id(),
-            started_at_unix_ms: 2000,
+            acquired_at_unix_ms: 2000,
             nonce: "wnonce".to_string(),
             start_token: None,
         };
@@ -927,9 +928,11 @@ mod tests {
     fn test_worker_lock_dead() {
         let dir = make_empty_state_dir();
         let dead_pid = u32::MAX / 2;
-        let contents = WorkerLockContents {
+        let contents = LockIdentity {
+            schema_version: 1,
+            purpose: crate::auto_sync::lock::WORKER_LOCK_PURPOSE.to_string(),
             pid: dead_pid,
-            started_at_unix_ms: 2000,
+            acquired_at_unix_ms: 2000,
             nonce: "dead".to_string(),
             start_token: None,
         };
