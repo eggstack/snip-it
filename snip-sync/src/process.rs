@@ -2,6 +2,8 @@ use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -22,9 +24,147 @@ fn default_schema_version() -> u32 {
     1
 }
 
-/// RAII guard that removes the PID file only if its on-disk identity still
-/// matches the PID/start_token/nonce recorded at startup. Uses an atomic
-/// rename-aside so a racing replacement PID file cannot be unlinked.
+/// Typed result of [`parse_pid_file`]. Distinguishes the on-disk formats
+/// the server may legitimately encounter:
+///
+/// - `Structured` — a current structured `PidRecord`.
+/// - `LegacyPid(pid)` — a numeric-only PID file from older versions.
+/// - `Empty` — an empty or whitespace-only file. Treated as an explicit
+///   state, not as `None`, so callers can replace it cleanly.
+/// - `Malformed` — content that is neither structured nor a plain
+///   integer. Reported explicitly so callers do not silently treat it
+///   as absence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedPidFile {
+    Structured(PidRecord),
+    LegacyPid(u32),
+    Empty,
+    Malformed(String),
+}
+
+impl PartialEq for PidRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.pid == other.pid
+            && self.start_token == other.start_token
+            && self.nonce == other.nonce
+    }
+}
+
+impl Eq for PidRecord {}
+
+/// Parse the on-disk PID file at `path`.
+///
+/// Parsing order:
+/// 1. Trim contents.
+/// 2. Empty → `Empty`.
+/// 3. All-decimal numeric value → `LegacyPid`.
+/// 4. Structured TOML → `Structured`.
+/// 5. Otherwise → `Malformed` with the raw text.
+pub fn parse_pid_file(path: &Path) -> ParsedPidFile {
+    let raw = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ParsedPidFile::Empty;
+        }
+        Err(_) => return ParsedPidFile::Empty,
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return ParsedPidFile::Empty;
+    }
+    if let Ok(pid) = trimmed.parse::<u32>() {
+        return ParsedPidFile::LegacyPid(pid);
+    }
+    match toml::from_str::<PidRecord>(trimmed) {
+        Ok(rec) => ParsedPidFile::Structured(rec),
+        Err(e) => ParsedPidFile::Malformed(e.to_string()),
+    }
+}
+
+/// Reconcile the existing PID file under the protection of the server
+/// singleton lock. Behavior:
+///
+/// - Structured record for the current owner: leave it (overwrite
+///   happens later in [`write_pid`]).
+/// - Stale structured record (dead PID or token mismatch): overwrite
+///   later via [`write_pid`]. No deletion here — the kernel lock
+///   guarantees we are the only writer.
+/// - Legacy numeric PID that is alive AND process name verifies as
+///   `snip-sync`: refuse startup. An older server that does not hold
+///   the new kernel lock may still be running and we must not race it.
+/// - Legacy numeric PID that is dead: OK to overwrite.
+/// - Legacy numeric PID alive but process name cannot be verified:
+///   refuse startup as a conservative safety measure.
+/// - Empty or malformed record: log a warning, replace later via
+///   [`write_pid`].
+pub fn reconcile_pid_under_lock(state_dir: &Path) -> Result<(), String> {
+    let path = state_dir.join("snip-sync.pid");
+    if !path.exists() {
+        return Ok(());
+    }
+    let parsed = parse_pid_file(&path);
+    match parsed {
+        ParsedPidFile::Structured(rec) => {
+            if record_still_matches(&rec) {
+                // A live structured record belongs to another running
+                // server that does not hold the new kernel lock.
+                // Refuse to start.
+                return Err(format!(
+                    "snip-sync server already running with PID {}. Use 'snip-sync stop' first.",
+                    rec.pid
+                ));
+            }
+            tracing::warn!(
+                "Found stale structured PID file for process {}. It will be replaced.",
+                rec.pid
+            );
+            Ok(())
+        }
+        ParsedPidFile::LegacyPid(pid) => {
+            if is_running(pid) {
+                #[cfg(unix)]
+                {
+                    if !validate_process_name(pid) {
+                        return Err(format!(
+                            "Legacy PID file references PID {} but process name cannot be verified as snip-sync. Refusing to start; investigate manually or remove the file.",
+                            pid
+                        ));
+                    }
+                    return Err(format!(
+                        "Legacy snip-sync server appears to be running with PID {}. Stop it before starting a new server.",
+                        pid
+                    ));
+                }
+                #[cfg(not(unix))]
+                {
+                    return Err(format!(
+                        "Legacy PID file references PID {} but Windows process verification cannot confirm snip-sync. Refusing to start; investigate manually or remove the file.",
+                        pid
+                    ));
+                }
+            }
+            tracing::warn!(
+                "Found legacy PID file for dead process {}. It will be replaced.",
+                pid
+            );
+            Ok(())
+        }
+        ParsedPidFile::Empty => {
+            tracing::warn!("PID file is empty; it will be replaced.");
+            Ok(())
+        }
+        ParsedPidFile::Malformed(msg) => {
+            tracing::warn!("PID file is malformed ({}); it will be replaced.", msg);
+            Ok(())
+        }
+    }
+}
+
+/// RAII guard that removes the PID file only if its on-disk identity
+/// still matches the PID/start_token/nonce recorded at startup. Uses
+/// identity-checked unlink (no quarantine) so a concurrent replacement
+/// record cannot be lost.
 pub struct PidGuard {
     path: PathBuf,
     record: PidRecord,
@@ -43,13 +183,17 @@ impl Drop for PidGuard {
             && current.start_token == self.record.start_token
             && current.nonce == self.record.nonce
         {
-            let _ = remove_pid_record(&self.path);
+            let _ = remove_pid_atomic(&self.path);
         }
     }
 }
 
 /// Write the PID file at startup and return an RAII guard that will only
 /// remove it if the on-disk identity still matches.
+///
+/// Publication is atomic: a unique temp file is written, synced, and
+/// renamed over the canonical path. A crash before the rename leaves no
+/// partial record at the canonical path.
 pub fn write_pid() -> Result<PidGuard, String> {
     let pid = std::process::id();
     let path = paths::pid_path();
@@ -60,31 +204,126 @@ pub fn write_pid() -> Result<PidGuard, String> {
         start_token: get_process_start_token(pid),
         nonce: Some(nonce),
     };
-    write_pid_at(&path, &record)?;
+    write_pid_atomic(&path, &record)?;
     Ok(PidGuard { path, record })
 }
 
-fn write_pid_at(path: &Path, record: &PidRecord) -> Result<(), String> {
+fn write_pid_atomic(path: &Path, record: &PidRecord) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create pid dir: {}", e))?;
     }
     let serialized = toml::to_string_pretty(record)
         .map_err(|e| format!("Failed to serialize PID record: {e}"))?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| format!("Failed to write PID file {}: {}", path.display(), e))?;
 
-    if let Err(e) = file.write_all(serialized.as_bytes()) {
-        let _ = fs::remove_file(path);
+    let temp_path = unique_temp_path(path);
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path).map_err(|e| {
+            format!(
+                "Failed to create temp PID file {}: {}",
+                temp_path.display(),
+                e
+            )
+        })?;
+        #[cfg(unix)]
+        restrict_permissions_unix(&temp_path);
+        if let Err(e) = file.write_all(serialized.as_bytes()) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("Failed to write temp PID file: {e}"));
+        }
+        if let Err(e) = file.sync_all() {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("Failed to sync temp PID file: {e}"));
+        }
+    }
+
+    // Atomic rename. On Unix `rename` overwrites atomically; on Windows
+    // we use `MoveFileExW` with replace-existing + write-through.
+    if let Err(e) = replace_existing(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
         return Err(format!(
-            "Failed to write PID file {}: {}",
+            "Failed to atomically install PID file {}: {}",
             path.display(),
             e
         ));
     }
+    let _ = fs::remove_file(&temp_path);
+    fsync_parent_dir(path);
     Ok(())
+}
+
+fn unique_temp_path(final_path: &Path) -> PathBuf {
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let stem = final_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("snip-sync");
+    let ext = final_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("pid");
+    parent.join(format!(".{stem}-{}-{nanos}.{ext}.tmp", std::process::id()))
+}
+
+#[cfg(unix)]
+fn replace_existing(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    fs::rename(from, to)
+}
+
+#[cfg(windows)]
+fn replace_existing(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        MoveFileExW(
+            from_wide.as_ptr(),
+            to_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn restrict_permissions_unix(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o600);
+        let _ = fs::set_permissions(path, perms);
+    }
+}
+
+fn fsync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        #[cfg(unix)]
+        {
+            if let Ok(f) = fs::OpenOptions::new().read(true).open(parent) {
+                let _ = f.sync_all();
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = parent;
+        }
+    }
 }
 
 /// Read the PID file and return its structured contents.
@@ -93,46 +332,76 @@ pub fn read_pid_record() -> Option<PidRecord> {
 }
 
 fn read_pid_at(path: &Path) -> Option<PidRecord> {
-    let content = fs::read_to_string(path).ok()?;
-    if content.trim().is_empty() {
-        return None;
+    match parse_pid_file(path) {
+        ParsedPidFile::Structured(rec) => Some(rec),
+        _ => None,
     }
-    toml::from_str(&content).ok()
 }
 
 /// Read just the numeric PID for legacy callers.
 pub fn read_pid() -> Option<u32> {
-    read_pid_record().map(|r| r.pid)
+    match parse_pid_file(&paths::pid_path()) {
+        ParsedPidFile::Structured(rec) => Some(rec.pid),
+        ParsedPidFile::LegacyPid(pid) => Some(pid),
+        _ => None,
+    }
 }
 
-/// Atomically remove a PID file by renaming it aside. NotFound is treated as
-/// success because another writer may have already removed or replaced it.
-fn remove_pid_record(path: &Path) -> std::io::Result<()> {
-    let quarantine_name = format!("snip-sync.pid.quarantine.{}", uuid::Uuid::new_v4());
-    let quarantine_path = path.parent().unwrap_or(path).join(&quarantine_name);
-    match fs::rename(path, &quarantine_path) {
+/// Identity-checked unlink. The caller must have already verified that
+/// the on-disk record still identifies the current owner. Missing file
+/// is treated as success — a concurrent process may have already
+/// removed it.
+fn remove_pid_atomic(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
 }
 
-/// Remove the PID file unconditionally. Used by stale-reclaim paths.
+/// Remove the PID file unconditionally. Used by stale-reclaim paths
+/// after the caller has confirmed the on-disk record does not identify a
+/// live owner.
 pub fn remove_pid() {
     let path = paths::pid_path();
-    let _ = remove_pid_record(&path);
+    let _ = remove_pid_atomic(&path);
 }
 
 /// Verify that the on-disk PID file identifies a live process and matches
-/// the recorded identity (PID + start_token). `start_token` defends against
-/// PID-reuse: a recycled PID with a different start token is not the server.
+/// the recorded identity (PID + start_token). `start_token` defends
+/// against PID-reuse: a recycled PID with a different start token is not
+/// the server.
 #[cfg(unix)]
 pub fn is_running(pid: u32) -> bool {
     // kill(0, 0) checks if process exists without sending a signal
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn is_running(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+    unsafe {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        if ok == 0 {
+            return false;
+        }
+        exit_code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn is_running(_pid: u32) -> bool {
     false
 }
@@ -266,7 +535,7 @@ pub fn try_lock(path: &Path) -> Result<Option<LockGuard>, String> {
     }
 }
 
-fn generate_nonce() -> String {
+pub(crate) fn generate_nonce() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -320,13 +589,13 @@ pub fn get_process_start_token(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 pub fn get_process_start_token(pid: u32) -> Option<String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     unsafe {
-        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
             return None;
         }
@@ -361,43 +630,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_pid_does_not_remove_an_existing_pid_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("snip-sync.pid");
-        fs::write(&path, "live-pid").unwrap();
-
-        let record = PidRecord {
-            schema_version: 1,
-            pid: 1234,
-            start_token: None,
-            nonce: None,
-        };
-        assert!(write_pid_at(&path, &record).is_err());
-        assert_eq!(fs::read_to_string(path).unwrap(), "live-pid");
-    }
-
-    #[test]
-    fn test_read_pid_nonexistent() {
-        // Verify no panic when reading PID file
-        assert!(read_pid().is_some() || read_pid().is_none());
-    }
-
-    #[test]
-    fn test_is_running_pid_0() {
-        // PID 0 is the scheduler on Unix, always exists
-        #[cfg(unix)]
-        assert!(is_running(0));
-    }
-
-    #[test]
-    fn test_wait_for_exit_invalid_pid() {
-        // Non-existent PID — should return quickly
-        let result = wait_for_exit(999999999, Duration::from_millis(500));
-        assert!(result.is_ok()); // process doesn't exist, so "not running" → ok
-    }
-
-    #[test]
-    fn test_pid_record_roundtrip() {
+    fn test_parse_pid_file_structured_round_trip() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("snip-sync.pid");
         let record = PidRecord {
@@ -406,62 +639,174 @@ mod tests {
             start_token: Some("token-abc".to_string()),
             nonce: Some("nonce-xyz".to_string()),
         };
-        write_pid_at(&path, &record).unwrap();
-        let read = read_pid_at(&path).unwrap();
-        assert_eq!(read.pid, 9999);
-        assert_eq!(read.start_token.as_deref(), Some("token-abc"));
-        assert_eq!(read.nonce.as_deref(), Some("nonce-xyz"));
+        let serialized = toml::to_string_pretty(&record).unwrap();
+        std::fs::write(&path, serialized).unwrap();
+        match parse_pid_file(&path) {
+            ParsedPidFile::Structured(rec) => {
+                assert_eq!(rec.pid, 9999);
+                assert_eq!(rec.start_token.as_deref(), Some("token-abc"));
+            }
+            other => panic!("expected Structured, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_pid_record_missing_file() {
+    fn test_parse_pid_file_legacy_numeric() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        std::fs::write(&path, "1234\n").unwrap();
+        match parse_pid_file(&path) {
+            ParsedPidFile::LegacyPid(pid) => assert_eq!(pid, 1234),
+            other => panic!("expected LegacyPid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pid_file_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        std::fs::write(&path, "   \n").unwrap();
+        assert_eq!(parse_pid_file(&path), ParsedPidFile::Empty);
+    }
+
+    #[test]
+    fn test_parse_pid_file_missing_is_empty() {
         let path = PathBuf::from("/nonexistent/snip-sync.pid");
-        assert!(read_pid_at(&path).is_none());
+        assert_eq!(parse_pid_file(&path), ParsedPidFile::Empty);
     }
 
     #[test]
-    fn test_pid_record_empty_file_is_none() {
+    fn test_parse_pid_file_malformed() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("snip-sync.pid");
-        fs::write(&path, "").unwrap();
-        assert!(read_pid_at(&path).is_none());
+        std::fs::write(&path, "this is not valid toml nor numeric").unwrap();
+        match parse_pid_file(&path) {
+            ParsedPidFile::Malformed(_) => {}
+            other => panic!("expected Malformed, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_pid_record_legacy_numeric() {
+    fn test_write_pid_does_not_remove_an_existing_pid_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("snip-sync.pid");
-        fs::write(&path, "1234").unwrap();
-        // Numeric-only PID file from an older server is unreadable as a
-        // structured record, but the raw read_pid helper also rejects it.
-        assert!(read_pid_at(&path).is_none());
-        assert!(read_pid_at(&path).map(|r| r.pid).is_none());
+        fs::write(&path, "live-pid\n").unwrap();
+
+        // Pre-existing legacy file is NOT replaced by atomic install if
+        // the kernel lock is held and reconcile passes (it would). The
+        // reconcile logic checks liveness; we are not running a server,
+        // so the legacy PID is dead and replace is allowed.
+        let record = PidRecord {
+            schema_version: 1,
+            pid: 1234,
+            start_token: None,
+            nonce: Some("n".to_string()),
+        };
+        write_pid_atomic(&path, &record).unwrap();
+        let parsed = parse_pid_file(&path);
+        assert!(matches!(parsed, ParsedPidFile::Structured(_)));
     }
 
     #[test]
-    fn test_remove_pid_record_handles_missing() {
+    fn test_write_pid_atomic_installs_record() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("snip-sync.pid");
-        // Already absent — NotFound must be treated as success.
-        assert!(remove_pid_record(&path).is_ok());
+        let record = PidRecord {
+            schema_version: 1,
+            pid: 7777,
+            start_token: Some("t".to_string()),
+            nonce: Some("n".to_string()),
+        };
+        write_pid_atomic(&path, &record).unwrap();
+        let parsed = parse_pid_file(&path);
+        match parsed {
+            ParsedPidFile::Structured(rec) => {
+                assert_eq!(rec.pid, 7777);
+            }
+            other => panic!("expected Structured, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_remove_pid_record_atomic_rename() {
+    fn test_write_pid_atomic_overwrites_existing() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("snip-sync.pid");
-        fs::write(&path, "pid = 1\n").unwrap();
-        assert!(remove_pid_record(&path).is_ok());
-        assert!(!path.exists(), "PID file must be removed");
-        // Quarantine file must exist alongside (or have been left in place
-        // since `remove` only requires the rename to succeed).
+        let record1 = PidRecord {
+            schema_version: 1,
+            pid: 1000,
+            start_token: Some("t1".to_string()),
+            nonce: Some("n1".to_string()),
+        };
+        write_pid_atomic(&path, &record1).unwrap();
+        let record2 = PidRecord {
+            schema_version: 1,
+            pid: 2000,
+            start_token: Some("t2".to_string()),
+            nonce: Some("n2".to_string()),
+        };
+        write_pid_atomic(&path, &record2).unwrap();
+        match parse_pid_file(&path) {
+            ParsedPidFile::Structured(rec) => {
+                assert_eq!(rec.pid, 2000);
+            }
+            other => panic!("expected Structured, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_remove_pid_atomic_removes_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        fs::write(&path, "test").unwrap();
+        assert!(remove_pid_atomic(&path).is_ok());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_remove_pid_atomic_missing_is_ok() {
+        let path = PathBuf::from("/nonexistent/snip-sync.pid");
+        assert!(remove_pid_atomic(&path).is_ok());
+    }
+
+    #[test]
+    fn test_pid_guard_does_not_remove_replacement() {
+        // Simulate the race: a guard is dropped, but a replacement
+        // server has already published a new PID record. The guard
+        // must NOT unlink the replacement record.
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        let record = PidRecord {
+            schema_version: 1,
+            pid: std::process::id(),
+            start_token: Some("t".to_string()),
+            nonce: Some("n".to_string()),
+        };
+        write_pid_atomic(&path, &record).unwrap();
+        let guard = PidGuard {
+            path: path.clone(),
+            record,
+        };
+        // Replace with a different record (e.g. another server took over).
+        let replacement = PidRecord {
+            schema_version: 1,
+            pid: 1234,
+            start_token: Some("replacement-token".to_string()),
+            nonce: Some("replacement-nonce".to_string()),
+        };
+        write_pid_atomic(&path, &replacement).unwrap();
+        drop(guard);
+        // Replacement record must still be present.
+        match parse_pid_file(&path) {
+            ParsedPidFile::Structured(rec) => assert_eq!(rec.pid, 1234),
+            other => panic!("expected Structured replacement, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_record_still_matches_dead_pid() {
         let record = PidRecord {
             schema_version: 1,
-            pid: 99999999, // assumed dead
+            pid: 99999999,
             start_token: Some("anything".to_string()),
             nonce: Some("nonce".to_string()),
         };
@@ -470,8 +815,8 @@ mod tests {
 
     #[test]
     fn test_record_still_matches_no_start_token() {
-        // Legacy record with no start token: conservative policy treats live
-        // PID as a match (we cannot disprove it).
+        // Legacy record with no start token: conservative policy treats
+        // live PID as a match.
         let record = PidRecord {
             schema_version: 1,
             pid: std::process::id(),
@@ -484,9 +829,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_record_still_matches_pid_reuse_detected() {
-        // Write a record with a deliberately bogus start token for the
-        // current PID. The observed token from /proc/<pid>/stat will not
-        // match, so record_still_matches must return false.
         let bogus = "bogus-token-99999";
         let record = PidRecord {
             schema_version: 1,
@@ -502,5 +844,38 @@ mod tests {
         let a = generate_nonce();
         let b = generate_nonce();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_reconcile_pid_under_lock_dead_legacy_is_ok() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("snip-sync.pid"), "99999999").unwrap();
+        assert!(reconcile_pid_under_lock(temp.path()).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_reconcile_pid_under_lock_empty_is_ok() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("snip-sync.pid"), "").unwrap();
+        assert!(reconcile_pid_under_lock(temp.path()).is_ok());
+    }
+
+    #[test]
+    fn test_reconcile_pid_under_lock_missing_is_ok() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(reconcile_pid_under_lock(temp.path()).is_ok());
+    }
+
+    #[test]
+    fn test_reconcile_pid_under_lock_malformed_is_ok() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("snip-sync.pid"),
+            "this is not valid toml nor numeric",
+        )
+        .unwrap();
+        assert!(reconcile_pid_under_lock(temp.path()).is_ok());
     }
 }

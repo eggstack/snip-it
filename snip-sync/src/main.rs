@@ -68,28 +68,40 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
     snip_sync::bootstrap::ensure_config_file()?;
     let config = snip_sync::Config::load();
 
-    // Check for stale PID file before starting
-    if let Some(old_record) = snip_sync::process::read_pid_record() {
-        if snip_sync::process::record_still_matches(&old_record) {
+    // Acquire the kernel-backed server singleton lock. This is the
+    // authoritative mutual-exclusion barrier; the PID file is metadata
+    // that we publish while the lock is held.
+    let state_dir = snip_sync::paths::state_dir();
+    let _server_lock = match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
+        Ok(guard) => guard,
+        Err(snip_sync::server_lock::ServerLockError::Busy { owner }) => {
             return Err(format!(
-                "Server already running with PID {}. Use 'snip-sync stop' first.",
-                old_record.pid
+                "snip-sync server already running{}",
+                owner
+                    .map(|o| format!(" (pid={})", o.pid))
+                    .unwrap_or_default()
             )
             .into());
         }
-        tracing::warn!(
-            "Found stale PID file for process {}. Removing.",
-            old_record.pid
-        );
-        snip_sync::process::remove_pid();
-    }
+        Err(snip_sync::server_lock::ServerLockError::UnsupportedPlatform) => {
+            return Err("snip-sync server lock is not supported on this platform".into());
+        }
+        Err(snip_sync::server_lock::ServerLockError::Io(e)) => {
+            return Err(format!("Failed to acquire server lock: {e}").into());
+        }
+    };
 
+    // While the server lock is held, reconcile and atomically publish
+    // the PID record. The lock prevents a second `serve` from racing on
+    // the PID file.
+    snip_sync::process::reconcile_pid_under_lock(&state_dir)?;
     let _pid_guard =
         snip_sync::process::write_pid().map_err(|e| format!("Failed to write PID file: {}", e))?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    // PID file removal is owned by the guard; it only unlinks the file if
-    // the on-disk identity still matches the one we recorded at startup.
+    // Server lock and PID file removal are owned by the guards; the PID
+    // file guard only unlinks the file if the on-disk identity still
+    // matches the one we recorded at startup.
     rt.block_on(serve_inner(config))
 }
 
@@ -434,62 +446,99 @@ fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let record =
-        snip_sync::process::read_pid_record().ok_or("No PID file found. Is the server running?")?;
-    let pid = record.pid;
+    let state_dir = snip_sync::paths::state_dir();
+    // Snapshot the recorded identity so we can verify it after exit.
+    let expected = match snip_sync::process::read_pid_record() {
+        Some(r) => r,
+        None => return Err("No PID file found. Is the server running?".into()),
+    };
+    let pid = expected.pid;
 
     // Refuse to signal unless the recorded identity still matches a live
     // process. This guards against PID reuse — a recycled PID with a
     // different start token is not the server which wrote the PID file.
-    if !snip_sync::process::record_still_matches(&record) {
+    if !snip_sync::process::record_still_matches(&expected) {
         println!(
             "Process {} is not running (or its identity no longer matches the PID file). Cleaning up stale PID file.",
             pid
         );
-        snip_sync::process::remove_pid();
-        return Ok(());
-    }
-
-    if !force && !snip_sync::process::validate_process_name(pid) {
+        // Acquire the server lock first so a replacement server cannot
+        // be unlinked by our cleanup. If a new server is already running,
+        // the lock is busy and we must NOT remove its PID file.
+        match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
+            Ok(_guard) => {
+                snip_sync::process::remove_pid();
+                Ok(())
+            }
+            Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => {
+                // A replacement server is running; leave its PID file alone.
+                Ok(())
+            }
+            Err(e) => Err(format!("Failed to acquire server lock: {e}").into()),
+        }
+    } else if !force && !snip_sync::process::validate_process_name(pid) {
         eprintln!(
             "Warning: PID {} does not appear to be a snip-sync process.",
             pid
         );
         eprintln!("Use --force to stop it anyway.");
-        return Err("Refusing to stop non-snip-sync process".into());
-    }
+        Err("Refusing to stop non-snip-sync process".into())
+    } else {
+        #[cfg(not(unix))]
+        {
+            let _ = expected;
+            eprintln!("Stop is only supported on Unix systems.");
+            return Err("Unsupported platform".into());
+        }
 
-    #[cfg(not(unix))]
-    {
-        eprintln!("Stop is only supported on Unix systems.");
-        return Err("Unsupported platform".into());
-    }
+        #[cfg(unix)]
+        {
+            println!("Sending SIGTERM to process {}...", pid);
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
 
-    #[cfg(unix)]
-    {
-        println!("Sending SIGTERM to process {}...", pid);
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-
-        match snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10)) {
-            Ok(()) => {
-                snip_sync::process::remove_pid();
-                println!("Server stopped.");
-            }
-            Err(e) => {
+            let exit_result =
+                snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10));
+            if let Err(ref e) = exit_result {
                 eprintln!("Warning: {}", e);
-                if force {
-                    println!("Sending SIGKILL...");
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-                    snip_sync::process::remove_pid();
-                    println!("Server killed.");
-                } else {
-                    return Err(e.into());
+                if !force {
+                    return Err(exit_result.unwrap_err().into());
                 }
+                println!("Sending SIGKILL...");
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                let _ = snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(5));
+            }
+
+            // Acquire the server singleton lock before unlinking the
+            // PID record. If a new server has already started, the lock
+            // is busy and we leave its PID file alone.
+            match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
+                Ok(_guard) => {
+                    // Re-verify the on-disk record still identifies the
+                    // process we just stopped before removing it.
+                    if let Some(current) = snip_sync::process::read_pid_record()
+                        && current.pid == expected.pid
+                        && current.start_token == expected.start_token
+                        && current.nonce == expected.nonce
+                    {
+                        snip_sync::process::remove_pid();
+                    }
+                    if exit_result.is_ok() {
+                        println!("Server stopped.");
+                    } else {
+                        println!("Server killed.");
+                    }
+                    Ok(())
+                }
+                Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => {
+                    println!(
+                        "A replacement server has already started; leaving its PID file in place."
+                    );
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to acquire server lock: {e}").into()),
             }
         }
     }
-
-    Ok(())
 }
 
 fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {

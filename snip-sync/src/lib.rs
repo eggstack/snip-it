@@ -21,6 +21,7 @@ pub mod paths;
 pub mod premade;
 pub mod process;
 pub mod rate_limiter;
+pub mod server_lock;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 pub mod test_observer;
