@@ -8,6 +8,11 @@
 //! | success       | yes          | success, exactly one notification    |
 //! | failure       | no           | error, no notification               |
 //! | failure       | yes          | error, exactly one notification      |
+//!
+//! The tests use small POSIX shell scripts as the editor, so they are
+//! Unix-only.
+
+#![cfg(unix)]
 
 mod support;
 
