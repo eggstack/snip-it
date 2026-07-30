@@ -33,6 +33,11 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
 
     let resolved_editor = resolve_editor(&editor)?;
 
+    // Snapshot the exact pre-editor bytes so we can compare after the
+    // editor exits. Mutation notification must reflect whether bytes
+    // actually changed, independent of the editor's exit status.
+    let before = fs::read(&path)?;
+
     let status = Command::new(&resolved_editor)
         .arg(&path)
         .status()
@@ -40,23 +45,39 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
             SnipError::command_error(&resolved_editor, vec![path.display().to_string()], e)
         })?;
 
+    let after = fs::read(&path)?;
+    let changed = before != after;
+
     if !status.success() {
+        if changed {
+            crate::auto_sync::notify_mutation(
+                crate::auto_sync::MutationKind::SnippetUpdate,
+                crate::auto_sync::MutationOrigin::User,
+            );
+        }
         return Err(SnipError::runtime_error(
             "Editor failed",
             Some(&format!(
-                "EDITOR '{}' exited with non-zero status {:?}. The library was not modified.",
+                "EDITOR '{}' exited with non-zero status {:?}.{}",
                 resolved_editor,
-                status.code()
+                status.code(),
+                if changed {
+                    " The library was modified; saved changes were notified for sync."
+                } else {
+                    " The library was not modified."
+                }
             )),
         ));
     }
 
-    // Auto-sync trigger: notify after editor closes (Workstream B2).
-    // Output-only edits (run_edit_output) are local-only and do not trigger sync.
-    crate::auto_sync::notify_mutation(
-        crate::auto_sync::MutationKind::SnippetUpdate,
-        crate::auto_sync::MutationOrigin::User,
-    );
+    // Auto-sync trigger: notify only when the library actually changed.
+    // Unchanged editor sessions must not create pending sync intent.
+    if changed {
+        crate::auto_sync::notify_mutation(
+            crate::auto_sync::MutationKind::SnippetUpdate,
+            crate::auto_sync::MutationOrigin::User,
+        );
+    }
 
     Ok(())
 }
