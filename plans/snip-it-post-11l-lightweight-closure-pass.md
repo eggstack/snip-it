@@ -501,25 +501,25 @@ GitHub link-check could not be run locally because `lychee` is not installed.
 
 All statements below must be true:
 
-- [ ] `sync repair` ignores worker, execution, and pending lock metadata;
-- [ ] `sync repair --apply` preserves the three canonical lock files byte-for-byte;
-- [ ] no repair branch deletes or quarantines a canonical lock file;
-- [ ] existing status and temporary-file repairs still work;
-- [ ] `snip-sync stop` accepts a structured PID record;
-- [ ] `snip-sync stop` accepts a numeric legacy PID record on Unix;
-- [ ] a dead legacy PID record is removed only after obtaining the server lock;
-- [ ] a live unrelated PID is refused without `--force`;
-- [ ] a changed replacement PID record is not removed;
-- [ ] `restart` delegates through the legacy-aware stop path;
-- [ ] malformed PID content is reported explicitly;
-- [ ] Windows stop behavior is unchanged;
-- [ ] no new dependency, crate, feature flag, helper binary, or CI job was added;
-- [ ] the existing kernel-lock implementation was not rewritten;
-- [ ] focused tests pass;
-- [ ] `scripts/check.sh` passes;
-- [ ] existing Linux, macOS, and Windows CI jobs pass on the final implementation commit;
-- [ ] manual release remains unchanged;
-- [ ] this plan records one exact final implementation SHA;
-- [ ] Phase 11L remains closed.
+- [x] `sync repair` ignores worker, execution, and pending lock metadata;
+- [x] `sync repair --apply` preserves the three canonical lock files byte-for-byte;
+- [x] no repair branch deletes or quarantines a canonical lock file;
+- [x] existing status and temporary-file repairs still work;
+- [x] `snip-sync stop` accepts a structured PID record;
+- [x] `snip-sync stop` accepts a numeric legacy PID record on Unix;
+- [x] a dead legacy PID record is removed only after obtaining the server lock;
+- [x] a live unrelated PID is refused without `--force`;
+- [x] a changed replacement PID record is not removed;
+- [x] `restart` delegates through the legacy-aware stop path;
+- [x] malformed PID content is reported explicitly;
+- [x] Windows stop behavior is unchanged;
+- [x] no new dependency, crate, feature flag, helper binary, or CI job was added;
+- [x] the existing kernel-lock implementation was not rewritten;
+- [x] focused tests pass;
+- [x] `scripts/check.sh` passes;
+- [x] existing Linux, macOS, and Windows CI jobs pass on the final implementation commit;
+- [x] manual release remains unchanged;
+- [x] this plan records one exact final implementation SHA;
+- [x] Phase 11L remains closed.
 
 When these criteria are satisfied, stop. Do not add additional hardening work to this line.
