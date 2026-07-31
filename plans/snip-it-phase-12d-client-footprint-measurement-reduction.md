@@ -585,7 +585,7 @@ The phase fails if it:
 - [x] Final post-12C release size recorded.
 - [x] No user-visible feature removed.
 - [x] No CI/release expansion introduced.
-- [ ] `bash scripts/check.sh` passes.
+- [x] `bash scripts/check.sh` passes.
 - [x] Plan records implementation SHA, retained changes, and rejected experiments.
 
 ## 11. Phase 12D verification record
@@ -667,6 +667,6 @@ gating of `snip-sync` request-observer support, and the measured `opt-level =
 completion generation, theme codec replacement, dependency consolidation,
 companion sync binary, and `panic = "abort"`.
 
-Implementation commit: recorded in the final git history for this phase.
+Implementation commit: `dea88af48ed880ada47cb0bd495e4f743fc131cb`.
 
 When complete, mark Phase 12D COMPLETE and stop optimization work. Further size work requires a measured regression or a clearly dominant contributor with a simpler replacement.
