@@ -22,23 +22,23 @@ For the target logical layer architecture (Domain/Core → Sync-Client → Appli
 The CLI is the primary interface for users. The entry point is `src/main.rs` which uses `clap` to define all subcommands.
 
 **Commands** (`src/commands/`):
-- [new_cmd.md](commands/new_cmd.md) — Unified snippet creation and exact stdin ingestion
-- [list_cmd.md](commands/list_cmd.md) — Text-based snippet listing
-- [run_cmd.md](commands/run_cmd.md) — TUI selection + shell execution
-- [clip_cmd.md](commands/clip_cmd.md) — Copy snippet to clipboard
-- [search_cmd.md](commands/search_cmd.md) — Fuzzy search with detail display
-- [edit_cmd.md](commands/edit_cmd.md) — Open snippet config in `$EDITOR`
-- [select_cmd.md](commands/select_cmd.md) — Non-executing selection primitive for shell integration
-- [shell_cmd.md](commands/shell_cmd.md) — Shell integration code generation
-- [doctor_cmd.md](commands/doctor_cmd.md) — Compatibility diagnostics and pet file analysis
-- [import_cmd.md](commands/import_cmd.md) — Pet snippet file import
-- [keybindings_cmd.md](commands/keybindings_cmd.md) — TUI keybindings reference
-- [sync_cmd.md](commands/sync_cmd.md) — Bidirectional sync with server, recovery commands (retry, clear-failure, discard-pending, repair)
-- [cron_cmd.md](commands/cron_cmd.md) — Crontab generation for periodic sync
-- [register_cmd.md](commands/register_cmd.md) — Device registration
-- [library_cmd.md](commands/library_cmd.md) — Library management subcommands
-- [premade_cmd.md](commands/premade_cmd.md) — Premade library access
-- [mod.md](commands/mod.md) — Shared helpers (path resolution, library loading, snippet expansion)
+- [new_cmd](commands/new_cmd.md) — Unified snippet creation and exact stdin ingestion
+- [list_cmd](commands/list_cmd.md) — Text-based snippet listing
+- [run_cmd](commands/run_cmd.md) — TUI selection + shell execution
+- [clip_cmd](commands/clip_cmd.md) — Copy snippet to clipboard
+- [search_cmd](commands/search_cmd.md) — Fuzzy search with detail display
+- [edit_cmd](commands/edit_cmd.md) — Open snippet config in `$EDITOR`
+- [select_cmd](commands/select_cmd.md) — Non-executing selection primitive for shell integration
+- [shell_cmd](commands/shell_cmd.md) — Shell integration code generation
+- [doctor_cmd](commands/doctor_cmd.md) — Compatibility diagnostics and pet file analysis
+- [import_cmd](commands/import_cmd.md) — Pet snippet file import
+- [keybindings_cmd](commands/keybindings_cmd.md) — TUI keybindings reference
+- [sync_cmd](commands/sync_cmd.md) — Bidirectional sync with server, recovery commands (retry, clear-failure, discard-pending, repair)
+- [cron_cmd](commands/cron_cmd.md) — Crontab generation for periodic sync
+- [register_cmd](commands/register_cmd.md) — Device registration
+- [library_cmd](commands/library_cmd.md) — Library management subcommands
+- [premade_cmd](commands/premade_cmd.md) — Premade library access
+- [mod](commands/mod.md) — Shared helpers (path resolution, library loading, snippet expansion)
 
 **Command Patterns**:
 - Async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`) initialize the global Tokio runtime on first use
@@ -298,6 +298,10 @@ See [docs/API_TIGHTENING_FINDINGS.md](../docs/API_TIGHTENING_FINDINGS.md) and [d
 | [commands/search_cmd.md](commands/search_cmd.md) | Fuzzy search with detail display |
 | [commands/list_cmd.md](commands/list_cmd.md) | Text-based snippet listing |
 | [commands/edit_cmd.md](commands/edit_cmd.md) | Open snippet in `$EDITOR` |
+| [commands/select_cmd.md](commands/select_cmd.md) | Non-executing selection for shell integration |
+| [commands/shell_cmd.md](commands/shell_cmd.md) | Shell integration code generation (bash/zsh/fish) |
+| [commands/doctor_cmd.md](commands/doctor_cmd.md) | Diagnostics, pet analysis, environment audit |
+| [commands/import_cmd.md](commands/import_cmd.md) | Pet snippet file import |
 | [commands/sync_cmd.md](commands/sync_cmd.md) | Sync and config subcommands |
 | [commands/cron_cmd.md](commands/cron_cmd.md) | Crontab generation for periodic sync |
 | [commands/register_cmd.md](commands/register_cmd.md) | Device registration |
@@ -330,4 +334,4 @@ See [docs/API_TIGHTENING_FINDINGS.md](../docs/API_TIGHTENING_FINDINGS.md) and [d
 | **Testing** | |
 | [test-infrastructure.md](test-infrastructure.md) | Deterministic E2E test infrastructure (Phase 05A) |
 
-> **Note**: Architecture docs for `select_cmd`, `shell_cmd`, `doctor_cmd`, `import_cmd`, and `pet_analysis` are not yet written. See `docs/ARCHITECTURE_INVENTORY.md` for a comprehensive module inventory.
+> **Note**: See `docs/ARCHITECTURE_INVENTORY.md` for a comprehensive module inventory.
