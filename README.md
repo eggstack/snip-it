@@ -368,6 +368,11 @@ files persist on disk and may contain stale metadata.
 their metadata is diagnostic, and the next lock acquirer refreshes it after
 obtaining the kernel lock.
 
+The hidden worker reports failed sync execution with a nonzero internal exit
+status, so supervisors and diagnostics do not mistake a failed background sync
+for a successful one. The worker is re-executed using the current executable's
+native path representation, preserving valid non-UTF-8 Unix paths.
+
 ## CLI overview
 
 ```text

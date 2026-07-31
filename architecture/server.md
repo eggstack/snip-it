@@ -186,6 +186,11 @@ allowed_origins = "https://example.com"
 
 All values can be overridden via environment variables.
 
+Configuration loading is fail-closed for existing files. A malformed or
+unreadable `config.toml` causes `serve` and `croncheck` to return an error that
+identifies the path; compiled defaults are used only when the file is absent.
+Environment variables retain precedence over TOML values.
+
 ## Process lifecycle
 
 `snip-sync serve` holds the server singleton kernel lock for its full runtime
@@ -208,6 +213,9 @@ the operating-system lock, not by whether the file exists.
 - gRPC max message size: 4 MiB configurable
 - Snippet field length limits enforced server-side
 - Server generic error messages — no internal details exposed to clients
+- Authenticated request metadata is extracted for the request and is not
+  retained in production service state; bearer-header capture exists only in
+  test-helper builds.
 - Metrics endpoint: HTTP basic auth with constant-time comparison
 
 ## Key Files

@@ -100,6 +100,11 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 ### Kernel-backed process file locks
 All auto-sync locks and the `snip-sync` server singleton use `flock` (Unix) / `LockFileEx` (Windows). The kernel alone is authoritative — persistent lock files may contain stale metadata. `Drop` releases the lock without unlinking the file.
 
+Linux process start tokens use `/proc/<pid>/stat` field 22 (`starttime`), and
+Unix `kill(pid, 0)` probes treat `EPERM` and unknown errors as a live process;
+only `ESRCH` proves absence. The hidden auto-sync worker maps `Failed` to the
+existing general-error exit code while `Success` and `NothingToDo` remain zero.
+
 ### Mutation gate
 `gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. Single journal = auto-rollback; multiple/incomplete = refuse and direct to `snp repair`.
 

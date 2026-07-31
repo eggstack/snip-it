@@ -152,6 +152,11 @@ If metadata publication fails after kernel acquisition, the kernel lock is relea
 
 [`LockIdentity`](../../src/process_file_lock.rs) is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
 
+On Linux, process start identity is parsed from `/proc/<pid>/stat` using field
+22 (`starttime`) after locating the final closing parenthesis of `comm`, which
+also handles spaces and parentheses in process names. Unix liveness probes
+treat `ESRCH` as absent and `EPERM` or unknown errors conservatively as alive.
+
 ### Wrappers
 
 Three thin wrappers in `src/auto_sync/` consume the primitive and preserve the existing public types and error variants:

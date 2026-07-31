@@ -44,7 +44,7 @@ detached worker process (snp auto-sync-worker --state-dir ...)
      -> on success with no newer generation: clear_if_generation_matches
      -> on success with newer generation: continue loop (follow-up cycle)
      -> release execution lock
-  -> exit WorkerOutcome
+  -> exit WorkerOutcome (0 for Success/NothingToDo, nonzero for Failed)
 ```
 
 **Key point:** All mutation commands use a single central API (`notify_mutation` / `notify_local_mutation`). No command spawns its own worker or schedules its own pending state. `schedule_sync()` is the sole scheduling authority — it centralizes all spawn decisions and prevents worker storms. **Release 5 corrective:** the API split guarantees that only `record_pending_mutation` increments the generation; `schedule_existing_pending` never mutates the marker. The parent never holds the execution lock — every spawned worker races for the lock and exactly one wins. **Release 5F:** the worker spawns an executor subprocess for the actual sync; on timeout the executor is killed via SIGTERM/SIGKILL.
@@ -267,7 +267,13 @@ The detached worker:
 - On success, the worker records status but **does not clear pending** — the executor clears pending after remote acknowledgement. **Phase 11E:** the worker observes the executor exit code but does not clear pending based on child exit status alone. The executor clears pending only after `run_sync` returns `Ok(())`.
 - On `NothingToDo` (no pending state, lock contention, max-lifetime exceeded, or policy disabled), the marker is preserved — pending is only cleared on a real successful comparison.
 - A newer generation that appears during sync is detected on the next loop iteration and triggers a follow-up cycle.
-- Exits with `WorkerOutcome::{Success, Failed, NothingToDo}` mapped to internal exit codes (0/0/0).
+- Exits with `WorkerOutcome::{Success, Failed, NothingToDo}` mapped to internal
+  exit codes (0/1/0). A failed hidden worker therefore remains observable to
+  supervisors without changing public command exit behavior.
+
+The worker and executor pass the current executable to `Command` as a native
+`Path`/`OsStr`, so Unix executable paths containing non-UTF-8 bytes are not
+changed by a lossy UTF-8 conversion.
 
 The parent never waits for the worker. There is no IPC, no in-process debounce state, no shared Tokio runtime across the fork boundary. The worker creates its own Tokio runtime internally.
 

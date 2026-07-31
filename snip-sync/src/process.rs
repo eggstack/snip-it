@@ -400,8 +400,16 @@ pub fn remove_pid() {
 /// the server.
 #[cfg(unix)]
 pub fn is_running(pid: u32) -> bool {
-    // kill(0, 0) checks if process exists without sending a signal
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    if pid == 0 {
+        return true;
+    }
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
+}
+
+#[cfg(unix)]
+fn classify_kill_zero_error(errno: Option<i32>) -> bool {
+    !matches!(errno, Some(libc::ESRCH))
 }
 
 #[cfg(windows)]
@@ -580,13 +588,14 @@ pub fn get_process_start_token(pid: u32) -> Option<String> {
     let content = fs::read_to_string(&stat_path).ok()?;
     // Field 22 (1-indexed) is `starttime`. The comm field (field 2) may
     // contain spaces or parens, so find the last `)` and count from there.
-    let after_comm = content.rfind(')')?;
-    let fields: Vec<&str> = content[after_comm + 2..].split_whitespace().collect();
-    if fields.len() >= 19 {
-        Some(fields[18].to_string())
-    } else {
-        None
-    }
+    parse_linux_proc_start_token(&content)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_proc_start_token(stat: &str) -> Option<String> {
+    let after_comm = stat.rfind(')')?;
+    let fields: Vec<&str> = stat.get(after_comm + 2..)?.split_whitespace().collect();
+    fields.get(19).map(|value| (*value).to_owned())
 }
 
 #[cfg(target_os = "macos")]
@@ -655,6 +664,23 @@ pub fn get_process_start_token(_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_start_token_parser_reads_field_22() {
+        let stat = "42 (name with ) parens) S f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 FIELD21 START22";
+        assert_eq!(parse_linux_proc_start_token(stat), Some("START22".into()));
+        assert_ne!(parse_linux_proc_start_token(stat), Some("FIELD21".into()));
+        assert_eq!(parse_linux_proc_start_token("1 (short) S f3"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_zero_error_classification_is_conservative() {
+        assert!(classify_kill_zero_error(Some(libc::EPERM)));
+        assert!(!classify_kill_zero_error(Some(libc::ESRCH)));
+        assert!(classify_kill_zero_error(Some(libc::EINVAL)));
+    }
 
     #[test]
     fn test_parse_pid_file_structured_round_trip() {

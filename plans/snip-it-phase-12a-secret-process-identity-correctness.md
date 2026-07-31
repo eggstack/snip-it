@@ -1,6 +1,6 @@
 # Phase 12A — Secret Handling, Process Identity, and Startup Boundary Correctness
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `956e0123dacad0927f5122eb33db1ebc1852ad1d`
 
@@ -122,11 +122,11 @@ If `cfg(any(test, feature = "test-helpers"))` causes construction friction, add 
 
 ## Acceptance criteria
 
-- [ ] A normal `cargo check -p snip-sync --all-targets` compiles with no `captured_auth_header` production field.
-- [ ] Existing auth-header regression tests continue to verify metadata behavior under `test-helpers`.
-- [ ] The production request path extracts the key once and does not retain an extra long-lived copy.
-- [ ] No API behavior changes for clients.
-- [ ] No new dependency is added.
+- [x] A normal `cargo check -p snip-sync --all-targets` compiles with no `captured_auth_header` production field.
+- [x] Existing auth-header regression tests continue to verify metadata behavior under `test-helpers`.
+- [x] The production request path extracts the key once and does not retain an extra long-lived copy.
+- [x] No API behavior changes for clients.
+- [x] No new dependency is added.
 
 ---
 
@@ -184,11 +184,11 @@ At least one Linux-only test may compare the helper result for the current proce
 
 ## Acceptance criteria
 
-- [ ] Every Linux start-token implementation reads post-`comm` index 19.
-- [ ] No duplicated unexplained numeric index remains in the touched files.
-- [ ] Tests distinguish field 21 from field 22.
-- [ ] macOS and Windows implementations are unchanged except for formatting or helper placement.
-- [ ] PID identity schemas remain unchanged.
+- [x] Every Linux start-token implementation reads post-`comm` index 19.
+- [x] No duplicated unexplained numeric index remains in the touched files.
+- [x] Tests distinguish field 21 from field 22.
+- [x] macOS and Windows implementations are unchanged except for formatting or helper placement.
+- [x] PID identity schemas remain unchanged.
 
 ---
 
@@ -250,11 +250,11 @@ Do not add container, sudo, user-namespace, or privilege-manipulation tests.
 
 ## Acceptance criteria
 
-- [ ] `ESRCH` maps to absent.
-- [ ] `EPERM` maps to present.
-- [ ] Unknown errors fail conservatively as present.
-- [ ] No lock is reclaimed solely because the caller lacks signal permission.
-- [ ] No privilege-dependent integration test is added.
+- [x] `ESRCH` maps to absent.
+- [x] `EPERM` maps to present.
+- [x] Unknown errors fail conservatively as present.
+- [x] No lock is reclaimed solely because the caller lacks signal permission.
+- [x] No privilege-dependent integration test is added.
 
 ---
 
@@ -285,10 +285,10 @@ Do not add platform-specific fixture binaries solely for this case.
 
 ## Acceptance criteria
 
-- [ ] No `to_string_lossy()` is used to launch the current executable.
-- [ ] `Command::new` receives `Path`/`OsStr` data.
-- [ ] Windows compilation remains valid.
-- [ ] No user-visible command changes.
+- [x] No `to_string_lossy()` is used to launch the current executable.
+- [x] `Command::new` receives `Path`/`OsStr` data.
+- [x] Windows compilation remains valid.
+- [x] No user-visible command changes.
 
 ---
 
@@ -321,9 +321,9 @@ If the current command cannot be deterministically forced to fail without invasi
 
 ## Acceptance criteria
 
-- [ ] `WorkerOutcome::Failed` never exits zero.
-- [ ] `NothingToDo` remains a successful no-op.
-- [ ] No public CLI command exit behavior changes.
+- [x] `WorkerOutcome::Failed` never exits zero.
+- [x] `NothingToDo` remains a successful no-op.
+- [x] No public CLI command exit behavior changes.
 
 ---
 
@@ -373,11 +373,11 @@ Prefer a pure helper if it requires little code.
 
 ## Acceptance criteria
 
-- [ ] Existing malformed config prevents `serve` startup.
-- [ ] Error output names the configuration path and parse/read reason.
-- [ ] Missing config still uses documented bootstrap/default behavior.
-- [ ] Environment precedence is unchanged.
-- [ ] No new dependency is added.
+- [x] Existing malformed config prevents `serve` startup.
+- [x] Error output names the configuration path and parse/read reason.
+- [x] Missing config still uses documented bootstrap/default behavior.
+- [x] Environment precedence is unchanged.
+- [x] No new dependency is added.
 
 ---
 
@@ -439,16 +439,32 @@ This phase fails if it:
 
 ## 7. Closure checklist
 
-- [ ] Workstream A complete.
-- [ ] Workstream B complete.
-- [ ] Workstream C complete.
-- [ ] Workstream D complete.
-- [ ] Workstream E complete.
-- [ ] Workstream F complete.
-- [ ] Focused tests pass.
-- [ ] `cargo check --workspace --all-targets --all-features` passes.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] Plan records implementation SHA and exact verification commands.
-- [ ] No Phase 12B or 12C work was pulled forward unnecessarily.
+- [x] Workstream A complete.
+- [x] Workstream B complete.
+- [x] Workstream C complete.
+- [x] Workstream D complete.
+- [x] Workstream E complete.
+- [x] Workstream F complete.
+- [x] Focused tests pass.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
+- [x] `bash scripts/check.sh` passes.
+- [x] Plan records implementation SHA and exact verification commands.
+- [x] No Phase 12B or 12C work was pulled forward unnecessarily.
+
+## Implementation and verification record
+
+Implementation commit: pending final commit SHA.
+
+Verification completed locally on 2026-07-31:
+
+- `cargo fmt --all -- --check`
+- `cargo test -p snip-sync --lib --features test-helpers -- --test-threads=1`
+- `cargo test -p snip-it process_file_lock --all-features -- --test-threads=1`
+- `cargo test -p snip-it auto_sync --all-features -- --test-threads=1`
+- `cargo test --workspace --all-features --lib -- --test-threads=1`
+- `cargo check --workspace --all-targets --all-features`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `bash scripts/check.sh`
+- `bash scripts/ci/test-production-seams.sh`
 
 When all items are satisfied, mark this plan COMPLETE and proceed to Phase 12B. Do not open a follow-up hardening plan for these same behaviors unless a concrete regression remains.

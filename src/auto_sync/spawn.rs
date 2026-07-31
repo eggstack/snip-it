@@ -16,14 +16,12 @@ pub const EXECUTOR_SUBCOMMAND: &str = "auto-sync-execute";
 #[non_exhaustive]
 pub enum SpawnError {
     Spawn(std::io::Error),
-    NoExecutable,
 }
 
 impl std::fmt::Display for SpawnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Spawn(e) => write!(f, "spawn failed: {e}"),
-            Self::NoExecutable => write!(f, "could not locate snp executable"),
         }
     }
 }
@@ -32,9 +30,7 @@ impl std::error::Error for SpawnError {}
 
 pub fn spawn_worker(state_dir: &Path) -> Result<u32, SpawnError> {
     let exe = std::env::current_exe().map_err(SpawnError::Spawn)?;
-    let exe_path = exe.to_string_lossy().to_string();
-
-    let mut cmd = Command::new(&exe_path);
+    let mut cmd = Command::new(&exe);
     cmd.arg(WORKER_SUBCOMMAND);
     cmd.arg("--state-dir");
     cmd.arg(state_dir.as_os_str());
@@ -76,9 +72,7 @@ pub fn spawn_executor(
     generation: u64,
 ) -> Result<std::process::Child, SpawnError> {
     let exe = std::env::current_exe().map_err(SpawnError::Spawn)?;
-    let exe_path = exe.to_string_lossy().to_string();
-
-    let mut cmd = Command::new(&exe_path);
+    let mut cmd = Command::new(&exe);
     cmd.arg(EXECUTOR_SUBCOMMAND);
     cmd.arg("--state-dir");
     cmd.arg(state_dir.as_os_str());
@@ -129,12 +123,6 @@ mod tests {
     #[test]
     fn test_worker_subcommand_name() {
         assert_eq!(WORKER_SUBCOMMAND, "auto-sync-worker");
-    }
-
-    #[test]
-    fn test_spawn_error_display() {
-        let e = SpawnError::NoExecutable;
-        assert_eq!(e.to_string(), "could not locate snp executable");
     }
 
     #[test]

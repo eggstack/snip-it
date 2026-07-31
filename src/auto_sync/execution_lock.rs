@@ -177,7 +177,16 @@ pub fn process_alive(pid: u32) -> bool {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     const SIGNAL_NOOP: i32 = 0;
-    unsafe { kill(pid as i32, SIGNAL_NOOP) == 0 }
+    if pid == 0 {
+        return true;
+    }
+    let rc = unsafe { kill(pid as i32, SIGNAL_NOOP) };
+    rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
+}
+
+#[cfg(unix)]
+fn classify_kill_zero_error(errno: Option<i32>) -> bool {
+    !matches!(errno, Some(libc::ESRCH))
 }
 
 #[cfg(not(unix))]
@@ -413,6 +422,14 @@ mod tests {
     #[test]
     fn test_process_alive_nonexistent_pid() {
         assert!(!process_alive(99999999));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_kill_zero_error_classification_is_conservative() {
+        assert!(classify_kill_zero_error(Some(libc::EPERM)));
+        assert!(!classify_kill_zero_error(Some(libc::ESRCH)));
+        assert!(classify_kill_zero_error(Some(libc::EINVAL)));
     }
 
     #[test]

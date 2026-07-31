@@ -1196,9 +1196,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
             match outcome {
                 snip_it::auto_sync::WorkerOutcome::Success
-                | snip_it::auto_sync::WorkerOutcome::NothingToDo
-                | snip_it::auto_sync::WorkerOutcome::Failed => {}
-                _ => {}
+                | snip_it::auto_sync::WorkerOutcome::NothingToDo => {}
+                snip_it::auto_sync::WorkerOutcome::Failed => {
+                    std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR)
+                }
+                _ => std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR),
             }
         }
         Some(Commands::AutoSyncExecute {

@@ -179,69 +179,70 @@ pub struct Config {
     pub cors_allowed_origins: Vec<String>,
 }
 
-impl Config {
-    pub fn load() -> Self {
-        let config_path = paths::config_path();
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigLoadError {
+    #[error("failed to read configuration file {path}: {source}")]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to parse configuration file {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+}
 
-        let config_file = if config_path.exists() {
-            match std::fs::read_to_string(&config_path) {
-                Ok(content) => match toml::from_str(&content) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to parse config file {}: {}. Using defaults. Fix the config file or remove it to regenerate.",
-                            config_path.display(),
-                            e
-                        );
-                        ConfigFile::default()
-                    }
-                },
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to read config file {}: {}. Using defaults.",
-                        config_path.display(),
-                        e
-                    );
-                    ConfigFile::default()
-                }
+impl Config {
+    pub fn load() -> Result<Self, ConfigLoadError> {
+        let config_path = paths::config_path();
+        Self::load_from(&config_path, &|name| std::env::var(name).ok())
+    }
+
+    fn load_from(
+        config_path: &std::path::Path,
+        env: &impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, ConfigLoadError> {
+        let config_file = match std::fs::read_to_string(config_path) {
+            Ok(content) => toml::from_str(&content).map_err(|source| ConfigLoadError::Parse {
+                path: config_path.to_path_buf(),
+                source,
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
+            Err(source) => {
+                return Err(ConfigLoadError::Read {
+                    path: config_path.to_path_buf(),
+                    source,
+                });
             }
-        } else {
-            ConfigFile::default()
         };
 
         let server = config_file.server.unwrap_or_default();
 
-        Self {
-            grpc_host: std::env::var("GRPC_HOST")
-                .ok()
+        Ok(Self {
+            grpc_host: env("GRPC_HOST")
                 .or_else(|| server.grpc_host.clone())
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
-            grpc_port: std::env::var("GRPC_PORT")
-                .ok()
+            grpc_port: env("GRPC_PORT")
                 .and_then(|v| v.parse().ok())
                 .or(server.grpc_port)
                 .unwrap_or(50051),
-            http_host: std::env::var("HTTP_HOST")
-                .ok()
+            http_host: env("HTTP_HOST")
                 .or_else(|| server.http_host.clone())
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
-            http_port: std::env::var("HTTP_PORT")
-                .ok()
+            http_port: env("HTTP_PORT")
                 .and_then(|v| v.parse().ok())
                 .or(server.http_port)
                 .unwrap_or(50050),
-            db_path: std::env::var("DATABASE_URL")
-                .ok()
+            db_path: env("DATABASE_URL")
                 .or_else(|| server.database.as_ref().and_then(|d| d.path.clone()))
                 .unwrap_or_else(|| paths::default_db_path().to_string_lossy().into_owned()),
-            db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
-                .ok()
+            db_max_connections: env("DB_MAX_CONNECTIONS")
                 .and_then(|v| v.parse().ok())
                 .or(server.database.as_ref().and_then(|d| d.max_connections))
                 .unwrap_or(DEFAULT_DB_MAX_CONNECTIONS),
-            premade_dir: std::env::var("PREMADE_DIR")
+            premade_dir: env("PREMADE_DIR")
                 .map(PathBuf::from)
-                .ok()
                 .or_else(|| {
                     server
                         .premade
@@ -250,64 +251,53 @@ impl Config {
                         .map(PathBuf::from)
                 })
                 .unwrap_or_else(paths::default_premade_dir),
-            max_command_length: std::env::var("MAX_COMMAND_LENGTH")
-                .ok()
+            max_command_length: env("MAX_COMMAND_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_command_length))
                 .unwrap_or(DEFAULT_MAX_COMMAND_LENGTH),
-            max_description_length: std::env::var("MAX_DESCRIPTION_LENGTH")
-                .ok()
+            max_description_length: env("MAX_DESCRIPTION_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server
                     .limits
                     .as_ref()
                     .and_then(|l| l.max_description_length))
                 .unwrap_or(DEFAULT_MAX_DESCRIPTION_LENGTH),
-            max_tags: std::env::var("MAX_TAGS")
-                .ok()
+            max_tags: env("MAX_TAGS")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_tags))
                 .unwrap_or(DEFAULT_MAX_TAGS),
-            max_tag_length: std::env::var("MAX_TAG_LENGTH")
-                .ok()
+            max_tag_length: env("MAX_TAG_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_tag_length))
                 .unwrap_or(DEFAULT_MAX_TAG_LENGTH),
-            max_id_length: std::env::var("MAX_ID_LENGTH")
-                .ok()
+            max_id_length: env("MAX_ID_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_id_length))
                 .unwrap_or(DEFAULT_MAX_ID_LENGTH),
-            max_device_id_length: std::env::var("MAX_DEVICE_ID_LENGTH")
-                .ok()
+            max_device_id_length: env("MAX_DEVICE_ID_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_device_id_length))
                 .unwrap_or(DEFAULT_MAX_DEVICE_ID_LENGTH),
-            max_api_key_length: std::env::var("MAX_API_KEY_LENGTH")
-                .ok()
+            max_api_key_length: env("MAX_API_KEY_LENGTH")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.max_api_key_length))
                 .unwrap_or(DEFAULT_MAX_API_KEY_LENGTH),
-            request_timeout_secs: std::env::var("REQUEST_TIMEOUT_SECS")
-                .ok()
+            request_timeout_secs: env("REQUEST_TIMEOUT_SECS")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.request_timeout_secs))
                 .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
-            grpc_max_message_size: std::env::var("GRPC_MAX_MESSAGE_SIZE")
-                .ok()
+            grpc_max_message_size: env("GRPC_MAX_MESSAGE_SIZE")
                 .and_then(|v| v.parse().ok())
                 .or(server.limits.as_ref().and_then(|l| l.grpc_max_message_size))
                 .unwrap_or(DEFAULT_GRPC_MAX_MESSAGE_SIZE),
-            rate_limit_per_minute: std::env::var("RATE_LIMIT_PER_MINUTE")
-                .ok()
+            rate_limit_per_minute: env("RATE_LIMIT_PER_MINUTE")
                 .and_then(|v| v.parse().ok())
                 .or(server
                     .rate_limit
                     .as_ref()
                     .and_then(|r| r.requests_per_minute))
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
-            trusted_proxies: std::env::var("TRUSTED_PROXIES")
-                .ok()
+            trusted_proxies: env("TRUSTED_PROXIES")
                 .map(|v| {
                     v.split(',')
                         .map(|s| s.trim().to_string())
@@ -316,19 +306,15 @@ impl Config {
                 })
                 .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
                 .unwrap_or_default(),
-            persist_rate_limits: std::env::var("PERSIST_RATE_LIMITS")
-                .ok()
+            persist_rate_limits: env("PERSIST_RATE_LIMITS")
                 .map(|v| v == "true" || v == "1")
                 .or(server.rate_limit.as_ref().and_then(|r| r.persist))
                 .unwrap_or(false),
-            metrics_username: std::env::var("METRICS_USERNAME")
-                .ok()
+            metrics_username: env("METRICS_USERNAME")
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
-            metrics_password: std::env::var("METRICS_PASSWORD")
-                .ok()
+            metrics_password: env("METRICS_PASSWORD")
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.password.clone())),
-            cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS")
-                .ok()
+            cors_allowed_origins: env("CORS_ALLOWED_ORIGINS")
                 .or_else(|| server.cors.as_ref().and_then(|c| c.allowed_origins.clone()))
                 .map(|v| {
                     v.split(',')
@@ -338,7 +324,7 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
-        }
+        })
     }
 
     pub fn ensure_config_file() {
@@ -366,6 +352,7 @@ pub struct SnipSyncService {
     /// sync client actually sends a non-empty bearer token in metadata
     /// (catching the auth-header regression where `request.api_key` was
     /// read instead of the caller's API key).
+    #[cfg(any(test, feature = "test-helpers"))]
     pub captured_auth_header: Arc<std::sync::Mutex<Option<String>>>,
     /// Test-only: optional request observer for telemetry tests.
     /// When set, `record_request` and `record_request_finished` emit
@@ -467,8 +454,15 @@ impl SnipSyncService {
             .inc();
     }
 
-    fn capture_auth_header<T>(&self, request: &Request<T>, body_api_key: &str) -> String {
+    fn request_api_key<T>(&self, request: &Request<T>, body_api_key: &str) -> String {
         let api_key = extract_api_key(request, body_api_key);
+        #[cfg(any(test, feature = "test-helpers"))]
+        self.capture_test_auth_header(&api_key);
+        api_key
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    fn capture_test_auth_header(&self, api_key: &str) {
         if !api_key.is_empty() {
             let mut slot = self
                 .captured_auth_header
@@ -478,7 +472,6 @@ impl SnipSyncService {
                 *slot = Some(format!("Bearer {api_key}"));
             }
         }
-        api_key
     }
 
     pub async fn authenticate_and_rate_limit(&self, api_key: &str) -> Result<String, Status> {
@@ -746,7 +739,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("get_snippets");
         tracing::info!(request_id = %request_id, "GetSnippets request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -849,7 +842,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("push_snippets");
         tracing::info!(request_id = %request_id, "PushSnippets request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -979,7 +972,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("sync");
         tracing::info!(request_id = %request_id, "Sync request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -1196,7 +1189,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("create_library");
         self.record_library_op("create");
         tracing::info!(request_id = %request_id, "CreateLibrary request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -1252,7 +1245,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("list_libraries");
         self.record_library_op("list");
         tracing::info!(request_id = %request_id, "ListLibraries request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -1312,7 +1305,7 @@ impl SnippetSync for SnipSyncService {
         self.record_request("delete_library");
         self.record_library_op("delete");
         tracing::info!(request_id = %request_id, "DeleteLibrary request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -1370,7 +1363,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("list_premade_libraries");
         tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let _req = request.into_inner();
 
         let user_id = self
@@ -1421,7 +1414,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("get_premade_library");
         tracing::info!(request_id = %request_id, "GetPremadeLibrary request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
@@ -1492,7 +1485,7 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("search_premade_libraries");
         tracing::info!(request_id = %request_id, "SearchPremadeLibraries request");
-        let api_key = self.capture_auth_header(&request, &request.get_ref().api_key);
+        let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let _user_id = self
@@ -1590,6 +1583,7 @@ mod tests {
             config,
             metrics,
             premade_manager,
+            #[cfg(any(test, feature = "test-helpers"))]
             captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
             test_observer: None,
         }
@@ -1972,5 +1966,59 @@ mod tests {
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert_eq!(error.message(), "Invalid filename");
+    }
+
+    #[test]
+    fn config_load_missing_file_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.toml");
+        let config = Config::load_from(&path, &|_| None).unwrap();
+        assert_eq!(config.grpc_port, 50051);
+        assert_eq!(config.http_port, 50050);
+    }
+
+    #[test]
+    fn config_load_merges_file_and_environment_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[server]\ngrpc_port = 51000\nhttp_host = \"192.0.2.10\"\n",
+        )
+        .unwrap();
+        let config = Config::load_from(&path, &|name| {
+            (name == "GRPC_PORT").then(|| "52000".to_string())
+        })
+        .unwrap();
+        assert_eq!(config.grpc_port, 52000);
+        assert_eq!(config.http_host, "192.0.2.10");
+    }
+
+    #[test]
+    fn config_load_rejects_malformed_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server\n").unwrap();
+        let error = match Config::load_from(&path, &|_| None) {
+            Ok(_) => panic!("malformed config unexpectedly loaded"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("parse"));
+    }
+
+    #[test]
+    fn config_load_rejects_unreadable_existing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = match Config::load_from(dir.path(), &|_| None) {
+            Ok(_) => panic!("directory unexpectedly loaded as config"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(&dir.path().display().to_string())
+        );
     }
 }

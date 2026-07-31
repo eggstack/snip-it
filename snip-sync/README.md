@@ -147,6 +147,10 @@ CONFIG_PATH=/etc/snip-sync/config.toml snip-sync serve
 Configuration priority is environment variables, then the TOML file, then
 compiled defaults. The generated file contains the common settings:
 
+An existing configuration file is fail-closed: malformed TOML or an unreadable
+file stops startup with an error naming the path. Defaults are used only when
+the configuration file is missing (and the normal bootstrap path may create it).
+
 ```toml
 [server]
 grpc_host = "127.0.0.1"

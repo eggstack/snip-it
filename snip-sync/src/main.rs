@@ -66,7 +66,7 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     snip_sync::bootstrap::ensure_layout()?;
     snip_sync::bootstrap::ensure_config_file()?;
-    let config = snip_sync::Config::load();
+    let config = snip_sync::Config::load()?;
 
     // Acquire the kernel-backed server singleton lock. This is the
     // authoritative mutual-exclusion barrier; the PID file is metadata
@@ -214,6 +214,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         config,
         metrics,
         premade_manager,
+        #[cfg(feature = "test-helpers")]
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
         #[cfg(feature = "test-helpers")]
         test_observer: None,
@@ -623,7 +624,7 @@ fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let config = snip_sync::Config::load();
+    let config = snip_sync::Config::load()?;
 
     if check_health(&config.http_host, config.http_port) {
         if verbose {
