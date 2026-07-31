@@ -1,8 +1,30 @@
 # Post-Phase-11L — Kernel Lock, PID Lifecycle, and Editor Mutation Corrective Pass
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 Corrective baseline: `48a20a7f701bf49924aa77c39ff4a5af6b40f7ba`
+
+Final implementation SHA: see the merge commit on `main` covering the post-11L sequence:
+
+- `adc8615` — Add kernel-backed process file lock primitive
+- `e3b28f4` — Migrate worker, execution, and pending locks to kernel primitive
+- `fc790ca` — snip-sync server singleton lock and PID compatibility
+- `008e84e` — `snp edit` notifies based on actual byte change
+- `1cc0200` — Document kernel lock model and edit byte-change detection
+- `8c8e669` — cfg-gate `edit_mutation_notify` to Unix and tidy imports
+- `95bda1f` — Tighten `process_lock_concurrency` timing
+- `cdc1278` — rustfmt helper file
+
+Local verification on the merged SHA:
+
+- `bash scripts/check.sh` passes.
+- `bash scripts/release-check.sh verify` passes.
+- `bash scripts/ci/test-production-seams.sh` passes.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes on Unix.
+- Windows compile (`x86_64-pc-windows-gnu`) succeeds (no new errors; pre-existing warnings only).
+- Full `cargo test --workspace --all-features -- --test-threads=1` passes: 2553 passed, 8 ignored.
+
+Manual release and publish: unchanged. CI topology remains lightweight.
 
 Phase 11L remains complete. This is a separate post-closure corrective pass for regressions introduced by the later `bugs.md` audit implementation.
 
