@@ -1,6 +1,6 @@
 # Phase 12 Roadmap — Lightweight Correctness, Auto-Sync Simplification, and Footprint Control
 
-Status: CORRECTIVE PASS READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `f77a86f8733868bb77712f7ad08a5ef5443782db`
 
@@ -38,7 +38,7 @@ The correction strategy is deliberately sequential: fix current behavior first, 
 | 12E | `plans/snip-it-phase-12e-sync-ordering-recovery-semantics.md` | Make tie ordering deterministic and make recovery-marker claims truthful | 12A complete; independent of 12C |
 | 12F | `plans/snip-it-phase-12f-corrective-closure-pass.md` | Correct the bounded post-implementation timeout, backoff, recovery-resume, and stale-verification gaps | 12C, 12D, and 12E implemented |
 
-Implementation followed `12A -> 12B -> 12C`, with 12D and 12E completed independently where practical. Phase 12F is the only remaining implementation phase. It must not reopen the architecture or footprint work beyond the explicit corrective cases in its plan.
+Implementation followed `12A -> 12B -> 12C`, with 12D and 12E completed independently where practical. Phase 12F was the final implementation phase and did not reopen the architecture or footprint work beyond its explicit corrective cases.
 
 ---
 
@@ -264,21 +264,25 @@ The phase-aware startup resume and final cursor-before-marker-removal defects di
 
 Phase 12 is complete only when all statements below are true:
 
-- [ ] Plans 12A through 12F are marked COMPLETE with implementation SHAs.
-- [ ] All high-severity and medium-severity defects named in the review and post-implementation review are either corrected or explicitly documented as accepted with a concrete reason.
-- [ ] Auto-sync production execution uses one helper process per attempt, not a worker supervising a second executor.
-- [ ] Configured automatic-sync timeout behavior is truthful and enforced at the request/retry boundary.
-- [ ] Failed automatic sync does not bypass durable backoff by looping into newer pending work.
-- [ ] Recovery markers resume by phase and remain until linkage, merged content, and final cursor state are durable.
-- [ ] The ordinary local snippet workflow retains all current features.
-- [ ] The release binary has a recorded before/after size comparison.
-- [ ] CI topology is unchanged unless a pre-existing job required a trivial command update after code deletion.
-- [ ] No new dependency was added solely for planning, measurement, locking, scheduling, recovery, or testing.
-- [ ] Architecture documentation reflects the final one-helper model and current recovery semantics.
-- [ ] Release verification contains no deleted test target.
-- [ ] `bash scripts/check.sh` passes on the implementation platform.
-- [ ] `bash -n scripts/release-check.sh` passes and every named test target exists.
-- [ ] Platform CI is green or any platform-specific failure is addressed in the phase that caused it.
-- [ ] No additional generic hardening phase is opened.
+- [x] Plans 12A through 12F are marked COMPLETE with implementation SHAs.
+- [x] All high-severity and medium-severity defects named in the review and post-implementation review are either corrected or explicitly documented as accepted with a concrete reason.
+- [x] Auto-sync production execution uses one helper process per attempt, not a worker supervising a second executor.
+- [x] Configured automatic-sync timeout behavior is truthful and enforced at the request/retry boundary.
+- [x] Failed automatic sync does not bypass durable backoff by looping into newer pending work.
+- [x] Recovery markers resume by phase and remain until linkage, merged content, and final cursor state are durable.
+- [x] The ordinary local snippet workflow retains all current features.
+- [x] The release binary has a recorded before/after size comparison.
+- [x] CI topology is unchanged unless a pre-existing job required a trivial command update after code deletion.
+- [x] No new dependency was added solely for planning, measurement, locking, scheduling, recovery, or testing.
+- [x] Architecture documentation reflects the final one-helper model and current recovery semantics.
+- [x] Release verification contains no deleted test target.
+- [x] `bash scripts/check.sh` passes on the implementation platform.
+- [x] `bash -n scripts/release-check.sh` passes and every named test target exists.
+- [x] Platform CI is green or any platform-specific failure is addressed in the phase that caused it.
+- [x] No additional generic hardening phase is opened.
 
 When these criteria are met, mark this roadmap COMPLETE and close this line of work. Future changes require a reproduced user-visible defect, a measured regression, or an explicitly approved feature request.
+
+Phase 12 closure commit: `bf22c5c` (`phase-12f: close auto-sync and recovery gaps`).
+The complete local verification commands and results are recorded in the Phase
+12F plan.

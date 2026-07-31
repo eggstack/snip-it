@@ -1,6 +1,6 @@
 # Phase 12F — Corrective Closure Pass for Auto-Sync and Recovery
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `dc1fe1babd08fcc4c8fc977b9d4fe444fd2145fe`
 
@@ -147,15 +147,15 @@ Do not change the public CLI option or existing configuration field name.
 
 #### Acceptance criteria
 
-- [ ] `policy.sync_timeout` is consumed by the production auto-sync path.
-- [ ] Automatic sync request/retry work cannot knowingly begin after its configured deadline.
-- [ ] Individual automatic-sync requests use a timeout no greater than the remaining deadline.
-- [ ] Deadline exhaustion maps to `FailureClass::TransientTimeout`.
-- [ ] Pending intent remains after timeout.
-- [ ] Manual sync behavior is unchanged unless the existing command already supplies a limit.
-- [ ] No executor subprocess, watchdog, or cancellation thread is introduced.
-- [ ] No environment-variable mutation is used as the internal timeout API.
-- [ ] Documentation describes the actual bounded behavior and does not promise force-cancellation of local I/O.
+- [x] `policy.sync_timeout` is consumed by the production auto-sync path.
+- [x] Automatic sync request/retry work cannot knowingly begin after its configured deadline.
+- [x] Individual automatic-sync requests use a timeout no greater than the remaining deadline.
+- [x] Deadline exhaustion maps to `FailureClass::TransientTimeout`.
+- [x] Pending intent remains after timeout.
+- [x] Manual sync behavior is unchanged unless the existing command already supplies a limit.
+- [x] No executor subprocess, watchdog, or cancellation thread is introduced.
+- [x] No environment-variable mutation is used as the internal timeout API.
+- [x] Documentation describes the actual bounded behavior and does not promise force-cancellation of local I/O.
 
 ---
 
@@ -273,13 +273,13 @@ Existing lower-generation/corruption tests must remain valid.
 
 ### Acceptance criteria
 
-- [ ] Failed direct sync never immediately loops to a newer generation.
-- [ ] Successful direct sync may process newer work while lifetime remains.
-- [ ] The scheduler, not the helper loop, is authoritative for retry delay and attention state.
-- [ ] Transient failure plus a newer generation produces one network attempt in the helper test.
-- [ ] Attention failure plus a newer generation produces one network attempt in the helper test.
-- [ ] Exact-generation clear behavior is unchanged.
-- [ ] No new persistence field or retry loop is introduced.
+- [x] Failed direct sync never immediately loops to a newer generation.
+- [x] Successful direct sync may process newer work while lifetime remains.
+- [x] The scheduler, not the helper loop, is authoritative for retry delay and attention state.
+- [x] Transient failure plus a newer generation produces one network attempt in the helper test.
+- [x] Attention failure plus a newer generation produces one network attempt in the helper test.
+- [x] Exact-generation clear behavior is unchanged.
+- [x] No new persistence field or retry loop is introduced.
 
 ---
 
@@ -459,17 +459,17 @@ Do not add crash-failpoint infrastructure for this pass.
 
 ### Acceptance criteria
 
-- [ ] Startup scanning performs bounded marker completion rather than logging only.
-- [ ] Only `ErrorKind::NotFound` means the marker is absent.
-- [ ] Marker schema and local identity are validated before a stored server ID is used.
-- [ ] `Creating`, `RemoteCreated`, and `Linked` each have explicit resumable behavior.
-- [ ] `Linked` recovery never calls create-library.
-- [ ] Final `last_sync` persistence failure preserves the marker and reports failure.
-- [ ] Marker removal occurs only after durable merged data and cursor state.
-- [ ] A stale linked marker cannot create a duplicate remote library.
-- [ ] Corrupt, mismatched, or ambiguous markers remain available for diagnosis.
-- [ ] No server/protobuf/schema change is introduced.
-- [ ] No new persistence file is introduced.
+- [x] Startup scanning performs bounded marker completion rather than logging only.
+- [x] Only `ErrorKind::NotFound` means the marker is absent.
+- [x] Marker schema and local identity are validated before a stored server ID is used.
+- [x] `Creating`, `RemoteCreated`, and `Linked` each have explicit resumable behavior.
+- [x] `Linked` recovery never calls create-library.
+- [x] Final `last_sync` persistence failure preserves the marker and reports failure.
+- [x] Marker removal occurs only after durable merged data and cursor state.
+- [x] A stale linked marker cannot create a duplicate remote library.
+- [x] Corrupt, mismatched, or ambiguous markers remain available for diagnosis.
+- [x] No server/protobuf/schema change is introduced.
+- [x] No new persistence file is introduced.
 
 ---
 
@@ -538,13 +538,13 @@ The full `bash scripts/release-check.sh verify` remains a manual pre-release com
 
 ### Acceptance criteria
 
-- [ ] `scripts/release-check.sh` contains no deleted test target.
-- [ ] Every explicit test target named by the release script exists.
-- [ ] `AGENTS.md` contains no normative reference to `tests/deterministic_e2e.rs`.
-- [ ] Current architecture documentation contains no executor-era production claim.
-- [ ] No deleted broad test suite is restored.
-- [ ] `scripts/check.sh` remains focused and does not gain a new matrix or deep-suite phase.
-- [ ] Focused tests cover the new corrective behavior without a mocking dependency.
+- [x] `scripts/release-check.sh` contains no deleted test target.
+- [x] Every explicit test target named by the release script exists.
+- [x] `AGENTS.md` contains no normative reference to `tests/deterministic_e2e.rs`.
+- [x] Current architecture documentation contains no executor-era production claim.
+- [x] No deleted broad test suite is restored.
+- [x] `scripts/check.sh` remains focused and does not gain a new matrix or deep-suite phase.
+- [x] Focused tests cover the new corrective behavior without a mocking dependency.
 
 ---
 
@@ -576,9 +576,9 @@ Record the result in the Phase 12D or Phase 12F closure notes only if the experi
 
 ### Acceptance criteria
 
-- [ ] No benchmark infrastructure is added.
-- [ ] The release profile is unchanged unless a measured, material regression justifies a bounded correction.
-- [ ] This optional check does not delay the correctness work or expand scope.
+- [x] No benchmark infrastructure is added.
+- [x] The release profile is unchanged unless a measured, material regression justifies a bounded correction.
+- [x] This optional check does not delay the correctness work or expand scope.
 
 ---
 
@@ -729,27 +729,47 @@ Any answer inconsistent with this plan blocks closure.
 
 ## 10. Closure checklist
 
-- [ ] Direct automatic sync consumes the configured timeout.
-- [ ] Request/retry work is bounded by the remaining automatic-sync deadline.
-- [ ] Timeout preserves pending state and records `TransientTimeout`.
-- [ ] Failed helper attempts exit without processing a newer generation.
-- [ ] Scheduler backoff and attention state remain authoritative.
-- [ ] Successful helpers may still process a newer generation within lifetime.
-- [ ] Recovery marker lookup distinguishes absence from I/O failure.
-- [ ] Marker schema and local identity are validated.
-- [ ] `Creating`, `RemoteCreated`, and `Linked` resume correctly.
-- [ ] `Linked` recovery performs no remote create.
-- [ ] Final cursor persistence is required before marker removal.
-- [ ] Stale linked markers complete without duplicate remote libraries.
-- [ ] Corrupt, mismatched, and ambiguous markers remain on disk.
-- [ ] Release verification names only existing test targets.
-- [ ] Current contributor docs contain no deleted executor-era test reference.
-- [ ] Focused regression tests pass.
-- [ ] `cargo check --workspace --all-targets --all-features` passes.
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] `bash -n scripts/release-check.sh` passes.
-- [ ] No new dependency, process, daemon, lock, persistence file, protocol field, CI job, or benchmark framework was added.
-- [ ] Plan records implementation SHA and exact verification commands.
+- [x] Direct automatic sync consumes the configured timeout.
+- [x] Request/retry work is bounded by the remaining automatic-sync deadline.
+- [x] Timeout preserves pending state and records `TransientTimeout`.
+- [x] Failed helper attempts exit without processing a newer generation.
+- [x] Scheduler backoff and attention state remain authoritative.
+- [x] Successful helpers may still process a newer generation within lifetime.
+- [x] Recovery marker lookup distinguishes absence from I/O failure.
+- [x] Marker schema and local identity are validated.
+- [x] `Creating`, `RemoteCreated`, and `Linked` resume correctly.
+- [x] `Linked` recovery performs no remote create.
+- [x] Final cursor persistence is required before marker removal.
+- [x] Stale linked markers complete without duplicate remote libraries.
+- [x] Corrupt, mismatched, and ambiguous markers remain on disk.
+- [x] Release verification names only existing test targets.
+- [x] Current contributor docs contain no deleted executor-era test reference.
+- [x] Focused regression tests pass.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes.
+- [x] `bash scripts/check.sh` passes.
+- [x] `bash -n scripts/release-check.sh` passes.
+- [x] No new dependency, process, daemon, lock, persistence file, protocol field, CI job, or benchmark framework was added.
+- [x] Plan records implementation SHA and exact verification commands.
 
 When all items are checked, mark this plan COMPLETE, update the Phase 12 roadmap to COMPLETE, and close this line of work.
+
+## Implementation closure
+
+Implementation commit: `bf22c5c` (`phase-12f: close auto-sync and recovery gaps`).
+
+Verification completed locally:
+
+```text
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+bash scripts/check.sh
+cargo test --workspace --all-features -- --test-threads=1
+cargo build --workspace --release --all-features
+cargo test --release --test cleanup_crash_failpoints --features test-support -- --test-threads=1
+cargo test --release --test restore_crash_failpoints --features test-support -- --test-threads=1
+cargo test --release --test transaction_crash_recovery --features test-support -- --test-threads=1
+bash scripts/ci/test-production-seams.sh
+bash -n scripts/release-check.sh
+```
