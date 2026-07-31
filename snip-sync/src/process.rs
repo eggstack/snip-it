@@ -668,7 +668,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_start_token_parser_reads_field_22() {
-        let stat = "42 (name with ) parens) S f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 FIELD21 START22";
+        let stat = "42 (name with ) parens) S f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 FIELD21 START22";
         assert_eq!(parse_linux_proc_start_token(stat), Some("START22".into()));
         assert_ne!(parse_linux_proc_start_token(stat), Some("FIELD21".into()));
         assert_eq!(parse_linux_proc_start_token("1 (short) S f3"), None);
