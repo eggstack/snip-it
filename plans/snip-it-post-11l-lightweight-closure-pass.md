@@ -8,7 +8,7 @@ This plan supersedes the **remaining work and closure requirements** in `plans/s
 
 Phase 11L remains complete. This is a small follow-up pass for two concrete post-11L defects and truthful closure bookkeeping.
 
-Final implementation SHA: pending the documentation/status commit below.
+Final implementation SHA: `1bbae107613ef784057069467820688b66afd39e`.
 
 ---
 
@@ -483,7 +483,7 @@ The implementation was recorded in these commits:
 
 - `093e8db` — stop sync repair from deleting persistent lock files;
 - `0a27cd9` — support legacy numeric PID files in stop and restart;
-- final documentation/status commit — exact SHA recorded above after commit.
+- `1bbae10` — documentation and closure status.
 
 Verification completed locally:
 
