@@ -10,7 +10,7 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/library.rs:659` — `load_library(path: &Path) -> SnipResult<Snippets>` |
+| **Canonical** | `src/library.rs:767` — `load_library(path: &Path) -> SnipResult<Snippets>` |
 | **Semantics** | Reads TOML, applies `fix_invalid_toml_escapes`, deduplicates snippet IDs, returns default on missing/corrupt (with backup). Uses `cached_read_toml`. |
 
 ### Callers
@@ -42,7 +42,7 @@ This is the only significant loader variant. It is used by `list_cmd` and `new_c
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/library.rs:726` — `save_library(path: &Path, snippets: &Snippets) -> SnipResult<()>` |
+| **Canonical** | `src/library.rs:834` — `save_library(path: &Path, snippets: &Snippets) -> SnipResult<()>` |
 | **Semantics** | Creates backup, sorts by `updated_at` desc, serializes via `toml::to_string_pretty`, writes atomically. No TOML post-processing. |
 
 ### Callers
@@ -99,7 +99,7 @@ None. Single canonical pair.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical (list mode)** | `src/sort.rs:108` — `rank_snippets(indices, snippets, fuzzy_scores, usage, opts) -> Vec<usize>` |
+| **Canonical (list mode)** | `src/sort.rs:111` — `rank_snippets(indices, snippets, fuzzy_scores, usage, opts) -> Vec<usize>` |
 | **Canonical (TUI mode)** | `src/ui/mod.rs:187` — `sort_filtered_indices(filtered, filter_state, snippets, ...)` |
 | **Semantics** | `rank_snippets` applies multi-key sort (favorites-first, mode-dependent primary, tie-break chain). `sort_filtered_indices` is the TUI's inline re-sort (favorites-first + fuzzy scores + display order). |
 
@@ -125,7 +125,7 @@ These are **not duplicates** — `rank_snippets` is for non-interactive list out
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/utils/variables.rs:548` — `expand_command(command: &str, values: &[(String, String)]) -> String` |
+| **Canonical** | `src/utils/variables.rs:629` — `expand_command(command: &str, values: &[(String, String)]) -> String` |
 | **Semantics** | Tokenizes `<var>` placeholders, handles `\` escapes, supports `<var=default>`, `<var=_opt1_||_opt2_>`, `<var=_red_||_green_||_blue_||>` list prompts. Pure string transformation (no I/O). |
 
 ### Callers
@@ -167,7 +167,7 @@ None for import. No export implementation exists.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/usage.rs:78` — `UsageIndex::record_use(&mut self, snippet_id: &str)` |
+| **Canonical** | `src/usage.rs:83` — `UsageIndex::record_use(&mut self, snippet_id: &str)` |
 | **Semantics** | Increments `use_count`, sets `last_used_at` to current timestamp. Creates entry if missing. |
 
 ### Persistence
@@ -198,7 +198,7 @@ None. Single canonical implementation.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/sync_commands.rs:365` — `run_sync(sync_settings, library_name, push_only, pull_only, runtime) -> SnipResult<()>` |
+| **Canonical** | `src/sync_commands.rs:599` — `run_sync(sync_settings, library_name, push_only, pull_only, runtime) -> SnipResult<()>` |
 | **Semantics** | Resolves direction, ensures config, creates client, health check, iterates libraries, merges per-library via `merge_and_save`, records status. |
 
 ### Callers
@@ -259,7 +259,7 @@ These are **semantically equivalent** but the duplication is a maintenance risk.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/auto_sync/pending.rs:64` — `record_pending_mutation(state_dir, snapshot) -> Result<PendingState, PendingError>` |
+| **Canonical** | `src/auto_sync/pending.rs:66` — `record_pending_mutation(state_dir, snapshot) -> Result<PendingState, PendingError>` |
 | **Semantics** | Acquires pending txn lock, reads existing state, increments generation, writes atomically. |
 
 ### Callers (production)
@@ -283,7 +283,7 @@ None. Single canonical implementation.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/auto_sync/schedule.rs:48` — `schedule_sync(state_dir, policy, caller) -> ScheduleDecision` |
+| **Canonical** | `src/auto_sync/schedule.rs:67` — `schedule_sync(state_dir, policy, caller) -> ScheduleDecision` |
 | **Semantics** | Central scheduling authority. Checks: sync configured, policy enabled, pending work exists, execution lock not held, backoff not active, config-change deferral release. Returns `ScheduleDecision` enum. |
 
 ### Convenience Wrapper
@@ -367,7 +367,7 @@ None. Single canonical status persistence path.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/auto_sync/pending.rs:102` — `clear_if_generation_matches(state_dir, observed_generation) -> Result<ConditionalClearResult, PendingError>` |
+| **Canonical** | `src/auto_sync/pending.rs:231` — `clear_if_generation_matches(state_dir, observed_generation) -> Result<ConditionalClearResult, PendingError>` |
 | **Semantics** | Read-compare-delete under `PendingTxnGuard`. Only deletes if generation matches (prevents stale clears). |
 
 ### Convenience Wrappers
@@ -405,7 +405,7 @@ None. Single canonical clear with generation guard. Wrappers are thin adapters.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/status_snapshot.rs:137` — `capture_snapshot() -> StatusSnapshot` |
+| **Canonical** | `src/status_snapshot.rs:144` — `capture_snapshot() -> StatusSnapshot` |
 | **Semantics** | Assembles read-only projection from: `sync_configuration_state`, `pending_state_view`, `execution_state_view`, `read_status_typed`, library counts. Includes `derive_top_level` for summary state and `collect_diagnostics` for issues. |
 
 ### Supporting Functions
@@ -476,7 +476,7 @@ None. `doctor` is read-only diagnostics; `repair` is write-capable state recover
 - **Record usage**: Single `UsageIndex::record_use`
 - **Record pending**: Single `record_pending_mutation`
 - **Schedule worker**: Single `schedule_sync` authority
-- **Supervise executor**: Single spawn + run pair
+- **Supervise worker**: Single detached helper spawn + run pair
 - **Record status**: Single `write_status` / `record_success` / `record_failure`
 - **Conditional clear**: Single `clear_if_generation_matches`
 - **Inspect status**: Single `capture_snapshot`

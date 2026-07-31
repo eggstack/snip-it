@@ -13,7 +13,7 @@ Each snippet gets a new random salt, running Argon2 key derivation for every sin
 ## Sync Flow
 
 ```
-run_sync() flow (sync_commands.rs:365-742):
+run_sync() flow (sync_commands.rs:599-...):
 1. Validate config (api_key, device_id)
 2. Create SyncClient with TLS
 3. Health check
@@ -52,11 +52,11 @@ content and the final cursor are durable.
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `run_sync()` | `sync_commands.rs:365-742` | Main sync orchestration |
-| `merge_snippets()` | `sync_commands.rs:744-851` | Merge algorithm |
-| `encrypt_snippet()` | `sync.rs:518-544` | Encrypt snippet for server |
-| `decrypt_snippet()` | `sync.rs:547-571` | Decrypt snippet from server |
-| `sync_with_retry()` | `sync.rs:261-304` | Retry logic with exponential backoff |
+| `run_sync()` | `sync_commands.rs:599` | Main sync orchestration |
+| `merge_snippets()` | `sync_commands.rs:1127` | Merge algorithm |
+| `encrypt_snippet()` | `sync.rs:701` | Encrypt snippet for server |
+| `decrypt_snippet()` | `sync.rs:734` | Decrypt snippet from server |
+| `sync_with_retry()` | `sync.rs:380` | Retry logic with exponential backoff |
 | `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
 | `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
 | `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
@@ -68,7 +68,7 @@ cron use the unbounded canonical wrapper.
 
 ## Test Coverage
 
-Tests in `sync_commands.rs:896-1180`:
+Tests in `sync_commands.rs` (unit tests near end of file):
 - `test_server_wins_with_newer_timestamp`
 - `test_local_wins_with_newer_timestamp`
 - `test_new_server_snippet_added`

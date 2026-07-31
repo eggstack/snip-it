@@ -337,7 +337,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Residual risk** | Very low. The compile-time boundary eliminates the class of vulnerability entirely — there is no code path in the production binary that reads these environment variables. |
 | **User responsibility** | None. Production builds are immune to test seam activation by construction. |
 | **Tests / evidence** | `scripts/ci/test-production-seams.sh` builds and tests the no-feature binary. `#[cfg(not(feature = "test-support"))]` no-op stubs in `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`. |
-| **Owner / module** | `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`, `src/auto_sync/executor.rs`, `Cargo.toml` `[features]` table. |
+| **Owner / module** | `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`, `Cargo.toml` `[features]` table. |
 
 ---
 
@@ -382,7 +382,7 @@ Users who require protection against local attackers should use full-disk encryp
 | T11: Compromised Release Asset | `update.rs` | Self-update verification tests | Low |
 | T12: Accidental Unsafe Execution | `run_cmd.rs`, `get_cmd.rs`, `clip_cmd.rs` | CLI integration tests | **Medium** |
 | T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo-deny` | Low |
-| T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs`, `executor.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
+| T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
 
 ---
 

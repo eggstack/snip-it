@@ -200,7 +200,19 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 
 - `architecture/` — deep-dive docs per module (see index below)
 - `docs/` — public API, threat model, security audit, supply-chain policy
-- `.skills/` — specialized agent reference docs (encryption, keychain, server, sync, UI, etc.)
+- `.skills/` — specialized agent reference docs (see below)
+
+### Skills Index
+
+| Skill | File | Key Content |
+|-------|------|-------------|
+| Architecture review | `.skills/architecture-review.md` | Review process, key files, verification checklists |
+| Encryption | `.skills/encryption-module.md` | AES-256-GCM + Argon2id, key cache, payload format, security properties |
+| Keychain | `.skills/keychain-integration.md` | OS keychain storage pattern, migration, platform notes |
+| Remediation | `.skills/remediation-patterns.md` | Atomic writes, transactions, durability classes, repair patterns |
+| Server | `.skills/server-module.md` | snip-sync server architecture, env vars, gRPC endpoints |
+| Sync | `.skills/sync-module.md` | Sync flow, merge strategy, failure classification, recovery commands |
+| UI | `.skills/ui-module.md` | TUI module structure, theme system, syntax highlighting |
 
 ### Architecture Index
 
@@ -217,4 +229,15 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 | Selector | `architecture/selector.md` | Deterministic non-TUI snippet resolution |
 | Sort/ranking | `architecture/sort.md` | Sort modes, tie-break chain, `--favorites-first` |
 | Status | `architecture/status.md` | Status snapshot, diagnostic codes, `snp status` |
+| Encryption | `architecture/encryption.md` | AES-256-GCM + Argon2id, key cache, payload format |
+| Config | `architecture/config.md` | `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode` |
+| Core data model | `architecture/core.md` | `Snippet`, `Snippets`, `SnipError`, `LibraryManager` |
+| Library | `architecture/library.md` | Library CRUD, TOML persistence, file layout |
+| Logging | `architecture/logging.md` | Structured tracing, audit log, initialization |
+| Protobuf | `architecture/proto.md` | `SnippetSync` service, message types, code generation |
+| Clipboard | `architecture/clipboard.md` | Platform support, auto-clear, generation counter |
+| Usage | `architecture/usage.md` | `UsageIndex`, usage tracking, update policy |
+| Output | `architecture/output.md` | `OutputPresentation`, terminal display, security |
+| Utilities | `architecture/utils.md` | Config paths, variables, TOML helpers, shell keywords |
+| UI modules | `architecture/ui.md` | TUI module details, mode system, rendering |
 | Test infra | `architecture/test-infrastructure.md` | Deterministic E2E, event sink, temp-dir isolation |

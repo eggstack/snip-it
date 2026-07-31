@@ -18,7 +18,9 @@ library — it is a standalone binary.  The public surface exists because:
    arguments (e.g., `sort::SnippetSort`).
 
 Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
-`sync_commands`, and `utils`.  Everything else is `pub`.
+`sync_commands`, and `utils`.  Several additional modules are also `pub(crate)`:
+`diagnostics`, `encryption`, `local_data`, `migration`, `output`, `status_snapshot`,
+`test_failpoints`, and (conditionally) `transaction`.  Everything else is `pub`.
 
 ---
 
@@ -29,22 +31,29 @@ Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
 | `pub mod auto_sync` | **application-internal** | Auto-sync subsystem; used by binary + integration tests only |
 | `pub mod commands` | **application-internal** | CLI command implementations; no external consumer |
 | `pub mod config` | **provisional-public** | `SyncSettings`, `SyncDirection`, constants; could be useful for library consumers |
-| `pub mod encryption` | **provisional-public** | AES-256-GCM encryption; reusable standalone |
+| `pub mod encryption` | **pub(crate)** | AES-256-GCM encryption; internal to crate |
 | `pub mod error` | **stable-public** | `SnipError`, `SnipResult`, `SyncFailureKind` — core error types |
 | `pub mod logging` | **application-internal** | Logging infrastructure; not intended for external use |
 | `pub mod proto` | **integration-test-only** | Prost-generated gRPC types; needed by sync integration tests |
 | `pub mod sync` | **integration-test-only** | `SyncClient`; used by sync integration tests |
 | `pub mod ui` | **application-internal** | TUI interface; not for external consumers |
-| `pub mod diagnostics` | **provisional-public** | Import/doctor report types; could be useful for tooling |
-| `pub mod output` | **provisional-public** | Output field rendering; self-contained utility |
+| `pub mod diagnostics` | **pub(crate)** | Import/doctor report types; internal to crate |
+| `pub mod output` | **pub(crate)** | Output field rendering; internal to crate |
 | `pub mod sort` | **stable-public** | `SnippetSort`, `SortOptions`, `rank_snippets`; used by CLI args and tests |
-| `pub mod status_snapshot` | **application-internal** | Status projection for `snp status` and doctor |
+| `pub mod status_snapshot` | **pub(crate)** | Status projection for `snp status` and doctor |
 | `pub mod usage` | **application-internal** | Local-only usage metadata; not for external use |
 | `pub use error::{SnipError, SnipResult}` | **stable-public** | Re-exported for convenience |
 | `pub struct SnippetData` | **application-internal** | Parallel vectors for TUI display; internal glue |
 | `pub enum ProcessResult` | **application-internal** | TUI selection result; internal glue |
 | `pub enum CommandOutcome` | **application-internal** | CLI-level exit code mapping; internal glue |
 | `pub enum SelectionOutcome` | **application-internal** | Raw TUI selection result; internal glue |
+| `pub mod outcome` | **application-internal** | `CliOutcome` enum and exit code mapping |
+| `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
+| `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
+| `pub(crate) mod local_data` | **application-internal** | Local data lock coordination |
+| `pub(crate) mod migration` | **application-internal** | Schema versioning for TOML migrations |
+| `pub(crate) mod test_failpoints` | **application-internal** | Test-only failpoint hooks (compiled with `test-support`) |
+| `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary with journal, lock, begin/commit/rollback |
 
 ---
 
@@ -52,7 +61,7 @@ Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (17 variants) |
+| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (19 variants) |
 | `pub enum SnipError` | **stable-public** | `#[non_exhaustive]` error enum with 6 variants |
 | `pub type SnipResult<T>` | **stable-public** | `Result<T, SnipError>` alias |
 | `SnipError::io_error()` | **stable-public** | Constructor |
@@ -104,6 +113,8 @@ Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
 
 ## `encryption` module (`src/encryption.rs`)
 
+*Module is `pub(crate)` in `lib.rs` — correctly hidden from external consumers.*
+
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub fn clear_key_cache()` | **provisional-public** | Session cache management |
@@ -112,7 +123,7 @@ Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
 | `pub struct EncryptedPayload` | **provisional-public** | `{ salt, nonce, ciphertext }` |
 | `pub fn encrypt()` | **provisional-public** | AES-256-GCM encryption |
 | `pub fn decrypt()` | **provisional-public** | AES-256-GCM decryption |
-| `pub fn ct_eq()` (#[cfg(test)]) | **dead-or-accidental** | Test-only constant-time comparison exposed as `pub` |
+| `pub fn ct_eq()` (#[cfg(test)]) | **removed** | Was test-only constant-time comparison; no longer present in source |
 
 ---
 
@@ -159,7 +170,7 @@ to external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod clip_cmd` through `pub mod sync_cmd` (18 submodules) | **application-internal** | All CLI command modules |
+| `pub mod clip_cmd` through `pub mod sync_cmd` (23 submodules) | **application-internal** | All CLI command modules |
 | `pub enum ExpandedCommand` | **application-internal** | Command expansion result |
 | `pub fn get_config_path()` | **application-internal** | Config path resolution |
 | `pub fn get_library_path()` | **application-internal** | Library path resolution |
@@ -173,6 +184,8 @@ to external consumers.*
 ---
 
 ## `diagnostics` module (`src/diagnostics.rs`)
+
+*Module is `pub(crate)` in `lib.rs` — correctly hidden from external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
@@ -189,6 +202,8 @@ to external consumers.*
 ---
 
 ## `output` module (`src/output.rs`)
+
+*Module is `pub(crate)` in `lib.rs` — correctly hidden from external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
@@ -216,7 +231,7 @@ to external consumers.*
 
 ## `status_snapshot` module (`src/status_snapshot.rs`)
 
-*Entire module is `application-internal`.*
+*Entire module is `pub(crate)` — correctly hidden from external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
@@ -367,7 +382,7 @@ detached auto-sync helper management.*
 ### High priority (should narrow)
 
 1. **`pub mod commands`** → `pub(crate)` — No external consumer needs CLI
-   command implementations.  The 18 submodules and their helpers are purely
+   command implementations.  The 23 submodules and their helpers are purely
    binary-internal.
 
 2. **`pub mod auto_sync`** → `pub(crate)` — The entire auto-sync subsystem
@@ -377,8 +392,8 @@ detached auto-sync helper management.*
 
 3. **`pub mod logging`** → `pub(crate)` — Logging setup is binary-internal.
 
-4. **`pub mod status_snapshot`** → `pub(crate)` — Status projection for
-   `snp status` and doctor; purely binary-internal.
+4. **`pub mod status_snapshot`** → Already `pub(crate)` — Status projection for
+   `snp status` and doctor; correctly hidden.
 
 5. **`pub mod ui`** → `pub(crate)` — TUI is binary-internal.
 
@@ -408,19 +423,18 @@ detached auto-sync helper management.*
 11. **`pub mod sort`** — Used by `#[derive(clap::ValueEnum)]` on CLI
     arguments.  Appropriately `pub`.
 
-12. **`pub mod encryption`** — Self-contained crypto utilities.  Reasonably
-    `pub` for potential library reuse.
+12. **`pub(crate) mod encryption`** — Already correctly scoped.  Self-contained
+    crypto utilities internal to the crate.
 
-13. **`pub mod diagnostics`** — Report types for import/doctor.  Reasonably
-    `pub` for tooling.
+13. **`pub(crate) mod diagnostics`** — Already correctly scoped.  Report types
+    for import/doctor; internal to the crate.
 
-14. **`pub mod output`** — Self-contained rendering utility.  Reasonably `pub`.
+14. **`pub(crate) mod output`** — Already correctly scoped.  Self-contained
+    rendering utility internal to the crate.
 
 ### Dead/accidental items
 
-15. **`pub fn ct_eq()` in `encryption.rs`** — Marked `#[cfg(test)]` but
-    declared `pub`.  This is dead code in release builds.  Should be
-    `#[cfg(test)] pub(crate)` or removed.
+15. **`pub fn ct_eq()` in `encryption.rs`** — **REMOVED.** Was test-only constant-time comparison; no longer present in source.
 
 16. **`pub fn quote_strings_containing_backslashes()` in `utils/toml_helpers.rs`** —
     Public helper that was used by earlier code but is no longer called in the
@@ -443,14 +457,14 @@ detached auto-sync helper management.*
 | Classification | Count |
 |---------------|-------|
 | **stable-public** | ~25 items (error, sort, re-exports) |
-| **provisional-public** | ~55 items (config, encryption, diagnostics, output) |
-| **application-internal** | ~200+ items (commands, auto_sync, logging, status_snapshot, ui, usage, library, clipboard, utils) |
+| **provisional-public** | ~30 items (config, some config types) |
+| **pub(crate)** | ~15 modules (encryption, diagnostics, output, status_snapshot, library, clipboard, utils, sync_commands, local_data, migration, test_failpoints, transaction, process_file_lock, selector, outcome) |
+| **application-internal** | ~200+ items (commands, auto_sync, logging, ui, usage) |
 | **integration-test-only** | ~40 items (sync, proto) |
-| **dead-or-accidental** | 2 items (ct_eq, quote_strings_containing_backslashes) |
+| **removed** | 1 item (ct_eq) |
 
 The majority of the public surface (~250 items) is `application-internal`,
 exposed only because the binary crate and library crate share the same
-package.  Narrowing `commands`, `auto_sync`, `logging`, `status_snapshot`,
-`ui`, and `usage` to `pub(crate)` would reduce the public surface by ~80%
-and make the true external API (error, sort, encryption, config, diagnostics,
-output) much clearer.
+package.  Narrowing `commands`, `auto_sync`, `logging`, `ui`, and `usage`
+to `pub(crate)` would reduce the public surface further and make the true
+external API (error, sort, config) much clearer.

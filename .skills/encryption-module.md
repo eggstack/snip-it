@@ -16,20 +16,15 @@ Memory cost is set to `1 << 14` (16 MiB). OWASP recommends a minimum of 19 MiB (
 
 ## Key Derivation
 
-**Current (misused API)**:
 ```rust
-// Uses hash_password (designed for password storage, not key derivation)
+// Uses hash_password with string-encoded salt (encryption.rs:160-207)
 let hash = argon2.hash_password(api_key.as_bytes(), &salt_string)?;
 let hash_output = hash.hash.ok_or_else(...)?;
 let hash_bytes = hash_output.as_bytes();
 ```
 
-**Recommended (correct API)**:
-```rust
-// Use hash_raw for direct key derivation
-let mut hash_bytes = [0u8; 32];
-argon2.hash_password_into(api_key.as_bytes(), salt, &mut hash_bytes)?;
-```
+The derived key is wrapped in `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop`.
+After use, the key is explicitly zeroized via `drop(std::mem::take(&mut key))` (lines 227, 252).
 
 ## Payload Format
 
@@ -62,7 +57,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:203-210`). The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:303-304`). The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
 
 ## Security Properties
 

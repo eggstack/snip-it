@@ -47,6 +47,8 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 | `src/diagnostics.rs` | CompatibilityDiagnostic, PetImportReport, DoctorReport — import/doctor models |
 | `src/output.rs` | OutputPresentation — safe terminal rendering of snippet output metadata |
 | `src/error.rs` | SnipError, SnipResult, SyncFailureKind — typed error categories |
+| `src/selector.rs` | SnippetSelector, ResolutionPolicy — deterministic non-TUI snippet resolution |
+| `src/process_file_lock.rs` | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
 | `src/utils/variables.rs` | Variable parsing, expansion, <name=default> syntax |
 | `src/utils/shell_keywords.rs` | Shell keyword detection for syntax highlighting |
 | `src/utils/atomic.rs` | Atomic file writes with private permissions |
@@ -109,8 +111,12 @@ Everything that touches the terminal, spawns processes, or orchestrates user wor
 | `src/logging.rs` | Structured logging with file rotation, audit log |
 | `src/update.rs` | Self-update (crates.io, Homebrew, GitHub releases) |
 | `src/status_snapshot.rs` | Read-only status projection for `snp status` and doctor |
+| `src/outcome.rs` | CliOutcome enum and exit-code mapping |
+| `src/transaction.rs` | Transaction boundary with journal, lock, begin/commit/rollback (cfg-gated) |
+| `src/local_data.rs` | Local data lock coordination |
+| `src/migration.rs` | Schema versioning for TOML migrations |
 | `src/ui/*` | TUI (ratatui + crossterm), themes, syntax highlighting, variable prompts |
-| `src/auto_sync/*` | Auto-sync subsystem (execution_lock, executor, lock, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker) |
+| `src/auto_sync/*` | Auto-sync subsystem (execution_lock, lock, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker) |
 
 **Application layer dependencies (allowed):**
 - Everything in core and sync-client layers
@@ -140,7 +146,7 @@ dependency on clipboard.
 
 ### 2. error.rs → encryption (core → sync-client)
 
-**Location:** `src/error.rs:295-302`
+**Location:** `src/error.rs:303-304`
 ```rust
 impl From<crate::encryption::CryptoError> for SnipError {
     fn from(e: crate::encryption::CryptoError) -> Self { ... }

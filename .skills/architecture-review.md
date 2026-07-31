@@ -76,7 +76,7 @@ Output to `plans/<module>_review.md` with:
 - Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs`
 - Premade TOCTOU: read from `canonical_path` not original `path`
 - Health RPC verifies database connectivity via `db.ping()`
-- `CryptoError` integrates with `SnipError` via `From` impl (`error.rs:203-210`)
+- `CryptoError` integrates with `SnipError` via `From` impl (`error.rs:303-304`)
 - `From<io::Error>` auto-conversion with kind-based operation strings (`error.rs`)
 
 ## Phase 06A Checklist
