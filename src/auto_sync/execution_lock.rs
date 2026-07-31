@@ -112,6 +112,13 @@ impl SyncExecutionLock {
     pub fn path(&self) -> &Path {
         self.inner.path()
     }
+
+    /// Read the on-disk lock identity using the already-open file handle.
+    /// Avoids opening a second handle which would conflict with the
+    /// kernel lock on Windows.
+    pub fn read_owner_via_handle(&self) -> Option<crate::process_file_lock::LockIdentity> {
+        self.inner.read_identity_via_handle().ok().flatten()
+    }
 }
 
 impl std::fmt::Debug for SyncExecutionLock {
@@ -256,9 +263,14 @@ mod tests {
     #[test]
     fn test_no_secrets_in_lock_file() {
         let dir = TempDir::new().unwrap();
-        let _lock = try_acquire(dir.path()).unwrap();
-        let raw = std::fs::read_to_string(execution_lock_path(dir.path())).unwrap();
-        let raw_lower = raw.to_lowercase();
+        let lock = try_acquire(dir.path()).unwrap();
+        // Read via the existing file handle to avoid a second handle
+        // that conflicts with the Windows kernel lock range.
+        let id = lock
+            .read_owner_via_handle()
+            .expect("identity must be readable via handle");
+        let serialized = toml::to_string_pretty(&id).unwrap();
+        let raw_lower = serialized.to_lowercase();
         let value_only = raw_lower
             .lines()
             .filter_map(|line| line.split_once('=').map(|(_, v)| v))
@@ -284,7 +296,7 @@ mod tests {
     fn test_inspect_returns_contents() {
         let dir = TempDir::new().unwrap();
         let lock = try_acquire(dir.path()).unwrap();
-        let contents = inspect(lock.path()).unwrap();
+        let contents = lock.read_owner_via_handle().unwrap();
         assert_eq!(contents.pid, std::process::id());
         assert_eq!(contents.nonce, lock.nonce());
         assert_eq!(contents.purpose, EXECUTION_LOCK_PURPOSE);
@@ -443,7 +455,7 @@ mod tests {
         let path = execution_lock_path(dir.path());
         std::fs::write(&path, "").unwrap();
         let lock = try_acquire(dir.path()).unwrap();
-        let observed = inspect(&path).unwrap();
+        let observed = lock.read_owner_via_handle().unwrap();
         assert_eq!(observed.nonce, lock.nonce());
     }
 
@@ -453,7 +465,9 @@ mod tests {
         let path = execution_lock_path(dir.path());
         std::fs::write(&path, "garbage data").unwrap();
         let lock = try_acquire(dir.path()).unwrap();
-        let observed = inspect(&path).unwrap();
+        // Old contents are overwritten; reading via the held handle
+        // returns the new identity.
+        let observed = lock.read_owner_via_handle().unwrap();
         assert_eq!(observed.nonce, lock.nonce());
     }
 

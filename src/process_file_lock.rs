@@ -162,6 +162,29 @@ impl ProcessFileLock {
     pub fn nonce(&self) -> &str {
         &self.identity.nonce
     }
+
+    /// Read the current contents of the lock file using the already-open
+    /// file handle. Useful for callers that hold the kernel lock and
+    /// need to read the file's bytes — opening a second handle on
+    /// Windows would conflict with the locked byte range.
+    pub fn read_identity_via_handle(&self) -> std::io::Result<Option<LockIdentity>> {
+        use std::io::{Read, Seek};
+        let Some(file) = self.file.as_ref() else {
+            return Ok(None);
+        };
+        let mut f = file.try_clone()?;
+        f.seek(std::io::SeekFrom::Start(0))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        let raw = match std::str::from_utf8(&buf) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+        if raw.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(toml::from_str(raw).ok())
+    }
 }
 
 impl Drop for ProcessFileLock {
@@ -205,8 +228,12 @@ fn release_windows_lock(file: Option<&File>) {
 
 #[cfg(windows)]
 const LOCKED_BYTE_COUNT: u32 = 1;
+// Lock a single byte at offset `u32::MAX`. This range is far beyond any
+// real file content, so Windows does not deny read or write access to
+// the actual lock-file bytes. Only another attempt to lock the same
+// range returns ERROR_LOCK_VIOLATION.
 #[cfg(windows)]
-const LOCKED_BYTE_OFFSET: u32 = 0;
+const LOCKED_BYTE_OFFSET: u32 = u32::MAX;
 
 /// Try to acquire the kernel lock at `path` without waiting.
 ///

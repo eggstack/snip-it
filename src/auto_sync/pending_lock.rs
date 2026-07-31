@@ -59,6 +59,13 @@ impl PendingTxnGuard {
     pub fn nonce(&self) -> &str {
         self.inner.nonce()
     }
+
+    /// Read the on-disk lock identity using the already-open file handle.
+    /// Avoids opening a second handle which would conflict with the
+    /// kernel lock on Windows.
+    pub fn read_owner_via_handle(&self) -> Option<crate::process_file_lock::LockIdentity> {
+        self.inner.read_identity_via_handle().ok().flatten()
+    }
 }
 
 impl std::fmt::Debug for PendingTxnGuard {
@@ -232,9 +239,14 @@ mod tests {
     #[test]
     fn test_no_secrets_in_lock_file() {
         let dir = TempDir::new().unwrap();
-        let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
-        let raw = std::fs::read_to_string(pending_txn_lock_path(dir.path())).unwrap();
-        let raw_lower = raw.to_lowercase();
+        let guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
+        // Read via the existing file handle to avoid a second handle
+        // that conflicts with the Windows kernel lock range.
+        let id = guard
+            .read_owner_via_handle()
+            .expect("identity must be readable via handle");
+        let serialized = toml::to_string_pretty(&id).unwrap();
+        let raw_lower = serialized.to_lowercase();
         let value_only = raw_lower
             .lines()
             .filter_map(|line| line.split_once('=').map(|(_, v)| v))
@@ -333,9 +345,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = pending_txn_lock_path(dir.path());
         std::fs::write(&path, "").unwrap();
-        let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
-        // Acquisition succeeded despite empty file.
-        let observed = crate::process_file_lock::read_owner(&path).unwrap();
+        let guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
+        // Acquisition succeeded; old empty file was overwritten. Read
+        // via the held handle to avoid opening a second handle.
+        let observed = guard
+            .read_owner_via_handle()
+            .expect("identity must be readable via handle");
         assert_eq!(observed.purpose, PENDING_TXN_LOCK_PURPOSE);
     }
 
@@ -344,8 +359,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = pending_txn_lock_path(dir.path());
         std::fs::write(&path, "garbage data").unwrap();
-        let _guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
-        let observed = crate::process_file_lock::read_owner(&path).unwrap();
+        let guard = acquire_pending_txn(dir.path(), Duration::from_millis(100)).unwrap();
+        let observed = guard
+            .read_owner_via_handle()
+            .expect("identity must be readable via handle");
         assert_eq!(observed.purpose, PENDING_TXN_LOCK_PURPOSE);
     }
 }

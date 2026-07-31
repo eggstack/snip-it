@@ -68,16 +68,24 @@ pub fn schedule_sync(
         }
     };
 
-    // Check execution lock
-    let lock_path = execution_lock::execution_lock_path(state_dir);
-    if let Some(contents) = execution_lock::inspect(&lock_path)
-        && execution_lock::process_alive(contents.pid)
-    {
-        tracing::debug!(
-            owner_pid = contents.pid,
-            "schedule_sync: execution lock held by live process"
-        );
-        return ScheduleDecision::AlreadyActive;
+    // Check execution lock. Attempt a nonblocking acquisition so the
+    // kernel is the sole authority for mutual exclusion; if we cannot
+    // acquire, another process holds it.
+    match execution_lock::try_acquire(state_dir) {
+        Ok(_guard) => {
+            // Drop immediately — we only wanted to test availability.
+        }
+        Err(execution_lock::ExecutionLockError::AlreadyHeld { pid, .. }) => {
+            tracing::debug!(
+                owner_pid = pid,
+                "schedule_sync: execution lock held by another process"
+            );
+            return ScheduleDecision::AlreadyActive;
+        }
+        Err(_) => {
+            // Inspection or other error — fall through and treat as
+            // not held. Errors are logged at the call site.
+        }
     }
 
     // Check backoff status (unless explicit retry bypasses it)

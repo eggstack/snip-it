@@ -147,8 +147,12 @@ fn release_windows_lock(file: Option<&File>) {
 
 #[cfg(windows)]
 const LOCKED_BYTE_COUNT: u32 = 1;
+// Lock a single byte at offset `u32::MAX`. This range is far beyond any
+// real file content, so Windows does not deny read or write access to
+// the actual lock-file bytes. Only another attempt to lock the same
+// range returns ERROR_LOCK_VIOLATION.
 #[cfg(windows)]
-const LOCKED_BYTE_OFFSET: u32 = 0;
+const LOCKED_BYTE_OFFSET: u32 = u32::MAX;
 
 /// Path of the persistent server lock file.
 pub fn server_lock_path(state_dir: &Path) -> PathBuf {
