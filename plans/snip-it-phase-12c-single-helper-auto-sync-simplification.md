@@ -1,6 +1,8 @@
 # Phase 12C — Collapse Auto-Sync to One Helper Process
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
+
+Implementation commit: `42f520f`
 
 Baseline: `baa532dbb7dbd0876a1290737a2de93f7b009249`
 
@@ -504,19 +506,31 @@ The phase fails if it:
 
 ## 8. Closure checklist
 
-- [ ] Helper invokes canonical sync directly.
-- [ ] Executor subprocess production path is removed.
-- [ ] `auto-sync-execute` is removed or has no production use and a documented temporary removal deadline.
-- [ ] Exact-generation clear remains correct.
-- [ ] Newer-generation preservation remains correct.
-- [ ] Manual and automatic sync share one execution lock.
-- [ ] Network/retry waits remain bounded.
-- [ ] Worker remains detached and bounded, not resident.
-- [ ] Obsolete tests and docs are removed or rewritten.
-- [ ] Auto-sync production line count decreases.
-- [ ] Focused tests pass.
-- [ ] `cargo check --workspace --all-targets --all-features` passes.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] Plan records implementation SHA and verification commands.
+- [x] Helper invokes canonical sync directly.
+- [x] Executor subprocess production path is removed.
+- [x] `auto-sync-execute` is removed.
+- [x] Exact-generation clear remains correct.
+- [x] Newer-generation preservation remains correct.
+- [x] Manual and automatic sync share one execution lock.
+- [x] Network/retry waits remain bounded.
+- [x] Worker remains detached and bounded, not resident.
+- [x] Obsolete tests and docs are removed or rewritten.
+- [x] Auto-sync production line count decreases.
+- [x] Focused tests pass.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
+- [x] `bash scripts/check.sh` passes.
+- [x] Plan records implementation SHA and verification commands.
+
+### Verification
+
+- `cargo fmt --all -- --check`
+- `cargo check --workspace --all-targets --all-features`
+- `cargo test -p snip-it auto_sync --all-features -- --test-threads=1`
+- `cargo test --test auto_sync_lifecycle --features test-support -- --test-threads=1`
+- `cargo test --test auto_sync_mutations --features test-support -- --test-threads=1`
+- `cargo test --test auto_sync_concurrency --features test-support -- --test-threads=1`
+- `bash scripts/check.sh`
+- `bash scripts/ci/test-production-seams.sh`
+- `cargo test --workspace --all-features -- --test-threads=1` (2,389 passed, 8 ignored)
 
 When all items are satisfied, mark Phase 12C COMPLETE. Do not create a follow-up supervisor, watchdog, or hardening phase. Remaining optimization belongs only to measured Phase 12D work.
