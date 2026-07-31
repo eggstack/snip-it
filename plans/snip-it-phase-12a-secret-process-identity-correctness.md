@@ -453,7 +453,7 @@ This phase fails if it:
 
 ## Implementation and verification record
 
-Implementation commit: pending final commit SHA.
+Implementation commit: `111e99c`.
 
 Verification completed locally on 2026-07-31:
 
