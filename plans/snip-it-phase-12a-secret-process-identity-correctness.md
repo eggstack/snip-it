@@ -453,7 +453,7 @@ This phase fails if it:
 
 ## Implementation and verification record
 
-Implementation commit: `111e99c`.
+Implementation commit: `111e99c`; Linux fixture correction: `e4e1e67`.
 
 Verification completed locally on 2026-07-31:
 
@@ -466,5 +466,10 @@ Verification completed locally on 2026-07-31:
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `bash scripts/check.sh`
 - `bash scripts/ci/test-production-seams.sh`
+
+The first remote CI run caught an off-by-one in the synthetic Linux fixture
+(the explicit `S` state token was followed by an extra `f3`). The fixture was
+corrected in `e4e1e67`; the local focused tests and `bash scripts/check.sh`
+were rerun successfully afterward.
 
 When all items are satisfied, mark this plan COMPLETE and proceed to Phase 12B. Do not open a follow-up hardening plan for these same behaviors unless a concrete regression remains.
