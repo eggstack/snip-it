@@ -11,8 +11,62 @@ use crate::error::{SnipError, SnipResult};
 use crate::library::{self, Snippet, Snippets};
 use crate::proto::Snippet as ProtoSnippet;
 use crate::sync;
+use crate::utils::atomic::{AtomicWriteOptions, Durability, atomic_replace};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct SyncRecoveryMarker {
+    schema: u32,
+    local_library_name: String,
+    #[serde(default)]
+    local_library_id: String,
+    #[serde(default)]
+    server_library_id: Option<String>,
+    created_at_unix_ms: i64,
+    phase: RecoveryPhase,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+enum RecoveryPhase {
+    Creating,
+    RemoteCreated,
+    Linked,
+}
+
+fn recovery_marker_path(libraries_dir: &Path, library_name: &str) -> std::path::PathBuf {
+    libraries_dir.join(format!("{library_name}.sync_recovery"))
+}
+
+fn write_recovery_marker(path: &Path, marker: &SyncRecoveryMarker) -> SnipResult<()> {
+    let bytes = toml::to_string_pretty(marker).map_err(|e| {
+        SnipError::runtime_error("serialize sync recovery marker", Some(&e.to_string()))
+    })?;
+    atomic_replace(
+        path,
+        bytes.as_bytes(),
+        &AtomicWriteOptions::for_durability(Durability::DurableUserData),
+    )?;
+    Ok(())
+}
+
+fn read_recovery_marker(path: &Path) -> SnipResult<SyncRecoveryMarker> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| SnipError::io_error("read sync recovery marker", path, e))?;
+    toml::from_str(&content)
+        .map_err(|e| SnipError::runtime_error("invalid sync recovery marker", Some(&e.to_string())))
+}
+
+fn normalized_library_name(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-")
+}
+
+fn recovery_marker_for(libraries_dir: &Path, library_name: &str) -> std::path::PathBuf {
+    recovery_marker_path(libraries_dir, library_name)
+}
 
 /// Handles "Library not found" recovery by re-creating the server library
 /// and retrying the sync operation.
@@ -28,7 +82,7 @@ fn handle_library_not_found(
     results: &mut Vec<(String, bool, String)>,
 ) {
     tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
-    let normalized_name = lib_name.to_lowercase().replace(' ', "-");
+    let normalized_name = normalized_library_name(lib_name);
 
     let Some(recovery_dir) = lib_path.parent() else {
         tracing::error!(library = %lib_name, "Cannot create recovery marker: path has no parent");
@@ -50,69 +104,142 @@ fn handle_library_not_found(
         }
         return;
     };
-    let recovery_marker = recovery_dir.join(format!("{lib_name}.sync_recovery"));
-    let marker_content = format!(
-        r#"{{"library":"{}","attempted_at":"{}"}}"#,
-        lib_name,
-        chrono::Utc::now().to_rfc3339()
-    );
-    if let Err(e) = fs::write(&recovery_marker, &marker_content) {
-        tracing::warn!(library = %lib_name, error = %e, "Failed to write recovery marker");
+    let recovery_marker = recovery_marker_for(recovery_dir, lib_name);
+    let mut marker = match fs::symlink_metadata(&recovery_marker) {
+        Ok(_) => match read_recovery_marker(&recovery_marker) {
+            Ok(marker) => marker,
+            Err(e) => {
+                tracing::error!(library = %lib_name, error = %e, "Recovery marker is corrupt; refusing blind recreation");
+                status.failed += 1;
+                results.push((lib_name.to_string(), false, e.to_string()));
+                return;
+            }
+        },
+        Err(_) => SyncRecoveryMarker {
+            schema: 1,
+            local_library_name: lib_name.to_string(),
+            local_library_id: mgr
+                .get_library_by_filename(lib_name)
+                .map(|lib| lib.library_id.clone())
+                .unwrap_or_default(),
+            server_library_id: None,
+            created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
+            phase: RecoveryPhase::Creating,
+        },
+    };
+
+    if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
+        tracing::error!(library = %lib_name, error = %e, "Failed to persist recovery marker; refusing remote recreation");
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
     }
 
-    match runtime.block_on(client.create_library(&normalized_name)) {
-        Ok(server_lib) => {
-            if let Err(e) = mgr.link_server_library(lib_name, &server_lib.id) {
-                tracing::warn!(library = %lib_name, error = %e, "Failed to update library ID");
+    let server_lib = if let Some(server_id) = marker.server_library_id.clone() {
+        crate::proto::Library {
+            id: server_id,
+            name: normalized_name.clone(),
+            created_at: 0,
+            snippet_count: 0,
+        }
+    } else {
+        let existing = match runtime.block_on(client.list_libraries()) {
+            Ok(libraries) => libraries
+                .into_iter()
+                .filter(|lib| normalized_library_name(&lib.name) == normalized_name)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::error!(library = %lib_name, error = %e, "Could not inspect remote libraries during recovery");
+                status.failed += 1;
+                results.push((lib_name.to_string(), false, e.to_string()));
+                return;
             }
-            if let Err(e) = mgr.update_last_sync(lib_name, 0) {
-                tracing::warn!(library = %lib_name, error = %e, "Failed to reset sync timestamp");
-            }
-            tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
-            let local_snippets_for_retry: Vec<ProtoSnippet> =
-                snippets.snippets.iter().map(ProtoSnippet::from).collect();
-            let retry_result = runtime.block_on(client.sync_encrypted(
-                local_snippets_for_retry,
-                0,
-                &server_lib.id,
-            ));
-            match retry_result {
-                Ok(retry_response) if retry_response.success => {
-                    let server_snippets = retry_response.snippets;
-                    match merge_and_save(
-                        lib_path,
-                        lib_name,
-                        snippets,
-                        &server_snippets,
-                        &sync_settings.device_id,
-                    ) {
-                        Ok((_merged, _backup, _conflicts)) => {
-                            if let Err(e) =
-                                mgr.update_last_sync(lib_name, retry_response.server_timestamp)
-                            {
-                                tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
-                            }
-                            if recovery_marker.exists()
-                                && let Err(e) = fs::remove_file(&recovery_marker)
-                            {
-                                tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
-                            }
-                            status.pulled += server_snippets.len() as u32;
-                            results.push((
-                                lib_name.to_string(),
-                                true,
-                                "Re-linked and synced".to_string(),
-                            ));
-                        }
-                        Err(e) => {
-                            status.failed += 1;
-                            results.push((lib_name.to_string(), false, e.to_string()));
-                        }
-                    }
-                }
-                Ok(retry_response) => {
+        };
+
+        match existing.as_slice() {
+            [server_lib] => server_lib.clone(),
+            [] => match runtime.block_on(client.create_library(&normalized_name)) {
+                Ok(server_lib) => server_lib,
+                Err(e) => {
+                    tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
                     status.failed += 1;
-                    results.push((lib_name.to_string(), false, retry_response.message));
+                    results.push((
+                        lib_name.to_string(),
+                        false,
+                        format!("Library deleted and re-creation failed: {e}"),
+                    ));
+                    return;
+                }
+            },
+            _ => {
+                let e = SnipError::runtime_error(
+                    "Ambiguous remote library recovery",
+                    Some(&format!(
+                        "multiple remote libraries normalize to '{normalized_name}'"
+                    )),
+                );
+                tracing::error!(library = %lib_name, error = %e, "Refusing ambiguous recovery");
+                status.failed += 1;
+                results.push((lib_name.to_string(), false, e.to_string()));
+                return;
+            }
+        }
+    };
+
+    marker.server_library_id = Some(server_lib.id.clone());
+    marker.phase = RecoveryPhase::RemoteCreated;
+    if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
+        tracing::error!(library = %lib_name, error = %e, "Failed to persist recovered server ID");
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
+    }
+
+    if let Err(e) = mgr.relink_server_library(lib_name, &server_lib.id, Some(0)) {
+        tracing::error!(library = %lib_name, error = %e, "Failed to persist recovered library linkage");
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
+    }
+    marker.phase = RecoveryPhase::Linked;
+    if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
+        tracing::error!(library = %lib_name, error = %e, "Failed to persist linked recovery state");
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
+    }
+
+    tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
+    let local_snippets_for_retry: Vec<ProtoSnippet> =
+        snippets.snippets.iter().map(ProtoSnippet::from).collect();
+    let retry_result =
+        runtime.block_on(client.sync_encrypted(local_snippets_for_retry, 0, &server_lib.id));
+    match retry_result {
+        Ok(retry_response) if retry_response.success => {
+            let server_snippets = retry_response.snippets;
+            match merge_and_save(
+                lib_path,
+                lib_name,
+                snippets,
+                &server_snippets,
+                &sync_settings.device_id,
+            ) {
+                Ok((_merged, _backup, _conflicts)) => {
+                    if let Err(e) = mgr.update_last_sync(lib_name, retry_response.server_timestamp)
+                    {
+                        tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                    }
+                    if recovery_marker.exists()
+                        && let Err(e) = fs::remove_file(&recovery_marker)
+                    {
+                        tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
+                    }
+                    status.pulled += server_snippets.len() as u32;
+                    results.push((
+                        lib_name.to_string(),
+                        true,
+                        "Re-linked and synced".to_string(),
+                    ));
                 }
                 Err(e) => {
                     status.failed += 1;
@@ -120,14 +247,13 @@ fn handle_library_not_found(
                 }
             }
         }
-        Err(e) => {
-            tracing::error!(library = %lib_name, error = %e, "Failed to re-create library on server");
+        Ok(retry_response) => {
             status.failed += 1;
-            results.push((
-                lib_name.to_string(),
-                false,
-                format!("Library deleted and re-creation failed: {e}"),
-            ));
+            results.push((lib_name.to_string(), false, retry_response.message));
+        }
+        Err(e) => {
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
         }
     }
 }
@@ -148,9 +274,13 @@ fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
                 continue;
             };
             let lib_name = stem.to_string_lossy();
-            tracing::info!(library = %lib_name, "Found incomplete recovery marker, will retry on next sync");
-            if let Err(e) = fs::remove_file(&path) {
-                tracing::warn!(library = %lib_name, error = %e, "Failed to remove stale recovery marker");
+            match read_recovery_marker(&path) {
+                Ok(marker) => {
+                    tracing::info!(library = %lib_name, phase = ?marker.phase, "Found durable sync recovery marker; recovery will resume")
+                }
+                Err(e) => {
+                    tracing::error!(library = %lib_name, error = %e, "Recovery marker is corrupt and was preserved")
+                }
             }
         }
     }
@@ -765,6 +895,99 @@ pub fn run_sync(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct VersionKey {
+    updated_at: i64,
+    device_id: String,
+    fingerprint: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VersionWinner {
+    Local,
+    Remote,
+    Equivalent,
+}
+
+fn hash_field(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn fingerprint(
+    id: &str,
+    description: &str,
+    command: &str,
+    tags: &[String],
+    created_at: i64,
+    updated_at: i64,
+    device_id: &str,
+    deleted: bool,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, id);
+    hash_field(&mut hasher, description);
+    hash_field(&mut hasher, command);
+    hasher.update((tags.len() as u64).to_le_bytes());
+    for tag in tags {
+        hash_field(&mut hasher, tag);
+    }
+    hasher.update(created_at.to_le_bytes());
+    hasher.update(updated_at.to_le_bytes());
+    hash_field(&mut hasher, device_id);
+    hasher.update([deleted as u8]);
+    hasher.finalize().into()
+}
+
+fn local_version_key(snippet: &Snippet) -> VersionKey {
+    VersionKey {
+        updated_at: snippet.updated_at,
+        device_id: snippet.device_id.clone(),
+        fingerprint: fingerprint(
+            &snippet.id,
+            &snippet.description,
+            &snippet.command,
+            &snippet.tags,
+            snippet.created_at,
+            snippet.updated_at,
+            &snippet.device_id,
+            snippet.deleted,
+        ),
+    }
+}
+
+fn remote_version_key(snippet: &ProtoSnippet) -> VersionKey {
+    VersionKey {
+        updated_at: snippet.updated_at,
+        device_id: snippet.device_id.clone(),
+        fingerprint: fingerprint(
+            &snippet.id,
+            &snippet.description,
+            &snippet.command,
+            &snippet.tags,
+            snippet.created_at,
+            snippet.updated_at,
+            &snippet.device_id,
+            snippet.deleted,
+        ),
+    }
+}
+
+fn choose_version(local: &Snippet, remote: &ProtoSnippet) -> VersionWinner {
+    // This product intentionally has no resurrection: an explicit deletion
+    // wins even when the other copy has a later wall-clock timestamp.
+    match (local.deleted, remote.deleted) {
+        (true, false) => VersionWinner::Local,
+        (false, true) => VersionWinner::Remote,
+        (true, true) => VersionWinner::Equivalent,
+        (false, false) => match local_version_key(local).cmp(&remote_version_key(remote)) {
+            Ordering::Less => VersionWinner::Remote,
+            Ordering::Greater => VersionWinner::Local,
+            Ordering::Equal => VersionWinner::Equivalent,
+        },
+    }
+}
+
 fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippets {
     let local_by_id: std::collections::HashMap<_, _> =
         local.snippets.iter().map(|s| (s.id.clone(), s)).collect();
@@ -775,13 +998,9 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     for server_snip in server_snippets {
         seen_ids.insert(server_snip.id.clone());
 
-        if server_snip.deleted {
-            // Server deleted this snippet. If a local copy exists, mark it as
-            // deleted (preserving the data) rather than silently removing it.
-            if let Some(local_snip) = local_by_id.get(&server_snip.id)
-                && !local_snip.deleted
-            {
-                merged_snippets.push(Snippet {
+        if let Some(local_snip) = local_by_id.get(&server_snip.id) {
+            match choose_version(local_snip, server_snip) {
+                VersionWinner::Remote if server_snip.deleted => merged_snippets.push(Snippet {
                     id: local_snip.id.clone(),
                     description: local_snip.description.clone(),
                     command: local_snip.command.clone(),
@@ -793,41 +1012,8 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                     updated_at: server_snip.updated_at,
                     device_id: local_snip.device_id.clone(),
                     deleted: true,
-                });
-            }
-            // If both server and local agree deleted, skip entirely
-            continue;
-        }
-
-        if let Some(local_snip) = local_by_id.get(&server_snip.id) {
-            if local_snip.deleted {
-                // Local snippet was deleted — preserve the deletion even if
-                // the server copy is newer.  A deleted local snippet means the
-                // user explicitly removed it; a newer server copy should not
-                // silently resurrect it.
-                merged_snippets.push(Snippet {
-                    id: local_snip.id.clone(),
-                    description: local_snip.description.clone(),
-                    command: local_snip.command.clone(),
-                    output: local_snip.output.clone(),
-                    tags: local_snip.tags.clone(),
-                    folders: local_snip.folders.clone(),
-                    favorite: local_snip.favorite,
-                    created_at: local_snip.created_at,
-                    updated_at: local_snip.updated_at.max(server_snip.updated_at),
-                    device_id: local_snip.device_id.clone(),
-                    deleted: true,
-                });
-            } else if server_snip.updated_at >= local_snip.updated_at {
-                if server_snip.updated_at != local_snip.updated_at {
-                    tracing::warn!(
-                        snippet_id = %server_snip.id,
-                        old_updated_at = local_snip.updated_at,
-                        new_updated_at = server_snip.updated_at,
-                        "Snippet ID collision: server version overwrites local"
-                    );
-                }
-                merged_snippets.push(Snippet {
+                }),
+                VersionWinner::Remote => merged_snippets.push(Snippet {
                     id: server_snip.id.clone(),
                     description: server_snip.description.clone(),
                     command: server_snip.command.clone(),
@@ -839,11 +1025,28 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                     updated_at: server_snip.updated_at,
                     device_id: server_snip.device_id.clone(),
                     deleted: false,
-                });
-            } else {
-                merged_snippets.push((*local_snip).clone());
+                }),
+                VersionWinner::Local if local_snip.deleted => merged_snippets.push(Snippet {
+                    id: local_snip.id.clone(),
+                    description: local_snip.description.clone(),
+                    command: local_snip.command.clone(),
+                    output: local_snip.output.clone(),
+                    tags: local_snip.tags.clone(),
+                    folders: local_snip.folders.clone(),
+                    favorite: local_snip.favorite,
+                    created_at: local_snip.created_at,
+                    updated_at: local_snip.updated_at.max(server_snip.updated_at),
+                    device_id: local_snip.device_id.clone(),
+                    deleted: true,
+                }),
+                VersionWinner::Local => merged_snippets.push((*local_snip).clone()),
+                VersionWinner::Equivalent if local_snip.deleted => continue,
+                VersionWinner::Equivalent => merged_snippets.push((*local_snip).clone()),
             }
         } else {
+            if server_snip.deleted {
+                continue;
+            }
             merged_snippets.push(Snippet {
                 id: server_snip.id.clone(),
                 description: server_snip.description.clone(),
@@ -866,7 +1069,12 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         }
     }
 
-    merged_snippets.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+    merged_snippets.sort_by_key(|b| {
+        (
+            std::cmp::Reverse(b.updated_at),
+            std::cmp::Reverse(local_version_key(b)),
+        )
+    });
 
     Snippets {
         snippets: merged_snippets,
@@ -916,6 +1124,40 @@ mod tests {
         }
     }
 
+    fn as_proto(snippet: &Snippet) -> ProtoSnippet {
+        ProtoSnippet::from(snippet)
+    }
+
+    fn as_snippet(snippet: &ProtoSnippet) -> Snippet {
+        Snippet {
+            id: snippet.id.clone(),
+            description: snippet.description.clone(),
+            command: snippet.command.clone(),
+            output: String::new(),
+            tags: snippet.tags.clone(),
+            folders: Vec::new(),
+            favorite: false,
+            created_at: snippet.created_at,
+            updated_at: snippet.updated_at,
+            device_id: snippet.device_id.clone(),
+            deleted: snippet.deleted,
+        }
+    }
+
+    fn merged_description(local: &Snippet, remote: &ProtoSnippet) -> String {
+        merge_snippets(
+            &Snippets {
+                snippets: vec![local.clone()],
+                folders: Vec::new(),
+            },
+            std::slice::from_ref(remote),
+        )
+        .snippets
+        .first()
+        .map(|snippet| snippet.description.clone())
+        .unwrap_or_default()
+    }
+
     #[test]
     fn test_server_wins_with_newer_timestamp() {
         let local = Snippets {
@@ -947,6 +1189,80 @@ mod tests {
         assert_eq!(merged.snippets.len(), 1);
         assert_eq!(merged.snippets[0].description, "local desc");
         assert_eq!(merged.snippets[0].command, "local cmd");
+    }
+
+    #[test]
+    fn test_equal_timestamp_different_devices_is_role_independent() {
+        let mut a = make_local_snippet("1", "A", "echo A", 100);
+        a.device_id = "device-a".to_string();
+        let mut b = make_server_snippet("1", "B", "echo B", 100);
+        b.device_id = "device-b".to_string();
+
+        let forward = merged_description(&a, &b);
+        let reverse = merged_description(&as_snippet(&b), &as_proto(&a));
+        assert_eq!(forward, reverse);
+        assert!(matches!(
+            choose_version(&a, &b),
+            VersionWinner::Local | VersionWinner::Remote
+        ));
+    }
+
+    #[test]
+    fn test_equal_timestamp_same_device_uses_content_fingerprint() {
+        let mut a = make_local_snippet("1", "A", "echo A", 100);
+        a.device_id = "same-device".to_string();
+        let mut b = make_server_snippet("1", "B", "echo B", 100);
+        b.device_id = "same-device".to_string();
+
+        let forward = merged_description(&a, &b);
+        let reverse = merged_description(&as_snippet(&b), &as_proto(&a));
+        assert_eq!(forward, reverse);
+        assert_ne!(forward, "");
+    }
+
+    #[test]
+    fn test_equal_timestamp_delete_live_is_role_independent() {
+        let mut deleted = make_local_snippet("1", "deleted", "echo deleted", 100);
+        deleted.deleted = true;
+        let live = make_server_snippet("1", "live", "echo live", 100);
+
+        let forward = merge_snippets(
+            &Snippets {
+                snippets: vec![deleted.clone()],
+                folders: Vec::new(),
+            },
+            std::slice::from_ref(&live),
+        );
+        let reverse = merge_snippets(
+            &Snippets {
+                snippets: vec![as_snippet(&live)],
+                folders: Vec::new(),
+            },
+            &[as_proto(&deleted)],
+        );
+        assert_eq!(forward.snippets[0].deleted, reverse.snippets[0].deleted);
+        assert!(forward.snippets[0].deleted);
+        assert!(reverse.snippets[0].deleted);
+    }
+
+    #[test]
+    fn test_recovery_marker_is_atomic_and_corrupt_marker_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = recovery_marker_path(dir.path(), "work");
+        let marker = SyncRecoveryMarker {
+            schema: 1,
+            local_library_name: "work".to_string(),
+            local_library_id: "local-id".to_string(),
+            server_library_id: Some("server-id".to_string()),
+            created_at_unix_ms: 1,
+            phase: RecoveryPhase::RemoteCreated,
+        };
+        write_recovery_marker(&path, &marker).unwrap();
+        assert_eq!(read_recovery_marker(&path).unwrap(), marker);
+
+        fs::write(&path, "not valid toml = [").unwrap();
+        check_and_complete_recovery_markers(dir.path()).unwrap();
+        assert!(path.exists());
     }
 
     #[test]

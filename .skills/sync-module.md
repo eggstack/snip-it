@@ -31,13 +31,18 @@ run_sync() flow (sync_commands.rs:365-742):
 
 ## Merge Strategy
 
-Last-write-wins based on `updated_at` timestamp:
-- Server deleted + local not deleted → mark local as deleted
-- Both deleted → exclude from output
-- Server newer → server wins, preserve local-only fields (`output`, `folders`, `favorite`)
-- Local newer or equal → local wins
-- Local deleted → NOT resurrected by newer server copy (local-deleted-wins)
-- Local-only snippets → preserved unchanged
+Live versions use deterministic ordering by `(updated_at, device_id,
+SHA-256(synced-fields))`; this is role-independent for equal timestamps.
+Deletion wins over live content even when the live timestamp is newer, so
+explicit deletions are not silently resurrected. Both-deleted records are
+omitted from display while required tombstones remain available for upload.
+Server wins preserve local-only fields (`output`, `folders`, `favorite`).
+Severe clock skew can still make one device dominate until its clock catches
+up; this is wall-clock ordering, not CRDT or logical-clock reconciliation.
+
+Missing remote libraries use an atomic `<library>.sync_recovery` TOML marker.
+The server ID is recorded before local relinking, linkage and `last_sync` are
+saved together, and corrupt/ambiguous recovery state blocks blind recreation.
 
 ## Key Functions
 
@@ -71,7 +76,10 @@ Tests in `sync_commands.rs:896-1180`:
 - `test_proto_snippet_excludes_usage_metadata`
 - `test_merge_preserves_local_output_when_server_wins`
 
-Missing: No tests for encryption roundtrip through sync, retry logic, or the critical encrypt-failure + timestamp-update interaction.
+Focused coverage also includes equal-timestamp role swaps, same-device content
+fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
+and preservation of corrupt markers. Existing integration coverage continues to
+cover encryption and retry/timestamp behavior.
 
 ## Failure Classification and Retry (Phase 03)
 

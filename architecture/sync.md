@@ -54,24 +54,28 @@ pub enum SyncDirection {
 
 ## Merge Strategy (`merge_snippets()`)
 
-**Last-write-wins** based on `updated_at` timestamp:
+Live versions are ordered by the deterministic key
+`(updated_at, device_id, SHA-256(content))`. The fingerprint covers only the
+synced fields (`id`, description, command, tags in stored order, creation and
+update timestamps, device ID, and deletion state); local-only `output`,
+`folders`, and `favorite` are never part of conflict ordering. This makes an
+equal-timestamp merge produce the same result when the two inputs are swapped.
 
-1. **Server wins** (server `updated_at` > local `updated_at`):
-   - Server snippet replaces local (unless server `deleted: true`)
-   - Local-only fields `output`, `folders`, `favorite` are **preserved**
+Deletion is intentionally stronger than last-write-wins: a deleted version
+wins over live content even when the live copy has a later timestamp. This
+product does not silently resurrect an explicitly deleted snippet. If both
+copies are deleted, the merged display omits the record; tombstones remain in
+the local data until the server acknowledges them.
 
-2. **Local wins** (local `updated_at` > server `updated_at`):
-   - Local snippet pushed to server
+For a live/live conflict, the greater key wins and the losing copy's local-only
+fields remain local. A snippet present on only one side is preserved according
+to its state.
 
-3. **Server deleted: true**:
-   - Local copy marked `deleted: true` (data preserved, not shown in UI)
-   - Never fully deleted to allow recovery
-
-4. **Both deleted** (both have `deleted: true`):
-   - Excluded from merged result
-
-5. **Local-only** (snippet exists only locally or only server):
-   - Preserved as-is
+The primary ordering is still wall-clock time in Unix seconds. Deterministic
+tie-breaking does not correct clocks: a device with a severely fast clock can
+dominate edits until real time catches up. Correct the system clock if this
+occurs. Sync is deliberately not a CRDT and does not add logical clocks,
+vector clocks, or distributed reconciliation machinery.
 
 ### Output Field Sync Contract
 
@@ -129,6 +133,20 @@ service SnippetSync {
 - `SnipError::Runtime` for sync-specific errors (sync failures, validation errors)
 - `CryptoError` for encryption/decryption errors (converted to `SnipError::Runtime` via `From`)
 - Network failures trigger retry with exponential backoff via `retry_grpc!` macro
+
+## Remote Library Recovery
+
+When a linked remote library is missing, the client writes an atomic
+`<library>.sync_recovery` TOML record before recreating it. The record contains
+only the local name/ID, phase, timestamp, and (once returned) the server ID —
+never credentials or snippet content. The server ID is persisted before local
+relinking, and the local server ID plus `last_sync = 0` are saved together.
+
+If a process stops before the server ID is recorded, the next recovery lists
+libraries by normalized name and reuses exactly one match; zero matches may
+create one, while multiple matches fail visibly as ambiguous. Corrupt markers
+are preserved and block blind recreation. A marker is removed only after the
+relink and retry sync have been durably completed.
 
 ## Auto-Sync Policy
 

@@ -1,6 +1,6 @@
 # Phase 12E — Deterministic Sync Ordering and Truthful Recovery Semantics
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `b14dd66102d0c1a63deed4f14b2bc2391ef4c0a3`
 
@@ -493,19 +493,53 @@ This phase fails if it:
 
 ## 7. Closure checklist
 
-- [ ] Deterministic version comparator implemented.
-- [ ] Equal-timestamp role-swap tests pass.
-- [ ] Deletion policy is explicit and tested.
-- [ ] Timestamp mutation behavior is consistent.
-- [ ] Clock-skew limitation is documented.
-- [ ] Recovery option A, B, or C is selected and recorded.
-- [ ] Recovery no longer deletes unresolved state without action.
-- [ ] Retry after remote creation does not create a duplicate.
-- [ ] Local linkage fields are persisted coherently.
-- [ ] Focused sync and server tests pass.
-- [ ] `cargo check --workspace --all-targets --all-features` passes.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] Plan records implementation SHA and verification commands.
-- [ ] No CRDT, new daemon, or broad schema framework was introduced.
+- [x] Deterministic version comparator implemented.
+- [x] Equal-timestamp role-swap tests pass.
+- [x] Deletion policy is explicit and tested.
+- [x] Timestamp mutation behavior is consistent.
+- [x] Clock-skew limitation is documented.
+- [x] Recovery option A, B, or C is selected and recorded.
+- [x] Recovery no longer deletes unresolved state without action.
+- [x] Retry after remote creation does not create a duplicate.
+- [x] Local linkage fields are persisted coherently.
+- [x] Focused sync and server tests pass.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
+- [x] `bash scripts/check.sh` passes.
+- [x] Plan records implementation SHA and verification commands.
+- [x] No CRDT, new daemon, or broad schema framework was introduced.
 
 When all items are satisfied, mark Phase 12E COMPLETE. Do not open another sync-consistency phase unless a reproducible conflict or recovery defect remains.
+
+## Implementation notes
+
+- Selected recovery option: **B**, with a narrow name-reuse guard for the
+  crash window before the server ID can be persisted. The current create RPC
+  does not accept a stable client library ID, while it does return the server
+  ID; adding a protocol field would be broader than the bounded local marker.
+- Live conflict ordering is `(updated_at, device_id,
+  SHA-256(id, description, command, stored-order tags, created_at, updated_at,
+  device_id, deleted))`. Local-only fields are excluded.
+- Deletion remains a deliberate no-resurrection rule. Equal and unequal
+  delete/live comparisons are role-independent; both-deleted records remain
+  omitted from display.
+- Recovery markers are durable TOML written with `atomic_replace`. The marker
+  records `creating`, `remote_created`, and `linked` phases, preserves corrupt
+  state, rejects ambiguous normalized-name matches, and is removed only after
+  relink, merged-library persistence, and the final sync cursor update.
+- `LibraryManager::relink_server_library` persists server linkage and
+  `last_sync` in one locked config save.
+- Focused tests cover live/live ordering, same-device fingerprint ties,
+  delete/live role swaps, marker round trips, and corrupt-marker preservation.
+
+Verification completed locally:
+
+```text
+cargo fmt --all -- --check
+cargo test -p snip-it sync_commands --all-features -- --test-threads=1
+cargo test --test sync_integration --features test-support -- --test-threads=1
+cargo test --test sync_contracts --features test-support -- --test-threads=1
+cargo check --workspace --all-targets --all-features
+bash scripts/check.sh
+```
+
+Implementation commit SHA: `1a9292122a23a94a5d6e435c4a26752873d23fe9`.

@@ -542,6 +542,25 @@ snippets = []
         Ok(())
     }
 
+    /// Atomically persists server linkage and the sync cursor for recovery.
+    pub fn relink_server_library(
+        &mut self,
+        filename: &str,
+        server_id: &str,
+        last_sync: Option<i64>,
+    ) -> SnipResult<()> {
+        let _lock = self.acquire_local_data_lock()?;
+        if let Some(lib) = self.get_library_by_filename_mut(filename) {
+            lib.library_id = server_id.to_string();
+            lib.server_id = Some(server_id.to_string());
+            lib.last_sync = last_sync;
+
+            self.bump_generation();
+            self.save_config()?;
+        }
+        Ok(())
+    }
+
     /// Clears server linkage metadata for a local library.
     pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()> {
         let _lock = self.acquire_local_data_lock()?;

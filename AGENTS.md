@@ -148,6 +148,13 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 - The server's request observer is compiled only with tests or the explicit `test-helpers` feature. Do not add production branches for test event capture.
 - The client retains Tokio's multi-thread feature because the production detached auto-sync worker creates its own multi-thread runtime; do not prune it without redesigning that supported path.
 
+### Sync ordering and recovery (Phase 12E)
+- Live snippet conflicts use `(updated_at, device_id, SHA-256(synced fields))`; never reintroduce role-dependent `>=` server-wins behavior.
+- Deletion wins over live content, including when the live copy has a later timestamp. This is intentional no-resurrection behavior, not pure LWW.
+- `output`, `folders`, and `favorite` are local-only and must not enter the conflict fingerprint.
+- Missing-library recovery uses atomic `<library>.sync_recovery` TOML state. Preserve corrupt markers, reuse exactly one normalized remote-name match, fail on ambiguity, and remove a marker only after relink and retry sync are durable.
+- Recovery linkage and `last_sync` reset must be persisted in one `LibraryManager` save.
+
 ### Selection & Exit Codes
 - `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
 - Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0

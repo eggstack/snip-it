@@ -284,6 +284,13 @@ them; the server handles authentication, library metadata, and ciphertext
 storage. The server does not terminate TLS, so a remote deployment must put it
 behind a TLS-terminating reverse proxy.
 
+Sync resolves live equal-timestamp conflicts deterministically using the
+timestamp, device ID, and a SHA-256 fingerprint of synced fields. Explicit
+deletions win and are not silently resurrected. This remains wall-clock-based;
+correct system clocks if one device has severe clock skew. Missing remote
+libraries use a durable, credential-free recovery marker so a crashed relink
+can resume without blindly creating another library.
+
 The complete deployment guide, including Docker, Caddy, systemd, configuration,
 health checks, and troubleshooting, is in
 [snip-sync/README.md](snip-sync/README.md).
