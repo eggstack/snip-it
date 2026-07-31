@@ -331,6 +331,28 @@ pub fn read_pid_record() -> Option<PidRecord> {
     read_pid_at(&paths::pid_path())
 }
 
+/// Remove the PID file only when it still contains the expected record.
+/// Legacy numeric records are compared by PID alone; structured records use
+/// all of their identity fields. Other parsed states are never removable.
+pub fn remove_pid_if_unchanged(expected: &ParsedPidFile) {
+    remove_pid_if_unchanged_at(&paths::pid_path(), expected);
+}
+
+fn remove_pid_if_unchanged_at(path: &Path, expected: &ParsedPidFile) {
+    let matches = match (expected, parse_pid_file(path)) {
+        (ParsedPidFile::LegacyPid(expected_pid), ParsedPidFile::LegacyPid(current_pid)) => {
+            expected_pid == &current_pid
+        }
+        (ParsedPidFile::Structured(expected_record), ParsedPidFile::Structured(current_record)) => {
+            expected_record == &current_record
+        }
+        _ => false,
+    };
+    if matches {
+        let _ = remove_pid_atomic(path);
+    }
+}
+
 fn read_pid_at(path: &Path) -> Option<PidRecord> {
     match parse_pid_file(path) {
         ParsedPidFile::Structured(rec) => Some(rec),
@@ -684,6 +706,19 @@ mod tests {
             ParsedPidFile::Malformed(_) => {}
             other => panic!("expected Malformed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_remove_legacy_pid_only_when_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        std::fs::write(&path, "1234\n").unwrap();
+
+        remove_pid_if_unchanged_at(&path, &ParsedPidFile::LegacyPid(9999));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "1234\n");
+
+        remove_pid_if_unchanged_at(&path, &ParsedPidFile::LegacyPid(1234));
+        assert!(!path.exists());
     }
 
     #[test]

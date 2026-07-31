@@ -447,33 +447,43 @@ fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
 
 fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     let state_dir = snip_sync::paths::state_dir();
-    // Snapshot the recorded identity so we can verify it after exit.
-    let expected = match snip_sync::process::read_pid_record() {
-        Some(r) => r,
-        None => return Err("No PID file found. Is the server running?".into()),
+    let expected = snip_sync::process::parse_pid_file(&snip_sync::paths::pid_path());
+    let pid = match &expected {
+        snip_sync::process::ParsedPidFile::Structured(record) => record.pid,
+        snip_sync::process::ParsedPidFile::LegacyPid(pid) => *pid,
+        snip_sync::process::ParsedPidFile::Empty => {
+            return Err("No usable PID file found. Is the server running?".into());
+        }
+        snip_sync::process::ParsedPidFile::Malformed(message) => {
+            return Err(format!("PID file is malformed: {message}. Remove or replace it.").into());
+        }
     };
-    let pid = expected.pid;
 
-    // Refuse to signal unless the recorded identity still matches a live
-    // process. This guards against PID reuse — a recycled PID with a
-    // different start token is not the server which wrote the PID file.
-    if !snip_sync::process::record_still_matches(&expected) {
+    #[cfg(not(unix))]
+    if matches!(expected, snip_sync::process::ParsedPidFile::LegacyPid(_)) {
+        eprintln!("Stop is only supported on Unix systems.");
+        return Err("Unsupported platform".into());
+    }
+
+    let structured_matches = match &expected {
+        snip_sync::process::ParsedPidFile::Structured(record) => {
+            snip_sync::process::record_still_matches(record)
+        }
+        snip_sync::process::ParsedPidFile::LegacyPid(pid) => snip_sync::process::is_running(*pid),
+        _ => false,
+    };
+
+    if !structured_matches {
         println!(
             "Process {} is not running (or its identity no longer matches the PID file). Cleaning up stale PID file.",
             pid
         );
-        // Acquire the server lock first so a replacement server cannot
-        // be unlinked by our cleanup. If a new server is already running,
-        // the lock is busy and we must NOT remove its PID file.
         match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
             Ok(_guard) => {
-                snip_sync::process::remove_pid();
+                snip_sync::process::remove_pid_if_unchanged(&expected);
                 Ok(())
             }
-            Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => {
-                // A replacement server is running; leave its PID file alone.
-                Ok(())
-            }
+            Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => Ok(()),
             Err(e) => Err(format!("Failed to acquire server lock: {e}").into()),
         }
     } else if !force && !snip_sync::process::validate_process_name(pid) {
@@ -513,15 +523,9 @@ fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
             // is busy and we leave its PID file alone.
             match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
                 Ok(_guard) => {
-                    // Re-verify the on-disk record still identifies the
-                    // process we just stopped before removing it.
-                    if let Some(current) = snip_sync::process::read_pid_record()
-                        && current.pid == expected.pid
-                        && current.start_token == expected.start_token
-                        && current.nonce == expected.nonce
-                    {
-                        snip_sync::process::remove_pid();
-                    }
+                    // Re-verify the on-disk record still identifies the process we
+                    // just stopped before removing it. Legacy records compare by PID.
+                    snip_sync::process::remove_pid_if_unchanged(&expected);
                     if exit_result.is_ok() {
                         println!("Server stopped.");
                     } else {
@@ -542,12 +546,22 @@ fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    match snip_sync::process::read_pid_record() {
-        Some(record) if snip_sync::process::record_still_matches(&record) => {
+    match snip_sync::process::parse_pid_file(&snip_sync::paths::pid_path()) {
+        snip_sync::process::ParsedPidFile::Structured(record)
+            if snip_sync::process::record_still_matches(&record) =>
+        {
             println!("Stopping existing server (PID {})...", record.pid);
             cmd_stop(force)?;
         }
-        _ => {
+        snip_sync::process::ParsedPidFile::LegacyPid(pid) => {
+            println!("Stopping existing server (PID {pid})...");
+            cmd_stop(force)?;
+        }
+        snip_sync::process::ParsedPidFile::Malformed(message) => {
+            return Err(format!("PID file is malformed: {message}. Remove or replace it.").into());
+        }
+        snip_sync::process::ParsedPidFile::Empty
+        | snip_sync::process::ParsedPidFile::Structured(_) => {
             println!("No running server found.");
         }
     }

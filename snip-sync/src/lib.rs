@@ -370,7 +370,7 @@ pub struct SnipSyncService {
     /// Test-only: optional request observer for telemetry tests.
     /// When set, `record_request` and `record_request_finished` emit
     /// sanitized events to the observer.
-    #[cfg(feature = "test-helpers")]
+    #[cfg(any(test, feature = "test-helpers"))]
     pub test_observer: Option<Arc<dyn crate::test_observer::TestRequestObserver>>,
 }
 
