@@ -1,5 +1,12 @@
 # AGENTS.md
 
+## Phase 12B Auto-Sync Correctness Closure
+
+- `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
+- Startup recovery and scheduling use the kernel-backed execution lock as the sole ownership authority. Persistent PID/nonce metadata is diagnostic only.
+- Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt/inconsistent state: preserve the marker, log the failure, and do not spawn sync work.
+- Executor timeout and wait-error paths use bounded terminate-and-reap cleanup while the worker still owns the execution lock.
+
 ## Build & Test Commands
 
 ```bash

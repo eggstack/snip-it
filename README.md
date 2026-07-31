@@ -355,7 +355,10 @@ forces a sync attempt after bounded time even if changes continue, preventing
 indefinite starvation.
 
 Local mutations always succeed before any remote work begins. A failed
-auto-sync never rolls back or corrupts a successful local save.
+auto-sync never rolls back or corrupts a successful local save. Unreadable
+pending state, execution-lock failures, and worker-spawn failures remain
+visible through existing status/logging paths; they are never treated as
+“no pending work” or as a successfully started worker.
 
 A durable pending marker (`auto-sync-pending.toml`) records the latest
 mutation generation; the worker only clears state matching its observed

@@ -300,7 +300,7 @@ fn test_startup_recovery_schedules_worker() {
     let dir = TempDir::new().unwrap();
     create_mutation(dir.path());
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
     assert_eq!(
         decision,
         ScheduleDecision::SpawnNow,
@@ -314,7 +314,7 @@ fn test_startup_recovery_skips_when_lock_held() {
     create_mutation(dir.path());
     let _lock = try_acquire(dir.path()).unwrap();
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
     assert_eq!(
         decision,
         ScheduleDecision::AlreadyActive,
@@ -330,7 +330,7 @@ fn test_startup_recovery_preserves_stale_pending() {
     let state = pending::read_state_from_dir(dir.path()).unwrap();
     assert_eq!(state.generation, 1);
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
     assert!(
         decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive,
         "pending marker must still be scheduled regardless of age, got {decision:?}"
@@ -355,7 +355,7 @@ fn test_backoff_active_defers_scheduling() {
     )
     .unwrap();
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
     assert!(
         matches!(decision, ScheduleDecision::DeferredUntil(_)),
         "active backoff must produce DeferredUntil, got {decision:?}"
@@ -380,7 +380,7 @@ fn test_backoff_expired_allows_spawn() {
     )
     .unwrap();
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
     assert_eq!(
         decision,
         ScheduleDecision::SpawnNow,
@@ -405,7 +405,7 @@ fn test_attention_required_blocks_scheduling() {
     )
     .unwrap();
 
-    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+    let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
     assert!(
         matches!(
             decision,

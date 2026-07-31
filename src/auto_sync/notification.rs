@@ -123,8 +123,13 @@ fn schedule_after_record(state_dir: &std::path::Path, _marked: &PendingState) ->
         &policy,
         crate::auto_sync::schedule::Caller::Mutation,
     ) {
-        crate::auto_sync::schedule::ScheduleDecision::SpawnNow => SpawnResult::Spawned,
-        _ => SpawnResult::Suppressed,
+        Ok(crate::auto_sync::schedule::ScheduleDecision::SpawnNow) => SpawnResult::Spawned,
+        Ok(_) => SpawnResult::Suppressed,
+        Err(error) => {
+            tracing::warn!(%error, "auto-sync scheduling failed; pending work preserved");
+            apply_scheduling_failure_policy(&policy);
+            SpawnResult::SpawnFailed
+        }
     }
 }
 
@@ -220,7 +225,12 @@ pub fn should_attempt_auto_sync_recovery_for_policy(policy: Option<StartupRecove
 
 pub fn startup_recover_pending() {
     let state_dir = derive_state_dir();
-    let _ = worker::startup_recover(&state_dir);
+    match worker::startup_recover(&state_dir) {
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(%error, "auto-sync startup recovery could not read pending state")
+        }
+    }
 }
 
 pub fn derive_state_dir() -> std::path::PathBuf {

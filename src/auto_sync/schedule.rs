@@ -35,6 +35,25 @@ pub enum ScheduleDecision {
     NotConfigured,
 }
 
+#[derive(Debug)]
+pub enum ScheduleError {
+    Pending(pending::PendingError),
+    ExecutionLock(execution_lock::ExecutionLockError),
+    Spawn(spawn::SpawnError),
+}
+
+impl std::fmt::Display for ScheduleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending(error) => write!(f, "pending state error: {error}"),
+            Self::ExecutionLock(error) => write!(f, "execution lock error: {error}"),
+            Self::Spawn(error) => write!(f, "worker spawn error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScheduleError {}
+
 /// Determine whether a worker should be spawned.
 ///
 /// This is the single entry point for all scheduling decisions:
@@ -49,23 +68,20 @@ pub fn schedule_sync(
     state_dir: &Path,
     policy: &AutoSyncPolicy,
     caller: Caller,
-) -> ScheduleDecision {
+) -> Result<ScheduleDecision, ScheduleError> {
     if !policy.sync_configured {
-        return ScheduleDecision::NotConfigured;
+        return Ok(ScheduleDecision::NotConfigured);
     }
 
     if !policy.should_trigger() {
-        return ScheduleDecision::Disabled;
+        return Ok(ScheduleDecision::Disabled);
     }
 
     // Check if pending work exists
     let _pending_state = match pending::read_state_from_dir(state_dir) {
         Ok(s) => s,
-        Err(pending::PendingError::NotFound) => return ScheduleDecision::NoPending,
-        Err(e) => {
-            tracing::warn!(error = %e, "schedule_sync: failed to read pending state");
-            return ScheduleDecision::NoPending;
-        }
+        Err(pending::PendingError::NotFound) => return Ok(ScheduleDecision::NoPending),
+        Err(e) => return Err(ScheduleError::Pending(e)),
     };
 
     // Check execution lock. Attempt a nonblocking acquisition so the
@@ -80,12 +96,9 @@ pub fn schedule_sync(
                 owner_pid = pid,
                 "schedule_sync: execution lock held by another process"
             );
-            return ScheduleDecision::AlreadyActive;
+            return Ok(ScheduleDecision::AlreadyActive);
         }
-        Err(_) => {
-            // Inspection or other error — fall through and treat as
-            // not held. Errors are logged at the call site.
-        }
+        Err(e) => return Err(ScheduleError::ExecutionLock(e)),
     }
 
     // Check backoff status (unless explicit retry bypasses it)
@@ -95,7 +108,9 @@ pub fn schedule_sync(
                 if status.next_attempt_at_unix_ms > 0 {
                     let now_ms = unix_now_ms();
                     if now_ms < status.next_attempt_at_unix_ms {
-                        return ScheduleDecision::DeferredUntil(status.next_attempt_at_unix_ms);
+                        return Ok(ScheduleDecision::DeferredUntil(
+                            status.next_attempt_at_unix_ms,
+                        ));
                     }
                 }
 
@@ -124,10 +139,10 @@ pub fn schedule_sync(
                                 ) {
                                     // Config changed — fall through to SpawnNow
                                 } else {
-                                    return ScheduleDecision::RequiresAttention(last_class);
+                                    return Ok(ScheduleDecision::RequiresAttention(last_class));
                                 }
                             } else {
-                                return ScheduleDecision::RequiresAttention(last_class);
+                                return Ok(ScheduleDecision::RequiresAttention(last_class));
                             }
                         }
                         _ => {} // RetryAfter or WaitForConfigurationChange - proceed
@@ -135,17 +150,20 @@ pub fn schedule_sync(
                 }
             }
             status::StatusRead::Corrupt(_) => {
-                return ScheduleDecision::RequiresAttention(FailureClass::Internal);
+                return Ok(ScheduleDecision::RequiresAttention(FailureClass::Internal));
             }
             status::StatusRead::Missing => {}
         }
     }
 
-    ScheduleDecision::SpawnNow
+    Ok(ScheduleDecision::SpawnNow)
 }
 
 /// Convenience wrapper that resolves policy from the current config.
-pub fn schedule_sync_from_config(state_dir: &Path, caller: Caller) -> ScheduleDecision {
+pub fn schedule_sync_from_config(
+    state_dir: &Path,
+    caller: Caller,
+) -> Result<ScheduleDecision, ScheduleError> {
     let settings = crate::config::get_sync_settings();
     let policy = AutoSyncPolicy::resolve(&settings);
     schedule_sync(state_dir, &policy, caller)
@@ -161,14 +179,15 @@ pub fn schedule_existing_pending(
     state_dir: &Path,
     policy: &AutoSyncPolicy,
     caller: Caller,
-) -> ScheduleDecision {
-    let decision = schedule_sync(state_dir, policy, caller);
+) -> Result<ScheduleDecision, ScheduleError> {
+    let decision = schedule_sync(state_dir, policy, caller)?;
     if decision == ScheduleDecision::SpawnNow
         && let Err(e) = spawn::spawn_worker(state_dir)
     {
         tracing::warn!(error = %e, "schedule_existing_pending: failed to spawn worker");
+        return Err(ScheduleError::Spawn(e));
     }
-    decision
+    Ok(decision)
 }
 
 /// The sole authority for translating a `SpawnNow` decision into an actual
@@ -178,15 +197,16 @@ pub fn schedule_and_spawn(
     state_dir: &Path,
     policy: &AutoSyncPolicy,
     caller: Caller,
-) -> ScheduleDecision {
-    let decision = schedule_sync(state_dir, policy, caller);
+) -> Result<ScheduleDecision, ScheduleError> {
+    let decision = schedule_sync(state_dir, policy, caller)?;
     if decision == ScheduleDecision::SpawnNow
         && !test_worker_spawn_suppressed()
         && let Err(e) = spawn::spawn_worker(state_dir)
     {
         tracing::warn!(error = %e, "schedule_and_spawn: failed to spawn worker");
+        return Err(ScheduleError::Spawn(e));
     }
-    decision
+    Ok(decision)
 }
 
 /// Test-only worker spawn suppression.
@@ -243,8 +263,63 @@ mod tests {
     #[test]
     fn test_no_pending_returns_no_pending() {
         let dir = TempDir::new().unwrap();
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+        let decision =
+            schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
         assert_eq!(decision, ScheduleDecision::NoPending);
+    }
+
+    #[test]
+    fn test_corrupt_pending_is_an_error_not_no_pending() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(pending::pending_path(dir.path()), "not toml").unwrap();
+        let result = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+        assert!(matches!(result, Err(ScheduleError::Pending(_))));
+    }
+
+    #[test]
+    fn test_execution_lock_io_error_is_not_spawn_now() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        std::fs::create_dir(execution_lock::execution_lock_path(dir.path())).unwrap();
+        let result = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        assert!(matches!(result, Err(ScheduleError::ExecutionLock(_))));
+        assert!(pending::pending_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn test_live_pid_metadata_without_kernel_lock_does_not_block_recovery() {
+        let dir = TempDir::new().unwrap();
+        pending::record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: MutationKind::SnippetCreate,
+            },
+        )
+        .unwrap();
+        let identity = crate::process_file_lock::LockIdentity {
+            schema_version: crate::process_file_lock::LOCK_IDENTITY_SCHEMA_VERSION,
+            purpose: execution_lock::EXECUTION_LOCK_PURPOSE.to_string(),
+            pid: std::process::id(),
+            start_token: None,
+            nonce: "diagnostic-only".to_string(),
+            acquired_at_unix_ms: 0,
+        };
+        std::fs::write(
+            execution_lock::execution_lock_path(dir.path()),
+            toml::to_string(&identity).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap(),
+            ScheduleDecision::SpawnNow
+        );
     }
 
     #[test]
@@ -257,7 +332,7 @@ mod tests {
             },
         )
         .unwrap();
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         // May be SpawnNow or AlreadyActive depending on lock state
         assert!(
             decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive
@@ -275,7 +350,8 @@ mod tests {
         )
         .unwrap();
         let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery);
+        let decision =
+            schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
         assert_eq!(decision, ScheduleDecision::AlreadyActive);
     }
 
@@ -304,7 +380,7 @@ mod tests {
         )
         .unwrap();
 
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert!(matches!(decision, ScheduleDecision::DeferredUntil(_)));
     }
 
@@ -332,7 +408,7 @@ mod tests {
         )
         .unwrap();
 
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::ExplicitRetry);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::ExplicitRetry).unwrap();
         // Explicit retry should not be DeferredUntil
         assert_ne!(
             decision,
@@ -364,7 +440,7 @@ mod tests {
         )
         .unwrap();
 
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert!(matches!(
             decision,
             ScheduleDecision::RequiresAttention(FailureClass::Authentication)
@@ -378,7 +454,7 @@ mod tests {
             sync_configured: false,
             ..AutoSyncPolicy::default()
         };
-        let decision = schedule_sync(dir.path(), &policy, Caller::StartupRecovery);
+        let decision = schedule_sync(dir.path(), &policy, Caller::StartupRecovery).unwrap();
         assert_eq!(decision, ScheduleDecision::NotConfigured);
     }
 
@@ -397,7 +473,7 @@ mod tests {
             enabled: false,
             ..AutoSyncPolicy::default()
         };
-        let decision = schedule_sync(dir.path(), &policy, Caller::StartupRecovery);
+        let decision = schedule_sync(dir.path(), &policy, Caller::StartupRecovery).unwrap();
         assert_eq!(decision, ScheduleDecision::Disabled);
     }
 
@@ -427,7 +503,7 @@ mod tests {
 
         // schedule_sync should detect the config fingerprint difference
         // (current fingerprint will differ from 100 since settings are default)
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         // If config changed (fingerprint differs), should be SpawnNow
         // If fingerprint happens to match, should be RequiresAttention
         assert!(
@@ -448,7 +524,7 @@ mod tests {
         )
         .unwrap();
         let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert_eq!(decision, ScheduleDecision::AlreadyActive);
     }
 
@@ -486,7 +562,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
             assert!(
                 matches!(decision, ScheduleDecision::DeferredUntil(_)),
                 "mutation {i} should be deferred, got {decision:?}"
@@ -514,7 +590,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
             assert_eq!(
                 decision,
                 ScheduleDecision::AlreadyActive,

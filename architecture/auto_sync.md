@@ -339,7 +339,7 @@ nonce = "abc-12345-def"
 - Kernel-backed acquisition — only one worker wins.
 - **Post-11L:** `Drop` releases the kernel lock and closes the file. The persistent lock file is never unlinked or renamed; an old guard cannot remove a replacement owner's lock.
 - **Post-11L:** empty or malformed disk metadata is overwritten by the next acquirer without inspection.
-- **Release 5 corrective:** the parent never acquires the lock. The lock exists for the worker; the parent only inspects it (via `lock::process_alive` / `lock::inspect`) for status output.
+- **Phase 12B:** the parent never treats PID metadata as ownership. Startup recovery and scheduling rely on the kernel lock; metadata is diagnostic only and remains available for status/error messages.
 - Restrictive permissions (0o600 on Unix).
 - Each spawned worker generates a fresh nonce in its lock entry; workers spawned concurrently race for the kernel lock and exactly one wins.
 
@@ -385,9 +385,9 @@ Child (snp auto-sync-worker --state-dir ...)
   |-- read_state_from_dir(state_dir) -> PendingState{generation, timestamp, snapshot}
   |-- DEBOUNCE LOOP (bounded by max_lifetime, default 5 minutes):
   |     |-- debounce(state_dir, observed_generation, policy.debounce, max_delay, clock) -> DebounceResult
-  |           (reloads marker every ≤250ms; if a newer generation appears,
-  |            this iteration observes the change via reload and may restart
-  |            the loop with the new generation; returns the latest observed state)
+  |           (reloads marker every ≤250ms; newer generations restart the
+  |            quiet period; a lower generation fails closed and preserves
+  |            the marker for diagnosis/repair)
   |     |-- execute_sync(state_dir, policy)
   |           |-- spawn::spawn_executor(state_dir)
   |           |     (snp auto-sync-execute --state-dir <dir>, NOT detached,
@@ -397,7 +397,8 @@ Child (snp auto-sync-worker --state-dir ...)
   |           |         (Success=0, NotConfigured=2, AuthFailure=3,
   |           |          NetworkTimeout=4, ConflictPartial=5,
   |           |          LocalPersistence=6, InternalError=7)
-  |           |     |-- on timeout: SIGTERM -> 2s grace -> SIGKILL -> reap -> Failed
+  |           |     |-- on timeout or wait error: terminate -> bounded grace
+  |           |         polling -> force kill if needed -> reap -> Failed
   |     |-- if Success && newer_generation_observed -> continue loop (follow-up)
   |     |-- if Success && no newer generation -> clear_if_generation_matches, exit
   |     |-- if Failed -> preserve pending, exit
@@ -544,12 +545,12 @@ pub enum ScheduleDecision {
 
 1. Pending marker exists and contains valid work.
 2. Policy is enabled (`settings.auto_sync && settings.enabled`).
-3. Execution lock is not held (`try_acquire` or inspection).
+3. Execution lock is available according to a nonblocking kernel-backed `try_acquire`; persistent PID metadata is never used as authority.
 4. Backoff status: `next_attempt_at_unix_ms` in status file has elapsed.
 5. Failure class retry allowance: `Internal` failures have a 3-attempt budget; `RequiresAttention` failures are not retried automatically.
 6. Config-change detection: if `RequiresAttention` is due to `Authentication`, `CredentialStore`, or `Configuration`, check if the config fingerprint has changed since the failure. If so, release the deferral and allow a new attempt.
 
-Only `SpawnNow` invokes the process spawner (`spawn::spawn_worker`). All other variants are terminal for that scheduling call — no process is created. This function is called from notification handlers, startup recovery, and any path that previously called `schedule_existing_pending` directly.
+Only `SpawnNow` invokes the process spawner (`spawn::spawn_worker`). All other variants are terminal for that scheduling call — no process is created. Local control-plane failures are returned as `ScheduleError` (`Pending`, `ExecutionLock`, or `Spawn`) rather than being converted into `NoPending` or `SpawnNow`; callers log the failure and preserve the pending marker. This function is called from notification handlers, startup recovery, and any path that previously called `schedule_existing_pending` directly.
 
 ## Explicit Sync Precedence
 

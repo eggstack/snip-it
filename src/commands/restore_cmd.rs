@@ -1640,11 +1640,13 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         // already established by ensure_pending_for_transaction above.
         let settings = crate::config::get_sync_settings();
         let policy = crate::auto_sync::policy::AutoSyncPolicy::resolve(&settings);
-        let _ = crate::auto_sync::schedule::schedule_existing_pending(
+        if let Err(error) = crate::auto_sync::schedule::schedule_existing_pending(
             &sync_state_dir,
             &policy,
             crate::auto_sync::schedule::Caller::Mutation,
-        );
+        ) {
+            tracing::warn!(%error, "restore auto-sync scheduling failed; pending work preserved");
+        }
     } else {
         // No files restored — just commit the transaction.
         crate::transaction::commit_transaction(&transaction_dir, &journal_with_backups)?;

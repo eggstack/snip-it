@@ -71,7 +71,7 @@ fn record_failure_and_schedule(
         .unwrap();
     }
 
-    schedule::schedule_sync(&env.state_dir, &enabled_policy(), Caller::Mutation)
+    schedule::schedule_sync(&env.state_dir, &enabled_policy(), Caller::Mutation).unwrap()
 }
 
 // ── Exit code roundtrip tests ───────────────────────────────────────
@@ -682,7 +682,7 @@ fn test_explicit_retry_bypasses_backoff() {
     .unwrap();
 
     let decision =
-        schedule::schedule_sync(&env.state_dir, &enabled_policy(), Caller::ExplicitRetry);
+        schedule::schedule_sync(&env.state_dir, &enabled_policy(), Caller::ExplicitRetry).unwrap();
     // Explicit retry should NOT be DeferredUntil
     assert!(
         !matches!(decision, ScheduleDecision::DeferredUntil(_)),

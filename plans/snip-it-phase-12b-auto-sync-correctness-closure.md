@@ -1,6 +1,6 @@
 # Phase 12B — Auto-Sync State and Child-Lifecycle Correctness
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `8ca5472a9a6481689ab155d79e9a43765b658172`
 
@@ -146,12 +146,12 @@ For startup recovery:
 
 ## Acceptance criteria
 
-- [ ] Corrupt pending TOML cannot return `NoPending`.
-- [ ] Integrity mismatch cannot return `NoPending`.
-- [ ] Lock I/O failure cannot return `SpawnNow`.
-- [ ] Spawn failure cannot be reported as successful scheduling.
-- [ ] Pending data is preserved on every local scheduling error.
-- [ ] No new persistence file is added.
+- [x] Corrupt pending TOML cannot return `NoPending`.
+- [x] Integrity mismatch cannot return `NoPending`.
+- [x] Lock I/O failure cannot return `SpawnNow`.
+- [x] Spawn failure cannot be reported as successful scheduling.
+- [x] Pending data is preserved on every local scheduling error.
+- [x] No new persistence file is added.
 
 ---
 
@@ -205,10 +205,10 @@ Also retain one test where the kernel lock is actually held and recovery reports
 
 ## Acceptance criteria
 
-- [ ] Persistent metadata alone never suppresses startup recovery.
-- [ ] A genuinely held kernel lock suppresses duplicate work.
-- [ ] Malformed metadata does not weaken kernel exclusion.
-- [ ] Metadata remains diagnostic-only in docs and code comments.
+- [x] Persistent metadata alone never suppresses startup recovery.
+- [x] A genuinely held kernel lock suppresses duplicate work.
+- [x] Malformed metadata does not weaken kernel exclusion.
+- [x] Metadata remains diagnostic-only in docs and code comments.
 
 ---
 
@@ -257,11 +257,11 @@ Do not add probabilistic concurrent tests.
 
 ## Acceptance criteria
 
-- [ ] Lower generation never becomes the next sync target.
-- [ ] The on-disk marker is preserved.
-- [ ] Status/logging identifies generation rollback as internal corruption/inconsistency.
-- [ ] A newer generation remains supported.
-- [ ] Equal generation behavior is unchanged.
+- [x] Lower generation never becomes the next sync target.
+- [x] The on-disk marker is preserved.
+- [x] Status/logging identifies generation rollback as internal corruption/inconsistency.
+- [x] A newer generation remains supported.
+- [x] Equal generation behavior is unchanged.
 
 ---
 
@@ -309,10 +309,10 @@ Do not add sleeps longer than the existing grace interval; use polling and short
 
 ## Acceptance criteria
 
-- [ ] Every post-spawn error path attempts to reap the executor.
-- [ ] The execution lock is held until cleanup finishes.
-- [ ] No child can intentionally continue after the worker reports a wait failure.
-- [ ] Timeout behavior remains unchanged from the user perspective.
+- [x] Every post-spawn error path attempts to reap the executor.
+- [x] The execution lock is held until cleanup finishes.
+- [x] No child can intentionally continue after the worker reports a wait failure.
+- [x] Timeout behavior remains unchanged from the user perspective.
 
 ---
 
@@ -332,10 +332,10 @@ Avoid storing raw TOML, command text, descriptions, API keys, or file contents i
 
 ## Acceptance criteria
 
-- [ ] `snp status` or existing logs distinguish corrupt pending state from no pending state.
-- [ ] Lock acquisition failure is not reported as active sync unless the lock is genuinely held.
-- [ ] Messages are concise and secret-free.
-- [ ] No new status file or diagnostic registry is created.
+- [x] `snp status` or existing logs distinguish corrupt pending state from no pending state.
+- [x] Lock acquisition failure is not reported as active sync unless the lock is genuinely held.
+- [x] Messages are concise and secret-free.
+- [x] No new status file or diagnostic registry is created.
 
 ---
 
@@ -391,16 +391,29 @@ The phase fails if it:
 
 ## 7. Closure checklist
 
-- [ ] Scheduling errors are explicit.
-- [ ] Spawn result is truthful.
-- [ ] Startup recovery uses kernel lock authority.
-- [ ] Generation rollback fails closed.
-- [ ] Executor cleanup is complete on wait error.
-- [ ] Existing status paths expose local state failures.
-- [ ] Focused tests pass.
-- [ ] `cargo check --workspace --all-targets --all-features` passes.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] Plan records implementation SHA and verification commands.
-- [ ] No architectural simplification work was mixed into this phase.
+- [x] Scheduling errors are explicit.
+- [x] Spawn result is truthful.
+- [x] Startup recovery uses kernel lock authority.
+- [x] Generation rollback fails closed.
+- [x] Executor cleanup is complete on wait error.
+- [x] Existing status paths expose local state failures.
+- [x] Focused tests pass.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
+- [x] `bash scripts/check.sh` passes.
+- [x] Plan records implementation SHA and verification commands.
+- [x] No architectural simplification work was mixed into this phase.
+
+## 8. Implementation record
+
+Implemented on `main` in the Phase 12B correctness closure changes. The
+implementation keeps the detached worker and executor processes intact for
+Phase 12C, returns local scheduling failures explicitly, treats the kernel
+execution lock as authoritative, rejects pending-generation rollback, and
+reaps executors on timeout and wait errors.
+
+Verification was completed locally with the focused auto-sync tests,
+`cargo check --workspace --all-targets --all-features`, and
+`bash scripts/check.sh` (including format, clippy, workspace build, unit,
+platform smoke, manifest, destination-permission, and executor tests).
 
 When complete, proceed to Phase 12C. Do not add a follow-up correctness framework; Phase 12C should delete complexity rather than add more guards around it.

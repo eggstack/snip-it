@@ -54,7 +54,8 @@ fn test_schedule_already_active_when_lock_held() {
     )
     .unwrap();
     let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-    let decision = schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+    let decision =
+        schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
     assert_eq!(decision, ScheduleDecision::AlreadyActive);
 }
 
@@ -68,7 +69,8 @@ fn test_schedule_spawn_now_when_no_lock() {
         },
     )
     .unwrap();
-    let decision = schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+    let decision =
+        schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
     assert!(decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive);
 }
 
@@ -91,7 +93,8 @@ fn test_20_mutations_during_lock_all_already_active() {
             },
         )
         .unwrap();
-        let decision = schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
+        let decision =
+            schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert_eq!(
             decision,
             ScheduleDecision::AlreadyActive,

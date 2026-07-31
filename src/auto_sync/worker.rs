@@ -258,6 +258,17 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 }
                 DebounceResult::Failed(e) => {
                     tracing::warn!(error = %e, "auto-sync worker debounce failed");
+                    let consecutive = next_consecutive_failures(state_dir);
+                    let _ = status::record_failure(
+                        state_dir,
+                        observed_generation,
+                        FailureClass::Internal,
+                        -1,
+                        consecutive,
+                        0,
+                        &e,
+                        current_config_fingerprint(),
+                    );
                     return WorkerOutcome::Failed;
                 }
             }
@@ -313,7 +324,29 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                         );
                         continue;
                     }
-                    _ => return outcome,
+                    Ok(current) if current.generation < sync_observed.generation => {
+                        tracing::error!(
+                            observed = sync_observed.generation,
+                            current = current.generation,
+                            "auto-sync worker detected pending generation rollback"
+                        );
+                        let _ = status::record_failure(
+                            state_dir,
+                            sync_observed.generation,
+                            FailureClass::Internal,
+                            -1,
+                            next_consecutive_failures(state_dir),
+                            0,
+                            "pending generation rollback after sync",
+                            current_config_fingerprint(),
+                        );
+                        return WorkerOutcome::Failed;
+                    }
+                    Ok(_) | Err(pending::PendingError::NotFound) => return outcome,
+                    Err(error) => {
+                        tracing::error!(%error, "auto-sync worker failed to reload pending state");
+                        return WorkerOutcome::Failed;
+                    }
                 }
             }
             Err(e) => {
@@ -366,7 +399,7 @@ pub fn debounce(
         if now >= deadline || now >= max_target {
             match pending::read_state_from_dir(state_dir) {
                 Ok(latest) => {
-                    if latest.generation != current.generation {
+                    if latest.generation > current.generation {
                         current = latest;
                         let new_deadline = compute_deadline(
                             current.created_at_unix_ms,
@@ -380,6 +413,12 @@ pub fn debounce(
                             continue;
                         }
                         return DebounceResult::Ready(current);
+                    }
+                    if latest.generation < current.generation {
+                        return DebounceResult::Failed(format!(
+                            "pending generation rollback: observed {} after {}",
+                            latest.generation, current.generation
+                        ));
                     }
                     return DebounceResult::Ready(current);
                 }
@@ -412,7 +451,10 @@ pub fn debounce(
                         return DebounceResult::Ready(current);
                     }
                 } else if current_state.generation < current.generation {
-                    current = current_state;
+                    return DebounceResult::Failed(format!(
+                        "pending generation rollback: observed {} after {}",
+                        current_state.generation, current.generation
+                    ));
                 }
             }
             Err(pending::PendingError::NotFound) => {
@@ -434,11 +476,12 @@ pub fn debounce(
     }
 }
 
-pub fn preflight_check(
-    state_dir: &Path,
-    _observed_generation: u64,
-) -> Result<PendingState, String> {
+pub fn preflight_check(state_dir: &Path, observed_generation: u64) -> Result<PendingState, String> {
     match pending::read_state_from_dir(state_dir) {
+        Ok(state) if state.generation < observed_generation => Err(format!(
+            "pending generation rollback: observed {} after {}",
+            state.generation, observed_generation
+        )),
         Ok(state) => Ok(state),
         Err(pending::PendingError::NotFound) => {
             Err("pending marker removed, nothing to do".to_string())
@@ -723,12 +766,7 @@ fn execute_sync(
         }
         Ok(None) => {
             tracing::warn!("sync executor timed out, terminating");
-            terminate_child(&mut child);
-            std::thread::sleep(policy.termination_grace);
-            if let Ok(None) = child.try_wait() {
-                force_kill_child(&mut child);
-                let _ = child.wait();
-            }
+            terminate_and_reap(&mut child, policy.termination_grace);
             // Record timeout as transient timeout failure
             let consecutive = next_consecutive_failures(state_dir);
             let backoff = transient_backoff(consecutive);
@@ -754,6 +792,7 @@ fn execute_sync(
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to wait for sync executor");
+            terminate_and_reap(&mut child, policy.termination_grace);
             let _ = status::record_failure(
                 state_dir,
                 observed_generation,
@@ -831,6 +870,33 @@ fn wait_child_with_timeout(
     }
 }
 
+/// Best-effort bounded cleanup for every post-spawn failure path.
+///
+/// The caller retains the execution lock while this runs, so a worker cannot
+/// report failure and release the lock while its executor is still live.
+fn terminate_and_reap(child: &mut std::process::Child, grace: Duration) {
+    terminate_child(child);
+    let deadline = Instant::now()
+        .checked_add(grace)
+        .unwrap_or_else(Instant::now);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Ok(None) | Err(_) => {
+                force_kill_child(child);
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 fn terminate_child(child: &mut std::process::Child) {
     unsafe {
@@ -872,20 +938,6 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
 
     let current = pending::read_state_from_dir(state_dir)?;
 
-    // Check if the execution lock is already held by another process.
-    // If so, skip scheduling — the active holder will handle pending work.
-    let lock_path = execution_lock::execution_lock_path(state_dir);
-    if let Some(contents) = execution_lock::inspect(&lock_path)
-        && execution_lock::process_alive(contents.pid)
-    {
-        tracing::info!(
-            generation = current.generation,
-            owner_pid = contents.pid,
-            "startup recovery: execution lock held; skipping scheduling (active sync in progress)"
-        );
-        return Ok(Some(current));
-    }
-
     let now_ms = unix_now_ms();
     let age_ms = now_ms.saturating_sub(current.created_at_unix_ms);
 
@@ -904,11 +956,13 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
 
     let settings = crate::config::get_sync_settings();
     let policy = AutoSyncPolicy::resolve(&settings);
-    let _ = crate::auto_sync::schedule::schedule_and_spawn(
+    if let Err(error) = crate::auto_sync::schedule::schedule_and_spawn(
         state_dir,
         &policy,
         crate::auto_sync::schedule::Caller::StartupRecovery,
-    );
+    ) {
+        tracing::warn!(%error, "startup recovery scheduling failed; pending work preserved");
+    }
     Ok(Some(current))
 }
 
@@ -1139,6 +1193,42 @@ mod tests {
         assert!(result.is_none());
         force_kill_child(&mut child);
         let _ = child.wait();
+    }
+
+    #[test]
+    fn test_terminate_and_reap_is_bounded_and_reaps_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        terminate_and_reap(&mut child, Duration::from_millis(100));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn test_debounce_rejects_generation_rollback_and_preserves_marker() {
+        let dir = TempDir::new().unwrap();
+        pending::set_local_generation_with_timestamp(dir.path(), 2, 0).unwrap();
+        let observed = pending::read_state_from_dir(dir.path()).unwrap();
+        pending::set_local_generation_with_timestamp(dir.path(), 1, 0).unwrap();
+        let start = Instant::now();
+        let clock = MockClock::new(start, 0);
+
+        let result = debounce(
+            dir.path(),
+            observed,
+            start,
+            start,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+            &clock,
+        );
+        assert!(matches!(result, DebounceResult::Failed(message) if message.contains("rollback")));
+        assert_eq!(
+            pending::read_state_from_dir(dir.path()).unwrap().generation,
+            1
+        );
     }
 
     #[test]
