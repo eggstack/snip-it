@@ -1,6 +1,6 @@
 # Post-Phase-11L — Minimal PID CLI Test and API-Surface Polish
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `9bc87bc703bc0312f087932661216249c6d0313e`
 
@@ -522,9 +522,25 @@ Required result:
 
 Do not split this into additional cleanup, refactor, documentation, or CI commits.
 
+## 7. Verification record
+
+CLI-test implementation commit: `fff1a91` (`post-11L: add focused legacy PID CLI tests`).
+
+The focused verification completed locally on 2026-07-31:
+
+- `cargo fmt --all -- --check`;
+- `cargo test -p snip-sync --test legacy_pid_cli -- --test-threads=1`;
+- `cargo test -p snip-sync --lib -- --test-threads=1`;
+- `cargo check -p snip-sync --all-targets`;
+- `bash scripts/check.sh`.
+
+The existing CI topology is unchanged. Remote CI is verified separately for
+the pushed closure commit; no all-platform command-level stop claim is made
+by this Linux-only proof.
+
 ---
 
-## 7. Prohibited outcomes
+## 8. Prohibited outcomes
 
 The pass fails if it introduces any of the following:
 

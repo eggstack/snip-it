@@ -8,6 +8,10 @@ This plan supersedes the **remaining work and closure requirements** in `plans/s
 
 Phase 11L remains complete. This is a small follow-up pass for two concrete post-11L defects and truthful closure bookkeeping.
 
+Follow-up CLI proof: `plans/snip-it-post-11l-minimal-pid-cli-polish.md`.
+The production implementation remains closed; the follow-up adds direct
+binary-level tests for dead legacy cleanup and restart refusal/preservation.
+
 Final implementation SHA: `1bbae107613ef784057069467820688b66afd39e`.
 
 ---
