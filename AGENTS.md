@@ -251,7 +251,10 @@ A separate corrective pass after Phase 11L closure replaces the previous create-
 worker, execution, or pending kernel-lock files. `snip-sync stop` and
 `restart` accept both structured PID records and legacy numeric PID files on
 Unix; a legacy record is removed only after server-lock acquisition and only
-if its PID is unchanged. Malformed PID files are reported explicitly.
+if its PID is unchanged. Malformed PID files are reported explicitly. Direct
+binary-level coverage for dead legacy cleanup and restart refusal/preservation
+lives in `snip-sync/tests/legacy_pid_cli.rs`; the narrow
+`remove_pid_if_unchanged` helper is CLI-only and hidden from generated API docs.
 
 ### Restore crash-recovery proof is exact
 `tests/restore_crash_failpoints.rs` uses mandatory JSON parsing of

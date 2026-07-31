@@ -331,9 +331,14 @@ pub fn read_pid_record() -> Option<PidRecord> {
     read_pid_at(&paths::pid_path())
 }
 
-/// Remove the PID file only when it still contains the expected record.
-/// Legacy numeric records are compared by PID alone; structured records use
-/// all of their identity fields. Other parsed states are never removable.
+/// CLI support helper: remove the PID file only if it still matches `expected`.
+///
+/// The caller must hold the server singleton lock. This is public only because
+/// the package binary and library are separate Rust crates; it is not a general
+/// lock-ownership or reclamation API. Legacy numeric records are compared by
+/// PID alone; structured records use all of their identity fields. Other parsed
+/// states are never removable.
+#[doc(hidden)]
 pub fn remove_pid_if_unchanged(expected: &ParsedPidFile) {
     remove_pid_if_unchanged_at(&paths::pid_path(), expected);
 }

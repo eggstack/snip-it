@@ -59,6 +59,16 @@ The server defaults to gRPC `127.0.0.1:50051`, HTTP health/metrics
 `127.0.0.1:50050`, and a SQLite database under the platform data/config area.
 The initialized premade directory is also shown by `snip-sync paths`.
 
+### Lifecycle commands
+
+Use `snip-sync stop` to stop the local server and `snip-sync restart` to stop
+and start it again. On Unix, both commands accept the current structured PID
+record and older numeric PID files. A dead numeric PID is cleaned only after
+the server singleton lock is acquired; a live process whose name is not
+`snip-sync` is refused unless `--force` is supplied. The persistent
+`snip-sync.server.lock` file may remain after shutdown because its kernel lock,
+not file existence, records ownership.
+
 To generate local certificate assets for a reverse-proxy experiment:
 
 ```bash

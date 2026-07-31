@@ -186,6 +186,17 @@ allowed_origins = "https://example.com"
 
 All values can be overridden via environment variables.
 
+## Process lifecycle
+
+`snip-sync serve` holds the server singleton kernel lock for its full runtime
+and publishes an identity-checked PID record in the state directory. The
+`stop` and `restart` commands accept both structured records and legacy numeric
+PID files on Unix. Stale numeric records are removed only after acquiring the
+server lock and rereading the unchanged record; live processes that do not
+appear to be `snip-sync` are refused unless `--force` is provided. The
+`snip-sync.server.lock` path is persistent metadata; ownership is determined by
+the operating-system lock, not by whether the file exists.
+
 ---
 
 ## Security Properties (Phase 09A)

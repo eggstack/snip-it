@@ -30,6 +30,14 @@ snip-sync/
 └── src/update.rs       # Server self-update
 ```
 
+### Process lifecycle
+
+The server singleton uses a kernel-backed lock held for the full `serve`
+runtime. `stop` and `restart` understand structured and legacy numeric PID
+records on Unix; stale legacy records are cleaned only after lock acquisition,
+while live unrelated processes are refused unless `--force` is explicit.
+Persistent lock-file presence is not an ownership signal.
+
 ## Environment Variables
 
 | Variable | Default | Description |
