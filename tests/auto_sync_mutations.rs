@@ -499,7 +499,7 @@ auto_sync_failure = "ignore"
     assert!(content.contains("second snippet"));
 }
 
-/// No corrupted coordinator state blocks future commands.
+/// No corrupted pending state blocks future commands.
 #[test]
 fn test_durability_corrupt_pending_does_not_block() {
     let (_tmp, config_dir) = setup_test_env();

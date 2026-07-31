@@ -237,7 +237,7 @@ updated_at = 100
     }
 }
 
-/// Lock file permissions are restrictive (Unix) when created by the coordinator.
+/// Lock file permissions are restrictive (Unix) when created by the worker.
 #[test]
 fn test_lock_file_restrictive_permissions() {
     let (_tmp, config_dir) = setup_test_env();
@@ -264,7 +264,7 @@ auto_sync_failure = "ignore"
     cmd.args(["library", "set-primary", "lock-perm-test"]);
     cmd.output().unwrap();
 
-    // Trigger auto-sync to create lock file via the coordinator
+    // Trigger auto-sync to create lock file via the worker
     let mut cmd = snp_in(&config_dir);
     cmd.args([
         "new",

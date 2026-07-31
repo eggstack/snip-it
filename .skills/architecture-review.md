@@ -86,7 +86,7 @@ When reviewing public API changes or architecture docs, verify:
 1. **Public API inventory** (`docs/PUBLIC_API.md`): Every public item is accounted for and justified
 2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports
 3. **Canonical operations** (`docs/CANONICAL_OPERATIONS.md`): Each operation has a single, documented entry point
-4. **Dead items** (`docs/OBSOLETE_ITEMS.md`): Removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, `encryption::ct_eq`) are gone from source and not referenced
+4. **Dead items** (`docs/OBSOLETE_ITEMS.md`): Removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, `encryption::ct_eq`) are confirmed gone from source and not referenced. Verify no re-introduction.
 5. **`#[non_exhaustive]`**: All public enums that may gain variants are marked `#[non_exhaustive]`
 6. **Feature boundaries** (`docs/FEATURE_BOUNDARIES.md`): Feature-gated items are correctly gated and documented
 

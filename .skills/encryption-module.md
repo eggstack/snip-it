@@ -5,7 +5,7 @@ Guide agents through working with the encryption module (`src/encryption.rs`).
 
 ## Argon2 Memory Cost
 
-**Location**: `src/encryption.rs:39`
+**Location**: `src/encryption.rs:37`
 ```rust
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
 ```

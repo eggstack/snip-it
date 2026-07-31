@@ -66,8 +66,8 @@ themes/           50 Halloy TOML theme files
 
 - `main.rs` — CLI entry point, clap dispatch
 - `lib.rs` — Library crate (exports for integration tests)
-- `commands/` — 16 command modules + shared helpers in `mod.rs`
-- `auto_sync/` — Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification, status, schedule)
+- `commands/` — 23 command modules + shared helpers in `mod.rs`
+- `auto_sync/` — Auto-sync subsystem (execution_lock, executor, lock, mod, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
 - `library.rs` — Snippet/library data structures and TOML persistence
@@ -75,10 +75,13 @@ themes/           50 Halloy TOML theme files
 - `sync_commands.rs` — Sync orchestration and merge logic
 - `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
 - `config.rs` — Sync settings, path resolution, keychain API key
-- `transaction.rs` — Local mutation transaction boundary (journal, lock, commit, rollback)
-- `migration.rs` — Migration framework (schema versioning)
+- `error.rs` — `SnipError` enum, `SnipResult<T>`, `SyncFailureKind`
 - `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`)
 - `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
+- `sort.rs` — Sort modes, ranking, `SnippetSort`
+- `usage.rs` — Local usage metadata (`UsageIndex`)
+- `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
+- `logging.rs` — Structured logging and audit trail
 
 ## Critical Gotchas
 
@@ -160,6 +163,23 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 
 ## Reference Docs
 
-- `architecture/` — deep-dive docs per module
+- `architecture/` — deep-dive docs per module (see index below)
 - `docs/` — public API, threat model, security audit, supply-chain policy
 - `.skills/` — specialized agent reference docs (encryption, keychain, server, sync, UI, etc.)
+
+### Architecture Index
+
+| Topic | File | Key Content |
+|-------|------|-------------|
+| Bird's-eye view | `architecture/overview.md` | Module map, data flow, configuration files |
+| Auto-sync | `architecture/auto_sync.md` | Two-process model, debounce, scheduling, backoff |
+| Sync protocol | `architecture/sync.md` | Merge strategy, encryption, conflict resolution |
+| Persistence | `architecture/persistence.md` | Atomic writes, transactions, validation, backup/restore |
+| Server | `architecture/server.md` | gRPC/HTTP endpoints, database schema, rate limiting |
+| TUI | `architecture/tui.md` | Keybindings, state machine, interaction model |
+| CLI | `architecture/cli.md` | Entry point, argument parsing, dispatch |
+| Outcome/exit codes | `architecture/outcome.md` | `CliOutcome` variants, stable exit codes |
+| Selector | `architecture/selector.md` | Deterministic non-TUI snippet resolution |
+| Sort/ranking | `architecture/sort.md` | Sort modes, tie-break chain, `--favorites-first` |
+| Status | `architecture/status.md` | Status snapshot, diagnostic codes, `snp status` |
+| Test infra | `architecture/test-infrastructure.md` | Deterministic E2E, event sink, temp-dir isolation |

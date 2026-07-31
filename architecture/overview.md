@@ -315,7 +315,7 @@ See [docs/API_TIGHTENING_FINDINGS.md](../docs/API_TIGHTENING_FINDINGS.md) and [d
 | [encryption.md](encryption.md) | AES-256-GCM end-to-end encryption |
 | **Sync** | |
 | [sync.md](sync.md) | Sync protocol, merge logic, conflict resolution |
-| [auto_sync.md](auto_sync.md) | Auto-sync policy, coordinator, debounce, triggers |
+| [auto_sync.md](auto_sync.md) | Auto-sync policy, worker, debounce, triggers |
 | [status.md](status.md) | Status snapshot, `snp status` command, diagnostic codes |
 | **UI** | |
 | [tui.md](tui.md) | TUI architecture, keybindings, state machine |

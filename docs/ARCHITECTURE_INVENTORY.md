@@ -15,7 +15,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### CLI (`src/main.rs`, `src/commands/`)
 - Clap derive CLI with `Option<Commands>` — no subcommand defaults to `run` (TUI selector)
-- 16 command modules, each with a public `run()` entry function
+- 23 command modules, each with a public `run()` entry function
 - `RUNTIME: LazyLock<Runtime>` — lazy Tokio async runtime, only initialized by async commands
 - `dispatch_command()` — top-level match on `Option<Commands>`
 - Shared helpers in `src/commands/mod.rs`:
@@ -147,7 +147,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 Optional post-mutation background synchronization (Release 5A–5F). Disabled by default; opt-in via `snp sync config --auto-sync on`. Two-process-per-cycle model: a detached debounce worker spawns a killable executor subprocess.
 
-- **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `max_retries`, `sync_timeout`.
+- **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `sync_timeout`.
 - **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity` over all behavior-driving fields. v1 markers migrate transparently. `ConditionalClearResult` enum (Cleared/Missing/GenerationChanged) returned by conditional clear.
 - **`PendingTxnGuard`** (`pending_lock.rs`) — short-lived transaction lock serializing concurrent CLI processes on the pending marker. Atomic acquire via `create_new(true)`; ownership-checked drop; bounded retry with jitter; dead-owner reclaim via `kill -0`; unique temp files per transaction; atomic rename + directory fsync.
 - **`WorkerLock`** (`lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` only (live PID means owned, regardless of age). Ownership-checked drop — only removes if PID and nonce match. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.

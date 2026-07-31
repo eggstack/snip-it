@@ -100,13 +100,13 @@
 - Run `cargo clippy --all-targets -- -D warnings` before committing
 - Run `cargo fmt --check` to verify formatting
 
-## Phase 06A Dead Items
+## Phase 06A Dead Items (Removed)
 
-The following dead items were identified and removed during the API tightening audit:
+The following dead items were identified and **removed** during the API tightening audit:
 
-- **`AutoSyncPolicy.max_retries`** — field was never read; backoff is now durable and retry-count-based via `auto-sync-status.toml`. Do not re-add; use `schedule_sync()` backoff decisions instead.
-- **`STALE_LOCK_THRESHOLD_SECS`** — constant was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks. Do not re-add; use timeout-based staleness detection.
-- **`encryption::ct_eq`** — constant-time equality helper was unreferenced; replaced by downstream crate functionality. Do not re-add.
+- **`AutoSyncPolicy.max_retries`** — **REMOVED.** Field was never read; backoff is now durable and retry-count-based via `auto-sync-status.toml`. Do not re-add; use `schedule_sync()` backoff decisions instead.
+- **`STALE_LOCK_THRESHOLD_SECS`** — **REMOVED.** Constant was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks. Do not re-add; use timeout-based staleness detection.
+- **`encryption::ct_eq`** — **REMOVED.** Constant-time equality helper was unreferenced; replaced by downstream crate functionality. Do not re-add.
 
 Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
 

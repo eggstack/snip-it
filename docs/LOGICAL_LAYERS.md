@@ -104,13 +104,13 @@ Everything that touches the terminal, spawns processes, or orchestrates user wor
 |--------|---------------|
 | `src/main.rs` | CLI entry point, clap dispatch |
 | `src/lib.rs` | Library crate exports |
-| `src/commands/*` | 16 command modules (new, list, run, clip, select, search, edit, sync, register, library, premade, import, doctor, cron, shell, keybindings, status) |
+| `src/commands/*` | 23 command modules (new, list, run, clip, select, search, edit, get, sync, register, library, premade, import, doctor, cron, shell, keybindings, status, validate, backup, restore, repair, pet_analysis) |
 | `src/clipboard.rs` | Cross-platform clipboard access (arboard/clipboard-win) |
 | `src/logging.rs` | Structured logging with file rotation, audit log |
 | `src/update.rs` | Self-update (crates.io, Homebrew, GitHub releases) |
 | `src/status_snapshot.rs` | Read-only status projection for `snp status` and doctor |
 | `src/ui/*` | TUI (ratatui + crossterm), themes, syntax highlighting, variable prompts |
-| `src/auto_sync/*` | Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification, status, schedule) |
+| `src/auto_sync/*` | Auto-sync subsystem (execution_lock, executor, lock, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker) |
 
 **Application layer dependencies (allowed):**
 - Everything in core and sync-client layers

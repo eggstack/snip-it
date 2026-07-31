@@ -10,21 +10,22 @@ The "coordinator" was the in-process debounce state machine from Release 5B/5C t
 ### Test Files
 | File | Issue |
 |------|-------|
-| `tests/auto_sync_coordinator.rs` | **Entire file named after obsolete concept.** Contains tests like `test_disabled_auto_sync_no_coordinator_files` and references to "coordinator" in comments. Should be renamed to `auto_sync_worker.rs` or similar. |
-| `tests/auto_sync_mutations.rs:502` | Comment: "No corrupted coordinator state blocks future commands" — stale reference. |
-| `tests/auto_sync_config.rs:240,267` | Comments: "created by the coordinator" and "create lock file via the coordinator" — should reference "worker" or "spawn system". |
+| `tests/auto_sync_coordinator.rs` | **Renamed** — file no longer exists under this name. |
+| `tests/auto_sync_mutations.rs:502` | Comment: "No corrupted coordinator state" — **Fixed** to "pending state". |
+| `tests/auto_sync_lifecycle.rs:1,218,240,349` | Module doc and comments reference "coordinator" — **Fixed** to "worker"/"lifecycle". |
+| `tests/auto_sync_config.rs:240,267` | Comments: "created by the coordinator" — **Fixed** to "worker". |
 
 ### Architecture Docs
 | File | Line | Issue |
 |------|------|-------|
-| `architecture/overview.md:290` | Table: "Auto-sync policy, coordinator, debounce, triggers" — should say "worker" |
+| `architecture/overview.md:318` | Table: "Auto-sync policy, coordinator, debounce, triggers" — **Fixed** to "worker" |
 | `architecture/auto_sync.md:522` | "Replaces the in-process coordinator (Release 5D)" — acceptable as historical context but could be tightened |
 | `architecture/sync.md:198,408,471` | Historical references to coordinator — acceptable as design rationale |
 
 ### Plan Documents
 Multiple plan docs reference coordinator — these are historical artifacts and can remain, but should not be treated as current architecture references.
 
-**Action**: Rename `tests/auto_sync_coordinator.rs`, update 3 test comments, update `architecture/overview.md` table entry.
+**Action**: Rename `tests/auto_sync_coordinator.rs`, update 3 test comments, update `architecture/overview.md` table entry. **Status: Done.**
 
 ---
 
@@ -47,12 +48,8 @@ These serve different purposes and are **not duplicates**:
 | Location | Default | Purpose |
 |----------|---------|---------|
 | `src/sync.rs:30` | `DEFAULT_MAX_RETRIES = 3` | gRPC client-level retry (per-request) |
-| `src/auto_sync/policy.rs:7` | `DEFAULT_MAX_RETRIES = 1` | Auto-sync policy-level retry (per-cycle) |
 
-These are **distinct retry layers** (transport vs. orchestration) and both are correct. However:
-- `policy.rs:19` has `pub max_retries: u32` that is **always set to `DEFAULT_MAX_RETRIES`** and never read by the worker or executor. The worker uses `sync_timeout` and exit codes, not `max_retries`. This field is **dead**.
-
-**Action**: Remove `max_retries` from `AutoSyncPolicy` and `DEFAULT_MAX_RETRIES` from `policy.rs`.
+**Status: CLEAN.** The `AutoSyncPolicy.max_retries` field and `DEFAULT_MAX_RETRIES` in `policy.rs` were **removed** in Phase 06A. Only the gRPC transport retry config remains.
 
 ---
 
@@ -88,15 +85,11 @@ The specific comment about `tokio::time::timeout` around `spawn_blocking` not ca
 
 ---
 
-## 6. Unused `max_retries` / Stale Fields
+## 6. Unused `max_retries` / Stale Fields (Removed)
 
 ### `AutoSyncPolicy.max_retries`
-- Defined at `src/auto_sync/policy.rs:19`
-- Set to `DEFAULT_MAX_RETRIES` (1) in `resolve()` and `Default`
-- **Never read** by any production code. The worker uses `sync_timeout` and executor exit codes for retry decisions.
-- Referenced only in tests (`policy.rs` unit tests)
-
-**Action**: Remove `max_retries` from `AutoSyncPolicy` struct, remove `DEFAULT_MAX_RETRIES` constant.
+- **REMOVED** in Phase 06A. Was never read by any production code.
+- Retry behavior is now driven entirely by durable backoff state in `auto-sync-status.toml`.
 
 ### `SyncRetryConfig.max_retries`
 - Defined at `src/sync.rs:39`
@@ -106,10 +99,7 @@ The specific comment about `tokio::time::timeout` around `spawn_blocking` not ca
 **Status: KEEP.** This is a different retry layer.
 
 ### `STALE_LOCK_THRESHOLD_SECS`
-- Defined at `src/auto_sync/lock.rs:9` as `5 * 60`
-- **Never used** — staleness is determined by `process_alive()` (PID check), not by age threshold.
-
-**Action**: Remove unused constant.
+- **REMOVED** in Phase 06A. Was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks.
 
 ---
 
@@ -183,13 +173,13 @@ No dead lock types.
 
 ## Summary of Actionable Items
 
-| # | Item | Priority | Effort |
-|---|------|----------|--------|
-| 1 | Rename `tests/auto_sync_coordinator.rs` and update 3 stale "coordinator" comments in tests | High | Low |
-| 2 | Update `architecture/overview.md` table entry (coordinator → worker) | High | Trivial |
-| 3 | Remove `max_retries` from `AutoSyncPolicy` (dead field) | High | Low |
-| 4 | Remove `STALE_LOCK_THRESHOLD_SECS` from `lock.rs` (unused constant) | Medium | Trivial |
-| 5 | Tidy Release 5 labels in architecture docs (move to History sections) | Low | Medium |
-| 6 | Feature-gate `sync`, `tui`, `auto-sync`, `clipboard`, `self-update`, `bundled-themes` | Future | High |
+| # | Item | Priority | Effort | Status |
+|---|------|----------|--------|--------|
+| 1 | Rename `tests/auto_sync_coordinator.rs` and update 3 stale "coordinator" comments in tests | High | Low | **Done** |
+| 2 | Update `architecture/overview.md` table entry (coordinator → worker) | High | Trivial | **Done** |
+| 3 | Remove `max_retries` from `AutoSyncPolicy` (dead field) | High | Low | **Done** |
+| 4 | Remove `STALE_LOCK_THRESHOLD_SECS` from `lock.rs` (unused constant) | Medium | Trivial | **Done** |
+| 5 | Tidy Release 5 labels in architecture docs (move to History sections) | Low | Medium | Open |
+| 6 | Feature-gate `sync`, `tui`, `auto-sync`, `clipboard`, `self-update`, `bundled-themes` | Future | High | Open |
 
-Items 1-4 are straightforward removals. Item 5 is cosmetic. Item 6 is the feature boundary work from Workstream I.
+Items 1-4 are completed. Item 5 is cosmetic. Item 6 is the feature boundary work from Workstream I.

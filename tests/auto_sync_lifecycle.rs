@@ -1,4 +1,4 @@
-//! Auto-sync coordinator tests: debounce correctness, coalescing,
+//! Auto-sync lifecycle tests: debounce correctness, coalescing,
 //! and state machine validation.
 //!
 //! Covers Workstream C (Debounce and Coalescing Correctness).
@@ -215,7 +215,7 @@ auto_sync_failure = "ignore"
 
 /// Disabled auto-sync: no pending marker, no lock file.
 #[test]
-fn test_disabled_auto_sync_no_coordinator_files() {
+fn test_disabled_auto_sync_no_worker_files() {
     let (_tmp, config_dir) = setup_test_env();
 
     // No sync.toml = auto_sync defaults to false
@@ -237,7 +237,7 @@ fn test_disabled_auto_sync_no_coordinator_files() {
     ]);
     let _ = output_with_stdin(cmd, b"echo disabled");
 
-    // No coordinator files should be created
+    // No worker files should be created
     let pending_path = config_dir.join("auto-sync-pending.toml");
     let lock_path = config_dir.join("auto-sync.lock");
     assert!(
@@ -346,7 +346,7 @@ auto_sync_failure = "ignore"
     .unwrap();
 
     // This test verifies the design invariant: sync-merge writes
-    // (MutationOrigin::SyncMerge) are suppressed by the coordinator.
+    // (MutationOrigin::SyncMerge) are suppressed by the worker.
     // The CLI does not expose a direct way to trigger sync-merge,
     // but we can verify that a normal sync does not create recursive triggers.
     let mut cmd = snp_in(&config_dir);

@@ -26,7 +26,9 @@ snip-sync/
 ├── src/cli.rs          # CLI argument parsing
 ├── src/editor.rs       # Editor integration
 ├── src/process.rs      # Process management
+├── src/server_lock.rs  # Kernel-backed server singleton lock (flock/LockFileEx)
 ├── src/test_helpers.rs # In-process test server support
+├── src/test_observer.rs# Test-only request telemetry (no secrets)
 └── src/update.rs       # Server self-update
 ```
 
