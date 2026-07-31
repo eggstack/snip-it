@@ -405,7 +405,7 @@ The phase fails if it:
 
 ## 8. Implementation record
 
-Implemented on `main` in the Phase 12B correctness closure changes. The
+Implemented on `main` in commit `42f26ac`. The
 implementation keeps the detached worker and executor processes intact for
 Phase 12C, returns local scheduling failures explicitly, treats the kernel
 execution lock as authoritative, rejects pending-generation rollback, and
