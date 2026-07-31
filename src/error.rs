@@ -64,6 +64,8 @@ pub enum SyncFailureKind {
     DecryptionFailed,
     /// Server-side library not found (gRPC NOT_FOUND for library operations).
     LibraryNotFound,
+    /// The bounded automatic-sync deadline expired.
+    Timeout,
 }
 
 impl fmt::Display for SyncFailureKind {
@@ -87,6 +89,7 @@ impl fmt::Display for SyncFailureKind {
             Self::EncryptionFailed => write!(f, "Failed to encrypt snippet data"),
             Self::DecryptionFailed => write!(f, "Failed to decrypt snippet data"),
             Self::LibraryNotFound => write!(f, "Library not found"),
+            Self::Timeout => write!(f, "Sync deadline expired"),
         }
     }
 }

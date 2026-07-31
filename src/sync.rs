@@ -35,6 +35,20 @@ const DEFAULT_MAX_DELAY_MS: u64 = 5000; // Cap exponential backoff at 5 seconds
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
+/// Bounds network and retry work for one automatic-sync invocation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SyncRunLimits {
+    pub deadline: std::time::Instant,
+    pub request_timeout: Duration,
+}
+
+impl SyncRunLimits {
+    pub(crate) fn remaining(self) -> Option<Duration> {
+        self.deadline
+            .checked_duration_since(std::time::Instant::now())
+    }
+}
+
 /// Configuration for gRPC retry behavior with exponential backoff.
 #[derive(Debug, Clone)]
 pub struct SyncRetryConfig {
@@ -114,6 +128,62 @@ macro_rules! retry_grpc {
     }};
 }
 
+/// Retry a request while honoring the per-invocation automatic-sync deadline.
+macro_rules! retry_grpc_limited {
+    ($client:expr, $op:expr, $name:expr) => {{
+        let config = default_retry_config();
+        let mut delay_ms = config.initial_delay_ms;
+        let mut attempt = 0u32;
+        loop {
+            let response = match $client.limits.and_then(SyncRunLimits::remaining) {
+                Some(remaining) if !remaining.is_zero() => {
+                    match tokio::time::timeout(remaining, $op).await {
+                        Ok(response) => response,
+                        Err(_) => {
+                            break Err(SnipError::sync_failure(
+                                crate::error::SyncFailureKind::Timeout,
+                                Some("automatic sync deadline expired"),
+                            ));
+                        }
+                    }
+                }
+                None if $client.limits.is_none() => $op.await,
+                _ => {
+                    break Err(SnipError::sync_failure(
+                        crate::error::SyncFailureKind::Timeout,
+                        Some("automatic sync deadline expired"),
+                    ));
+                }
+            };
+            match response {
+                Ok(val) => break Ok(val),
+                Err(e) => {
+                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
+                        || attempt >= config.max_retries
+                    {
+                        break Err(grpc_error_to_snip_error($name, &e));
+                    }
+                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
+                    let delay = Duration::from_millis(actual_delay);
+                    if $client.limits.is_some_and(|limits| {
+                        limits
+                            .remaining()
+                            .is_none_or(|remaining| remaining <= delay)
+                    }) {
+                        break Err(SnipError::sync_failure(
+                            crate::error::SyncFailureKind::Timeout,
+                            Some("automatic sync deadline expired during retry backoff"),
+                        ));
+                    }
+                    tokio::time::sleep(delay).await;
+                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
+                    attempt += 1;
+                }
+            }
+        }
+    }};
+}
+
 /// Convert a gRPC error status into a typed `SnipError`.
 ///
 /// Distinguishes `NotFound` (library not found) from other non-retryable errors.
@@ -121,6 +191,11 @@ fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipErro
     if status.code() == Code::NotFound {
         SnipError::sync_failure(
             crate::error::SyncFailureKind::LibraryNotFound,
+            Some(&status.to_string()),
+        )
+    } else if status.code() == Code::DeadlineExceeded {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::Timeout,
             Some(&status.to_string()),
         )
     } else {
@@ -151,23 +226,47 @@ struct EncryptedSnippetData {
 pub struct SyncClient {
     client: SnippetSyncClient<Channel>,
     settings: SyncSettings,
+    limits: Option<SyncRunLimits>,
 }
 
 impl SyncClient {
+    fn ensure_budget(&self) -> SnipResult<()> {
+        if self
+            .limits
+            .is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero()))
+        {
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::Timeout,
+                Some("automatic sync deadline expired before network operation"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Creates a new sync client connected to the server specified in settings.
     pub async fn create(settings: SyncSettings) -> SnipResult<Self> {
+        Self::create_with_limits(settings, None).await
+    }
+
+    pub(crate) async fn create_with_limits(
+        settings: SyncSettings,
+        limits: Option<SyncRunLimits>,
+    ) -> SnipResult<Self> {
         let server_url = settings.server_url.clone();
 
-        let channel = create_tls_channel(&server_url).await.map_err(|e| {
-            SnipError::sync_failure(
-                crate::error::SyncFailureKind::ConnectFailed,
-                Some(&e.to_string()),
-            )
-        })?;
+        let channel = create_tls_channel(&server_url, limits.map(|l| l.request_timeout))
+            .await
+            .map_err(|e| {
+                SnipError::sync_failure(
+                    crate::error::SyncFailureKind::ConnectFailed,
+                    Some(&e.to_string()),
+                )
+            })?;
 
         Ok(Self {
             client: SnippetSyncClient::new(channel),
             settings,
+            limits,
         })
     }
 
@@ -181,6 +280,7 @@ impl SyncClient {
         last_sync: i64,
         library_id: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
+        self.ensure_budget()?;
         let api_key = self.settings.api_key.clone();
 
         let mut encrypted_snippets = Vec::new();
@@ -286,9 +386,42 @@ impl SyncClient {
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
         loop {
+            let remaining = self.limits.and_then(SyncRunLimits::remaining);
+            if self
+                .limits
+                .is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero()))
+            {
+                return Err(SnipError::sync_failure(
+                    crate::error::SyncFailureKind::Timeout,
+                    Some("automatic sync deadline expired before retry"),
+                ));
+            }
             let mut grpc_req = tonic::Request::new(request.clone());
             add_api_key_metadata(&mut grpc_req, api_key);
-            match self.client.sync(grpc_req).await {
+            let request_future = self.client.sync(grpc_req);
+            let response = match self.limits {
+                Some(_) => match remaining {
+                    Some(duration) if !duration.is_zero() => {
+                        match tokio::time::timeout(duration, request_future).await {
+                            Ok(response) => response,
+                            Err(_) => {
+                                return Err(SnipError::sync_failure(
+                                    crate::error::SyncFailureKind::Timeout,
+                                    Some("automatic sync deadline expired"),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(SnipError::sync_failure(
+                            crate::error::SyncFailureKind::Timeout,
+                            Some("automatic sync deadline expired"),
+                        ));
+                    }
+                },
+                None => request_future.await,
+            };
+            match response {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(e) => {
                     if !SyncRetryConfig::is_retryable_grpc_error(&e)
@@ -305,7 +438,18 @@ impl SyncClient {
                         delay_ms
                     );
                     let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
-                    tokio::time::sleep(Duration::from_millis(actual_delay)).await;
+                    let delay = Duration::from_millis(actual_delay);
+                    if self.limits.is_some_and(|limits| {
+                        limits
+                            .remaining()
+                            .is_none_or(|remaining| remaining <= delay)
+                    }) {
+                        return Err(SnipError::sync_failure(
+                            crate::error::SyncFailureKind::Timeout,
+                            Some("automatic sync deadline expired during retry backoff"),
+                        ));
+                    }
+                    tokio::time::sleep(delay).await;
                     let backoff_multiplier = if is_rate_limited { 4.0 } else { 2.0 };
                     let max_delay = if is_rate_limited {
                         120_000u64
@@ -321,21 +465,33 @@ impl SyncClient {
 
     /// Checks server health and returns `true` if the server is reachable.
     pub async fn health_check(&mut self) -> SnipResult<bool> {
-        match retry_grpc!(
+        self.ensure_budget()?;
+        match retry_grpc_limited!(
+            self,
             self.client.health(tonic::Request::new(HealthRequest {})),
             "Health check"
         ) {
             Ok(response) => Ok(response.into_inner().healthy),
             Err(e) => {
                 tracing::debug!(error = %e, "Health check failed");
-                Ok(false)
+                if matches!(
+                    e,
+                    SnipError::SyncFailure {
+                        kind: crate::error::SyncFailureKind::Timeout,
+                        ..
+                    }
+                ) {
+                    Err(e)
+                } else {
+                    Ok(false)
+                }
             }
         }
     }
 
     /// Registers a new device with the server and returns the API key and device ID.
     pub async fn register(server_url: String) -> SnipResult<(String, String)> {
-        let channel = create_tls_channel(&server_url).await.map_err(|e| {
+        let channel = create_tls_channel(&server_url, None).await.map_err(|e| {
             SnipError::sync_failure(
                 crate::error::SyncFailureKind::ConnectFailed,
                 Some(&e.to_string()),
@@ -364,12 +520,14 @@ impl SyncClient {
 
     /// Lists all libraries on the sync server.
     pub async fn list_libraries(&mut self) -> SnipResult<Vec<Library>> {
+        self.ensure_budget()?;
         let api_key = self.settings.api_key.clone();
         let mut all_libraries = Vec::new();
         let mut offset = 0i32;
         const PAGE_LIMIT: i32 = 50;
         loop {
-            let response = retry_grpc!(
+            let response = retry_grpc_limited!(
+                self,
                 async {
                     let mut req = tonic::Request::new(ListLibrariesRequest {
                         api_key: api_key.clone(),
@@ -400,9 +558,11 @@ impl SyncClient {
 
     /// Creates a new library on the sync server.
     pub async fn create_library(&mut self, name: &str) -> SnipResult<Library> {
+        self.ensure_budget()?;
         let api_key = self.settings.api_key.clone();
         let name_str = name.to_string();
-        let response = retry_grpc!(
+        let response = retry_grpc_limited!(
+            self,
             async {
                 let mut req = tonic::Request::new(CreateLibraryRequest {
                     api_key: api_key.clone(),
@@ -497,6 +657,7 @@ impl SyncClient {
 
 async fn create_tls_channel(
     server_url: &str,
+    request_timeout: Option<Duration>,
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let uri: Uri = server_url.parse()?;
     let scheme = uri.scheme_str().unwrap_or("https").to_ascii_lowercase();
@@ -510,14 +671,17 @@ async fn create_tls_channel(
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
-    let request_timeout_secs = std::env::var("SNP_SYNC_REQUEST_TIMEOUT")
+    let configured_request_timeout = std::env::var("SNP_SYNC_REQUEST_TIMEOUT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+    let request_timeout = request_timeout
+        .unwrap_or_else(|| Duration::from_secs(configured_request_timeout))
+        .min(Duration::from_secs(configured_request_timeout));
 
     let endpoint = Endpoint::new(uri)?
         .connect_timeout(Duration::from_secs(connect_timeout_secs))
-        .timeout(Duration::from_secs(request_timeout_secs));
+        .timeout(request_timeout);
 
     let endpoint = if let Some(host) = host {
         let tls_config = ClientTlsConfig::new()
@@ -663,6 +827,25 @@ mod tests {
                 status.code()
             );
         }
+    }
+
+    #[test]
+    fn deadline_exceeded_is_a_typed_timeout() {
+        let error = grpc_error_to_snip_error(
+            "sync",
+            &tonic::Status::deadline_exceeded("budget exhausted"),
+        );
+        assert!(matches!(
+            error,
+            SnipError::SyncFailure {
+                kind: crate::error::SyncFailureKind::Timeout,
+                ..
+            }
+        ));
+        assert_eq!(
+            crate::auto_sync::policy::FailureClass::from_error(&error),
+            crate::auto_sync::policy::FailureClass::TransientTimeout
+        );
     }
 
     #[test]

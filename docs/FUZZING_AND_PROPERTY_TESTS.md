@@ -52,9 +52,11 @@ Tests that verify `serialize -> deserialize` or `encrypt -> decrypt` produce ide
 - **Sync contracts** (`tests/sync_contracts.rs`): Verifies sync direction resolution (Push, Pull, Bidirectional) under all CLI-flag and config combinations. Proves CLI overrides take precedence over config.
 - **Sync integration** (`tests/sync_integration.rs`): Async tests with an in-process server that verify full sync round-trips (push, pull, bidirectional) with real gRPC transport.
 
-### Deterministic E2E Tests (Phase 05A)
+### Auto-sync Closure Tests
 
-- **`test_deterministic_sync_cycle`** (`tests/deterministic_e2e.rs`): Full end-to-end test proving the exact auto-sync lifecycle: local mutation -> pending generation -> detached helper -> server-side state change -> status success -> conditional pending clear. Uses a real in-process server, event sink, and exact-count assertions.
+- **`tests/auto_sync_closure.rs`**: Focused contracts for pending generations,
+  exact-generation acknowledgement, and scheduler behavior after helper
+  failure. Server-side sync effects are covered by `tests/sync_integration.rs`.
 
 ### Failure Class Contract Tests
 
@@ -192,11 +194,11 @@ The existing test suite provides bounded fuzz coverage through targeted edge-cas
 # Full test suite including property-like tests
 cargo test --workspace
 
-# Deterministic E2E (requires single-threaded PTY tests)
+# Sync integration (requires single-threaded execution)
 cargo test --test pty_integration -- --test-threads=1
 
 # Phase 05A test suites (deterministic, contract, debounce, sync)
-cargo test --test deterministic_e2e
+cargo test --test auto_sync_closure --features test-support -- --test-threads=1
 cargo test --test failure_class_contracts
 cargo test --test debounce_matrix
 cargo test --test sync_contracts

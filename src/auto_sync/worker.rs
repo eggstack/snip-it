@@ -128,6 +128,9 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
             }
         };
         let outcome = execute_sync(state_dir, policy, observed.generation);
+        if !follow_up_allowed(outcome) {
+            return outcome;
+        }
         match pending::read_state_from_dir(state_dir) {
             Ok(current) if current.generation > observed.generation => continue,
             Ok(current) if current.generation < observed.generation => {
@@ -149,6 +152,10 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
             }
         }
     }
+}
+
+fn follow_up_allowed(outcome: WorkerOutcome) -> bool {
+    matches!(outcome, WorkerOutcome::Success)
 }
 
 fn compute_deadline(
@@ -292,7 +299,21 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
             );
         }
     };
-    match crate::sync_commands::run_sync(&settings, None, push_only, pull_only, &runtime) {
+    let deadline = Instant::now()
+        .checked_add(policy.sync_timeout)
+        .unwrap_or_else(Instant::now);
+    let limits = crate::sync::SyncRunLimits {
+        deadline,
+        request_timeout: policy.sync_timeout,
+    };
+    match crate::sync_commands::run_sync_with_limits(
+        &settings,
+        None,
+        push_only,
+        pull_only,
+        &runtime,
+        Some(limits),
+    ) {
         Ok(()) => match pending::clear_if_generation_matches(state_dir, generation) {
             Ok(pending::ConditionalClearResult::Cleared) => {
                 let _ = status::record_success(
@@ -426,5 +447,17 @@ pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pend
         Ok(state) => Ok(Some(state.generation)),
         Err(pending::PendingError::NotFound) => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerOutcome, follow_up_allowed};
+
+    #[test]
+    fn failed_or_empty_sync_cannot_enter_new_generation_follow_up() {
+        assert!(!follow_up_allowed(WorkerOutcome::Failed));
+        assert!(!follow_up_allowed(WorkerOutcome::NothingToDo));
+        assert!(follow_up_allowed(WorkerOutcome::Success));
     }
 }

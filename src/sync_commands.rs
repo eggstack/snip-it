@@ -15,7 +15,9 @@ use crate::utils::atomic::{AtomicWriteOptions, Durability, atomic_replace};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,22 +88,12 @@ fn handle_library_not_found(
 
     let Some(recovery_dir) = lib_path.parent() else {
         tracing::error!(library = %lib_name, "Cannot create recovery marker: path has no parent");
-        // Continue without recovery marker - sync will still work
-        if let Err(e) = runtime.block_on(client.create_library(&normalized_name)) {
-            tracing::warn!(library = %lib_name, error = %e, "Failed to re-create library on server");
-            status.failed += 1;
-            results.push((
-                lib_name.to_string(),
-                false,
-                format!("Re-creation failed: {e}"),
-            ));
-        } else {
-            results.push((
-                lib_name.to_string(),
-                true,
-                "Re-linked (no recovery marker)".to_string(),
-            ));
-        }
+        status.failed += 1;
+        results.push((
+            lib_name.to_string(),
+            false,
+            "Recovery path has no parent".to_string(),
+        ));
         return;
     };
     let recovery_marker = recovery_marker_for(recovery_dir, lib_name);
@@ -115,7 +107,7 @@ fn handle_library_not_found(
                 return;
             }
         },
-        Err(_) => SyncRecoveryMarker {
+        Err(error) if error.kind() == ErrorKind::NotFound => SyncRecoveryMarker {
             schema: 1,
             local_library_name: lib_name.to_string(),
             local_library_id: mgr
@@ -126,7 +118,66 @@ fn handle_library_not_found(
             created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
             phase: RecoveryPhase::Creating,
         },
+        Err(error) => {
+            let e = SnipError::io_error("inspect sync recovery marker", &recovery_marker, error);
+            tracing::error!(library = %lib_name, error = %e, "Recovery marker lookup failed closed");
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        }
     };
+
+    let Some(local_meta) = mgr.get_library_by_filename(lib_name) else {
+        let e = SnipError::runtime_error(
+            "Sync recovery identity mismatch",
+            Some("local library is not registered"),
+        );
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
+    };
+    let marker_stem = recovery_marker
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".sync_recovery"));
+    let identity_ok = marker.schema == 1
+        && normalized_library_name(&marker.local_library_name) == normalized_name
+        && marker_stem == Some(lib_name)
+        && (marker.local_library_id.is_empty() || marker.local_library_id == local_meta.library_id)
+        && lib_path.exists();
+    if !identity_ok {
+        let e = SnipError::runtime_error(
+            "Sync recovery identity mismatch",
+            Some("marker identity does not match the current local library"),
+        );
+        tracing::error!(library = %lib_name, error = %e, "Refusing mismatched recovery marker");
+        status.failed += 1;
+        results.push((lib_name.to_string(), false, e.to_string()));
+        return;
+    }
+
+    let already_linked = marker.phase == RecoveryPhase::Linked;
+    if already_linked {
+        let Some(server_id) = marker.server_library_id.as_deref() else {
+            let e = SnipError::runtime_error(
+                "Invalid linked recovery marker",
+                Some("missing server library ID"),
+            );
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        };
+        if local_meta.server_id.as_deref() != Some(server_id) || local_meta.library_id != server_id
+        {
+            let e = SnipError::runtime_error(
+                "Sync recovery identity mismatch",
+                Some("linked marker does not match local linkage"),
+            );
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        }
+    }
 
     if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
         tracing::error!(library = %lib_name, error = %e, "Failed to persist recovery marker; refusing remote recreation");
@@ -135,7 +186,17 @@ fn handle_library_not_found(
         return;
     }
 
-    let server_lib = if let Some(server_id) = marker.server_library_id.clone() {
+    let server_lib = if already_linked {
+        crate::proto::Library {
+            id: marker
+                .server_library_id
+                .clone()
+                .expect("validated linked marker"),
+            name: normalized_name.clone(),
+            created_at: 0,
+            snippet_count: 0,
+        }
+    } else if let Some(server_id) = marker.server_library_id.clone() {
         crate::proto::Library {
             id: server_id,
             name: normalized_name.clone(),
@@ -195,18 +256,20 @@ fn handle_library_not_found(
         return;
     }
 
-    if let Err(e) = mgr.relink_server_library(lib_name, &server_lib.id, Some(0)) {
-        tracing::error!(library = %lib_name, error = %e, "Failed to persist recovered library linkage");
-        status.failed += 1;
-        results.push((lib_name.to_string(), false, e.to_string()));
-        return;
-    }
-    marker.phase = RecoveryPhase::Linked;
-    if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
-        tracing::error!(library = %lib_name, error = %e, "Failed to persist linked recovery state");
-        status.failed += 1;
-        results.push((lib_name.to_string(), false, e.to_string()));
-        return;
+    if !already_linked {
+        if let Err(e) = mgr.relink_server_library(lib_name, &server_lib.id, Some(0)) {
+            tracing::error!(library = %lib_name, error = %e, "Failed to persist recovered library linkage");
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        }
+        marker.phase = RecoveryPhase::Linked;
+        if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
+            tracing::error!(library = %lib_name, error = %e, "Failed to persist linked recovery state");
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        }
     }
 
     tracing::info!(library = %lib_name, server_id = %server_lib.id, "Re-created and relinked library");
@@ -227,7 +290,9 @@ fn handle_library_not_found(
                 Ok((_merged, _backup, _conflicts)) => {
                     if let Err(e) = mgr.update_last_sync(lib_name, retry_response.server_timestamp)
                     {
-                        tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp after re-creation");
+                        status.failed += 1;
+                        results.push((lib_name.to_string(), false, e.to_string()));
+                        return;
                     }
                     if recovery_marker.exists()
                         && let Err(e) = fs::remove_file(&recovery_marker)
@@ -258,12 +323,21 @@ fn handle_library_not_found(
     }
 }
 
-fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
+fn check_and_complete_recovery_markers(
+    libraries_dir: &Path,
+    sync_settings: &SyncSettings,
+    client: &mut sync::SyncClient,
+    mgr: &mut library::LibraryManager,
+    runtime: &tokio::runtime::Runtime,
+    status: &mut SyncStatus,
+    results: &mut Vec<(String, bool, String)>,
+) -> SnipResult<HashSet<String>> {
+    let mut completed = HashSet::new();
     let entries = match fs::read_dir(libraries_dir) {
         Ok(entries) => entries,
         Err(e) => {
             tracing::warn!(error = %e, path = %libraries_dir.display(), "Failed to read libraries directory for recovery marker check");
-            return Ok(());
+            return Ok(completed);
         }
     };
 
@@ -275,8 +349,39 @@ fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
             };
             let lib_name = stem.to_string_lossy();
             match read_recovery_marker(&path) {
-                Ok(marker) => {
-                    tracing::info!(library = %lib_name, phase = ?marker.phase, "Found durable sync recovery marker; recovery will resume")
+                Ok(_marker) => {
+                    let lib_name = lib_name.to_string();
+                    let lib_path = libraries_dir.join(format!("{lib_name}.toml"));
+                    if !lib_path.exists() {
+                        tracing::error!(library = %lib_name, "Recovery marker has no local library; preserving marker");
+                        continue;
+                    }
+                    let snippets = match library::load_library(&lib_path) {
+                        Ok(snippets) => snippets,
+                        Err(error) => {
+                            tracing::error!(library = %lib_name, %error, "Could not load library for recovery");
+                            status.failed += 1;
+                            results.push((lib_name, false, error.to_string()));
+                            continue;
+                        }
+                    };
+                    let before = results.len();
+                    handle_library_not_found(
+                        &lib_name,
+                        &lib_path,
+                        &snippets,
+                        sync_settings,
+                        client,
+                        mgr,
+                        runtime,
+                        status,
+                        results,
+                    );
+                    if results.len() > before
+                        && results.last().is_some_and(|(_, success, _)| *success)
+                    {
+                        completed.insert(lib_name);
+                    }
                 }
                 Err(e) => {
                     tracing::error!(library = %lib_name, error = %e, "Recovery marker is corrupt and was preserved")
@@ -284,7 +389,7 @@ fn check_and_complete_recovery_markers(libraries_dir: &Path) -> SnipResult<()> {
             }
         }
     }
-    Ok(())
+    Ok(completed)
 }
 
 impl From<&Snippet> for ProtoSnippet {
@@ -333,24 +438,21 @@ fn ensure_sync_configured(settings: &SyncSettings) -> bool {
     true
 }
 
-fn create_sync_client(
-    runtime: &tokio::runtime::Runtime,
-    settings: &SyncSettings,
-) -> SnipResult<sync::SyncClient> {
-    runtime.block_on(sync::SyncClient::create(settings.clone()))
-}
-
 fn check_server_health(
     runtime: &tokio::runtime::Runtime,
     client: &mut sync::SyncClient,
     server_url: &str,
-) -> bool {
+) -> SnipResult<()> {
     match runtime.block_on(client.health_check()) {
-        Ok(true) => true,
-        _ => {
+        Ok(true) => Ok(()),
+        Ok(false) => {
             tracing::error!("Server is not reachable at {}", server_url);
-            false
+            Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::HealthCheckFailed,
+                None,
+            ))
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -501,6 +603,24 @@ pub fn run_sync(
     pull_only: bool,
     runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<()> {
+    run_sync_with_limits(
+        sync_settings,
+        library_name,
+        push_only,
+        pull_only,
+        runtime,
+        None,
+    )
+}
+
+pub(crate) fn run_sync_with_limits(
+    sync_settings: &SyncSettings,
+    library_name: Option<&str>,
+    push_only: bool,
+    pull_only: bool,
+    runtime: &tokio::runtime::Runtime,
+    limits: Option<sync::SyncRunLimits>,
+) -> SnipResult<()> {
     let direction = if push_only {
         SyncDirection::Push
     } else if pull_only {
@@ -523,19 +643,19 @@ pub fn run_sync(
         ));
     }
 
-    let mut client = create_sync_client(runtime, sync_settings).map_err(|e| {
-        SnipError::sync_failure(
-            crate::error::SyncFailureKind::ConnectFailed,
-            Some(&e.to_string()),
-        )
-    })?;
+    let mut client = runtime
+        .block_on(sync::SyncClient::create_with_limits(
+            sync_settings.clone(),
+            limits,
+        ))
+        .map_err(|e| {
+            SnipError::sync_failure(
+                crate::error::SyncFailureKind::ConnectFailed,
+                Some(&e.to_string()),
+            )
+        })?;
 
-    if !check_server_health(runtime, &mut client, &sync_settings.server_url) {
-        return Err(SnipError::sync_failure(
-            crate::error::SyncFailureKind::HealthCheckFailed,
-            None,
-        ));
-    }
+    check_server_health(runtime, &mut client, &sync_settings.server_url)?;
 
     let mut mgr = match library::LibraryManager::new() {
         Ok(m) => m,
@@ -552,10 +672,6 @@ pub fn run_sync(
             crate::error::SyncFailureKind::LibraryModeInitFailed,
             Some(&e.to_string()),
         ));
-    }
-
-    if let Err(e) = check_and_complete_recovery_markers(mgr.get_libraries_dir()) {
-        tracing::warn!("Recovery marker check failed: {}", e);
     }
 
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
@@ -640,7 +756,27 @@ pub fn run_sync(
     let mut status = SyncStatus::new();
     let mut results: Vec<(String, bool, String)> = Vec::new();
 
+    let libraries_dir = mgr.get_libraries_dir().clone();
+    let recovered = match check_and_complete_recovery_markers(
+        &libraries_dir,
+        sync_settings,
+        &mut client,
+        &mut mgr,
+        runtime,
+        &mut status,
+        &mut results,
+    ) {
+        Ok(recovered) => recovered,
+        Err(error) => {
+            tracing::warn!(%error, "Recovery marker scan failed");
+            HashSet::new()
+        }
+    };
+
     for lib_name in &libraries_to_sync {
+        if recovered.contains(lib_name) {
+            continue;
+        }
         completed += 1;
         print!("\r[{completed}/{total}] Syncing {lib_name}...");
         std::io::Write::flush(&mut std::io::stdout()).ok();
@@ -1261,7 +1397,7 @@ mod tests {
         assert_eq!(read_recovery_marker(&path).unwrap(), marker);
 
         fs::write(&path, "not valid toml = [").unwrap();
-        check_and_complete_recovery_markers(dir.path()).unwrap();
+        assert!(read_recovery_marker(&path).is_err());
         assert!(path.exists());
     }
 

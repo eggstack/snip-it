@@ -11,7 +11,7 @@ The snip-it codebase is organized into three logical layers with strict dependen
 ┌─────────────────────────────────────────────┐
 │           Application / CLI Layer           │
 │  Clap, TUI, clipboard, shell, editor,       │
-│  worker/executor, lock/pending/status,      │
+│  worker, lock/pending/status,               │
 │  runtime, rendering, update                 │
 ├─────────────────────────────────────────────┤
 │           Sync-Client Layer                 │

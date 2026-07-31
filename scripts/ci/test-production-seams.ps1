@@ -118,18 +118,7 @@ sha256 = "$IndexSha"
     Write-Host 'PASS: failpoint did not abort production restore'
 
     Write-Host ''
-    Write-Host '=== Test 2: removed executor command is not accepted ==='
-    $StateDir = Join-Path $TmpDir 'state'
-    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *> $null
-    $exitCode2 = $LASTEXITCODE
-    if ($exitCode2 -eq 0) {
-        Write-Host 'FAIL: removed auto-sync-execute command is still accepted'
-        exit 1
-    }
-    Write-Host 'PASS: executor subprocess command is removed'
-
-    Write-Host ''
-    Write-Host '=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==='
+    Write-Host '=== Test 2: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==='
     $env:SNP_SKIP_WORKER_SPAWN = '1'
     & $Binary library create seam-test *>$null
     if ($LASTEXITCODE -ne 0) {

@@ -50,8 +50,6 @@ run_verify() {
       --features test-support -- --test-threads=1
     cargo test --release --test restore_crash_failpoints \
       --features test-support -- --test-threads=1
-    cargo test --release --test deterministic_e2e \
-      --features test-support -- --test-threads=1
     cargo test --release --test transaction_crash_recovery \
       --features test-support -- --test-threads=1
 

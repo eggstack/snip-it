@@ -174,7 +174,9 @@ Tests never touch the developer's real `~/.config/snp/`, real keychain, or real 
 
 ## Headline Test
 
-The canonical deterministic test (`tests/deterministic_e2e.rs:test_real_remote_effect_before_pending_clear`) proves the exact sequence:
+The focused auto-sync closure tests (`tests/auto_sync_closure.rs`) prove the
+pending-generation and scheduling sequence. Sync server effects are covered by
+`tests/sync_integration.rs` and `tests/sync_contracts.rs`:
 
 1. Start isolated server with recorded remote revision R0
 2. Register real client, enable auto-sync with debounce=2
@@ -202,7 +204,7 @@ The canonical deterministic test (`tests/deterministic_e2e.rs:test_real_remote_e
 
 | Suite | File | Tests | What it proves |
 |-------|------|-------|----------------|
-| Deterministic E2E | `deterministic_e2e.rs` | 12 | Real binary → real server → pending lifecycle |
+| Auto-sync closure | `auto_sync_closure.rs` | focused | Pending generation and scheduler contracts |
 | Failure-Class Contracts | `failure_class_contracts.rs` | 42 | FailureClass → ExitCode → Status → Schedule |
 | Debounce Matrix | `debounce_matrix.rs` | 22 | Exact debounce/scheduling behavior |
 | Sync Contracts | `sync_contracts.rs` | 19 | Direction, CLI overrides, config defaults |

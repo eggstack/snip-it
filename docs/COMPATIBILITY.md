@@ -40,7 +40,7 @@ After at least one minor version:
 - Exit codes 0-9 are stable public contract (see `EXIT_CODES.md`).
 - New exit codes are additive (non-breaking).
 - Changing the meaning of an existing exit code is a breaking change.
-- Internal worker/executor codes are not part of the public contract.
+- Internal auto-sync worker codes are not part of the public contract.
 
 ---
 

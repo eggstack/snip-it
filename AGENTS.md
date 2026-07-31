@@ -40,8 +40,8 @@ cargo test --workspace --all-features -- --test-threads=1
 # Unit tests only
 cargo test --workspace --all-features --lib -- --test-threads=1
 
-# Single test by name (e.g. one deterministic_e2e test)
-cargo test --test deterministic_e2e --features test-support -- --exact test_observer_headline_sync_e2e --test-threads=1
+# Single focused auto-sync contract test by name
+cargo test --test auto_sync_closure --features test-support -- --test-threads=1
 
 # snip-sync tests (needs test-helpers feature)
 cargo test -p snip-sync --features test-helpers
@@ -49,7 +49,7 @@ cargo test -p snip-sync --features test-helpers
 
 **Key gotcha:** `cargo test --lib -p snip-it` does not work — `snip-it` is binary-only. Use `cargo test -p snip-it` or `cargo test --workspace`.
 
-**Key gotcha:** Many integration tests (`deterministic_e2e`, `restore_crash_failpoints`, `transaction_crash_recovery`, `cleanup_crash_failpoints`, `process_lifecycle`, etc.) require `--features test-support` to compile.
+**Key gotcha:** Many integration tests (`restore_crash_failpoints`, `transaction_crash_recovery`, `cleanup_crash_failpoints`, `process_lifecycle`, etc.) require `--features test-support` to compile.
 
 **Key gotcha:** PTY tests (`pty_integration.rs`) use real terminal pairs — always pass `--test-threads=1`.
 
@@ -116,7 +116,7 @@ existing general-error exit code while `Success` and `NothingToDo` remain zero.
 `gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. Single journal = auto-rollback; multiple/incomplete = refuse and direct to `snp repair`.
 
 ### Deterministic test assertions
-Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. See `tests/deterministic_e2e.rs`.
+Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. Auto-sync closure cases live in `tests/auto_sync_closure.rs`; sync-boundary cases live in `tests/sync_integration.rs` and `tests/sync_contracts.rs`.
 
 ### Test event emission
 The helper emits lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines). See `tests/support/event_sink.rs` (test-side) and `src/auto_sync/test_events.rs` (production).

@@ -144,9 +144,12 @@ relinking, and the local server ID plus `last_sync = 0` are saved together.
 
 If a process stops before the server ID is recorded, the next recovery lists
 libraries by normalized name and reuses exactly one match; zero matches may
-create one, while multiple matches fail visibly as ambiguous. Corrupt markers
-are preserved and block blind recreation. A marker is removed only after the
-relink and retry sync have been durably completed.
+create one, while multiple matches fail visibly as ambiguous. Corrupt or
+mismatched markers are preserved and block blind recreation. Startup scans and
+the normal `LibraryNotFound` path resume `Creating`, `RemoteCreated`, and
+`Linked` markers. A linked marker never creates a remote library. A marker is
+removed only after merged content and the final `last_sync` cursor have been
+durably completed.
 
 ## Auto-Sync Policy
 

@@ -180,7 +180,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Mitigations** | TOML parse validation with strict deserialization; `sanitize_library_name` rejects path separators and control characters; command size cap (16 MiB); import rejects oversized payloads; content is not executed on import. |
 | **Residual risk** | Low. A valid TOML file with malicious shell content in a `command` field is by design executable when the user runs it. This is the intended use case. |
 | **User responsibility** | Review imported snippets before executing them. Treat snippet commands as you would any shell script from an untrusted source. |
-| **Tests / evidence** | `tests/deterministic_e2e.rs`, `tests/local_contracts.rs`, `tests/package_evidence.rs`. Golden command corpus verifies TOML round-trip fidelity. |
+| **Tests / evidence** | `tests/auto_sync_closure.rs`, `tests/local_contracts.rs`, `tests/package_evidence.rs`. Golden command corpus verifies TOML round-trip fidelity. |
 | **Owner / module** | `src/commands/import_cmd.rs`, `src/library.rs`, `src/utils/toml_helpers.rs` |
 
 ### T2: Malicious Backup Archive
@@ -192,7 +192,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Mitigations** | SHA-256 checksum verification against manifest; path validation in `restore_cmd.rs` rejects entries escaping the restore target; dry-run mode available; transaction journals enable rollback; `redact_sync_config` strips API keys from backup content. |
 | **Residual risk** | Low. Checksum and path validation prevent most attacks. A backup from a fully compromised source could still contain valid but malicious snippet content (same as T1). |
 | **User responsibility** | Only restore backups you created or trust. Use dry-run mode first. |
-| **Tests / evidence** | `tests/deterministic_e2e.rs` (restore path). `src/commands/backup_cmd.rs`, `src/commands/restore_cmd.rs` unit tests. |
+| **Tests / evidence** | `tests/recovery_integration.rs`. `src/commands/backup_cmd.rs`, `src/commands/restore_cmd.rs` unit tests. |
 | **Owner / module** | `src/commands/backup_cmd.rs`, `src/commands/restore_cmd.rs` |
 
 ### T3: Compromised / Malformed Sync Server
@@ -369,8 +369,8 @@ Users who require protection against local attackers should use full-disk encryp
 
 | Threat | Primary Module(s) | Test Coverage | Residual Risk |
 |--------|-------------------|---------------|---------------|
-| T1: Malicious Pet/TOML/Import | `import_cmd.rs`, `library.rs`, `toml_helpers.rs` | `deterministic_e2e`, `local_contracts`, `package_evidence` | Low |
-| T2: Malicious Backup Archive | `backup_cmd.rs`, `restore_cmd.rs` | `deterministic_e2e`, unit tests | Low |
+| T1: Malicious Pet/TOML/Import | `import_cmd.rs`, `library.rs`, `toml_helpers.rs` | `local_contracts`, `package_evidence` | Low |
+| T2: Malicious Backup Archive | `backup_cmd.rs`, `restore_cmd.rs` | `recovery_integration`, unit tests | Low |
 | T3: Compromised Sync Server | `sync.rs`, `sync_commands.rs`, `encryption.rs` | `sync_integration`, `sync_contracts` | Low |
 | T4: Network Attacker (TLS) | `sync.rs`, `config.rs` | `sync_integration` | Very Low |
 | T5: Same-Account Local Process | `atomic.rs`, `lock.rs`, `status.rs`, `config.rs` | Lock/status unit tests | **Medium** |

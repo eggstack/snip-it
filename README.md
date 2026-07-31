@@ -365,6 +365,11 @@ snp sync config --failure warn                 # ignore, warn, or error
 forces a sync attempt after bounded time even if changes continue, preventing
 indefinite starvation.
 
+`auto_sync_timeout_seconds` bounds each automatic-sync network and retry
+window. Requests and retry sleeps are capped by the remaining deadline;
+deadline expiry records transient timeout status and preserves pending intent.
+Local filesystem operations are not force-cancelled.
+
 Local mutations always succeed before any remote work begins. A failed
 auto-sync never rolls back or corrupts a successful local save. Unreadable
 pending state, execution-lock failures, and worker-spawn failures remain

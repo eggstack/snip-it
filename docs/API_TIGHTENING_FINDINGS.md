@@ -176,7 +176,7 @@ Found in **42 files** (test modules only). No `#[cfg(test)]` items leak into pub
 ### Test Event Env Var Gating
 
 `SNP_TEST_EVENTS_DIR` is checked at runtime via `std::env::var()` — not compile-time gated. This means:
-- The env var check runs on every worker/executor lifecycle event
+- The env var check runs on every auto-sync worker lifecycle event
 - In release builds: one `std::env::var()` call per event (cheap)
 - In test builds: events are written to the specified directory
 

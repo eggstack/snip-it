@@ -327,8 +327,8 @@ None. `schedule_sync` is the sole scheduling authority. All paths converge here.
 The detached `auto-sync-worker` holds `SyncExecutionLock` and calls the
 canonical `sync_commands::run_sync` operation directly. It conditionally clears
 the observed pending generation after success, records durable status, and
-exits after the bounded helper lifetime. There is no executor subprocess or
-exit-code translation layer.
+exits after the bounded helper lifetime. Sync work stays in the detached helper
+and has no separate child-process lifecycle or exit-code translation layer.
 
 ---
 

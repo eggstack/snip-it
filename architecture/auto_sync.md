@@ -19,11 +19,12 @@ mutation
        -> record status/backoff and exit
 ```
 
-There is no executor subprocess, daemon, queue database, IPC channel, or
-service-manager integration. The helper is opportunistic and bounded by the
-existing worker lifetime. Network connection/request timeouts and retry
-budgets remain owned by the sync client; local filesystem operations are not
-force-cancelled by a second process.
+There is no child sync process, daemon, queue database, IPC channel, or
+service-manager integration. The helper is opportunistic and bounded by both
+the worker lifetime and `auto_sync_timeout_seconds` for each automatic-sync
+attempt. The sync client caps requests, retries, and retry sleeps by the
+remaining attempt deadline; local filesystem operations are not
+force-cancelled.
 
 ## Contracts
 
@@ -35,7 +36,8 @@ force-cancelled by a second process.
   `GenerationChanged` preserves newer work; `Missing` is treated as already
   cleared; clear errors preserve recoverability and record failure.
 - Authentication/configuration failures require attention. Transient failures
-  retain pending intent and durable backoff. A failed helper exits nonzero.
+  retain pending intent and durable backoff. A failed helper exits without an
+  immediate follow-up attempt, even if a newer generation appeared.
 - Persistent lock metadata is diagnostic only; kernel-backed ownership is the
   authority.
 
@@ -62,9 +64,12 @@ is suppressed from startup recovery recursion.
 ## Configuration
 
 `auto_sync_debounce_seconds` controls the quiet period and
-`auto_sync_max_delay_seconds` prevents starvation. Existing sync retry and
-request timeout behavior remains unchanged. Auto-sync defaults and command
-surface are unchanged.
+`auto_sync_max_delay_seconds` prevents starvation. Manual sync and cron retain
+their existing timeout behavior. Automatic sync uses
+`auto_sync_timeout_seconds` as a per-attempt network/retry budget; a deadline
+records `TransientTimeout`, preserves pending intent, and does not promise
+cancellation of local I/O. Auto-sync defaults and command surface are
+unchanged.
 
 ## Related design
 

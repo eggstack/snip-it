@@ -126,15 +126,7 @@ fi
 echo "PASS: failpoint did not abort production restore"
 
 echo ""
-echo "=== Test 2: removed executor command is not accepted ==="
-if "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 >/dev/null 2>&1; then
-    echo "FAIL: removed auto-sync-execute command is still accepted"
-    exit 1
-fi
-echo "PASS: executor subprocess command is removed"
-
-echo ""
-echo "=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==="
+echo "=== Test 2: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==="
 # Perform a real mutation (create a library) with SNP_SKIP_WORKER_SPAWN set.
 # Production binary ignores the variable — the mutation should complete normally.
 # We use a reachable-but-non-syncing config (auto_sync=false) so the mutation

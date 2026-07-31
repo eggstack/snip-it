@@ -41,8 +41,12 @@ Severe clock skew can still make one device dominate until its clock catches
 up; this is wall-clock ordering, not CRDT or logical-clock reconciliation.
 
 Missing remote libraries use an atomic `<library>.sync_recovery` TOML marker.
-The server ID is recorded before local relinking, linkage and `last_sync` are
-saved together, and corrupt/ambiguous recovery state blocks blind recreation.
+Startup and the normal missing-library path resume the existing
+`Creating`/`RemoteCreated`/`Linked` phases. The server ID is recorded before
+local relinking, linkage and `last_sync` are saved together, and
+corrupt/mismatched/ambiguous recovery state blocks blind recreation. A linked
+marker never creates a second remote library and is removed only after merged
+content and the final cursor are durable.
 
 ## Key Functions
 
@@ -53,12 +57,14 @@ saved together, and corrupt/ambiguous recovery state blocks blind recreation.
 | `encrypt_snippet()` | `sync.rs:518-544` | Encrypt snippet for server |
 | `decrypt_snippet()` | `sync.rs:547-571` | Decrypt snippet from server |
 | `sync_with_retry()` | `sync.rs:261-304` | Retry logic with exponential backoff |
+| `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
 | `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
 | `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
 | `clear_pending_after_explicit_sync()` | `auto_sync/notification.rs` | Generation-safe pending clear after manual sync |
 
-**Note:** The detached auto-sync helper invokes `run_sync` directly and owns the
-`SyncExecutionLock` for the entire detached cycle.
+**Note:** The detached auto-sync helper invokes `run_sync_with_limits` directly
+and owns the `SyncExecutionLock` for the entire detached cycle. Manual sync and
+cron use the unbounded canonical wrapper.
 
 ## Test Coverage
 
@@ -106,6 +112,7 @@ cover encryption and retry/timestamp behavior.
 | `PremadePartialFailure` | Partial | sync_commands.rs |
 | `EncryptionFailed` | Internal | sync.rs |
 | `DecryptionFailed` | Internal | sync.rs |
+| `Timeout` | TransientTimeout | sync.rs |
 
 ### FailureClass Enum
 

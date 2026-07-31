@@ -58,6 +58,7 @@ pub struct SyncSettings {
     pub sync_interval_minutes: u32,       // Default: 30
     pub auto_sync: bool,                  // Default: false
     pub auto_sync_debounce_seconds: u64,  // Default: 2 (clamped 0..300)
+    pub auto_sync_timeout_seconds: Option<u64>, // Automatic network/retry budget
     pub auto_sync_failure: AutoSyncFailureMode,  // Default: Warn
     pub sync_direction: SyncDirection,    // Default: Push
     pub clipboard_auto_clear_seconds: Option<u32>,
@@ -98,6 +99,7 @@ device_id = "device-uuid"
 sync_interval_minutes = 30
 auto_sync = false
 auto_sync_debounce_seconds = 2
+auto_sync_timeout_seconds = 30
 auto_sync_failure = "warn"
 sync_direction = "Bidirectional"
 clipboard_auto_clear_seconds = 30
@@ -108,6 +110,12 @@ clipboard_auto_clear_seconds = 30
 - `load_sync_settings()` — Reads `sync.toml`, falls back to defaults
 - `save_sync_settings()` — Writes with backslash-safe quoting
 - `get_sync_settings()` — Convenience wrapper, never fails
+
+`auto_sync_timeout_seconds` is consumed only by the detached automatic-sync
+helper. It bounds each request, retry backoff, and recovery network operation;
+deadline exhaustion preserves pending intent and records `TransientTimeout`.
+Manual sync and cron retain their existing request-timeout defaults, and local
+filesystem operations are not force-cancelled.
 
 ## Environment Variables
 
