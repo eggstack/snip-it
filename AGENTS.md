@@ -49,7 +49,7 @@ cargo test -p snip-sync --features test-helpers
 
 **Key gotcha:** `cargo test --lib -p snip-it` does not work — `snip-it` is binary-only. Use `cargo test -p snip-it` or `cargo test --workspace`.
 
-**Key gotcha:** Many integration tests (`restore_crash_failpoints`, `transaction_crash_recovery`, `cleanup_crash_failpoints`, `process_lifecycle`, etc.) require `--features test-support` to compile.
+**Key gotcha:** Only 3 integration tests require `--features test-support` to compile: `repair_transactions`, `process_lock_concurrency`, and `local_data_lock_barriers` (they use `#[cfg(feature = "test-support")]` gated code). All other integration tests compile without the feature.
 
 **Key gotcha:** PTY tests (`pty_integration.rs`) use real terminal pairs — always pass `--test-threads=1`.
 
@@ -89,6 +89,16 @@ themes/           50 Halloy TOML theme files
 - `usage.rs` — Local usage metadata (`UsageIndex`)
 - `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
 - `logging.rs` — Structured logging and audit trail
+- `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
+- `migration.rs` — Schema versioning (`SchemaVersion` ordinal type)
+- `clipboard.rs` — Cross-platform clipboard integration
+- `diagnostics.rs` — Internal diagnostics
+- `local_data.rs` — Local data lock coordination
+- `output.rs` — Output file handling
+- `proto.rs` — Protobuf type re-exports
+- `status_snapshot.rs` — Status snapshot and diagnostic codes
+- `update.rs` — Update checking
+- `test_failpoints.rs` — Test-only failpoint hooks (compiled with `test-support`)
 
 ## Critical Gotchas
 
