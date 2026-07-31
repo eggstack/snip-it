@@ -3,120 +3,53 @@
 ## Build & Test Commands
 
 ```bash
-# Focused developer verification (same as Linux CI)
+# Focused developer verification (same as Linux CI) — fmt, clippy, build, unit tests, selected integration tests
 bash scripts/check.sh
 
-# Build the entire workspace (snip-it, snip-proto, snip-sync)
+# Exhaustive pre-release verification (requires clean working tree)
+bash scripts/release-check.sh verify
+
+# Production seam proof — verifies test-only env vars are inactive in production builds (no test-support)
+bash scripts/ci/test-production-seams.sh
+
+# Build the workspace
 cargo build --workspace
 cargo build --release
 
-# Run all tests across the workspace (unit + integration + server)
-cargo test --workspace --all-features -- --test-threads=1
-
-# Run only CLI integration tests
-cargo test --test integration
-
-# Run only sync integration tests (async, needs test-helpers feature)
-cargo test --test sync_integration
-
-# Run PTY end-to-end tests (MUST run single-threaded)
-cargo test --test pty_integration -- --test-threads=1
-
-# Run only auto-sync closure tests
-cargo test --test auto_sync_closure
-
-# Run only snip-sync tests
-cargo test -p snip-sync
-
-# Run Phase 05A test suites
-cargo test --test deterministic_e2e
-cargo test --test failure_class_contracts
-cargo test --test debounce_matrix
-cargo test --test sync_contracts
-cargo test --test mutual_exclusion
-cargo test --test process_lifecycle
-cargo test --test local_contracts
-cargo test --test package_evidence
-
-# Run Phase 07A test suites
-cargo test --test persistence_unit
-cargo test --test identity_contract
-
-# Run Phase 08A+ lifecycle tests (requires test-support feature)
-cargo test --test deterministic_e2e --features test-support
-cargo test --test process_lifecycle --features test-support
-cargo test --test debounce_matrix --features test-support
-cargo test --test mutual_exclusion --features test-support
-cargo test --test restore_security --features test-support
-cargo test --test restore_transactions --features test-support
-cargo test --test backup_contracts --features test-support
-cargo test --test execution_outcomes --features test-support
-cargo test --test update_archive_security --features test-support
-cargo test --test readonly_no_recovery --features test-support
-cargo test --test canary_nonexecution --features test-support
-
-# Run Phase 11H test suites (requires test-support feature)
-cargo test --test destination_permissions --features test-support
-cargo test --test manifest_contracts --features test-support
-cargo test --test deterministic_e2e --features test-support -- --test-threads=1
-cargo test -p snip-sync --features test-helpers
-
-# Run Phase 11E test suites (requires test-support feature)
-cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
-cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
-cargo test --test local_data_lock_barriers --features test-support -- --test-threads=1
-cargo test --test manifest_contracts --features test-support -- --test-threads=1
-cargo test --test backup_snapshot_concurrency --features test-support -- --test-threads=1
-cargo test --test auto_sync_lifecycle --features test-support -- --test-threads=1
-cargo test --test executor_noop_success --features test-support -- --test-threads=1
-
-# Run Phase 11H test suites (requires test-support feature)
-cargo test --test cleanup_crash_failpoints --features test-support -- --test-threads=1
-cargo test --test platform_smoke --features test-support -- --test-threads=1
-
-# Run Phase 11J test suites (requires test-support feature)
-cargo test --test repair_transactions --features test-support -- --test-threads=1
-cargo test --test transaction_crash_recovery --features test-support -- --test-threads=1
-cargo test --test cleanup_crash_failpoints --features test-support -- --test-threads=1
-cargo test --test deterministic_e2e --features test-support -- --test-threads=1
-cargo test --lib transaction --all-features -- --test-threads=1
-
-# Run Phase 11K focused verification
-cargo test --lib transaction --all-features -- --test-threads=1
-cargo test --test repair_transactions --features test-support -- --test-threads=1
-cargo test --test deterministic_e2e --features test-support test_observer_headline_sync_e2e -- --exact --test-threads=1
-cargo test --test deterministic_e2e --features test-support test_unreachable_server_preserves_pending -- --exact --test-threads=1
-
-# Run Phase 11L focused verification (requires test-support feature)
-cargo test --test restore_crash_failpoints --features test-support -- --test-threads=1
-cargo test --lib transaction --all-features -- --test-threads=1
-
-# Run production seam proof (no test-support feature)
-bash scripts/ci/test-production-seams.sh
-
 # Lint (warnings are errors)
-cargo clippy --workspace --all-targets -- -D warnings
-
-# Run clippy (warnings are errors)
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Format check
+# Format check / auto-format
 cargo fmt --all -- --check
-cargo fmt  # auto-format
-
-# Local verification scripts
-bash scripts/check.sh        # ordinary developer verification
-bash scripts/release-check.sh  # exhaustive pre-release verification
+cargo fmt
 ```
 
-**Key gotcha:** The main `snip-it` crate is binary-only — `cargo test --lib -p snip-it` does not work. Use `cargo test -p snip-it` (binary + integration tests) or `cargo test --workspace`.
+### Running Tests
 
-**Key gotcha:** Some test suites (`deterministic_e2e`, `process_lifecycle`, `debounce_matrix`, `mutual_exclusion`, `restore_security`, `restore_transactions`, `backup_contracts`, `execution_outcomes`, `update_archive_security`, `readonly_no_recovery`, `canary_nonexecution`, `restore_crash_failpoints`) require `--features test-support` to compile.
+```bash
+# All tests (unit + integration + server, single-threaded)
+cargo test --workspace --all-features -- --test-threads=1
+
+# Unit tests only
+cargo test --workspace --all-features --lib -- --test-threads=1
+
+# Single test by name (e.g. one deterministic_e2e test)
+cargo test --test deterministic_e2e --features test-support -- --exact test_observer_headline_sync_e2e --test-threads=1
+
+# snip-sync tests (needs test-helpers feature)
+cargo test -p snip-sync --features test-helpers
+```
+
+**Key gotcha:** `cargo test --lib -p snip-it` does not work — `snip-it` is binary-only. Use `cargo test -p snip-it` or `cargo test --workspace`.
+
+**Key gotcha:** Many integration tests (`deterministic_e2e`, `restore_crash_failpoints`, `transaction_crash_recovery`, `cleanup_crash_failpoints`, `process_lifecycle`, etc.) require `--features test-support` to compile.
+
+**Key gotcha:** PTY tests (`pty_integration.rs`) use real terminal pairs — always pass `--test-threads=1`.
 
 ## Toolchain
 
-- **Rust 1.94**, edition 2024 (unusual — not 2021). See `rust-toolchain.toml`.
-- `rustfmt.toml`: max_width=100, 4-space indent, Unix newlines, `edition = "2024"`.
+- **Rust 1.94**, edition 2024 (not 2021). See `rust-toolchain.toml`.
+- `rustfmt.toml`: `max_width=100`, 4-space indent, Unix newlines, `edition = "2024"`.
 
 ## Project Structure
 
@@ -124,277 +57,84 @@ bash scripts/release-check.sh  # exhaustive pre-release verification
 snip-it/          Main crate — binary "snp" (src/main.rs)
 snip-proto/       Protobuf definitions, tonic-generated gRPC code
 snip-sync/        Sync server (gRPC + HTTP/axum)
-tests/            Integration tests (integration.rs, pty_integration.rs, sync_integration.rs, auto_sync_*.rs,
-                          deterministic_e2e.rs, failure_class_contracts.rs, debounce_matrix.rs,
-                          sync_contracts.rs, mutual_exclusion.rs, process_lifecycle.rs,
-                          local_contracts.rs, package_evidence.rs)
+tests/            Integration tests (~50 files, see below)
+scripts/          check.sh, release-check.sh, ci/ helpers
 themes/           50 Halloy TOML theme files
-scripts/          build_themes.py — LZMA-compresses themes/ into src/ui/_generated_bundled_themes.rs
 ```
 
 ### Key Source Modules (`src/`)
 
-```
-src/main.rs              CLI entry point, clap dispatch
-src/lib.rs               Library crate (exports for integration tests)
-src/commands/             16 command modules (new, list, run, clip, select, search, edit,
-                          sync, register, library, premade, import, doctor, cron, shell,
-                          keybindings, status) + shared helpers in mod.rs
-src/auto_sync/            Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification,
-                          status, schedule)
-src/auto_sync/test_events.rs Test-only event emission for worker/executor lifecycle tracking
-src/auto_sync/status.rs  Durable status persistence (auto-sync-status.toml), failure/success recording, integrity checks
-src/auto_sync/schedule.rs Centralized schedule decision function, worker storm prevention, ScheduleDecision enum
-src/auto_sync/policy.rs  Expanded FailureClass (11 variants), RetryDisposition, transient_backoff()
-src/ui/                   TUI (ratatui + crossterm), theme system, syntax highlighting, variable prompts
-src/utils/                Config paths, TOML helpers, variable parsing, shell keywords, temp files, atomic writes
-src/utils/atomic.rs         Atomic file-write helpers (write_private_atomic, atomic_replace with durability classes)
-src/library.rs            Snippet/library data structures and TOML persistence (save_library acquires gate+lock; save_library_internal skips gate+lock for internal transaction use)
-src/sync.rs               gRPC client for snip-sync server
-src/sync_commands.rs      Sync orchestration and merge logic
-src/encryption.rs         AES-256-GCM + Argon2id end-to-end encryption
-src/config.rs             Sync settings, path resolution, keychain API key
-src/error.rs              SnipError enum (with SyncFailure variant + SyncFailureKind) and SnipResult type
-src/logging.rs            Structured logging with file rotation
-src/clipboard.rs          Cross-platform clipboard access
-src/sort.rs               Sort modes, ranking, tie-break chain
-src/usage.rs              Local usage metadata (use count, last-used)
-src/output.rs             Snippet output field rendering/presentation
-src/diagnostics.rs        Shared diagnostic model for import/doctor
-src/status_snapshot.rs    Canonical read-only status projection for `snp status` and doctor
-src/proto.rs              Prost-generated protobuf types
-src/update.rs             Self-update support (crates.io, Homebrew, GitHub releases)
-src/transaction.rs          Local mutation transaction boundary (journal, lock, commit, rollback)
-src/migration.rs            Migration framework (schema versioning, trait-based migrations)
-src/commands/validate_cmd.rs Validation command (comprehensive read-only checks)
-src/commands/backup_cmd.rs  Backup snapshot command (manifest, checksums, secret-free)
-src/commands/restore_cmd.rs Restore command (dry-run, merge, replace, rollback)
-src/commands/repair_cmd.rs  Conservative repair command (idempotent, backed-up)
-src/selector.rs          Shared snippet selector model (SnippetSelector, ResolutionPolicy)
-src/outcome.rs           CLI outcome types and exit-code mapping (CliOutcome)
-src/commands/get_cmd.rs  Deterministic non-TUI snippet retrieval
-```
+- `main.rs` — CLI entry point, clap dispatch
+- `lib.rs` — Library crate (exports for integration tests)
+- `commands/` — 16 command modules + shared helpers in `mod.rs`
+- `auto_sync/` — Auto-sync subsystem (policy, pending, lock, executor, worker, spawn, notification, status, schedule)
+- `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
+- `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
+- `library.rs` — Snippet/library data structures and TOML persistence
+- `sync.rs` — gRPC client for snip-sync server
+- `sync_commands.rs` — Sync orchestration and merge logic
+- `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
+- `config.rs` — Sync settings, path resolution, keychain API key
+- `transaction.rs` — Local mutation transaction boundary (journal, lock, commit, rollback)
+- `migration.rs` — Migration framework (schema versioning)
+- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`)
+- `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
 
 ## Critical Gotchas
-
-### Binary-only crate
-`snp` is the binary name. The crate is `snip-it`. The workspace members are `snip-proto` and `snip-sync`.
 
 ### Generated code
 `src/ui/_generated_bundled_themes.rs` is generated at build time by `scripts/build_themes.py` (invoked from `build.rs`). Never edit it directly.
 
-### Sync tests need `test-helpers` feature
-`snip-sync` has a `test-helpers` feature for in-process server testing. `snp`'s dev-dependencies enable it automatically, but if you test sync crates individually, pass `--features test-helpers`.
-
-### PTY tests must be single-threaded
-`tests/pty_integration.rs` uses `portable-pty` and creates real PTY pairs. Always pass `--test-threads=1`.
-
 ### TOML backslash escape handling
-`src/utils/toml_helpers.rs` has `fix_invalid_toml_escapes()` (load) and `quote_strings_containing_backslashes()` (utility). The save path does NOT post-process — `toml::to_string_pretty` output is written directly. The earlier regex-based post-processing was removed because it corrupted tabs, trailing whitespace, and CRLF. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline.
+The save path does NOT post-process `toml::to_string_pretty` output. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline. See `src/utils/toml_helpers.rs`.
 
-### No command filtering (by design)
-Snippet commands execute as-is — no sanitization, no guardrails. This is intentional for power users.
+### Executor subprocess must never reacquire execution lock
+The worker holds `SyncExecutionLock` for the entire detached cycle. Adding any `execution_lock::try_acquire` call to the executor would deadlock. Pinned by `test_executor_source_does_not_reference_execution_lock`.
 
-### Executor subprocess never reacquires execution lock
-`src/auto_sync/executor.rs` invokes `crate::sync_commands::run_sync` directly. The worker (`src/auto_sync/worker.rs`) holds the `SyncExecutionLock` for the entire detached cycle. Adding any `execution_lock::try_acquire` or `wait_acquire` call to the executor would deadlock the worker waiting on its own child. The closure-phase structural test `test_executor_source_does_not_reference_execution_lock` pins this invariant.
-
-### `AGENTS.override.md` exists
+### AGENTS.override.md
 Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.
 
+### Kernel-backed process file locks
+All auto-sync locks and the `snip-sync` server singleton use `flock` (Unix) / `LockFileEx` (Windows). The kernel alone is authoritative — persistent lock files may contain stale metadata. `Drop` releases the lock without unlinking the file.
+
+### Mutation gate
+`gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. Single journal = auto-rollback; multiple/incomplete = refuse and direct to `snp repair`.
+
 ### Deterministic test assertions
-Phase 05A tests must use exact counts (not `>= 1`), prove server-side state effects,
-and verify pending clear ordering. See `tests/deterministic_e2e.rs` for the headline test pattern.
+Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. See `tests/deterministic_e2e.rs`.
 
 ### Test event emission
-Worker and executor processes emit lifecycle events when `SNP_TEST_EVENTS_DIR` is set.
-Events are JSON-lines in `<SNP_TEST_EVENTS_DIR>/test-events.jsonl`.
-Use `EventSink` (test-side) and `EventWriter` (child-side) from `tests/support/event_sink.rs`.
-Production code uses `src/auto_sync/test_events.rs` which checks the env var at runtime.
+Worker/executor processes emit lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines). See `tests/support/event_sink.rs` (test-side) and `src/auto_sync/test_events.rs` (production).
 
-### Atomic write durability classes
-`atomic_replace` supports four durability classes: DurableUserData (fsync file + fsync parent), SensitiveConfig (fsync parent only, 0o600 perms, symlink rejection), RecoverableMetadata (fsync parent only), EphemeralCoordination (no fsync). Use `AtomicWriteOptions::for_durability()` for correct defaults.
-
-### Transaction journals
-Multi-file operations should use `transaction.rs` for crash-safe coordination. The journal is persisted to disk in the `.transaction` subdirectory of the state directory (`derive_state_dir().join(".transaction")`). `commit_transaction` removes the journal; `rollback_transaction` restores from backups. Repair inspects this same canonical directory.
-
-### Transaction artifact path validation
-`src/transaction.rs::validate_contained_path` rejects every `Component::ParentDir`
-during lexical normalization and walks existing intermediate components with
-`symlink_metadata` to reject missing children below symlinked prefixes.
-Missing out-of-root and traversal paths return `Err` before existence checks.
-Unsafe-path errors leave journals and artifacts untouched. Apply the helper
-in every recovery state (not just on disk existence), and revalidate
-backup references immediately before reading them in rollback.
-
-### Transaction cleanup state machine (Phase 11H)
-New transactions enter `CleaningUp { outcome, next_step }` before any terminal state. The `CleanupOutcome` enum (`Commit` or `Rollback`) records whether the transaction committed or rolled back. The `CleanupStep` enum (`Validate`, `RemoveBackups`, `RemoveArtifactRoot`, `RemoveJournal`) tracks progress. Journal removal is the last step — absence of a journal is the true terminal indicator. Legacy `Committed` and `RolledBack` journals from older versions are handled as `CleaningUp` with the appropriate outcome during recovery.
-
-### Transaction lock (PID/nonce/start_token)
-The transaction lock (`transaction.lock`) is a structured TOML record containing `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. It uses `create_new(true)` for atomic acquisition. The lock record is verified on release — `TransactionLock::drop` only removes the file if the on-disk nonce AND start_token match. Dead-owner reclaim checks PID liveness via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. On Linux, the start_token is the process start time from `/proc/<pid>/stat` (field 22), providing PID-reuse protection. On macOS, `proc_pidinfo` with `PROC_PIDTBSDINFO` is used for process start time. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted. Transactions are short-lived, so contention is rare.
-
-### Phase 11J: Recovery serialization and artifact safety
-`recover_transaction_by_id` acquires the transaction lock BEFORE loading or classifying the journal, eliminating the TOCTOU window. Classification is now fallible (`SnipResult<RecoveryClass>`) — artifact ownership inspection rejects symlinked roots, symlinked backups, and out-of-root paths. `UnsafeFailed` journals block the mutation gate. Terminal journal removal uses `remove_terminal_journal` helper with fsync. Repair JSON is emitted after all work completes with stable `exit_status` field. The `transaction` module is `pub` under `test-support` feature for integration tests that exercise recovery APIs directly.
-
-**Phase 11C fix**: Lock ownership verification now uses `ProcessIdentity::observe(existing.pid)` to compare the observed owner's start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse.
-
-### Phase 11K: Literal safety and proof closure
-Scanner validates filename/internal journal ID match — mismatches enter `corrupt`, never `journals`. `short_transaction_id()` replaces all byte-slicing of untrusted IDs. Artifact path validation runs for every transaction state before classification, with lexical containment checked before existence. Rollback revalidates backup references immediately before reading. Mutation gate routes all terminal journal removal through `recover_transaction_by_id` (no direct deletion). `fsync_parent_dir` propagates Unix fsync errors. Test-only repair failure injection via `SNP_TEST_INJECT_ERROR=repair-transaction-{id}`. Observer tests use hard assertions for identity fields, exact concurrency of 1, and exact pending-clear event count.
-
-### Phase 11L: Lexical containment and exact recovery proof
-Corrected two production defects. `lexically_within` now explicitly rejects `Component::ParentDir` during normalization via `normalize_absolute_without_parent` — previously a missing path like `<artifact-root>/../../outside.bin` could pass lexical containment because the prefix check only compared component sequences. A new `reject_symlinked_existing_prefixes` helper walks existing intermediate components with `symlink_metadata` to reject missing children below symlinked prefixes (e.g. `<root>/link/missing.bin` where `link` is a symlink). The recovery proof in `tests/restore_crash_failpoints.rs` is now exact: `run_repair` passes `--apply --json` explicitly, JSON parsing is mandatory (`unwrap_or_else` with panic on error), and permissive patterns (`> 0`, `>= 1`, optional parsing, multiple exit codes) have been eliminated. The fixture uses non-zero timestamps so the dry-run has zero pre-existing items.
-
-### Post-11L: Kernel lock, PID lifecycle, editor mutation corrective pass
-A separate corrective pass after Phase 11L closure replaces the previous create-new / quarantine / PID-liveness reclaim model with a kernel-backed design. The shared `crate::process_file_lock` primitive grants mutual exclusion via `flock` on Unix and `LockFileEx` on Windows. The persistent lock file remains on disk and may contain stale metadata; the kernel alone is authoritative. `Drop` releases the kernel lock and closes the file without unlinking or renaming it. The `snip-sync` server singleton holds its lock for the full runtime. PID publication is atomic (temp-file + rename + parent fsync) and the parser accepts legacy numeric, empty, malformed, and structured contents. `snp edit` notifies based on exact byte changes, independent of editor exit status. Persistent lock files are expected; OS lock state, not file existence, indicates ownership. See `plans/snip-it-post-11l-kernel-lock-and-pid-lifecycle-corrective-pass.md` for the implementation plan.
-
-### Post-11L lightweight closure pass
-`snp sync repair` does not inspect, rewrite, remove, or chmod the persistent
-worker, execution, or pending kernel-lock files. `snip-sync stop` and
-`restart` accept both structured PID records and legacy numeric PID files on
-Unix; a legacy record is removed only after server-lock acquisition and only
-if its PID is unchanged. Malformed PID files are reported explicitly. Direct
-binary-level coverage for dead legacy cleanup and restart refusal/preservation
-lives in `snip-sync/tests/legacy_pid_cli.rs`; the narrow
-`remove_pid_if_unchanged` helper is CLI-only and hidden from generated API docs.
-
-### Restore crash-recovery proof is exact
-`tests/restore_crash_failpoints.rs` uses mandatory JSON parsing of
-`repair --apply --json` output. First recovery must exit exactly 0 with
-report `repaired`, `applied == 1`, `failed == 0`. Second recovery must
-exit exactly 0 with report `clean`, `applied == 0`, `failed == 0`. The
-fixture uses non-zero timestamps so the dry-run has zero pre-existing
-items. No permissive patterns (`> 0`, `>= 1`, `<= 1`, optional parsing,
-multiple exit codes) are allowed in required recovery proof.
-
-### Local-data lock (backup snapshot coordination)
-`LocalDataLock` (`src/local_data.rs`) is a short-lived exclusive file lock in the `.transaction` directory that serializes backup snapshot capture against all local TOML mutations. Backup acquires the lock during file enumeration and byte capture; `save_library` acquires it during writes. This ensures backup captures either the complete before-state or complete after-state, never a mixed state. The lock retries with exponential backoff (up to 30s) when contended.
-
-**Phase 11C fix**: `LocalDataLock` now uses the `OwnedFileLock` primitive with ownership record (`LocalDataLockInfo`) and stale recovery. The lock record contains `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, and `start_token` fields. Dead-owner reclaim uses `ProcessIdentity::observe(pid)`.
-
-### Post-11L: Kernel-backed process file locks
-All auto-sync locks (`auto_sync::lock`, `auto_sync::execution_lock`, `auto_sync::pending_lock`) and the `snip-sync` server singleton (`server_lock::ServerLock`) acquire mutual exclusion via `crate::process_file_lock`. The kernel alone arbitrates: `flock(fd, LOCK_EX | LOCK_NB)` on Unix, `LockFileEx` on Windows. Persistent lock files remain on disk and may carry stale metadata — file presence is not authoritative. `Drop` releases the kernel lock and closes the file but never unlinks or renames it. No `.quarantine.*` files are produced during normal ownership transitions.
-
-### Post-11L: `snp edit` byte-based change detection
-`snp edit` snapshots the exact pre-editor bytes and compares them after the editor exits. The mutation notification fires only when bytes actually changed, regardless of editor exit status. The four-row outcome matrix (success/unchanged, success/changed, failure/unchanged, failure/changed) is exercised by `tests/edit_mutation_notify.rs` using sh-based editor scripts. Saved changes are not silently left unsynchronized even when the editor exits nonzero.
-
-### Post-11L: snip-sync PID records
-The PID parser distinguishes `Structured`, `LegacyPid`, `Empty`, and `Malformed` contents. PID publication uses a private unique temp file in the same directory, fsync, and atomic rename. Graceful cleanup is identity-checked and never deletes a replacement server's record. Windows process liveness uses `OpenProcess`/`GetExitCodeProcess`/`GetProcessTimes` rather than the previous hard-coded `false`.
-
-### Mutation gate (interrupted-transaction recovery)
-`gate_mutation_on_interrupted_transactions()` (`src/transaction.rs`) must be called before any local mutating operation begins its write phase. Policy: if no interrupted journals exist, proceed; if exactly one complete journal exists, attempt automatic rollback; if multiple or incomplete journals exist, refuse mutation and direct the user to `snp repair`. This prevents new writes from proceeding over an unresolved restore.
-
-**Phase 11C fix**: The gate now handles `CommittedLocal` state, which represents a transaction that has committed locally but has not yet recorded the pending sync intent. Recovery from `CommittedLocal` completes the pending intent recording.
-
-### Durable transaction executor
-Restore uses the full transaction state machine: `Prepared` → `BackupsDurable` (after backup creation, before any live writes) → `Committing{next_commit_position}` (per-file, with progress persisted only after each verified atomic write) → `CommittedLocal{pending_generation, pending_recorded}` (pending sync intent recorded) → `Committed`. Rollback uses `RollingBack{next_rollback_position}` with rollback-order coordinates and atomic persistence (`atomic_replace` with `DurableUserData`) instead of `fs::copy`, and removes newly created files. Both commit and rollback are restartable from the last durable progress point.
-
-**Phase 11C fix**: Commit progress (`next_commit_position`) is now persisted only after a destination has been atomically installed and verified, not before. The `CommittedLocal` state eliminates the crash window between durable restore commit and pending-sync intent recording.
-
-### Migration schema versioning
-Library files can carry a `schema_version` key. Use `migration.rs` for version-gated operations. `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure.
-
-### Read-only commands suppress startup recovery
-`StartupRecoveryPolicy` in `src/auto_sync/notification.rs` classifies commands into five policies: `Allow` (mutation commands), `SuppressReadOnly` (list, search, get, status, validate, etc.), `SuppressExplicitSync` (sync, cron, register), `SuppressInternal` (worker/executor subprocesses), and `SuppressConfiguration` (doctor, keybindings, shell init). Only `Allow` triggers startup recovery — read-only commands never spawn workers or access the network.
-
-### Restartable transaction cleanup (CleaningUp state)
-`TransactionState` now includes `CleaningUp { next_cleanup_position: usize }`. `finalize_transaction_cleanup` is restartable: it persists `CleaningUp` state before each step and resumes from `next_cleanup_position` on recovery. The recovery scanner in `gate_mutation_on_interrupted_transactions` handles `CleaningUp` by resuming cleanup. Cleanup order: 0=validate containment, 1=remove staged files, 2=remove backup files, 3=remove artifact dir, 4=remove journal, 5=fsync parent.
-
-### Fail-closed artifact permissions
-`create_private_dir` uses `DirBuilderExt::mode(0o700)` at creation time and verifies the mode post-creation, returning `Err` on mismatch. `write_sync_verify` uses `OpenOptionsExt::mode(0o600)` at creation time and verifies the mode post-creation, returning `Err` on mismatch. Permission failures are fatal, not warnings.
-
-### Destination permission policy
-`DestinationClass` enum (`NewPrivate`, `ExistingPreserved`, `Restore`) in `src/commands/restore_cmd.rs` defines the permission policy for restore installation. New files default to `0o600` on Unix. Existing files preserve their original mode. After installation, `verify_permissions` checks the destination mode matches expectations.
-
-### Manifest semantic validation
-`validate_manifest_semantics` in `src/commands/restore_cmd.rs` parses the index file and enforces index/library consistency: no duplicate library names, no multiple primaries, no missing library references, no duplicate case-folded names, no path alias collisions, and (for replace mode) every library artifact must be referenced by the index. Called after source-file checks but before lock acquisition.
-
-### Typed repair actions
-`RepairAction` enum in `src/commands/repair_cmd.rs` provides typed repair categories. `RepairItem` uses `action: RepairAction` and `target_path: Option<PathBuf>` instead of string parsing. `RepairExitStatus` enum (`Clean`, `Repaired`, `PartialFailure`, `UnsafeOnly`, `DryRun`) provides typed exit status. Safe orphan deletion validates path containment and rejects symlinks.
-
-### Recording server telemetry
-`RecordedRequest` and `RecordingSummary` types in `tests/support/recording_server.rs` provide exact sanitized request telemetry. `RecordingServer` has `record_request()`, `summary()`, `assert_exact_request_count()`, `assert_operation_seen()`, `assert_operation_not_seen()`, `assert_total_request_count()`, and `assert_success_count()` methods.
-
-### LocalDataLock blocking proof
-`tests/local_data_lock_barriers.rs` uses `try_wait` to assert that backup remains blocked while the writer holds `LocalDataLock`. The `verify_backup_coherence()` helper verifies manifest hashes, index/library relationships, and no partial writes.
-
-### Production seam proofs
-`scripts/ci/test-production-seams.sh` and `scripts/ci/test-production-seams.ps1` traverse real guarded code paths: real `snp restore` with failpoints, real `snp auto-sync-execute --generation`, real `snp library create`, and real worker/executor logic. No `snp list` is used.
-
-### Phase 11H closure
-Phase 11H is the authoritative plan for CI simplification, local verification, and manual release. See `plans/snip-it-correctness-11h-ci-simplification-local-verification-and-manual-release.md` and `plans/snip-it-correctness-11-closure-status.md` for status.
-
-### Phase 11F closure
-All 12 workstreams (A–L) from `plans/snip-it-correctness-11f-finalization-security-and-evidence-closure.md` are complete. See `plans/snip-it-correctness-11-closure-status.md` for detailed evidence per workstream.
-
-### Feature labels are removed (binary is monolithic)
-The `[features]` table in `Cargo.toml` previously contained empty labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) that did not gate any dependencies. These were removed in Phase 10 as misleading. The binary is monolithic — all functionality is unconditionally compiled. Only `test-support` remains for test infrastructure.
-
-### Test credential compile-time gate
-`SNP_TEST_CREDENTIAL_FILE` environment variable behavior is gated behind `#[cfg(feature = "test-support")]` in `src/config.rs`. Production builds ignore this variable entirely — the keychain path is always used. Tests use it for deterministic credential availability across parent, worker, and executor subprocesses.
-
-### Output-file execution exit code
-When a snippet has an `output` field (output-file mode), timeout and spawn failures map to exit code `8` (execution failure), not generic exit code `1`. This is consistent with the normal execution path.
-
-### Self-update uses safe extraction
-Self-update (`src/update.rs`) validates tar archive entries before extraction: rejects absolute paths, parent-directory traversal, symlinks, and hard links. Uses Rust's `tar` crate instead of shelling out to `tar -xf`. Archives are downloaded over HTTPS only. UUID-based temp directories prevent collision.
+### No command filtering (by design)
+Snippet commands execute as-is — no sanitization. Intentional for power users.
 
 ## Key Architecture Notes
 
 ### Auto-Sync (two-process-per-cycle)
-- Detached worker (`snp auto-sync-worker`) spawns killable executor subprocess (`snp auto-sync-execute`)
-- Parent never holds the worker lock — it's the worker's responsibility
+- Detached worker (`snp auto-sync-worker`) spawns killable executor (`snp auto-sync-execute`)
+- Parent never holds the worker lock
 - All sync operations acquire `SyncExecutionLock` to prevent concurrent sync
 - Local mutations always commit before remote work; failed sync never rolls back local state
-- Debounce returns `DebounceResult` with latest observed state; preflight check before executor spawn
-- `Clock` trait for deterministic testing of time-dependent logic
-- Executor timeout (30s default) is independent of debounce; configurable via `sync_timeout` in `AutoSyncPolicy`
-- `max_delay` separate from `debounce` — bounded latency prevents starvation
-- `schedule_sync()` is the sole scheduling authority; replaces per-mutation spawn paths
-- Startup recovery always schedules workers for valid pending work regardless of age; `StartupRecoveryPolicy` suppresses recovery for read-only, sync, internal, and configuration commands
-- Failure classification is typed (`FailureClass` enum, 11 variants) with variant-based classification via `SyncFailureKind` (no string matching for sync errors)
-- Typed policy loading distinguishes `NotConfigured` (no sync account) from config failure
-- Status is persisted in `auto-sync-status.toml` with CRC32 integrity (not DefaultHasher), secret redaction, and config fingerprint
-- Backoff is durable (survives CLI restarts) with exponential schedule capped at 15 minutes
-- Config-change detection releases deferred failures when credentials/settings change
-- Foreground `snp sync` records durable status alongside detached workers
-- Executor maps errors → `FailureClass` → `ExecutorExitCode` (11 distinct codes: TransientTimeout, CredentialStore, Configuration, Partial); worker maps back on exit
-- Signal death on Unix is captured and logged for executor processes
-- Windows process liveness uses actual `GetExitCodeProcess` API checks (not placeholder)
-- Module: `src/auto_sync/` — policy, pending, lock, execution_lock, executor, spawn, worker, notification, status, schedule
+- `schedule_sync()` is the sole scheduling authority
+- Module: `src/auto_sync/`
 
 ### Error Handling
-- `SnipError` enum in `src/error.rs`, `SnipResult<T> = Result<T, SnipError>`
-- IO errors auto-convert via `From<io::Error>`
-- `CryptoError` auto-converts via `From<CryptoError>`
-- `SnipError` never carries credentials or API keys — error variants contain only operation names, paths, and upstream error messages
+- `SnipError` enum (`src/error.rs`), `SnipResult<T> = Result<T, SnipError>`
+- `SnipError` never carries credentials or API keys
 
 ### Async (Tokio)
-- Global `RUNTIME: LazyLock<Runtime>` created lazily on first access
-- Only async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`) trigger initialization
+- Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`)
 - Sync operations use `runtime.block_on()` for async gRPC calls
 
-### Selection Outcome Architecture
-- `SnippetSelection` (TUI layer) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
+### Selection & Exit Codes
+- `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
 - Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0
+- Output-file execution failures (timeout/spawn) map to exit code 8
 
 ### Output Field
 - `output` is local-only — not synced, not in `ProtoSnippet`
-- `snp edit --output`, `--output-stdin`, `--clear-output` for editing
-- `--filter` required when using output edit flags
-
-### Themes
-- Halloy-compatible TOML at `~/.config/snp/themes/<name>.toml`
-- Default theme (`Cyber Red`) hardcoded as fallback via `include_str!`
-- `SNP_THEME` env var for backward compat
-
-### CLI and Automation (Phase 08A)
-- `snp get` provides deterministic non-TUI snippet retrieval (never executes)
-- Exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI on `run`, `clip`, `edit`
-- `--var key=value` provides explicit noninteractive variable assignment (repeatable)
-- `CliOutcome` enum maps typed results to stable exit codes (0-9)
-- `SnippetSelector` / `ResolutionPolicy` provide shared selector model for all deterministic targeting
-- `VariableAssignments` type handles explicit variable values with duplicate detection
-- Machine-output modes: `--json`, `--csv`, `--raw`, `--field`, `--expanded`
-- Noninteractive modes never prompt; TTY detection prevents unexpected prompts
+- `snp edit --output` requires `--filter`
 
 ## Configuration Files
 
@@ -402,205 +142,24 @@ Self-update (`src/update.rs`) validates tar archive entries before extraction: r
 - `~/.config/snp/sync.toml` — sync settings
 - `~/.config/snp/libraries.toml` — library metadata
 - `~/.config/snp/libraries/*.toml` — individual library files
-- `~/.config/snp/premade/*.toml` — downloaded premade libraries
 - `~/.config/snp/themes/*.toml` — Halloy-compatible theme files
 - `~/.config/snp/themes.toml` — active theme selection
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
-- `~/.config/snp/auto-sync-status.toml` — Durable sync attempt status (not synced, private)
-- `~/.config/snp/transaction-journals/` — Transaction journals (Phase 07A)
-- `~/.config/snp/backups/` — Backup snapshots (Phase 07A)
+- `~/.config/snp/auto-sync-status.toml` — durable sync status (not synced, private)
+- `~/.config/snp/transaction-journals/` — transaction journals
+- `~/.config/snp/backups/` — backup snapshots
 
 ## Testing Notes
 
 - Integration tests use `TempDir` with `XDG_CONFIG_HOME` env override
 - Server tests use `sqlite::memory:` for isolation
-- Sync integration tests (`tests/sync_integration.rs`) are async `#[tokio::test]` with real in-process server
-- Golden command corpus: 24 edge cases verifying exact-text preservation across all acquisition sources
-
-## Deterministic Test Infrastructure (Phase 05A)
-
-The `tests/support/` module provides reusable test infrastructure for deterministic end-to-end tests:
-
-- `environment.rs` — `TestEnvironment` builder with isolated HOME, XDG, config, and credential handling
-- `recording_server.rs` — `RecordingServer` wrapper around snip-sync test helpers with event tracking
-- `event_sink.rs` — Cross-process JSON-lines event channel for worker/executor lifecycle evidence
-
-### TestEnvironment Usage
-
-```rust
-use support::environment::TestEnvironment;
-
-let env = TestEnvironment::builder()
-    .with_server_url(&server_url)
-    .with_debounce(2)
-    .build()?;
-
-// All commands are pre-configured with XDG_CONFIG_HOME and SNP_ALLOW_PLAINTEXT_API_KEY
-env.snp_output(&["new", "--command-stdin", "--description", "test"]);
-env.create_library("mylib");
-env.new_snippet("my-snippet");
-```
-
-### Key Design Decisions
-
+- `tests/support/` provides reusable infrastructure: `TestEnvironment`, `RecordingServer`, `EventSink`
 - Tests never use the developer's real config, keychain, or ports
 - `SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on all test commands
-- Each test gets a unique `device_id` and fixed `api_key`
-- `TempDir` provides automatic cleanup
-- Event sink uses JSON-lines format for process-safe concurrent writes
+- Golden command corpus: 24 edge cases verifying exact-text preservation
 
-## Phase 06A: Public API Tightening
+## Reference Docs
 
-Phase 06A tightened the public API surface and documented the logical layering of the crate.
-
-### Docs Directory
-
-The `docs/` directory contains reference documents produced during Phase 06A:
-
-| Document | Subject |
-|----------|---------|
-| `docs/PUBLIC_API.md` | Full public API surface inventory |
-| `docs/LOGICAL_LAYERS.md` | Logical layer separation (public vs internal) |
-| `docs/CANONICAL_OPERATIONS.md` | Canonical operation contracts |
-| `docs/API_TIGHTENING_FINDINGS.md` | Findings from the API tightening audit |
-| `docs/OBSOLETE_ITEMS.md` | Items removed as dead code |
-| `docs/FEATURE_BOUNDARIES.md` | Feature boundary documentation |
-
-### Dead Items Removed
-
-The following items were removed as dead public API:
-
-- `AutoSyncPolicy.max_retries` — field was never read; backoff is now durable and retry-count-based
-- `STALE_LOCK_THRESHOLD_SECS` — constant was unused; lock staleness is handled by timeout logic
-- `encryption::ct_eq` — constant-time equality helper was unreferenced; replaced by downstream crate functionality
-
-### `#[non_exhaustive]`
-
-Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
-
-## Phase 08A: CLI and Automation Polish
-
-Phase 08A adds deterministic noninteractive retrieval, shared exact selectors, stable output and exit contracts, explicit variable assignment, and safe composition.
-
-### New Commands
-- `snp get` — deterministic non-TUI retrieval (never executes, no clipboard, no mutation)
-
-### New Flags
-- `--id`, `--description-exact`, `--command-exact` on `run`, `clip`, `edit` (bypass TUI)
-- `--var key=value` on `get` (explicit variable assignment, repeatable)
-- `--resolution` on `get` (unique, first, all)
-
-### Exit Codes
-- 0: success
-- 1: general error
-- 2: usage/argument error
-- 3: not found
-- 4: user cancelled
-- 5: ambiguous match
-- 6: validation/persistence failure
-- 7: sync failure
-- 8: execution failure
-- 9: conflict/refused
-
-### Key Types
-- `SnippetSelector` — shared selector model for all deterministic targeting
-- `ResolutionPolicy` — Unique, First, All
-- `SelectionResult` — One, Many, NotFound, Ambiguous
-- `CliOutcome` — typed application outcome for exit-code mapping
-- `VariableAssignments` — explicit noninteractive variable values
-- `GetField` — output field selector for `snp get`
-
-### Verification
-```bash
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo fmt --all -- --check
-cargo test --workspace --all-features
-```
-
-## Phase 11: CI Simplification and Documentation
-
-Phase 11 simplifies the CI workflow to a focused set of jobs (fmt, clippy, test, package) and updates documentation to reflect Phase 07A–10 details.
-
-### CI Workflow
-- Replaced comprehensive CI with focused four-job workflow: `fmt`, `clippy`, `test` (matrix), `package`
-- `test` runs both debug and release on ubuntu/macos/windows
-- `package` verifies crate packaging and builds from unpacked source
-
-### Documentation Updates
-- **EXIT_CODES.md**: Added explicit "Execution Failure Exit Code" section documenting the two sub-cases (propagated child code vs fallback code 8)
-- **COMMAND_CONTRACTS.md**: Added "Startup Recovery Classification" section explaining that dry-run commands are classified by command category, not dry-run flag
-- **architecture/auto_sync.md**: Added "Operation-aware classification" note explaining `classify_command()` behavior for dry-run modes
-- **architecture/persistence.md**: Clarified that transaction lock does not use PID/nonce (unlike auto-sync locks)
-- **AGENTS.md**: Added transaction lock gotcha, `--features test-support` build note, and Phase 11 lifecycle test commands
-
-## Phase 09A: Security, Release, and Program Closure
-
-Phase 09A completes the correctness program through threat-model review, secret and process audit, filesystem and protocol hardening, supply-chain and package verification, cross-platform release gates, and committed closure record.
-
-### Security Documentation
-
-The `docs/` directory now includes security-focused reference documents:
-
-| Document | Subject |
-|----------|---------|
-| `docs/THREAT_MODEL.md` | Threat model with trust boundaries, threat actors, and per-threat mitigations |
-| `docs/SECURITY_AUDIT.md` | Comprehensive audit of secrets, process spawning, filesystem, sync, crypto, execution safety, backup/restore, and self-update |
-| `docs/SUPPLY_CHAIN_POLICY.md` | Dependency, license, and supply-chain policy |
-| `docs/FUZZING_AND_PROPERTY_TESTS.md` | Fuzz and property test inventory and required targets |
-
-### Security Posture Summary
-
-- **Non-execution guarantee**: Only `snp run` invokes a shell. All other commands treat snippet commands as opaque data.
-- **Credential isolation**: API keys stored in OS keychain (preferred) or gated plaintext fallback. Zeroized on drop, redacted in Debug output.
-- **Encryption**: AES-256-GCM with Argon2id (16 MiB, 3 iterations, 4 parallelism). Random salt and nonce per encryption.
-- **Process boundaries**: Worker detached via setsid(). No secrets in argv. Executor is regular child with timeout + SIGTERM/SIGKILL.
-- **Filesystem hardening**: O_EXCL lock creation, nonce-based ownership, atomic writes, 0o600/0o700 permissions.
-- **Supply chain**: cargo-deny for advisories/licenses, locked builds, deny unknown registries.
-
-### Known Limitations
-
-- CRC32 detects accidental corruption but does not authenticate against a malicious local actor
-- No mutual TLS / client certificate authentication
-
-## Architecture Documentation
-
-The `architecture/` directory contains deep-dive documents for each module. Use them as reference when working on specific subsystems:
-
-| Document | Subject |
-|----------|---------|
-| `architecture/overview.md` | Bird's-eye view, data flow, key patterns |
-| `architecture/cli.md` | CLI entry point, argument parsing, dispatch |
-| `architecture/commands/*.md` | Per-command deep dives |
-| `architecture/core.md` | Core types, error handling |
-| `architecture/library.md` | Data structures, persistence |
-| `architecture/config.md` | Sync settings, path resolution |
-| `architecture/encryption.md` | AES-256-GCM encryption |
-| `architecture/sync.md` | Sync protocol, merge logic |
-| `architecture/auto_sync.md` | Auto-sync policy, debounce, triggers |
-| `architecture/status.md` | Status snapshot, recovery commands, diagnostics |
-| `architecture/tui.md` | TUI keybindings, state machine |
-| `architecture/ui.md` | UI components, theme system |
-| `architecture/server.md` | snip-sync server architecture |
-| `architecture/proto.md` | Protobuf definitions |
-| `architecture/sort.md` | Sort modes, ranking |
-| `architecture/usage.md` | Usage metadata |
-| `architecture/output.md` | Output field rendering |
-| `architecture/logging.md` | Structured logging |
-| `architecture/clipboard.md` | Cross-platform clipboard |
-| `architecture/utils.md` | Config paths, TOML helpers |
-| `architecture/selector.md` | Snippet selector model, resolution policies |
-| `architecture/outcome.md` | CLI outcome types, exit-code mapping |
-
-## Skills
-
-The `.skills/` directory contains specialized reference documents for agents working on specific modules. Load relevant skills when working in those areas:
-
-| Skill | When to use |
-|-------|-------------|
-| `architecture-review.md` | Reviewing architecture docs against code |
-| `encryption-module.md` | Working with encryption, Argon2, key cache |
-| `keychain-integration.md` | API key storage, keyring crate patterns |
-| `remediation-patterns.md` | Bug fix patterns, code quality |
-| `server-module.md` | Working on snip-sync server |
-| `sync-module.md` | Working on sync protocol, merge logic |
-| `ui-module.md` | Working on TUI, themes, syntax highlighting |
+- `architecture/` — deep-dive docs per module
+- `docs/` — public API, threat model, security audit, supply-chain policy
+- `.skills/` — specialized agent reference docs (encryption, keychain, server, sync, UI, etc.)
