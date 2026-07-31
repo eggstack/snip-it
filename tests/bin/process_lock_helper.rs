@@ -64,7 +64,11 @@ fn wait_for_drop() {
 
 fn run_wait_acquire(label: &str) {
     wait_for_release();
-    match process_file_lock::wait_acquire(&lock_path(), "test-helper", Duration::from_secs(2)) {
+    // 200 ms is long enough for one contender to win the kernel lock
+    // and short enough that all other contenders see a Busy kernel
+    // lock and time out before the first acquirer is killed.
+    match process_file_lock::wait_acquire(&lock_path(), "test-helper", Duration::from_millis(200))
+    {
         Ok(_guard) => {
             record(label, "ACQUIRED");
             let mut stdout = std::io::stdout();

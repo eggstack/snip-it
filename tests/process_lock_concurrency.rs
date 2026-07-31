@@ -66,19 +66,33 @@ fn exactly_one_of_eight_contenders_acquires() {
     std::thread::sleep(Duration::from_millis(200));
     std::fs::write(barrier.join("release"), "").unwrap();
 
-    // Wait for each child to record its outcome.
+    // Collect every contender's outcome before killing anyone. The
+    // helper's wait_acquire timeout is intentionally short so the
+    // seven non-winners time out without holding any lock. Killing the
+    // single winner afterwards releases the kernel lock, but no other
+    // contender is still racing for it.
+    let mut outcomes: Vec<String> = Vec::with_capacity(contenders);
+    for i in 0..contenders {
+        outcomes.push(wait_for_outcome(
+            &barrier,
+            &format!("c{i}"),
+            Duration::from_secs(5),
+        ));
+    }
+    for child in &mut children {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
     let mut acquired = 0;
     let mut busy_or_timeout = 0;
     let mut other = Vec::new();
-    for (i, child) in children.iter_mut().enumerate() {
-        let outcome = wait_for_outcome(&barrier, &format!("c{i}"), Duration::from_secs(10));
+    for outcome in outcomes {
         match outcome.as_str() {
             "ACQUIRED" => acquired += 1,
             "BUSY" | "TIMEOUT" => busy_or_timeout += 1,
             other_outcome => other.push(other_outcome.to_string()),
         }
-        let _ = child.kill();
-        let _ = child.wait();
     }
 
     assert!(
