@@ -128,8 +128,6 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
     *LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
 
-    init_async_audit_log();
-
     tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
     tracing::info!("Log level: {:?}", config.level);
 
@@ -137,6 +135,16 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 }
 
 pub fn init_default_logging() {
+    init_default_file_logging();
+    init_async_audit_log();
+}
+
+/// Initialize file logging without starting the audit writer.
+///
+/// Read-only/configuration commands use this path when they need diagnostic
+/// logging but cannot emit audit records. Keeping the audit channel lazy avoids
+/// a background thread and audit filesystem work for those commands.
+pub fn init_default_file_logging() {
     // Ensure the config directory exists (and is permission-tightened on
     // Unix) before we try to create the logs subdirectory or the audit
     // log. `ensure_config_dir` is idempotent and cheap on subsequent

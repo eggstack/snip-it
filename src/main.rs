@@ -15,7 +15,8 @@ use snip_it::commands;
 use snip_it::config;
 use snip_it::error::SnipResult;
 use snip_it::logging::{
-    init_default_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
+    init_default_file_logging, init_default_logging, log_shutdown_info, log_startup_info,
+    setup_panic_handler,
 };
 
 mod update;
@@ -1262,13 +1263,69 @@ fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupServices {
+    Minimal,
+    Logging,
+    LoggingAndAudit,
+}
+
+fn startup_services(cmd: Option<&Commands>) -> StartupServices {
+    match cmd {
+        Some(
+            Commands::New { .. }
+            | Commands::Run { .. }
+            | Commands::Clip { .. }
+            | Commands::Edit { .. }
+            | Commands::Import { .. }
+            | Commands::Repair { .. }
+            | Commands::Restore { .. }
+            | Commands::Premade { .. }
+            | Commands::Library {
+                command:
+                    LibraryCommands::Create { .. }
+                    | LibraryCommands::Delete { .. }
+                    | LibraryCommands::SetPrimary { .. },
+            },
+        ) => StartupServices::LoggingAndAudit,
+        Some(Commands::Version)
+        | Some(Commands::Completions { .. })
+        | Some(Commands::Shell { .. })
+        | Some(Commands::Keybindings)
+        | Some(Commands::List { .. })
+        | Some(Commands::Search { .. })
+        | Some(Commands::Select { .. })
+        | Some(Commands::Status { .. })
+        | Some(Commands::Get { .. })
+        | Some(Commands::Validate { .. })
+        | Some(Commands::Backup { .. })
+        | Some(Commands::Library {
+            command: LibraryCommands::List | LibraryCommands::Show { .. },
+        }) => StartupServices::Minimal,
+        Some(Commands::Update { .. })
+        | Some(Commands::Doctor { .. })
+        | Some(Commands::Sync { .. })
+        | Some(Commands::Cron { .. })
+        | Some(Commands::Register { .. })
+        | Some(Commands::AutoSyncWorker { .. })
+        | None => StartupServices::Logging,
+    }
+}
+
 fn main() {
     setup_panic_handler();
     setup_signal_handler();
-    init_default_logging();
-    log_startup_info();
 
     let cli = Cli::parse();
+    let services = startup_services(cli.command.as_ref());
+    match services {
+        StartupServices::Minimal => {}
+        StartupServices::Logging => init_default_file_logging(),
+        StartupServices::LoggingAndAudit => init_default_logging(),
+    }
+    if services != StartupServices::Minimal {
+        log_startup_info();
+    }
 
     if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(
         cli.command.as_ref().map(classify_command),
@@ -1279,20 +1336,28 @@ fn main() {
     match dispatch_command(cli.command) {
         Ok(CommandOutcome::Success) => {}
         Ok(CommandOutcome::Cancelled) => {
-            log_shutdown_info();
+            if services != StartupServices::Minimal {
+                log_shutdown_info();
+            }
             std::process::exit(4);
         }
         Ok(CommandOutcome::ExecutionFailed { child_code }) => {
-            log_shutdown_info();
+            if services != StartupServices::Minimal {
+                log_shutdown_info();
+            }
             std::process::exit(child_code.unwrap_or(8));
         }
         Ok(_) => {}
         Err(e) => {
             eprintln!("error: {e}");
-            log_shutdown_info();
+            if services != StartupServices::Minimal {
+                log_shutdown_info();
+            }
             std::process::exit(1);
         }
     }
 
-    log_shutdown_info();
+    if services != StartupServices::Minimal {
+        log_shutdown_info();
+    }
 }

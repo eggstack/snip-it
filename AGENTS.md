@@ -142,6 +142,12 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 - Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`)
 - Sync operations use `runtime.block_on()` for async gRPC calls
 
+### Client footprint (Phase 12D)
+- Release profile uses `opt-level = "z"`, selected from a controlled native-platform measurement; keep it as one simple profile, not a CI optimization matrix.
+- `snp` parses the command before initializing file logging or the audit writer. Minimal read-only/configuration-output commands must not create `logs/`, `snp.log`, `audit.log`, or `.self_check`.
+- The server's request observer is compiled only with tests or the explicit `test-helpers` feature. Do not add production branches for test event capture.
+- The client retains Tokio's multi-thread feature because the production detached auto-sync worker creates its own multi-thread runtime; do not prune it without redesigning that supported path.
+
 ### Selection & Exit Codes
 - `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
 - Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0

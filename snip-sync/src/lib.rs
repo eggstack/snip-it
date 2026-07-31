@@ -24,6 +24,7 @@ pub mod rate_limiter;
 pub mod server_lock;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
+#[cfg(any(test, feature = "test-helpers"))]
 pub mod test_observer;
 
 pub use db::Database;

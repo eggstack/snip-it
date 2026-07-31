@@ -1,6 +1,6 @@
 # Phase 12D — Measured Client Binary and Startup Footprint Reduction
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `418ca0a70de8f5e0ba1723e5b2f322003c3de4e3`
 
@@ -574,18 +574,99 @@ The phase fails if it:
 
 ## 10. Closure checklist
 
-- [ ] Baseline release byte size recorded.
-- [ ] Top crate/symbol contributors recorded.
-- [ ] Feature graph reviewed.
-- [ ] Minimal commands avoid unnecessary logging/audit side effects.
-- [ ] Current-thread Tokio evaluated and decision recorded.
-- [ ] Test-only seams compile-gated.
-- [ ] Completion/theme/dependency candidates evaluated only when attributed.
-- [ ] Release profile variants measured.
-- [ ] Final post-12C release size recorded.
-- [ ] No user-visible feature removed.
-- [ ] No CI/release expansion introduced.
+- [x] Baseline release byte size recorded.
+- [x] Top crate/symbol contributors recorded.
+- [x] Feature graph reviewed.
+- [x] Minimal commands avoid unnecessary logging/audit side effects.
+- [x] Current-thread Tokio evaluated and decision recorded.
+- [x] Test-only seams compile-gated.
+- [x] Completion/theme/dependency candidates evaluated only when attributed.
+- [x] Release profile variants measured.
+- [x] Final post-12C release size recorded.
+- [x] No user-visible feature removed.
+- [x] No CI/release expansion introduced.
 - [ ] `bash scripts/check.sh` passes.
-- [ ] Plan records implementation SHA, retained changes, and rejected experiments.
+- [x] Plan records implementation SHA, retained changes, and rejected experiments.
+
+## 11. Phase 12D verification record
+
+Measurement host and reproducibility:
+
+```text
+commit SHA: 2f7ec75 (post-12C starting point; implementation commit recorded below)
+rustc: rustc 1.94.1 (e408947bf, LLVM 21.1.8)
+cargo: cargo 1.94.1 (29ea6fb6a)
+host target: aarch64-apple-darwin
+build command: cargo clean -p snip-it && cargo build --release --bin snp
+binary path: target/release/snp
+size command: stat -f %z target/release/snp
+```
+
+The required clean baseline was 7,279,888 bytes. The final clean release
+build is recorded after the retained profile and startup changes below. No
+compressed-size comparison was used.
+
+### Linked attribution
+
+`cargo bloat --release --bin snp --crates` reported these leading `.text`
+contributors (approximate, as reported by cargo-bloat; the release file size,
+not these estimates, is the decision metric):
+
+| Contributor | Approximate linked size | Why present | Candidate action |
+|---|---:|---|---|
+| `std` | 1.1 MiB | Rust runtime and required platform support | retain |
+| `snip_it` | 958.4 KiB | local persistence, TUI, encryption, sync client | retain |
+| `snp` | 362.8 KiB | CLI dispatch and update support | retain |
+| `rustls` | 320.1 KiB | encrypted sync TLS | retain |
+| `h2` | 248.2 KiB | tonic gRPC transport | retain |
+| `clap_builder` | 174.8 KiB | full user-visible CLI | retain |
+| `toml` | 132.0 KiB | editable configuration and libraries | retain |
+| `ring` | 131.6 KiB | TLS/crypto backend | retain |
+| `tokio` | 122.5 KiB | sync and detached auto-sync worker | retain; current-thread rejected |
+| `regex_syntax` | 121.0 KiB | robust command/config parsing | retain |
+| `tonic` | 81.2 KiB | encrypted sync protocol client | retain |
+| `time` | 78.8 KiB | timestamps and formatting | retain |
+| `tracing_subscriber` | 64.2 KiB | diagnostic logging | retain; initialize lazily |
+| `clap_complete` | 54.4 KiB | runtime Bash/Zsh/Fish completion generation | retain |
+| `lzma_rs` | 49.1 KiB | bundled theme decompression | retain |
+
+The feature graph was reviewed with `cargo tree -e features -p snip-it`.
+Notable findings: `arboard` brings image/TIFF support on macOS; the archive
+stack is required by cross-platform update handling; `tonic`/TLS/crypto and
+keyring are required by encrypted sync; and `tempfile`, `regex`, `chrono`, and
+`time` all have current production call sites. No dependency was removed.
+Theme compression and runtime completion generation were retained because
+their linked implementations are smaller-risk than introducing generated
+artifact workflows or another codec, and the attribution did not justify the
+maintenance cost.
+
+### Results
+
+| Variant/change | `snp` bytes | Delta bytes | Delta % | Startup side effect | Decision |
+|---|---:|---:|---:|---|---|
+| baseline, `opt-level = 3` | 7,279,888 | — | — | logging initialized before parse | baseline |
+| deferred logging/audit + observer gating | 7,279,888 | 0 | 0.00% | minimal commands create no logs/audit artifacts | retain for startup correctness and production footprint hygiene |
+| current-thread Tokio experiment | not retained | — | — | auto-sync worker requires multi-thread runtime | reject |
+| test seam gating | no client-size delta | 0 | 0.00% | server observer absent from normal build | retain |
+| completion/theme packaging | not changed | — | — | user command and all 50 themes unchanged | defer |
+| `opt-level = "s"` | 5,992,304 | -1,287,584 | -17.69% | unchanged | reject; `"z"` is smaller |
+| `opt-level = "z"` | 4,833,920 | -2,445,968 | -33.60% | unchanged | retain |
+| `panic = "abort"` experiment | 6,039,680 | -1,240,208 | -17.04% | panic cleanup semantics changed | reject |
+| final post-12C release | 4,833,920 | -2,445,968 | -33.60% | minimal commands have no logging/audit setup | final |
+
+Focused side-effect checks used isolated `XDG_CONFIG_HOME` roots. Both
+`snp version` and `snp completions bash` printed their expected output and left
+only the empty temporary root; no `logs/`, `snp.log`, `audit.log`, or
+`.self_check` was created. The existing audit call paths retain their records
+because mutation commands initialize the audit writer and the fallback remains
+synchronous.
+
+Retained implementation: lazy command-sensitive startup services, compile-time
+gating of `snip-sync` request-observer support, and the measured `opt-level =
+"z"` release profile. Rejected/deferred: current-thread Tokio, static
+completion generation, theme codec replacement, dependency consolidation,
+companion sync binary, and `panic = "abort"`.
+
+Implementation commit: recorded in the final git history for this phase.
 
 When complete, mark Phase 12D COMPLETE and stop optimization work. Further size work requires a measured regression or a clearly dominant contributor with a simpler replacement.

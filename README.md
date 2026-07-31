@@ -15,6 +15,11 @@ Built in Rust and heavily optimized for fast start times and quick navigation
 through large snippet libraries, snip-it was created in large part to make
 that workflow feel immediate.
 
+Lightweight commands such as `snp version` and `snp completions bash` use a
+minimal startup path and do not create logging or audit files. Logging is
+initialized lazily for commands that need diagnostics, and the audit writer is
+started only for mutation and execution commands.
+
 It was inspired by [pet](https://github.com/knqyf263/pet) and keeps the same
 simple, editable TOML approach to command snippets. The optional
 [`snip-sync`](snip-sync/README.md) server adds encrypted synchronization for

@@ -10,8 +10,17 @@ The binary `snp` is built with `clap` for argument parsing. On startup:
 
 1. Panic handler is installed (restores terminal, logs panic info)
 2. Signal handlers registered (SIGINT, SIGTERM on Unix; crossterm on Windows)
-3. Default tracing logging initialized
-4. CLI args parsed, command dispatched via `dispatch_command()`
+3. CLI args parsed and startup services classified
+4. Logging and audit infrastructure initialized only when the command needs it
+5. Command dispatched via `dispatch_command()`
+
+`version`, `completions`, `shell`, `keybindings`, and read-only commands use a
+minimal startup path: they do not create the config/log directory, `.self_check`,
+`snp.log`, or `audit.log`, and they do not start the audit writer thread.
+Mutation commands initialize file logging and the audit writer before dispatch;
+diagnostic/configuration commands initialize file logging without the audit
+writer. The panic hook remains installed before parsing so TUI terminal cleanup
+is still protected.
 
 ### Global State
 

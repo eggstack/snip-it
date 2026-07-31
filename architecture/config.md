@@ -27,6 +27,9 @@
     └── snippets.20260529_120000.toml.bak
 ```
 
+The paths under `logs/` and `audit.log` are created lazily. Commands such as
+`snp version` and `snp completions bash` do not create them.
+
 ### Resolution Logic
 
 ```rust
