@@ -1,12 +1,14 @@
 # Post-Phase-11L — Lightweight Lock Repair and PID Compatibility Closure
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Baseline: `535e9057b63f8602d0d1c9dbb48981d0a24be960`
 
 This plan supersedes the **remaining work and closure requirements** in `plans/snip-it-post-11l-kernel-lock-and-pid-lifecycle-corrective-pass.md`. It does not revert the useful kernel-lock, server-lock, PID-record, or editor-change work that already landed.
 
 Phase 11L remains complete. This is a small follow-up pass for two concrete post-11L defects and truthful closure bookkeeping.
+
+Final implementation SHA: pending the documentation/status commit below.
 
 ---
 
@@ -475,7 +477,27 @@ The pass is not acceptable if it introduces any of the following:
 
 ---
 
-## 7. Final closure criteria
+## 7. Verification record
+
+The implementation was recorded in these commits:
+
+- `093e8db` — stop sync repair from deleting persistent lock files;
+- `0a27cd9` — support legacy numeric PID files in stop and restart;
+- final documentation/status commit — exact SHA recorded above after commit.
+
+Verification completed locally:
+
+- `cargo fmt --all -- --check`;
+- `cargo test --workspace --lib --all-features -- --test-threads=1`;
+- `cargo test --test process_lock_concurrency --features test-support -- --test-threads=1`;
+- `cargo test -p snip-sync --lib -- --test-threads=1`;
+- focused `recovery_integration` sync-repair tests;
+- `bash scripts/check.sh`.
+
+The existing CI workflow and manual release process remain unchanged. The
+GitHub link-check could not be run locally because `lychee` is not installed.
+
+## 8. Final closure criteria
 
 All statements below must be true:
 

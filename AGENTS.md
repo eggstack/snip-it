@@ -246,6 +246,13 @@ Corrected two production defects. `lexically_within` now explicitly rejects `Com
 ### Post-11L: Kernel lock, PID lifecycle, editor mutation corrective pass
 A separate corrective pass after Phase 11L closure replaces the previous create-new / quarantine / PID-liveness reclaim model with a kernel-backed design. The shared `crate::process_file_lock` primitive grants mutual exclusion via `flock` on Unix and `LockFileEx` on Windows. The persistent lock file remains on disk and may contain stale metadata; the kernel alone is authoritative. `Drop` releases the kernel lock and closes the file without unlinking or renaming it. The `snip-sync` server singleton holds its lock for the full runtime. PID publication is atomic (temp-file + rename + parent fsync) and the parser accepts legacy numeric, empty, malformed, and structured contents. `snp edit` notifies based on exact byte changes, independent of editor exit status. Persistent lock files are expected; OS lock state, not file existence, indicates ownership. See `plans/snip-it-post-11l-kernel-lock-and-pid-lifecycle-corrective-pass.md` for the implementation plan.
 
+### Post-11L lightweight closure pass
+`snp sync repair` does not inspect, rewrite, remove, or chmod the persistent
+worker, execution, or pending kernel-lock files. `snip-sync stop` and
+`restart` accept both structured PID records and legacy numeric PID files on
+Unix; a legacy record is removed only after server-lock acquisition and only
+if its PID is unchanged. Malformed PID files are reported explicitly.
+
 ### Restore crash-recovery proof is exact
 `tests/restore_crash_failpoints.rs` uses mandatory JSON parsing of
 `repair --apply --json` output. First recovery must exit exactly 0 with

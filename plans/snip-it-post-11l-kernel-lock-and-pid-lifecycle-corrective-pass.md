@@ -1,6 +1,10 @@
 # Post-Phase-11L — Kernel Lock, PID Lifecycle, and Editor Mutation Corrective Pass
 
-Status: COMPLETE
+Status: SUPERSEDED by `plans/snip-it-post-11l-lightweight-closure-pass.md`
+
+The remaining lock-repair and legacy-PID requirements are tracked and closed
+by the lightweight post-11L pass. The implementation history below is
+preserved unchanged.
 
 Corrective baseline: `48a20a7f701bf49924aa77c39ff4a5af6b40f7ba`
 

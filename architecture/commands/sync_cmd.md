@@ -142,19 +142,20 @@ snp sync repair [--dry-run] [--apply]
 
 **Behavior (without `--apply`):** Lists all detected issues as dry-run actions:
 - Corrupt status file → quarantine and recreate
-- Stale execution lock (dead process) → remove
-- Stale worker lock (dead process) → remove
-- Stale pending transaction lock → remove
 - Orphaned temp files (`snp-sync-tmp.*`, `.quarantine.*`) → remove
 - Incorrect file permissions (not `0o600`) → fix
 
+Persistent kernel-lock files (`auto-sync-execution.lock`,
+`auto-sync-worker.lock`, and `auto-sync-pending.lock`) are intentionally not
+repair targets. Their metadata may be stale or malformed; the kernel lock is
+authoritative and the next successful acquirer refreshes metadata.
+
 **Behavior with `--apply`:** Executes all detected repair actions:
 - Corrupt files are moved to `.quarantine.{timestamp}/` before removal.
-- Stale locks are quarantined and removed.
 - Temp files are deleted.
 - Permissions are set to `0o600` on Unix.
 
-**When to use:** When `snp status` shows `Sync: corrupt or inaccessible state` or when `snp doctor` reports lock/status issues. Safe to run during active sync — repair actions only affect stale or corrupt artifacts.
+**When to use:** When `snp status` shows `Sync: corrupt or inaccessible state` or when `snp doctor` reports lock/status issues. Safe to run during active sync — repair actions only affect status and temporary artifacts; persistent kernel-lock files are left byte-for-byte unchanged.
 
 ## Legacy Flags (on `snp sync`)
 

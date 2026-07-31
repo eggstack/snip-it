@@ -679,7 +679,8 @@ Diagnostics emitted:
 9. Local state survives every remote/scheduling failure.
 10. No auto-sync fields enter snippet TOML, ProtoSnippet, or import/export schema.
 11. Worker is fully detached — its lifetime is not coupled to the parent's TTY.
-12. Cross-process safety: stale locks reclaimed, dead processes detected via `kill -0` (Unix) or `GetExitCodeProcess` (Windows), no permanent deadlock.
+12. Cross-process safety: kernel-backed locks release when the owning handle
+    closes, while metadata is diagnostic and never used for lock reclamation.
 13. Pending state generation is monotonic and conditional — stale workers cannot clobber fresh state.
 14. Pending marker integrity-checked via CRC32 over all behavior-driving fields; tampered files fail closed.
 15. **Release 5E:** Pending marker mutations serialized via `PendingTxnGuard`; unique temp files per transaction.
@@ -744,7 +745,10 @@ snp sync discard-pending [--force] [--generation <N>]
 
 ### `snp sync repair`
 
-Diagnose and repair corrupt auto-sync state. Without `--apply`, lists detected issues as dry-run actions. With `--apply`, executes repairs: quarantines corrupt files, removes stale locks, deletes orphaned temp files, fixes permissions.
+Diagnose and repair corrupt auto-sync state. Without `--apply`, lists detected
+issues as dry-run actions. With `--apply`, executes repairs: quarantines
+corrupt status files, deletes orphaned temporary files, and fixes permissions.
+Persistent kernel-lock files are never inspected or removed by this command.
 
 ```bash
 snp sync repair [--dry-run] [--apply]

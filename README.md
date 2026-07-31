@@ -364,6 +364,9 @@ Worker, execution, and pending locks (`auto-sync-worker.lock`,
 `auto-sync-execution.lock`, `auto-sync-pending.lock`) are backed by the
 kernel's advisory file-lock facility — the kernel alone arbitrates; lock
 files persist on disk and may contain stale metadata.
+`snp sync repair` intentionally leaves these persistent lock files untouched;
+their metadata is diagnostic, and the next lock acquirer refreshes it after
+obtaining the kernel lock.
 
 ## CLI overview
 
