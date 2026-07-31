@@ -94,14 +94,13 @@ See [library.md](library.md) for detailed data model and persistence behavior.
 - `collect_diagnostics()` — Severity-sorted diagnostic codes for machine and human consumers
 - See [status.md](status.md) for the full deep-dive
 
-**auto_sync/** — Optional post-mutation background synchronization (two-process-per-cycle model)
+**auto_sync/** — Optional post-mutation background synchronization (single detached-helper model)
 
 - `AutoSyncPolicy::resolve()` — effective policy from `SyncSettings` (disabled by default)
 - `notify_mutation()` — central API for mutation commands (trigger after local commit)
 - `record_pending_mutation()` — durable pending marker with monotonic generation and CRC32 integrity
 - `schedule_existing_pending()` — re-execs `snp auto-sync-worker` detached (parent never holds the execution lock)
-- `auto-sync-worker` (hidden subcommand) — debounce loop, spawns executor subprocess, supervises with timeout
-- `auto-sync-execute` (hidden subcommand) — invokes `crate::sync_commands::run_sync` (the canonical sync operation); does NOT acquire `SyncExecutionLock` — the worker owns it for the cycle. Exits with standardized codes.
+- `auto-sync-worker` (hidden subcommand) — acquires `SyncExecutionLock`, debounces pending work, invokes `crate::sync_commands::run_sync` directly, conditionally clears the observed generation, and exits.
 - `SyncExecutionLock` — shared lock preventing concurrent sync across worker, manual, explicit, and cron paths
 - `SubcommandTag` / `should_attempt_auto_sync_recovery()` — startup recovery classification
 - See [auto_sync.md](auto_sync.md) for the full deep-dive

@@ -1,6 +1,6 @@
 mod support;
 
-use snip_it::auto_sync::executor::effective_sync_direction;
+use snip_it::auto_sync::policy::effective_sync_direction;
 use snip_it::config::{SyncDirection, SyncSettings};
 
 #[test]

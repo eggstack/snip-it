@@ -104,13 +104,13 @@ Each boundary below represents a transition where data crosses from one trust do
 
 **Mitigations:** Minimal argv, `setsid()` for process isolation, no secrets in environment or args, nonce-based lock ownership.
 
-### Boundary 5: Worker to Executor
+### Boundary 5: Detached helper to sync client
 
-**Description:** The detached worker spawns a child executor (`snp auto-sync-execute`).
+**Description:** The detached worker invokes the canonical sync operation directly.
 
-**Properties:** The executor runs within the worker's process group. The worker holds the `SyncExecutionLock` for the entire cycle. The executor never acquires the execution lock itself.
+**Properties:** The worker holds the `SyncExecutionLock` for the entire cycle. Network/request waits remain bounded by the sync client.
 
-**Mitigations:** Structural invariant: executor source never references `execution_lock`. Lock held by worker for full detached cycle. Executor timeout (30s default) prevents runaway.
+**Mitigations:** Structural invariant: the helper owns the lock and calls the canonical sync path once per bounded cycle. Retry and request timeouts remain in the client; no child process is supervised.
 
 ### Boundary 6: Client to Sync Server
 

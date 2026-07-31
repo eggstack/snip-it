@@ -5,7 +5,6 @@ use std::time::Duration;
 
 pub const MAX_DEBOUNCE_SECS: u64 = 300;
 pub const DEFAULT_WORKER_LIFETIME_SECS: u64 = 300;
-pub const DEFAULT_TERMINATION_GRACE_SECS: u64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct AutoSyncPolicy {
@@ -17,10 +16,23 @@ pub struct AutoSyncPolicy {
     pub failure_mode: AutoSyncFailureMode,
     pub sync_timeout: Duration,
     pub max_delay: Duration,
-    /// Time after SIGTERM before escalating to SIGKILL.
-    pub termination_grace: Duration,
     /// Maximum time the worker stays alive before exiting.
     pub worker_lifetime: Duration,
+}
+
+/// Resolve configured sync direction with optional foreground CLI overrides.
+pub fn effective_sync_direction(
+    settings: &SyncSettings,
+    cli_push_only: bool,
+    cli_pull_only: bool,
+) -> crate::config::SyncDirection {
+    if cli_push_only {
+        crate::config::SyncDirection::Push
+    } else if cli_pull_only {
+        crate::config::SyncDirection::Pull
+    } else {
+        settings.sync_direction.clone()
+    }
 }
 
 impl AutoSyncPolicy {
@@ -32,7 +44,6 @@ impl AutoSyncPolicy {
             failure_mode: settings.auto_sync_failure.clone(),
             sync_timeout: settings.auto_sync_timeout(),
             max_delay: settings.auto_sync_max_delay(),
-            termination_grace: Duration::from_secs(DEFAULT_TERMINATION_GRACE_SECS),
             worker_lifetime: Duration::from_secs(DEFAULT_WORKER_LIFETIME_SECS),
         }
     }
@@ -51,7 +62,6 @@ impl Default for AutoSyncPolicy {
             failure_mode: AutoSyncFailureMode::Warn,
             sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
             max_delay: Duration::from_secs(300),
-            termination_grace: Duration::from_secs(DEFAULT_TERMINATION_GRACE_SECS),
             worker_lifetime: Duration::from_secs(DEFAULT_WORKER_LIFETIME_SECS),
         }
     }

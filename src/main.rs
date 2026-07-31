@@ -465,16 +465,6 @@ enum Commands {
         #[arg(long)]
         state_dir: std::path::PathBuf,
     },
-    /// Internal: one-shot sync executor (hidden, invoked by worker)
-    #[command(name = "auto-sync-execute", hide = true)]
-    AutoSyncExecute {
-        /// State directory
-        #[arg(long)]
-        state_dir: std::path::PathBuf,
-        /// Pending generation to clear after successful remote acknowledgement
-        #[arg(long)]
-        generation: u64,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1203,13 +1193,6 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 _ => std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR),
             }
         }
-        Some(Commands::AutoSyncExecute {
-            state_dir,
-            generation,
-        }) => {
-            let exit_code = snip_it::auto_sync::executor::run_executor(&state_dir, generation);
-            std::process::exit(exit_code);
-        }
     }
     Ok(CommandOutcome::Success)
 }
@@ -1241,10 +1224,8 @@ fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
             StartupRecoveryPolicy::SuppressExplicitSync
         }
 
-        // Internal worker/executor subprocesses
-        Commands::AutoSyncWorker { .. } | Commands::AutoSyncExecute { .. } => {
-            StartupRecoveryPolicy::SuppressInternal
-        }
+        // Internal worker subprocess
+        Commands::AutoSyncWorker { .. } => StartupRecoveryPolicy::SuppressInternal,
 
         // Configuration and setup commands
         Commands::Update { .. }

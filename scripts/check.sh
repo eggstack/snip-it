@@ -28,7 +28,7 @@ cargo test --test manifest_contracts --features test-support -- --test-threads=1
 echo "=== Destination permissions ==="
 cargo test --test destination_permissions --features test-support -- --test-threads=1
 
-echo "=== Executor noop success ==="
-cargo test --test executor_noop_success --features test-support -- --test-threads=1
+echo "=== Single-helper auto-sync contracts ==="
+cargo test --test auto_sync_closure --features test-support -- --test-threads=1
 
 echo "=== All checks passed ==="

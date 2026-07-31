@@ -173,7 +173,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Conflict resolution | Last-write-wins on Gist | Last-write-wins based on `updated_at` timestamp. Tombstone propagation for deletions. | Intentional difference | — | Different trust and conflict models. |
 | Modes | Push/pull via Git | `--push-only`, `--pull-only`, `--dry-run`, `--servers`. Bidirectional by default. | New | — | snp-only. |
 | Encryption | Plaintext on GitHub/GitLab | AES-256-GCM + Argon2id key derivation. API keys hashed with Argon2id. | New | — | snp-only. |
-| Auto-sync | `pet` config: `auto_sync = true` | Opt-in via `snp sync config --auto-sync on`. Two-process-per-cycle model: detached debounce worker (`snp auto-sync-worker`) spawns killable executor subprocess (`snp auto-sync-execute`) after local commit. Local-first semantics. | Implemented | R5 | Disabled by default. PID+nonce worker lock, shared `SyncExecutionLock`, durable pending marker (schema v2 with CRC32 integrity). |
+| Auto-sync | `pet` config: `auto_sync = true` | Opt-in via `snp sync config --auto-sync on`. One detached helper (`snp auto-sync-worker`) runs canonical sync after local commit. Local-first semantics. | Implemented | Phase 12C | Disabled by default. PID+nonce worker lock, shared `SyncExecutionLock`, durable pending marker (schema v2 with CRC32 integrity). |
 | Cron scheduling | Not built-in (user configures externally) | `snp cron --interval <minutes>` sets up automatic sync. | New | — | snp-only. |
 
 ### 3.8 import / export
@@ -274,7 +274,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Sync backend | GitHub Gist / GitHub Enterprise Gist / GitLab Snippets | Self-hosted gRPC server (`snip-sync`). Encrypted with AES-256-GCM + Argon2id. | Intentional difference | — | Different trust model. snp does not use hosted plaintext sync. |
 | Multi-device | Via Git push/pull | Via gRPC. Device ID tracking. Last-write-wins conflict resolution. | Intentional difference | — | Equivalent goal, different mechanism. |
 | Encryption | Plaintext (GitHub/GitLab handle transport encryption) | End-to-end encryption. API keys hashed with Argon2id. | New | — | snp-only security feature. |
-| Auto-sync | `auto_sync = true` in pet config | Opt-in via `snp sync config --auto-sync on`. Two-process-per-cycle model: detached worker spawns killable executor subprocess for actual sync. Failure modes: ignore, warn, error. | Implemented | R5 | Disabled by default. Local-first semantics, durable pending (schema v2, CRC32), shared `SyncExecutionLock`, platform-detached. |
+| Auto-sync | `auto_sync = true` in pet config | Opt-in via `snp sync config --auto-sync on`. One detached helper runs canonical sync directly. Failure modes: ignore, warn, error. | Implemented | Phase 12C | Disabled by default. Local-first semantics, durable pending (schema v2, CRC32), shared `SyncExecutionLock`, platform-detached. |
 | Server management | N/A | `snp register` creates account. `snp sync --servers` lists connected servers. | New | — | snp-only. |
 | Premade libraries | Not supported | `snp premade list/get/sync/search/update` — browse and download community snippet collections from server. | New | — | snp-only feature. |
 
@@ -316,7 +316,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | R4A | Optional sorting | `--sort relevance/recent/last-used/most-used/description/command` |
 | R4B | Output & notes presentation | Expose `output` field in preview, editing, export |
 | R4C | External libraries (deferred) | Deferred — zero demand, sufficient import workflow, high implementation cost | Deferred |
-| R5 | Auto-sync (implemented) | `snp sync config --auto-sync on` with debounce (0–300s), failure handling (ignore/warn/error), PID+nonce worker lock, shared `SyncExecutionLock`, durable pending markers (schema v2 with CRC32), two-process-per-cycle (worker + killable executor) |
+| Phase 12C | Auto-sync simplification | `snp sync config --auto-sync on` with debounce (0–300s), failure handling (ignore/warn/error), PID+nonce worker lock, shared `SyncExecutionLock`, durable pending markers (schema v2 with CRC32), one detached helper running canonical sync directly |
 
 ---
 

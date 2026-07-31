@@ -5,7 +5,7 @@
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
 - Startup recovery and scheduling use the kernel-backed execution lock as the sole ownership authority. Persistent PID/nonce metadata is diagnostic only.
 - Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt/inconsistent state: preserve the marker, log the failure, and do not spawn sync work.
-- Executor timeout and wait-error paths use bounded terminate-and-reap cleanup while the worker still owns the execution lock.
+- The detached helper runs canonical sync directly; network/request retry bounds remain in the sync client and no child executor is supervised.
 
 ## Build & Test Commands
 
@@ -74,7 +74,7 @@ themes/           50 Halloy TOML theme files
 - `main.rs` — CLI entry point, clap dispatch
 - `lib.rs` — Library crate (exports for integration tests)
 - `commands/` — 23 command modules + shared helpers in `mod.rs`
-- `auto_sync/` — Auto-sync subsystem (execution_lock, executor, lock, mod, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker)
+- `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
 - `library.rs` — Snippet/library data structures and TOML persistence
@@ -98,8 +98,8 @@ themes/           50 Halloy TOML theme files
 ### TOML backslash escape handling
 The save path does NOT post-process `toml::to_string_pretty` output. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline. See `src/utils/toml_helpers.rs`.
 
-### Executor subprocess must never reacquire execution lock
-The worker holds `SyncExecutionLock` for the entire detached cycle. Adding any `execution_lock::try_acquire` call to the executor would deadlock. Pinned by `test_executor_source_does_not_reference_execution_lock`.
+### Single-helper execution lock
+The detached `auto-sync-worker` holds `SyncExecutionLock` for the entire bounded cycle and runs `sync_commands::run_sync` directly. Manual sync and cron acquire the same lock.
 
 ### AGENTS.override.md
 Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.
@@ -119,15 +119,15 @@ existing general-error exit code while `Success` and `NothingToDo` remain zero.
 Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. See `tests/deterministic_e2e.rs`.
 
 ### Test event emission
-Worker/executor processes emit lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines). See `tests/support/event_sink.rs` (test-side) and `src/auto_sync/test_events.rs` (production).
+The helper emits lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines). See `tests/support/event_sink.rs` (test-side) and `src/auto_sync/test_events.rs` (production).
 
 ### No command filtering (by design)
 Snippet commands execute as-is — no sanitization. Intentional for power users.
 
 ## Key Architecture Notes
 
-### Auto-Sync (two-process-per-cycle)
-- Detached worker (`snp auto-sync-worker`) spawns killable executor (`snp auto-sync-execute`)
+### Auto-Sync (single detached helper)
+- Detached worker (`snp auto-sync-worker`) runs the canonical sync operation directly
 - Parent never holds the worker lock
 - All sync operations acquire `SyncExecutionLock` to prevent concurrent sync
 - Local mutations always commit before remote work; failed sync never rolls back local state

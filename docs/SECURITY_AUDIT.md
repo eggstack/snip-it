@@ -38,7 +38,7 @@
 | Property | Status | Evidence |
 |---|---|---|
 | No raw secret in CLI argv | Verified | API key is loaded from keychain/config at runtime, never passed as CLI argument. Worker/executor receive `--state-dir <path>` and `--generation <u64>` only (`src/auto_sync/spawn.rs:38-40`, `src/auto_sync/spawn.rs:74-77`). Generation is not sensitive. |
-| No raw secret in worker/executor argv | Verified | `spawn_worker` and `spawn_executor` pass only `--state-dir <path>` and `--generation <u64>` (`src/auto_sync/spawn.rs:38-40`, `src/auto_sync/spawn.rs:74-77`). The API key is loaded from keychain inside the executor child process (`src/auto_sync/executor.rs:193`). |
+| No raw secret in helper argv | Verified | `spawn_worker` passes only `--state-dir <path>` (`src/auto_sync/spawn.rs:38-40`). The API key is loaded from config/keychain inside the helper. |
 | No secret in pending/status/locks/journals/temp filenames | Verified | Pending files use `auto-sync-pending.toml`, locks use `auto-sync-worker.lock` / `auto-sync-execution.lock`, status uses `auto-sync-status.toml`, temp files use UUID-based `.tmp` suffixes. Lock files contain PID, timestamp, and nonce only (`src/auto_sync/lock.rs:10-15`, `src/auto_sync/execution_lock.rs:21-26`). |
 | No secret in tracing/logs/panics/error display | Verified | `SyncSettings` implements `Debug` with `api_key` field printing `[REDACTED]` (`src/config.rs:248`). Snippet IDs logged, not content. gRPC errors logged as status strings. |
 | Backup excludes credentials | Verified | `redact_sync_config()` replaces API key lines with `<redacted>` (`src/commands/backup_cmd.rs:230-247`). Backups include `sync.toml` only when `include_sync_state` is explicitly requested. |
@@ -56,9 +56,7 @@ CLI process (snp ...)
   |
   +-- Worker (detached): snp auto-sync-worker --state-dir <path>
   |     |
-  |     +-- Executor (child): snp auto-sync-execute --state-dir <path>
-  |           |
-  |           +-- (gRPC client only; no further descendants)
+  |     +-- (canonical gRPC sync; no further descendants)
   |
   +-- Snippet execution (run_cmd): $SHELL -c <command>
   |
@@ -79,18 +77,11 @@ CLI process (snp ...)
 | Environment | Inherits full parent environment (by design — needs `PATH`, `HOME`, platform paths) | No `env_clear()` call in `spawn.rs` |
 | Detachment | Fully detached from parent via `setsid()` / `DETACHED_PROCESS` | `src/auto_sync/spawn.rs:96-114` |
 
-### C.3 Executor Process
+### C.3 Helper sync operation
 
-| Property | Detail | Source |
-|---|---|---|
-| Binary | `std::env::current_exe()` — same executable | `src/auto_sync/spawn.rs:71` |
-| Arguments | `auto-sync-execute --state-dir <path>` | `src/auto_sync/spawn.rs:74-77` |
-| Parent | Regular child of worker (not detached) | `src/auto_sync/spawn.rs:70` doc comment |
-| stdin | `Stdio::null()` | `src/auto_sync/spawn.rs:79` |
-| stdout | `Stdio::null()` | `src/auto_sync/spawn.rs:80` |
-| stderr | `Stdio::null()` or `SNP_AUTO_SYNC_WORKER_LOG` | `src/auto_sync/spawn.rs:81-89` |
-| Environment | Inherits full parent environment; loads API key from keychain inside child | `src/auto_sync/executor.rs:193` |
-| Descendants | None by design — gRPC client only, no subprocess spawning | `src/auto_sync/executor.rs` — calls `run_sync()` which uses tonic gRPC |
+The detached worker calls `sync_commands::run_sync` directly while holding the
+shared execution lock. It creates no descendants. Connection/request timeouts
+and retry budgets are enforced by the sync client.
 
 ### C.4 Snippet Execution
 
@@ -126,33 +117,12 @@ CLI process (snp ...)
 | Parent observability | Parent cannot signal or wait on detached worker | By design — worker is fire-and-forget |
 | Lock holding | Worker holds `SyncExecutionLock` for entire cycle duration | `src/auto_sync/worker.rs:130` |
 
-### D.2 Executor Lifecycle
+### D.2 Helper lifecycle
 
-| Property | Detail | Source |
-|---|---|---|
-| Relationship | Regular child process of worker | `src/auto_sync/spawn.rs:70` |
-| Worker wait | `wait_child_with_timeout()` polls `try_wait()` every 100ms | `src/auto_sync/worker.rs:632-649` |
-| Timeout handling | SIGTERM -> 2s grace period -> SIGKILL | `src/auto_sync/worker.rs:543-548`, `src/auto_sync/worker.rs:651-673` |
-| Grace period | Configurable via `AutoSyncPolicy.termination_grace` (default 2s) | `src/auto_sync/worker.rs:544` |
-| Descendants | Creates no descendants (gRPC client only) | `src/auto_sync/executor.rs` — `run_sync()` |
-| Lock release | Lock released when `SyncExecutionLock` is dropped on worker exit | `src/auto_sync/execution_lock.rs:86-95` |
-
-### D.3 Termination Semantics
-
-1. Worker detects executor timeout via `wait_child_with_timeout` returning `Ok(None)`.
-2. Worker sends SIGTERM (Unix) / `child.kill()` (Windows).
-3. Worker sleeps for `termination_grace` duration (default 2s).
-4. Worker checks `child.try_wait()` — if still alive, sends SIGKILL (Unix) / kill (Windows).
-5. Worker calls `child.wait()` to reap the process.
-6. Worker records failure status and releases the execution lock on drop.
-
-### D.4 Direct-Child Reap Semantics
-
-Verified by tests:
-- `test_terminate_child_reap` — confirms `child.wait()` succeeds after SIGTERM (`src/auto_sync/worker.rs:984-992`)
-- `test_force_kill_child_reap` — confirms `child.wait()` succeeds after SIGKILL (`src/auto_sync/worker.rs:995-1003`)
-- `test_wait_child_with_timeout_exits_before_deadline` — confirms normal exit detection (`src/auto_sync/worker.rs:941-947`)
-- `test_wait_child_with_timeout_returns_none_on_timeout` — confirms timeout detection (`src/auto_sync/worker.rs:950-959`)
+The detached helper holds `SyncExecutionLock` for its complete bounded cycle,
+calls canonical sync directly, records durable status, and releases the lock
+through RAII on exit. Network/request timeout and retry behavior is enforced by
+the sync client; the helper does not supervise or kill a child process.
 
 ---
 
@@ -521,7 +491,6 @@ Integration tests use `env!("CARGO_BIN_EXE_snp")` (a compile-time Cargo-provided
 `scripts/ci/test-production-seams.sh` builds `snp` without `test-support` and verifies:
 
 - `SNP_TEST_FAILPOINT=restore-after-prepared` does not abort
-- `SNP_TEST_EXECUTOR_MODE=noop-success` does not bypass executor
 - `SNP_SKIP_WORKER_SPAWN=1` does not suppress scheduling
 - `SNP_TEST_EVENTS_DIR` does not create event files
 - `SNP_TEST_MUTATION_BARRIER_DIR` does not block
@@ -550,7 +519,7 @@ Integration tests use `env!("CARGO_BIN_EXE_snp")` (a compile-time Cargo-provided
 - Backup redaction strips API keys
 - Checksum verification on restore before any mutation
 - Self-update checksum verification before binary replacement
-- Process termination uses SIGTERM -> grace -> SIGKILL pattern
+- Detached helper returns without waiting for foreground network work
 
 ### Known Gaps (Accepted Risk)
 

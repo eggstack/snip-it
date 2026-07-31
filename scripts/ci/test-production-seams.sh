@@ -126,26 +126,12 @@ fi
 echo "PASS: failpoint did not abort production restore"
 
 echo ""
-echo "=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass production executor ==="
-# The noop-success seam should not exist in production. The executor
-# should attempt real sync (and fail to connect), not exit 0 immediately.
-set +e
-SNP_TEST_EXECUTOR_MODE="noop-success" \
-    "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 \
-    >/tmp/seam-stderr-2 2>&1
-EXIT_CODE=$?
-set -e
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "FAIL: production executor exited 0 with noop-success mode (seam is active)"
+echo "=== Test 2: removed executor command is not accepted ==="
+if "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 >/dev/null 2>&1; then
+    echo "FAIL: removed auto-sync-execute command is still accepted"
     exit 1
 fi
-# Verify stderr does not contain argument-parsing/usage diagnostics.
-if grep -qi "usage\|invalid\|unknown.*argument\|missing.*required" /tmp/seam-stderr-2; then
-    echo "FAIL: executor stderr contains usage/parsing diagnostics (argument parsing, not seam isolation):"
-    cat /tmp/seam-stderr-2
-    exit 1
-fi
-echo "PASS: noop-success mode did not bypass production executor (exit code: $EXIT_CODE)"
+echo "PASS: executor subprocess command is removed"
 
 echo ""
 echo "=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==="
@@ -168,12 +154,12 @@ echo "PASS: worker spawn suppression did not affect production mutation"
 
 echo ""
 echo "=== Test 4: SNP_TEST_EVENTS_DIR does not create event files ==="
-# Run a real worker/executor path with SNP_TEST_EVENTS_DIR set.
+# Run the real helper path with SNP_TEST_EVENTS_DIR set.
 # Production binary ignores the variable — no event file should be created.
 EVENTS_DIR="$TMPDIR/events"
 mkdir -p "$EVENTS_DIR"
 SNP_TEST_EVENTS_DIR="$EVENTS_DIR" \
-    "$BINARY" auto-sync-execute --state-dir "$TMPDIR/state" --generation 1 \
+    "$BINARY" auto-sync-worker --state-dir "$TMPDIR/state" \
     >/dev/null 2>&1 || true
 if [ -f "$EVENTS_DIR/test-events.jsonl" ]; then
     echo "FAIL: production binary created event file at $EVENTS_DIR/test-events.jsonl"

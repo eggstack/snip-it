@@ -78,7 +78,6 @@ This is the only significant loader variant. It is used by `list_cmd` and `new_c
 |--------|----------|
 | `status_snapshot::sync_configuration_state` | `src/status_snapshot.rs:195` |
 | `sync_commands::run_default_sync` | `src/sync_commands.rs:867` |
-| `executor::run_executor` | `src/auto_sync/executor.rs:192` |
 | `register_cmd::run` | `src/commands/register_cmd.rs:7,21` |
 | `doctor_cmd` | `src/commands/doctor_cmd.rs:588` |
 | `sync_cmd` (3 sites) | `src/commands/sync_cmd.rs:165,354,502` |
@@ -206,7 +205,6 @@ None. Single canonical implementation.
 
 | Caller | Location | Adapts? |
 |--------|----------|---------|
-| `executor::run_executor` | `src/auto_sync/executor.rs:256` | No — maps direction from `effective_sync_direction` |
 | `sync_cmd::run` | `src/commands/sync_cmd.rs:285` | No — resolves push/pull from CLI flags + config |
 | `sync_cmd::run_retry` | `src/commands/sync_cmd.rs:557` | No — passes through to `run_sync` |
 | `run_default_sync` | `src/sync_commands.rs:866` | Convenience wrapper — resolves settings, calls `run_sync` |
@@ -231,14 +229,13 @@ None. Single canonical implementation.
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/auto_sync/executor.rs:162` — `effective_sync_direction(settings, cli_push_only, cli_pull_only) -> SyncDirection` |
+| **Canonical** | `src/auto_sync/policy.rs` — `effective_sync_direction(settings, cli_push_only, cli_pull_only) -> SyncDirection` |
 | **Semantics** | CLI flags override config. No CLI override → use `settings.sync_direction`. |
 
 ### Callers
 
 | Caller | Location |
 |--------|----------|
-| `executor::run_executor` | `src/auto_sync/executor.rs:231` |
 
 ### Inline Resolution
 
@@ -325,29 +322,13 @@ None. `schedule_sync` is the sole scheduling authority. All paths converge here.
 
 ---
 
-## 12. Supervise Executor
+## 12. Automatic sync helper
 
-| Attribute | Value |
-|-----------|-------|
-| **Spawn** | `src/auto_sync/spawn.rs:69` — `spawn_executor(state_dir) -> Result<Child, SpawnError>` |
-| **Run** | `src/auto_sync/executor.rs:189` — `run_executor(state_dir) -> i32` |
-| **Callers (spawn)** | `worker::execute_sync` at `src/auto_sync/worker.rs:463` |
-| **Callers (run)** | CLI dispatch at `src/main.rs:839` |
-
-### Semantics
-
-- `spawn_executor`: Forks `snp auto-sync-execute` subprocess with `--state-dir`
-- `run_executor`: Loads settings, resolves direction, runs `run_sync`, classifies errors, maps to `ExecutorExitCode`
-
-### Worker Supervision
-
-| Function | Location | Purpose |
-|----------|----------|---------|
-| `worker::execute_sync` | `src/auto_sync/worker.rs:446` | Holds `SyncExecutionLock`, spawns executor, waits for exit, maps exit code → `FailureClass` → status |
-
-### Duplicates
-
-None. Single spawn + single run entry points.
+The detached `auto-sync-worker` holds `SyncExecutionLock` and calls the
+canonical `sync_commands::run_sync` operation directly. It conditionally clears
+the observed pending generation after success, records durable status, and
+exits after the bounded helper lifetime. There is no executor subprocess or
+exit-code translation layer.
 
 ---
 
@@ -374,7 +355,6 @@ None. Single spawn + single run entry points.
 
 | Caller | Location |
 |--------|----------|
-| `executor::run_executor` | `src/auto_sync/executor.rs` (via worker) |
 | `worker::execute_sync` | `src/auto_sync/worker.rs` |
 
 ### Duplicates
@@ -487,7 +467,7 @@ None. `doctor` is read-only diagnostics; `repair` is write-capable state recover
 |-------|----------|----------|
 | `load_snippets` parallel implementation | Medium | `src/commands/mod.rs:114` vs `src/library.rs:659` — no ID dedup, no cached_read_toml, returns error not default |
 | `save_snippets` parallel implementation | Low | `src/commands/mod.rs:163` vs `src/library.rs:726` — no `updated_at` sort |
-| Inline sync direction resolution | Low | `src/commands/sync_cmd.rs:253` vs `src/auto_sync/executor.rs:162` — equivalent logic, duplication risk |
+| Inline sync direction resolution | Low | `src/commands/sync_cmd.rs:253` vs `src/auto_sync/policy.rs` — equivalent logic, duplication risk |
 | No export function | Info | Export is implicit via `save_library` to arbitrary path |
 
 ### No Duplicates Found

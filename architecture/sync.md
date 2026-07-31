@@ -135,11 +135,10 @@ service SnippetSync {
 **Module**: `src/auto_sync/policy.rs`
 
 Auto-sync is disabled by default. When enabled via `snp sync config --auto-sync on`,
-mutation commands spawn a detached one-shot worker (`snp auto-sync-worker`) that
-performs the remote sync after the local change is committed. The worker spawns a
-killable executor subprocess (`snp auto-sync-execute`) for the actual sync work,
-allowing proper timeout enforcement. The parent returns immediately — no in-process
-latency. The effective policy is resolved once per command invocation via
+mutation commands spawn a detached one-shot helper (`snp auto-sync-worker`) that
+performs the remote sync directly after the local change is committed. The helper
+owns the execution lock for the full cycle. The parent returns immediately — no
+in-process latency. The effective policy is resolved once per command invocation via
 `AutoSyncPolicy::resolve()`.
 
 ### AutoSyncPolicy
@@ -209,8 +208,8 @@ The detached one-shot worker replaces the earlier in-process coordinator. After
 the parent mutation command commits the local change, it records a durable
 pending marker and re-execs the current binary as `snp auto-sync-worker` with
 platform-detached flags. The worker acquires the shared `SyncExecutionLock`,
-performs debounce, spawns a killable executor subprocess for the actual sync,
-and exits independently. The parent never acquires the execution lock.
+performs debounce, invokes the canonical sync directly, and exits independently.
+The parent never acquires the execution lock.
 
 ### Architecture
 
@@ -236,10 +235,8 @@ snp auto-sync-worker (child, detached)
      -> sleep in ≤250ms increments, reloading marker each time
      -> restart deadline if newer generation detected
   -> execute_sync(state_dir, policy)
-     -> spawn::spawn_executor(state_dir) -> child process (snp auto-sync-execute)
-     -> wait_child_with_timeout(child, policy.sync_timeout)
-        -> on success: map ExecutorExitCode -> WorkerOutcome
-        -> on timeout: SIGTERM -> 2s grace -> SIGKILL -> WorkerOutcome::Failed
+     -> run canonical sync directly
+        -> bounded network requests and retries in sync client
      -> on success: clear_if_generation_matches(state_dir, generation)
      -> on failure: record_failure(state_dir, generation, classification)
   -> reload marker; if newer generation exists, run another cycle
@@ -311,9 +308,9 @@ Retry dispositions by class:
 | CredentialStore | Retryable | Keyring may become available again |
 | Internal | NoRetry | Bug requires code fix |
 
-Classified from `SnipError` via `classify_sync_error()` in the executor,
-which applies a multi-step heuristic: error variant → gRPC status code →
-string pattern matching. The worker records the classification into
+Classified from `SnipError` via `FailureClass::from_error()` in `policy.rs`,
+which applies typed variant matching with a fallback heuristic for legacy runtime
+errors. The worker records the classification into
 `auto-sync-status.toml` for diagnostics.
 
 ### Durable Pending State (Schema v2)
@@ -465,14 +462,13 @@ Diagnostics emitted:
 4. PID+nonce worker lock prevents concurrent worker executions across processes.
 5. Pending marker survives crash; stale markers (>5 min) cleared on startup recovery.
 6. Manual and scheduled sync remain independent; explicit sync clears pending.
-7. No new visible CLI surface added — `auto-sync-worker` and `auto-sync-execute` are hidden.
+7. No new visible CLI surface added — `auto-sync-worker` is hidden.
 8. Pending marker schema is versioned (v2) with CRC32 integrity.
 9. Conditional clear keyed on observed generation prevents stale workers from
    clobbering fresh state.
 10. **Release 5F:** All sync operations share one `SyncExecutionLock`; no concurrent sync possible.
-11. **Release 5F:** Executor subprocess terminated (SIGTERM then SIGKILL) before execution lock released.
-12. **Release 5F:** No `spawn_blocking` cancellation claim; sync work runs in a killable child process.
-13. **Release 5F:** Startup recovery suppressed for sync-related commands.
+11. **Phase 12C:** The helper runs canonical sync directly; local I/O is not force-cancelled by a child process.
+12. **Phase 12C:** Startup recovery is suppressed for the hidden helper and explicit sync commands.
 
 ## Auto-Sync Mutation Trigger Integration (Release 5C)
 

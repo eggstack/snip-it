@@ -34,7 +34,7 @@ pub const AUTO_SYNC_DEBOUNCE_MAX: u64 = 300;
 pub const AUTO_SYNC_MAX_DELAY_MIN: u64 = 0;
 /// Maximum accepted value for `auto_sync_max_delay_seconds`.
 pub const AUTO_SYNC_MAX_DELAY_MAX: u64 = 600;
-/// Default executor sync timeout in seconds.
+/// Default auto-sync network operation timeout in seconds.
 pub const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 30;
 /// Minimum accepted value for `auto_sync_timeout_seconds`.
 pub const MIN_SYNC_TIMEOUT_SECS: u64 = 5;
@@ -324,7 +324,7 @@ impl SyncSettings {
         std::time::Duration::from_secs(secs)
     }
 
-    /// Returns the effective executor sync timeout, clamped to
+    /// Returns the configured auto-sync timeout value, clamped to
     /// [`MIN_SYNC_TIMEOUT_SECS`]..[`MAX_SYNC_TIMEOUT_SECS`].
     /// Defaults to [`DEFAULT_SYNC_TIMEOUT_SECS`] when not configured.
     pub fn auto_sync_timeout(&self) -> std::time::Duration {

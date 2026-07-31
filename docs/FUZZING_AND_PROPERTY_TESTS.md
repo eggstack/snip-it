@@ -26,7 +26,7 @@ Tests that verify `serialize -> deserialize` or `encrypt -> decrypt` produce ide
 - **Encrypt/decrypt round-trip** (`src/encryption.rs`): Verifies `decrypt(key, encrypt(key, plaintext)) == plaintext` for normal strings, empty strings, and Unicode payloads. Also verifies wrong-key decryption fails and that duplicate encryptions produce different ciphertext (nonce uniqueness).
 - **Snippet encrypt/decrypt round-trip** (`src/sync.rs`): Verifies `decrypt_snippet` inverts `encrypt_snippet` for snippet commands, including special characters and non-encrypted passthrough.
 - **TOML serialize/deserialize round-trip** (`src/library.rs`): Verifies `save_library -> load_library` preserves snippet fields exactly. Tests cover tabs, trailing whitespace, CRLF line endings, and backslash-containing commands. The golden command corpus (24 edge cases) exercises exact-text preservation across all acquisition sources.
-- **FailureClass code-string round-trip** (`src/auto_sync/executor.rs`): Verifies `FailureClass -> ExecutorExitCode -> FailureClass` round-trip is lossless for all 11 variants, and that `FailureClass -> code_string -> FailureClass` is also lossless.
+- **FailureClass code-string round-trip** (`src/auto_sync/policy.rs`): Verifies all failure classes retain stable status codes and retry semantics.
 
 ### Migration Idempotency Tests
 
@@ -54,11 +54,11 @@ Tests that verify `serialize -> deserialize` or `encrypt -> decrypt` produce ide
 
 ### Deterministic E2E Tests (Phase 05A)
 
-- **`test_deterministic_sync_cycle`** (`tests/deterministic_e2e.rs`): Full end-to-end test proving the exact auto-sync lifecycle: local mutation -> pending generation -> worker spawn -> executor process -> server-side state change -> status success -> conditional pending clear. Uses a real in-process server, event sink for process lifecycle evidence, and exact-count assertions.
+- **`test_deterministic_sync_cycle`** (`tests/deterministic_e2e.rs`): Full end-to-end test proving the exact auto-sync lifecycle: local mutation -> pending generation -> detached helper -> server-side state change -> status success -> conditional pending clear. Uses a real in-process server, event sink, and exact-count assertions.
 
 ### Failure Class Contract Tests
 
-- **Failure class matrix** (`tests/failure_class_contracts.rs`): Exhaustively tests all 11 `FailureClass` variants through the chain: `FailureClass -> ExecutorExitCode -> status file -> ScheduleDecision`. Verifies each exit code maps back to the correct failure class, status records the correct backoff, and scheduling decisions respect failure semantics.
+- **Failure class coverage** (`src/auto_sync/policy.rs`, status and scheduling tests): Verifies all `FailureClass` variants, durable backoff, and scheduling semantics without an executor exit-code layer.
 
 ### Mutual Exclusion Tests
 
@@ -224,7 +224,7 @@ Minimized test cases from debugging and fuzzing are embedded directly in unit te
 - **Golden command corpus** (`src/library.rs`): 24 edge-case commands with tabs, trailing spaces, CRLF line endings, and backslash sequences. Each case has a label and expected round-trip behavior.
 - **Encryption edge cases** (`src/encryption.rs`): Empty string, Unicode payloads, wrong-key rejection, different-nonce verification.
 - **TOML escape handling** (`src/utils/toml_helpers.rs`): Save-then-load round-trip with escapes and CRLF preservation.
-- **FailureClass exhaustive matrix** (`src/auto_sync/executor.rs`): All 11 variants tested through code-string and exit-code round-trips.
+- **FailureClass exhaustive matrix** (`src/auto_sync/policy.rs`): All variants are covered through code-string, status, and retry-disposition tests.
 
 These minimized cases serve as the regression corpus. If external fuzzing is added in the future, interesting inputs should be promoted to unit tests to prevent regression.
 

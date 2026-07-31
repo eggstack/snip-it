@@ -170,8 +170,6 @@ pub enum SubcommandTag {
     Register,
     /// Internal worker subprocess.
     AutoSyncWorker,
-    /// Internal executor subprocess.
-    AutoSyncExecute,
 }
 
 /// Semantic startup recovery policy for each CLI subcommand.
@@ -187,7 +185,7 @@ pub enum StartupRecoveryPolicy {
     SuppressReadOnly,
     /// Commands that manage sync themselves (sync, cron, register).
     SuppressExplicitSync,
-    /// Internal worker/executor subprocesses.
+    /// Internal worker subprocess.
     SuppressInternal,
     /// Config/setup commands (doctor, validate, keybindings, shell init).
     SuppressConfiguration,
@@ -200,10 +198,9 @@ impl StartupRecoveryPolicy {
     }
 }
 
-/// Returns true if the given command should attempt auto-sync recovery
-/// at startup. Commands that are themselves about to sync, modify sync
-/// policy, or are internal worker/executor subcommands should NOT
-/// trigger recovery.
+/// Returns true if the given command should attempt auto-sync recovery.
+/// Commands that are themselves about to sync, modify sync policy, or are the
+/// internal worker subcommand should not trigger recovery.
 pub fn should_attempt_auto_sync_recovery(tag: Option<SubcommandTag>) -> bool {
     matches!(tag, None | Some(SubcommandTag::Mutation))
 }
@@ -378,13 +375,6 @@ mod tests {
     fn test_recovery_blocked_for_auto_sync_worker() {
         assert!(!should_attempt_auto_sync_recovery(Some(
             SubcommandTag::AutoSyncWorker
-        )));
-    }
-
-    #[test]
-    fn test_recovery_blocked_for_auto_sync_execute() {
-        assert!(!should_attempt_auto_sync_recovery(Some(
-            SubcommandTag::AutoSyncExecute
         )));
     }
 

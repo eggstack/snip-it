@@ -3,7 +3,6 @@
 //! Auto-sync subsystem — detached one-shot worker model.
 
 pub mod execution_lock;
-pub mod executor;
 pub mod lock;
 pub mod notification;
 pub mod pending;

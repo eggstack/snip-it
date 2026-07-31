@@ -52,9 +52,8 @@ Last-write-wins based on `updated_at` timestamp:
 | `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
 | `clear_pending_after_explicit_sync()` | `auto_sync/notification.rs` | Generation-safe pending clear after manual sync |
 
-**Note:** The executor subprocess (`auto-sync-execute`) invokes `run_sync`
-directly — it does NOT acquire the `SyncExecutionLock`. The worker owns the
-lock for the entire detached cycle.
+**Note:** The detached auto-sync helper invokes `run_sync` directly and owns the
+`SyncExecutionLock` for the entire detached cycle.
 
 ## Test Coverage
 
@@ -120,7 +119,7 @@ Missing: No tests for encryption roundtrip through sync, retry logic, or the cri
 
 ### Classification: Variant-Based (Not String Matching)
 
-`classify_sync_error()` in `executor.rs` delegates to `FailureClass::from_error()` in `policy.rs`. For `SnipError::SyncFailure` variants, classification is direct variant matching — no string analysis. For legacy `SnipError::Runtime` variants, fallback heuristic string matching is used.
+Auto-sync delegates error classification to `FailureClass::from_error()` in `policy.rs`. For `SnipError::SyncFailure` variants, classification is direct variant matching — no string analysis. For legacy `SnipError::Runtime` variants, fallback heuristic string matching is used.
 
 ### Exponential Backoff
 

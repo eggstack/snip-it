@@ -55,11 +55,10 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `shell` | — | `shell_cmd` | No | Generate interactive shell integration |
 | `completions` | — | `completions_cmd` | No | Generate shell completions |
 | `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden.** Detached debounce worker for auto-sync (internal use) |
-| `auto-sync-execute` | — | `auto_sync::executor` | No | **Hidden.** Killable sync executor subprocess (internal use) |
 
-The `auto-sync-worker` and `auto-sync-execute` subcommands are registered with
-`hide = true` in the clap CLI — they do not appear in `--help` output and are
-used internally by the detached worker protocol. See
+The `auto-sync-worker` subcommand is registered with `hide = true` in the clap
+CLI — it does not appear in `--help` output and is used internally by the
+detached helper protocol. See
 [auto_sync.md](auto_sync.md) for the full architecture.
 
 ## Startup Recovery Classification (Phase 10)
@@ -73,7 +72,7 @@ pub enum StartupRecoveryPolicy {
     Allow,              // Mutation commands — recovery permitted
     SuppressReadOnly,   // Read-only commands — no worker spawn, no network
     SuppressExplicitSync, // sync, cron, register — manage own behavior
-    SuppressInternal,   // auto-sync-worker, auto-sync-execute
+    SuppressInternal,   // auto-sync-worker
     SuppressConfiguration, // doctor, keybindings, shell, completions, update
 }
 ```
@@ -85,7 +84,7 @@ pub enum StartupRecoveryPolicy {
 | `Allow` | `new`, `run`, `clip`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary` |
 | `SuppressReadOnly` | `version`, `list`, `search`, `select`, `status`, `get`, `validate`, `backup`, `library list/show` |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
-| `SuppressInternal` | `auto-sync-worker`, `auto-sync-execute` |
+| `SuppressInternal` | `auto-sync-worker` |
 | `SuppressConfiguration` | `update`, `doctor`, `completions`, `shell`, `keybindings` |
 
 The classification is exhaustive — every variant is mapped. Adding a new command

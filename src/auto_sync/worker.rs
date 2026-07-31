@@ -1,27 +1,15 @@
-//! One-shot worker entry point and execution helpers.
+//! Detached one-shot auto-sync helper.
 //!
-//! The worker is fully detached from the parent. The parent process never
-//! acquires the worker execution lock — that is the worker's job. Each
-//! spawned worker races for the lock; the winner performs the debounce,
-//! sync, and conditional clear loop. The parent only:
-//!
-//! 1. Calls `record_pending_mutation` exactly once after a local commit.
-//! 2. Calls `schedule::schedule_and_spawn` to spawn a detached worker that
-//!    arbitrates the lock.
-//!
-//! The worker performs a bounded quiet-period debounce across separate CLI
-//! processes. Newer generations arriving during sync are handled through a
-//! bounded follow-up cycle, not by losing work.
+//! The helper owns the shared execution lock for its whole bounded cycle,
+//! debounces durable pending work, runs the canonical sync operation directly,
+//! and conditionally clears only the generation it observed.
 
 use crate::auto_sync::execution_lock::{self, ExecutionLockError, SyncExecutionLock};
-use crate::auto_sync::executor::ExecutorExitCode;
 use crate::auto_sync::pending::{self, PendingState};
 use crate::auto_sync::policy::{AutoSyncPolicy, FailureClass, transient_backoff};
-use crate::auto_sync::spawn;
 use crate::auto_sync::status;
 use crate::config::get_sync_settings;
 use std::path::Path;
-use std::process::ExitStatus;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,35 +18,6 @@ pub enum WorkerOutcome {
     Success,
     Failed,
     NothingToDo,
-}
-
-/// Classification of an executor exit-zero completion based on the
-/// observed pending disposition.
-///
-/// The executor is the only component allowed to clear pending. After
-/// the executor exits zero, the worker inspects the pending marker to
-/// determine whether the zero exit actually represents remote
-/// acknowledgement. Exit zero alone is never sufficient evidence of
-/// remote success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutorCompletion {
-    /// Pending marker for generation `G` is gone — the executor cleared
-    /// it after remote acknowledgement. Record durable success for `G`.
-    AcknowledgedAndCleared,
-    /// Pending marker exists with a generation greater than `G` — the
-    /// executor's work was acknowledged but a newer mutation arrived.
-    /// Record success for completed `G` while preserving the newer marker.
-    AcknowledgedCoveredByNewer { current_generation: u64 },
-    /// Pending marker still exists with generation exactly `G` — the
-    /// executor exited zero without clearing pending (e.g. noop-success
-    /// test seam or protocol-integrity violation). Do NOT record success.
-    ExitZeroWithoutAcknowledgement,
-    /// Pending marker exists with generation lower than `G` — corrupt
-    /// or inconsistent state. Do NOT record success; preserve evidence.
-    PendingGenerationLowerThanObserved,
-    /// Pending marker cannot be read — local persistence/internal failure.
-    /// Do NOT record success; preserve recoverability.
-    PendingStateUnreadable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,14 +39,12 @@ impl Clock for SystemClock {
     fn now_instant(&self) -> Instant {
         Instant::now()
     }
-
     fn now_unix_ms(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
     }
-
     fn sleep(&self, duration: Duration) {
         std::thread::sleep(duration);
     }
@@ -101,257 +58,94 @@ pub enum DebounceResult {
     Failed(String),
 }
 
-/// Worker entry point invoked by the detached child.
-///
-/// Acquires the execution lock; exits with `NothingToDo` if another
-/// worker holds it. On success, performs a bounded debounce/sync loop:
-///
-/// 1. Read current pending state (the *observed* generation/timestamp).
-/// 2. Sleep until the quiet-period deadline is reached (clamped to a
-///    maximum worker lifetime).
-/// 3. Reload the marker. If generation or timestamp changed, the
-///    deadline is recomputed.
-/// 4. Once the deadline is reached, run sync bounded by `sync_timeout`.
-/// 5. On success, conditionally clear only if the marker still matches
-///    the observed generation.
-/// 6. Reload. If a newer generation exists, run another bounded cycle.
-/// 7. Release the lock and exit.
-///
-/// The worker never owns a pending marker generation. It observes it,
-/// acts on it, and lets a newer generation decide what to do.
+/// Run one detached, bounded helper cycle.
 pub fn run(state_dir: &Path) -> WorkerOutcome {
     let policy = AutoSyncPolicy::resolve(&get_sync_settings());
-
     crate::auto_sync::test_events::emit("worker", "started", std::process::id(), None, None);
-
     let lock = match execution_lock::try_acquire(state_dir) {
-        Ok(l) => l,
-        Err(ExecutionLockError::AlreadyHeld { .. }) => {
-            tracing::info!("auto-sync worker exiting: execution lock already held");
-            crate::auto_sync::test_events::emit(
-                "worker",
-                "exited",
-                std::process::id(),
-                None,
-                Some(r#"{"reason":"lock_held"}"#.into()),
-            );
-            return WorkerOutcome::NothingToDo;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "auto-sync worker failed to acquire execution lock");
-            crate::auto_sync::test_events::emit(
-                "worker",
-                "exited",
-                std::process::id(),
-                None,
-                Some(r#"{"reason":"lock_error"}"#.into()),
-            );
+        Ok(lock) => lock,
+        Err(ExecutionLockError::AlreadyHeld { .. }) => return WorkerOutcome::NothingToDo,
+        Err(error) => {
+            tracing::error!(%error, "auto-sync helper failed to acquire execution lock");
             return WorkerOutcome::Failed;
         }
     };
-
-    crate::auto_sync::test_events::emit("worker", "lock_acquired", std::process::id(), None, None);
-
     run_locked(state_dir, lock, &policy)
 }
 
 fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy) -> WorkerOutcome {
-    let _lock_keepalive = lock;
-    let clock = SystemClock;
-    let start = clock.now_instant();
-    let max_lifetime = policy.worker_lifetime;
-
+    let _lock = lock;
     if !policy.enabled {
-        tracing::info!("auto-sync worker exiting: policy disabled; pending preserved");
         return WorkerOutcome::NothingToDo;
     }
+    let clock = SystemClock;
+    let start = clock.now_instant();
 
     loop {
-        if start.elapsed() >= max_lifetime {
-            tracing::warn!(
-                elapsed_secs = start.elapsed().as_secs(),
-                "auto-sync worker exiting: maximum lifetime reached"
-            );
-            crate::auto_sync::test_events::emit(
-                "worker",
-                "exited",
-                std::process::id(),
-                None,
-                Some(r#"{"reason":"max_lifetime"}"#.into()),
-            );
+        if start.elapsed() >= policy.worker_lifetime {
             return WorkerOutcome::NothingToDo;
         }
-
-        let pending = match pending::read_state_from_dir(state_dir) {
-            Ok(p) => p,
-            Err(pending::PendingError::NotFound) => {
-                tracing::debug!("auto-sync worker exiting: no pending state");
-                crate::auto_sync::test_events::emit(
-                    "worker",
-                    "exited",
-                    std::process::id(),
-                    None,
-                    Some(r#"{"reason":"no_pending"}"#.into()),
-                );
-                return WorkerOutcome::NothingToDo;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "auto-sync worker failed to read pending state");
-                crate::auto_sync::test_events::emit(
-                    "worker",
-                    "exited",
-                    std::process::id(),
-                    None,
-                    Some(r#"{"reason":"read_error"}"#.into()),
-                );
+        let pending_state = match pending::read_state_from_dir(state_dir) {
+            Ok(state) => state,
+            Err(pending::PendingError::NotFound) => return WorkerOutcome::NothingToDo,
+            Err(error) => {
+                tracing::error!(%error, "auto-sync helper could not read pending state");
                 return WorkerOutcome::Failed;
             }
         };
-
-        let observed_generation = pending.generation;
-
-        crate::auto_sync::test_events::emit(
-            "worker",
-            "cycle_started",
-            std::process::id(),
-            Some(observed_generation),
-            None,
-        );
-
-        tracing::info!(
-            generation = observed_generation,
-            "auto-sync worker starting cycle"
-        );
-
-        let initial_deadline = compute_deadline(
-            pending.created_at_unix_ms,
-            policy.debounce,
-            start,
-            max_lifetime,
-            &clock,
-        );
-
-        let observed = if let Some(deadline) = initial_deadline {
-            match debounce(
-                state_dir,
-                pending,
-                deadline,
-                start,
-                max_lifetime,
-                policy.max_delay,
+        let observed = match debounce(
+            state_dir,
+            pending_state.clone(),
+            compute_deadline(
+                pending_state.created_at_unix_ms,
                 policy.debounce,
+                start,
+                policy.worker_lifetime,
                 &clock,
-            ) {
-                DebounceResult::Ready(state) => state,
-                DebounceResult::CancelledMarkerRemoved => {
-                    tracing::info!(
-                        "auto-sync worker exiting: pending marker removed during debounce"
-                    );
-                    return WorkerOutcome::NothingToDo;
-                }
-                DebounceResult::DeferredMaximumLifetime(state) => {
-                    tracing::info!(
-                        generation = state.generation,
-                        "auto-sync worker: max delay reached, forcing sync"
-                    );
-                    state
-                }
-                DebounceResult::Failed(e) => {
-                    tracing::warn!(error = %e, "auto-sync worker debounce failed");
-                    let consecutive = next_consecutive_failures(state_dir);
-                    let _ = status::record_failure(
-                        state_dir,
-                        observed_generation,
-                        FailureClass::Internal,
-                        -1,
-                        consecutive,
-                        0,
-                        &e,
-                        current_config_fingerprint(),
-                    );
-                    return WorkerOutcome::Failed;
-                }
+            ),
+            start,
+            policy.worker_lifetime,
+            policy.max_delay,
+            policy.debounce,
+            &clock,
+        ) {
+            DebounceResult::Ready(state) | DebounceResult::DeferredMaximumLifetime(state) => state,
+            DebounceResult::CancelledMarkerRemoved => return WorkerOutcome::NothingToDo,
+            DebounceResult::Failed(error) => {
+                return record_sync_failure(
+                    state_dir,
+                    pending_state.generation,
+                    FailureClass::Internal,
+                    &error,
+                );
             }
-        } else {
-            pending
         };
-
-        match preflight_check(state_dir, observed.generation) {
-            Ok(latest) => {
-                let latest_gen = latest.generation;
-                let sync_observed = if latest.generation != observed.generation {
-                    tracing::info!(
-                        observed = observed.generation,
-                        latest = latest.generation,
-                        "auto-sync worker: preflight detected newer generation"
-                    );
-                    latest
-                } else {
-                    observed
-                };
-
-                let outcome = execute_sync(state_dir, policy, latest_gen);
-
-                match outcome {
-                    WorkerOutcome::Success => {
-                        // The worker does NOT clear pending — only the
-                        // executor clears pending after remote acknowledgement.
-                        // A child exit code of 0 does not imply remote
-                        // success; the executor owns the pending clear.
-                        tracing::info!(
-                            generation = sync_observed.generation,
-                            "auto-sync worker cycle completed; pending preserved for executor"
-                        );
-                    }
-                    WorkerOutcome::Failed => {
-                        let _ =
-                            pending::record_failure(state_dir, sync_observed.generation, "unknown");
-                    }
-                    WorkerOutcome::NothingToDo => {
-                        tracing::info!(
-                            generation = sync_observed.generation,
-                            "auto-sync worker NothingToDo: pending preserved for next cycle"
-                        );
-                    }
-                }
-
-                match pending::read_state_from_dir(state_dir) {
-                    Ok(current) if current.generation > sync_observed.generation => {
-                        tracing::info!(
-                            previous = sync_observed.generation,
-                            current = current.generation,
-                            "auto-sync worker: newer generation detected, starting follow-up cycle"
-                        );
-                        continue;
-                    }
-                    Ok(current) if current.generation < sync_observed.generation => {
-                        tracing::error!(
-                            observed = sync_observed.generation,
-                            current = current.generation,
-                            "auto-sync worker detected pending generation rollback"
-                        );
-                        let _ = status::record_failure(
-                            state_dir,
-                            sync_observed.generation,
-                            FailureClass::Internal,
-                            -1,
-                            next_consecutive_failures(state_dir),
-                            0,
-                            "pending generation rollback after sync",
-                            current_config_fingerprint(),
-                        );
-                        return WorkerOutcome::Failed;
-                    }
-                    Ok(_) | Err(pending::PendingError::NotFound) => return outcome,
-                    Err(error) => {
-                        tracing::error!(%error, "auto-sync worker failed to reload pending state");
-                        return WorkerOutcome::Failed;
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::info!(error = %e, "auto-sync worker preflight: nothing to do");
+        let observed = match preflight_check(state_dir, observed.generation) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::debug!(%error, "auto-sync helper preflight found no executable work");
                 return WorkerOutcome::NothingToDo;
+            }
+        };
+        let outcome = execute_sync(state_dir, policy, observed.generation);
+        match pending::read_state_from_dir(state_dir) {
+            Ok(current) if current.generation > observed.generation => continue,
+            Ok(current) if current.generation < observed.generation => {
+                return record_sync_failure(
+                    state_dir,
+                    observed.generation,
+                    FailureClass::Internal,
+                    "pending generation rollback after sync",
+                );
+            }
+            Ok(_) | Err(pending::PendingError::NotFound) => return outcome,
+            Err(error) => {
+                return record_sync_failure(
+                    state_dir,
+                    observed.generation,
+                    FailureClass::Internal,
+                    &format!("pending reload failed after sync: {error}"),
+                );
             }
         }
     }
@@ -361,19 +155,14 @@ fn compute_deadline(
     observed_timestamp_ms: u64,
     debounce: Duration,
     start: Instant,
-    max_lifetime: Duration,
+    lifetime: Duration,
     clock: &dyn Clock,
-) -> Option<Instant> {
-    let now = clock.now_instant();
-    if debounce.is_zero() {
-        return None;
-    }
-    let target_unix_ms = observed_timestamp_ms.saturating_add(debounce.as_millis() as u64);
-    let target = unix_ms_to_instant(target_unix_ms, clock);
-    let max_target = start
-        .checked_add(max_lifetime)
-        .unwrap_or_else(|| now.checked_add(max_lifetime).unwrap_or(now));
-    Some(target.min(max_target))
+) -> Instant {
+    let target = unix_ms_to_instant(
+        observed_timestamp_ms.saturating_add(debounce.as_millis() as u64),
+        clock,
+    );
+    target.min(start.checked_add(lifetime).unwrap_or(target))
 }
 
 pub fn debounce(
@@ -386,91 +175,62 @@ pub fn debounce(
     debounce_duration: Duration,
     clock: &dyn Clock,
 ) -> DebounceResult {
+    let mut current = observed;
     let mut deadline = initial_deadline;
     let max_target = start.checked_add(max_lifetime).unwrap_or(deadline);
-    let mut current = observed;
-
-    if clock.now_instant() >= max_target {
-        return DebounceResult::Ready(current);
-    }
-
     loop {
-        let now = clock.now_instant();
-        if now >= deadline || now >= max_target {
+        if clock.now_instant() >= deadline || clock.now_instant() >= max_target {
             match pending::read_state_from_dir(state_dir) {
-                Ok(latest) => {
-                    if latest.generation > current.generation {
-                        current = latest;
-                        let new_deadline = compute_deadline(
-                            current.created_at_unix_ms,
-                            debounce_duration,
-                            start,
-                            max_lifetime,
-                            clock,
-                        );
-                        if let Some(d) = new_deadline {
-                            deadline = d.min(max_target);
-                            continue;
-                        }
-                        return DebounceResult::Ready(current);
-                    }
-                    if latest.generation < current.generation {
-                        return DebounceResult::Failed(format!(
-                            "pending generation rollback: observed {} after {}",
-                            latest.generation, current.generation
-                        ));
-                    }
-                    return DebounceResult::Ready(current);
-                }
-                Err(pending::PendingError::NotFound) => {
-                    return DebounceResult::CancelledMarkerRemoved;
-                }
-                Err(e) => {
-                    return DebounceResult::Failed(format!("{e}"));
-                }
-            }
-        }
-
-        let sleep_for = deadline.saturating_duration_since(now);
-        clock.sleep(sleep_for.min(Duration::from_millis(250)));
-
-        match pending::read_state_from_dir(state_dir) {
-            Ok(current_state) => {
-                if current_state.generation > current.generation {
-                    current = current_state;
-                    let new_deadline = compute_deadline(
+                Ok(latest) if latest.generation > current.generation => {
+                    current = latest;
+                    deadline = compute_deadline(
                         current.created_at_unix_ms,
                         debounce_duration,
                         start,
                         max_lifetime,
                         clock,
-                    );
-                    if let Some(d) = new_deadline {
-                        deadline = d.min(max_target);
-                    } else {
-                        return DebounceResult::Ready(current);
-                    }
-                } else if current_state.generation < current.generation {
-                    return DebounceResult::Failed(format!(
-                        "pending generation rollback: observed {} after {}",
-                        current_state.generation, current.generation
-                    ));
+                    )
+                    .min(max_target);
+                    continue;
                 }
-            }
-            Err(pending::PendingError::NotFound) => {
-                return DebounceResult::CancelledMarkerRemoved;
-            }
-            Err(e) => {
-                return DebounceResult::Failed(format!("{e}"));
+                Ok(latest) if latest.generation < current.generation => {
+                    return DebounceResult::Failed(
+                        "pending generation rollback during debounce".into(),
+                    );
+                }
+                Ok(_) => return DebounceResult::Ready(current),
+                Err(pending::PendingError::NotFound) => {
+                    return DebounceResult::CancelledMarkerRemoved;
+                }
+                Err(error) => return DebounceResult::Failed(error.to_string()),
             }
         }
-
-        if clock
-            .now_instant()
-            .checked_duration_since(start)
-            .unwrap_or(Duration::ZERO)
-            >= max_delay
-        {
+        let sleep_for = deadline
+            .saturating_duration_since(clock.now_instant())
+            .min(Duration::from_millis(250));
+        clock.sleep(sleep_for);
+        match pending::read_state_from_dir(state_dir) {
+            Ok(latest) if latest.generation > current.generation => {
+                current = latest;
+                deadline = compute_deadline(
+                    current.created_at_unix_ms,
+                    debounce_duration,
+                    start,
+                    max_lifetime,
+                    clock,
+                )
+                .min(max_target);
+            }
+            Ok(latest) if latest.generation < current.generation => {
+                return DebounceResult::Failed(
+                    "pending generation rollback during debounce".into(),
+                );
+            }
+            Ok(_) => {}
+            Err(pending::PendingError::NotFound) => return DebounceResult::CancelledMarkerRemoved,
+            Err(error) => return DebounceResult::Failed(error.to_string()),
+        }
+        if clock.now_instant().duration_since(start) >= max_delay {
             return DebounceResult::DeferredMaximumLifetime(current);
         }
     }
@@ -483,362 +243,147 @@ pub fn preflight_check(state_dir: &Path, observed_generation: u64) -> Result<Pen
             state.generation, observed_generation
         )),
         Ok(state) => Ok(state),
-        Err(pending::PendingError::NotFound) => {
-            Err("pending marker removed, nothing to do".to_string())
-        }
-        Err(e) => Err(format!("corrupt pending state: {e}")),
+        Err(pending::PendingError::NotFound) => Err("pending marker removed, nothing to do".into()),
+        Err(error) => Err(format!("corrupt pending state: {error}")),
     }
 }
 
 fn unix_ms_to_instant(target_unix_ms: u64, clock: &dyn Clock) -> Instant {
-    let now_unix_ms = clock.now_unix_ms();
-    if target_unix_ms <= now_unix_ms {
-        return clock.now_instant();
-    }
-    let delta = Duration::from_millis(target_unix_ms - now_unix_ms);
-    clock
-        .now_instant()
-        .checked_add(delta)
-        .unwrap_or_else(|| clock.now_instant())
-}
-
-/// Classify an executor exit-zero completion by inspecting the pending
-/// marker against the observed generation.
-///
-/// This implements the Workstream A classification rules:
-/// 1. pending missing → `AcknowledgedAndCleared`
-/// 2. pending generation > observed → `AcknowledgedCoveredByNewer`
-/// 3. pending generation == observed → `ExitZeroWithoutAcknowledgement`
-/// 4. pending generation < observed → `PendingGenerationLowerThanObserved`
-/// 5. pending unreadable → `PendingStateUnreadable`
-fn classify_executor_completion(state_dir: &Path, observed_generation: u64) -> ExecutorCompletion {
-    match pending::read_state_from_dir(state_dir) {
-        Ok(current) => {
-            if current.generation == observed_generation {
-                ExecutorCompletion::ExitZeroWithoutAcknowledgement
-            } else if current.generation > observed_generation {
-                ExecutorCompletion::AcknowledgedCoveredByNewer {
-                    current_generation: current.generation,
-                }
-            } else {
-                ExecutorCompletion::PendingGenerationLowerThanObserved
-            }
-        }
-        Err(pending::PendingError::NotFound) => ExecutorCompletion::AcknowledgedAndCleared,
-        Err(_) => ExecutorCompletion::PendingStateUnreadable,
+    let now = clock.now_unix_ms();
+    if target_unix_ms <= now {
+        clock.now_instant()
+    } else {
+        clock
+            .now_instant()
+            .checked_add(Duration::from_millis(target_unix_ms - now))
+            .unwrap_or_else(|| clock.now_instant())
     }
 }
 
-/// Performs the bounded sync attempt for the observed generation.
-///
-/// Spawns an executor subprocess and waits for it, enforcing the sync
-/// timeout. On timeout, sends SIGTERM (Unix) / terminate (Windows),
-/// waits a 2-second grace period, then SIGKILL (Unix) / kill (Windows)
-/// if still alive.
-///
-/// Maps `ExecutorExitCode` to `WorkerOutcome` and records durable status:
-/// - `Success` → `Success` (caller may conditionally clear pending)
-/// - any other code → `Failed` with failure class, backoff, and status
-///
-/// The disabled-policy branch is retained as a defensive guard, but
-/// `run_locked` already exits with `NothingToDo` before reaching this
-/// function when policy is disabled.
-fn execute_sync(
-    state_dir: &Path,
-    policy: &AutoSyncPolicy,
-    observed_generation: u64,
-) -> WorkerOutcome {
+fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> WorkerOutcome {
     if !policy.enabled {
         return WorkerOutcome::NothingToDo;
     }
-
     crate::auto_sync::test_events::emit(
         "worker",
         "sync_started",
         std::process::id(),
-        Some(observed_generation),
+        Some(generation),
         None,
     );
-
-    let mut child = match spawn::spawn_executor(state_dir, observed_generation) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to spawn sync executor");
-            // Record spawn failure status
-            let _ = status::record_failure(
+    let settings = get_sync_settings();
+    let (push_only, pull_only) = match settings.sync_direction {
+        crate::config::SyncDirection::Push => (true, false),
+        crate::config::SyncDirection::Pull => (false, true),
+        crate::config::SyncDirection::Bidirectional => (false, false),
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("snp-auto-sync")
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return record_sync_failure(
                 state_dir,
-                observed_generation,
+                generation,
                 FailureClass::Internal,
-                -1,
-                0,
-                0,
-                &format!("executor spawn failed: {e}"),
-                current_config_fingerprint(),
+                &format!("runtime creation failed: {error}"),
             );
-            return WorkerOutcome::Failed;
         }
     };
-
-    match wait_child_with_timeout(&mut child, policy.sync_timeout) {
-        Ok(Some(status_out)) => {
-            let code = status_out.code().unwrap_or(7);
-            match ExecutorExitCode::from_exit_status(status_out) {
-                ExecutorExitCode::Success => {
-                    // Do NOT treat exit zero alone as remote success.
-                    // Classify using the observed pending disposition.
-                    let completion = classify_executor_completion(state_dir, observed_generation);
-                    match completion {
-                        ExecutorCompletion::AcknowledgedAndCleared => {
-                            let _ = status::record_success(
-                                state_dir,
-                                observed_generation,
-                                "executor cleared pending after remote acknowledgement",
-                            );
-                            crate::auto_sync::test_events::emit(
-                                "worker",
-                                "sync_completed",
-                                std::process::id(),
-                                Some(observed_generation),
-                                Some(r#"{"success":true,"reason":"pending_cleared"}"#.into()),
-                            );
-                            WorkerOutcome::Success
-                        }
-                        ExecutorCompletion::AcknowledgedCoveredByNewer { current_generation } => {
-                            // Record success for the completed generation G
-                            // while preserving the newer marker.
-                            let _ = status::record_success(
-                                state_dir,
-                                observed_generation,
-                                "executor acknowledged; newer pending generation preserved",
-                            );
-                            crate::auto_sync::test_events::emit(
-                                "worker",
-                                "sync_completed",
-                                std::process::id(),
-                                Some(observed_generation),
-                                Some(
-                                    serde_json::json!({
-                                        "success": true,
-                                        "reason": "newer_generation_preserved",
-                                        "current_generation": current_generation,
-                                    })
-                                    .to_string(),
-                                ),
-                            );
-                            // Return NothingToDo so the caller's follow-up
-                            // cycle loop handles the newer generation.
-                            WorkerOutcome::NothingToDo
-                        }
-                        ExecutorCompletion::ExitZeroWithoutAcknowledgement => {
-                            // Executor exited zero but pending G is unchanged.
-                            // This is a protocol-integrity failure: the
-                            // noop-success seam or an unacknowledged exit
-                            // must NOT produce a success status.
-                            let consecutive = next_consecutive_failures(state_dir);
-                            let backoff = transient_backoff(consecutive);
-                            let next_attempt =
-                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
-                            let _ = status::record_failure(
-                                state_dir,
-                                observed_generation,
-                                FailureClass::Internal,
-                                ExecutorExitCode::Success.to_exit_status(),
-                                consecutive,
-                                next_attempt,
-                                "executor exited zero without clearing pending (protocol integrity)",
-                                current_config_fingerprint(),
-                            );
-                            crate::auto_sync::test_events::emit(
-                                "worker",
-                                "sync_completed",
-                                std::process::id(),
-                                Some(observed_generation),
-                                Some(
-                                    serde_json::json!({
-                                        "success": false,
-                                        "reason": "exit_zero_without_acknowledgement",
-                                    })
-                                    .to_string(),
-                                ),
-                            );
-                            WorkerOutcome::Failed
-                        }
-                        ExecutorCompletion::PendingGenerationLowerThanObserved => {
-                            let consecutive = next_consecutive_failures(state_dir);
-                            let backoff = transient_backoff(consecutive);
-                            let next_attempt =
-                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
-                            let _ = status::record_failure(
-                                state_dir,
-                                observed_generation,
-                                FailureClass::Internal,
-                                ExecutorExitCode::Success.to_exit_status(),
-                                consecutive,
-                                next_attempt,
-                                "pending generation lower than observed (corrupt state)",
-                                current_config_fingerprint(),
-                            );
-                            crate::auto_sync::test_events::emit(
-                                "worker",
-                                "sync_completed",
-                                std::process::id(),
-                                Some(observed_generation),
-                                Some(
-                                    serde_json::json!({
-                                        "success": false,
-                                        "reason": "pending_generation_lower_than_observed",
-                                    })
-                                    .to_string(),
-                                ),
-                            );
-                            WorkerOutcome::Failed
-                        }
-                        ExecutorCompletion::PendingStateUnreadable => {
-                            let consecutive = next_consecutive_failures(state_dir);
-                            let backoff = transient_backoff(consecutive);
-                            let next_attempt =
-                                unix_now_ms().saturating_add(backoff.as_millis() as u64);
-                            let _ = status::record_failure(
-                                state_dir,
-                                observed_generation,
-                                FailureClass::Internal,
-                                ExecutorExitCode::Success.to_exit_status(),
-                                consecutive,
-                                next_attempt,
-                                "pending state unreadable after executor exit zero",
-                                current_config_fingerprint(),
-                            );
-                            crate::auto_sync::test_events::emit(
-                                "worker",
-                                "sync_completed",
-                                std::process::id(),
-                                Some(observed_generation),
-                                Some(
-                                    serde_json::json!({
-                                        "success": false,
-                                        "reason": "pending_state_unreadable",
-                                    })
-                                    .to_string(),
-                                ),
-                            );
-                            WorkerOutcome::Failed
-                        }
-                    }
-                }
-                exit_code => {
-                    let failure_class = exit_code.failure_class();
-                    tracing::warn!(
-                        exit_code = code,
-                        failure_class = %failure_class.as_code(),
-                        "sync executor failed"
-                    );
-                    // Record failure with backoff
-                    let consecutive = next_consecutive_failures(state_dir);
-                    let backoff = transient_backoff(consecutive);
-                    let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
-                    let _ = status::record_failure(
-                        state_dir,
-                        observed_generation,
-                        failure_class,
-                        code,
-                        consecutive,
-                        next_attempt,
-                        &exit_code.to_string(),
-                        current_config_fingerprint(),
-                    );
-                    crate::auto_sync::test_events::emit(
-                        "worker",
-                        "sync_completed",
-                        std::process::id(),
-                        Some(observed_generation),
-                        Some(
-                            serde_json::json!({
-                                "success": false,
-                                "exit_code": code,
-                                "failure_class": failure_class.as_code(),
-                            })
-                            .to_string(),
-                        ),
-                    );
-                    WorkerOutcome::Failed
-                }
+    match crate::sync_commands::run_sync(&settings, None, push_only, pull_only, &runtime) {
+        Ok(()) => match pending::clear_if_generation_matches(state_dir, generation) {
+            Ok(pending::ConditionalClearResult::Cleared) => {
+                let _ = status::record_success(
+                    state_dir,
+                    generation,
+                    "canonical sync acknowledged; pending cleared",
+                );
+                emit_sync_completed(generation, true, "pending_cleared");
+                WorkerOutcome::Success
             }
-        }
-        Ok(None) => {
-            tracing::warn!("sync executor timed out, terminating");
-            terminate_and_reap(&mut child, policy.termination_grace);
-            // Record timeout as transient timeout failure
-            let consecutive = next_consecutive_failures(state_dir);
-            let backoff = transient_backoff(consecutive);
-            let next_attempt = unix_now_ms().saturating_add(backoff.as_millis() as u64);
-            let _ = status::record_failure(
+            Ok(pending::ConditionalClearResult::GenerationChanged { current }) => {
+                let _ = status::record_success(
+                    state_dir,
+                    generation,
+                    "canonical sync acknowledged; newer generation preserved",
+                );
+                tracing::info!(
+                    generation,
+                    current,
+                    "auto-sync preserved newer pending generation"
+                );
+                emit_sync_completed(generation, true, "newer_generation_preserved");
+                WorkerOutcome::Success
+            }
+            Ok(pending::ConditionalClearResult::Missing) => {
+                let _ = status::record_success(
+                    state_dir,
+                    generation,
+                    "canonical sync completed; pending was already cleared",
+                );
+                emit_sync_completed(generation, true, "pending_already_missing");
+                WorkerOutcome::Success
+            }
+            Err(error) => record_sync_failure(
                 state_dir,
-                observed_generation,
-                FailureClass::TransientTimeout,
-                ExecutorExitCode::TransientTimeout.to_exit_status(),
-                consecutive,
-                next_attempt,
-                "sync executor timed out",
-                current_config_fingerprint(),
-            );
-            crate::auto_sync::test_events::emit(
-                "worker",
-                "sync_completed",
-                std::process::id(),
-                Some(observed_generation),
-                Some(r#"{"success":false,"timeout":true}"#.into()),
-            );
-            WorkerOutcome::Failed
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to wait for sync executor");
-            terminate_and_reap(&mut child, policy.termination_grace);
-            let _ = status::record_failure(
-                state_dir,
-                observed_generation,
-                FailureClass::Internal,
-                -1,
-                0,
-                0,
-                &format!("wait failed: {e}"),
-                current_config_fingerprint(),
-            );
-            crate::auto_sync::test_events::emit(
-                "worker",
-                "sync_completed",
-                std::process::id(),
-                Some(observed_generation),
-                Some(
-                    serde_json::json!({
-                        "success": false,
-                        "error": e,
-                    })
-                    .to_string(),
-                ),
-            );
-            WorkerOutcome::Failed
-        }
+                generation,
+                FailureClass::LocalPersistence,
+                &format!("pending clear failed after successful sync: {error}"),
+            ),
+        },
+        Err(error) => record_sync_failure(
+            state_dir,
+            generation,
+            FailureClass::from_error(&error),
+            &error.to_string(),
+        ),
     }
 }
 
-/// Read the current consecutive failure count from status.
+fn record_sync_failure(
+    state_dir: &Path,
+    generation: u64,
+    class: FailureClass,
+    message: &str,
+) -> WorkerOutcome {
+    let consecutive = next_consecutive_failures(state_dir);
+    let backoff = transient_backoff(consecutive);
+    let _ = status::record_failure(
+        state_dir,
+        generation,
+        class,
+        -1,
+        consecutive,
+        unix_now_ms().saturating_add(backoff.as_millis() as u64),
+        message,
+        current_config_fingerprint(),
+    );
+    emit_sync_completed(generation, false, class.as_code());
+    WorkerOutcome::Failed
+}
+
+fn emit_sync_completed(generation: u64, success: bool, reason: &str) {
+    crate::auto_sync::test_events::emit(
+        "worker",
+        "sync_completed",
+        std::process::id(),
+        Some(generation),
+        Some(serde_json::json!({"success": success, "reason": reason}).to_string()),
+    );
+}
+
 fn next_consecutive_failures(state_dir: &Path) -> u32 {
     match status::read_status_typed(state_dir) {
-        status::StatusRead::Valid(s) => s.consecutive_failures.saturating_add(1),
-        status::StatusRead::Corrupt(e) => {
-            tracing::warn!(error = %e, "corrupt status reading consecutive_failures; starting fresh");
-            1
-        }
-        status::StatusRead::Missing => 1,
+        status::StatusRead::Valid(status) => status.consecutive_failures.saturating_add(1),
+        _ => 1,
     }
 }
 
-/// Compute the current config fingerprint for deferral release detection.
 fn current_config_fingerprint() -> u64 {
-    let settings = get_sync_settings();
-    status::compute_config_fingerprint(&settings)
+    status::compute_config_fingerprint(&get_sync_settings())
 }
-
 fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -846,116 +391,12 @@ fn unix_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Wait for a child process with a timeout.
-///
-/// Polls `try_wait()` every 100ms. Returns `Ok(Some(status))` if the
-/// child exits before the deadline, `Ok(None)` on timeout, or `Err`
-/// on platform errors.
-fn wait_child_with_timeout(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Result<Option<ExitStatus>, String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(Some(status)),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    return Ok(None);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-}
-
-/// Best-effort bounded cleanup for every post-spawn failure path.
-///
-/// The caller retains the execution lock while this runs, so a worker cannot
-/// report failure and release the lock while its executor is still live.
-fn terminate_and_reap(child: &mut std::process::Child, grace: Duration) {
-    terminate_child(child);
-    let deadline = Instant::now()
-        .checked_add(grace)
-        .unwrap_or_else(Instant::now);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(
-                    Duration::from_millis(25)
-                        .min(deadline.saturating_duration_since(Instant::now())),
-                );
-            }
-            Ok(None) | Err(_) => {
-                force_kill_child(child);
-                let _ = child.wait();
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn terminate_child(child: &mut std::process::Child) {
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
-    }
-}
-
-#[cfg(not(unix))]
-fn terminate_child(child: &mut std::process::Child) {
-    let _ = child.kill();
-}
-
-#[cfg(unix)]
-fn force_kill_child(child: &mut std::process::Child) {
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGKILL);
-    }
-}
-
-#[cfg(not(unix))]
-fn force_kill_child(child: &mut std::process::Child) {
-    let _ = child.kill();
-}
-
-/// Recovery path invoked by the parent at startup.
-///
-/// Loads the pending marker. If absent, nothing to do. If present, the
-/// marker is preserved (old valid work is not silently discarded); the
-/// caller may spawn a worker through `schedule::schedule_and_spawn`.
-///
-/// If the execution lock is already held (another sync in progress),
-/// scheduling is skipped — the active worker or foreground sync will
-/// handle the pending state.
 pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending::PendingError> {
-    let pending_path = pending::pending_path(state_dir);
-    if !pending_path.exists() {
+    if !pending::pending_path(state_dir).exists() {
         return Ok(None);
     }
-
     let current = pending::read_state_from_dir(state_dir)?;
-
-    let now_ms = unix_now_ms();
-    let age_ms = now_ms.saturating_sub(current.created_at_unix_ms);
-
-    if age_ms > pending::STALE_PENDING_THRESHOLD_MS {
-        tracing::warn!(
-            generation = current.generation,
-            age_ms,
-            "startup recovery: stale pending marker; scheduling worker for recoverable work"
-        );
-    } else {
-        tracing::info!(
-            generation = current.generation,
-            "startup recovery: pending state present; scheduling worker"
-        );
-    }
-
-    let settings = crate::config::get_sync_settings();
-    let policy = AutoSyncPolicy::resolve(&settings);
+    let policy = AutoSyncPolicy::resolve(&get_sync_settings());
     if let Err(error) = crate::auto_sync::schedule::schedule_and_spawn(
         state_dir,
         &policy,
@@ -966,11 +407,6 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
     Ok(Some(current))
 }
 
-/// Generation-aware explicit-sync clearing.
-///
-/// Captures the pending generation at sync start, then clears only if the
-/// marker still matches after sync succeeds — preserving any mutation
-/// that arrived during the explicit sync.
 pub fn clear_after_explicit_sync(
     state_dir: &Path,
     observed_generation: u64,
@@ -979,1051 +415,16 @@ pub fn clear_after_explicit_sync(
     if !sync_succeeded {
         return Ok(false);
     }
-    pending::clear_if_generation_matches(state_dir, observed_generation)
-        .map(|result| matches!(result, pending::ConditionalClearResult::Cleared))
+    Ok(matches!(
+        pending::clear_if_generation_matches(state_dir, observed_generation)?,
+        pending::ConditionalClearResult::Cleared
+    ))
 }
 
-/// Reads the current pending generation, if any. Used by callers of
-/// `clear_after_explicit_sync` to capture the observed generation
-/// **before** the explicit sync runs.
 pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pending::PendingError> {
     match pending::read_state_from_dir(state_dir) {
-        Ok(s) => Ok(Some(s.generation)),
+        Ok(state) => Ok(Some(state.generation)),
         Err(pending::PendingError::NotFound) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-pub mod policy {
-    //! Re-exported constants for worker policy.
-    pub use crate::auto_sync::policy::*;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::auto_sync::pending::PendingSnapshot;
-    use std::sync::Mutex;
-    use tempfile::TempDir;
-
-    struct MockClock {
-        instant: Mutex<Instant>,
-        unix_ms: Mutex<u64>,
-    }
-
-    impl MockClock {
-        fn new(start_instant: Instant, start_unix_ms: u64) -> Self {
-            Self {
-                instant: Mutex::new(start_instant),
-                unix_ms: Mutex::new(start_unix_ms),
-            }
-        }
-
-        fn advance(&self, duration: Duration) {
-            let mut inst = self.instant.lock().unwrap();
-            *inst += duration;
-            let mut ms = self.unix_ms.lock().unwrap();
-            *ms += duration.as_millis() as u64;
-        }
-    }
-
-    impl Clock for MockClock {
-        fn now_instant(&self) -> Instant {
-            *self.instant.lock().unwrap()
-        }
-        fn now_unix_ms(&self) -> u64 {
-            *self.unix_ms.lock().unwrap()
-        }
-        fn sleep(&self, duration: Duration) {
-            self.advance(duration);
-        }
-    }
-
-    #[test]
-    fn test_nothing_to_do_without_pending() {
-        let dir = TempDir::new().unwrap();
-        let outcome = run(dir.path());
-        assert_eq!(outcome, WorkerOutcome::NothingToDo);
-    }
-
-    #[test]
-    fn test_worker_outcome_equality() {
-        assert_eq!(WorkerOutcome::Success, WorkerOutcome::Success);
-        assert_eq!(WorkerOutcome::Failed, WorkerOutcome::Failed);
-        assert_eq!(WorkerOutcome::NothingToDo, WorkerOutcome::NothingToDo);
-        assert_ne!(WorkerOutcome::Success, WorkerOutcome::Failed);
-    }
-
-    #[test]
-    fn test_worker_outcome_debug() {
-        assert_eq!(format!("{:?}", WorkerOutcome::Success), "Success");
-        assert_eq!(format!("{:?}", WorkerOutcome::Failed), "Failed");
-        assert_eq!(format!("{:?}", WorkerOutcome::NothingToDo), "NothingToDo");
-    }
-
-    #[test]
-    fn test_startup_recover_no_pending() {
-        let dir = TempDir::new().unwrap();
-        let result = startup_recover(dir.path()).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_startup_recover_preserves_pending_without_incrementing() {
-        let dir = TempDir::new().unwrap();
-        let initial = pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let before_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
-        let _ = startup_recover(dir.path()).unwrap();
-        let after_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
-        assert_eq!(before_bytes, after_bytes);
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(current.generation, initial.generation);
-        assert_eq!(
-            current.snapshot,
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate
-            }
-        );
-    }
-
-    #[test]
-    fn test_spawn_result_equality() {
-        assert_eq!(SpawnResult::Spawned, SpawnResult::Spawned);
-        assert_eq!(SpawnResult::Suppressed, SpawnResult::Suppressed);
-        assert_eq!(SpawnResult::SpawnFailed, SpawnResult::SpawnFailed);
-        assert_ne!(SpawnResult::Spawned, SpawnResult::Suppressed);
-    }
-
-    #[test]
-    fn test_spawn_result_debug() {
-        assert_eq!(format!("{:?}", SpawnResult::Spawned), "Spawned");
-        assert_eq!(format!("{:?}", SpawnResult::Suppressed), "Suppressed");
-        assert_eq!(format!("{:?}", SpawnResult::SpawnFailed), "SpawnFailed");
-    }
-
-    #[test]
-    fn test_clear_after_explicit_sync_skipped_on_failure() {
-        let dir = TempDir::new().unwrap();
-        let initial = pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = observed_pending_generation(dir.path()).unwrap();
-        let cleared = clear_after_explicit_sync(dir.path(), observed.unwrap(), false).unwrap();
-        assert!(!cleared);
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(current.generation, initial.generation);
-    }
-
-    #[test]
-    fn test_clear_after_explicit_sync_clears_matching_generation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = observed_pending_generation(dir.path()).unwrap().unwrap();
-        let cleared = clear_after_explicit_sync(dir.path(), observed, true).unwrap();
-        assert!(cleared);
-        assert!(matches!(
-            pending::read_state_from_dir(dir.path()),
-            Err(pending::PendingError::NotFound)
-        ));
-    }
-
-    #[test]
-    fn test_clear_after_explicit_sync_preserves_newer_generation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = observed_pending_generation(dir.path()).unwrap().unwrap();
-        // Simulate a mutation arriving during the explicit sync.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-        let cleared = clear_after_explicit_sync(dir.path(), observed, true).unwrap();
-        assert!(!cleared);
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert!(current.generation > observed);
-        assert_eq!(
-            current.snapshot,
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
-            }
-        );
-    }
-
-    #[test]
-    fn test_wait_child_with_timeout_exits_before_deadline() {
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let result = wait_child_with_timeout(&mut child, Duration::from_secs(5)).unwrap();
-        assert!(result.is_some());
-        let status = result.unwrap();
-        assert!(status.success());
-    }
-
-    #[test]
-    fn test_wait_child_with_timeout_returns_none_on_timeout() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        let result = wait_child_with_timeout(&mut child, Duration::from_millis(200)).unwrap();
-        assert!(result.is_none());
-        force_kill_child(&mut child);
-        let _ = child.wait();
-    }
-
-    #[test]
-    fn test_terminate_and_reap_is_bounded_and_reaps_child() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        terminate_and_reap(&mut child, Duration::from_millis(100));
-        assert!(child.try_wait().unwrap().is_some());
-    }
-
-    #[test]
-    fn test_debounce_rejects_generation_rollback_and_preserves_marker() {
-        let dir = TempDir::new().unwrap();
-        pending::set_local_generation_with_timestamp(dir.path(), 2, 0).unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        pending::set_local_generation_with_timestamp(dir.path(), 1, 0).unwrap();
-        let start = Instant::now();
-        let clock = MockClock::new(start, 0);
-
-        let result = debounce(
-            dir.path(),
-            observed,
-            start,
-            start,
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            Duration::from_secs(1),
-            &clock,
-        );
-        assert!(matches!(result, DebounceResult::Failed(message) if message.contains("rollback")));
-        assert_eq!(
-            pending::read_state_from_dir(dir.path()).unwrap().generation,
-            1
-        );
-    }
-
-    #[test]
-    fn test_execute_sync_disabled_policy() {
-        let dir = TempDir::new().unwrap();
-        let policy = AutoSyncPolicy {
-            enabled: false,
-            ..AutoSyncPolicy::default()
-        };
-        let outcome = execute_sync(dir.path(), &policy, 0);
-        assert_eq!(outcome, WorkerOutcome::NothingToDo);
-    }
-
-    #[test]
-    fn test_execute_sync_spawn_failure_returns_failed() {
-        let nonexistent = Path::new("/nonexistent/state/dir/xyzzy");
-        let policy = AutoSyncPolicy {
-            enabled: true,
-            ..AutoSyncPolicy::default()
-        };
-        let outcome = execute_sync(nonexistent, &policy, 0);
-        assert_eq!(outcome, WorkerOutcome::Failed);
-    }
-
-    #[test]
-    fn test_terminate_child_reap() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        terminate_child(&mut child);
-        let status = child.wait().unwrap();
-        assert!(!status.success());
-    }
-
-    #[test]
-    fn test_force_kill_child_reap() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        force_kill_child(&mut child);
-        let status = child.wait().unwrap();
-        assert!(!status.success());
-    }
-
-    #[test]
-    fn test_debounce_zero_is_immediate() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
-        let deadline = start; // already at deadline (zero debounce means compute_deadline returns None, caller passes start)
-        let result = debounce(
-            dir.path(),
-            observed.clone(),
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-        match result {
-            DebounceResult::Ready(state) => {
-                assert_eq!(state.generation, observed.generation);
-            }
-            other => panic!("expected Ready, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_debounce_marker_removed_returns_cancelled() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
-        // Deadline is in the past so debounce checks the marker immediately.
-        let deadline = start - Duration::from_secs(10);
-        // Remove the marker before debounce reads it.
-        pending::clear(dir.path()).unwrap();
-        let result = debounce(
-            dir.path(),
-            observed,
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-        assert!(matches!(result, DebounceResult::CancelledMarkerRemoved));
-    }
-
-    #[test]
-    fn test_debounce_generation_change_promotes_observation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(observed.generation, 1);
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        // max_delay reached immediately so debounce exits after first sleep/read cycle.
-        let max_delay = Duration::ZERO;
-        // Deadline far in the future so the sleep path is taken.
-        let deadline = start + Duration::from_secs(60);
-        // Arrive with a newer generation before debounce reads.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-        let result = debounce(
-            dir.path(),
-            observed,
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-        match result {
-            DebounceResult::DeferredMaximumLifetime(state) => {
-                assert_eq!(state.generation, 2);
-            }
-            other => panic!("expected DeferredMaximumLifetime, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_preflight_check_returns_current_state() {
-        let dir = TempDir::new().unwrap();
-        let initial = pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let result = preflight_check(dir.path(), initial.generation).unwrap();
-        assert_eq!(result.generation, initial.generation);
-    }
-
-    #[test]
-    fn test_preflight_check_returns_error_when_missing() {
-        let dir = TempDir::new().unwrap();
-        let result = preflight_check(dir.path(), 1);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("nothing to do"));
-    }
-
-    /// When preflight detects a newer generation than what debounce returned,
-    /// the caller should restart debounce with the newer state.
-    #[test]
-    fn test_preflight_newer_generation_detected() {
-        let dir = TempDir::new().unwrap();
-        // Record generation 1
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let gen1 = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(gen1.generation, 1);
-
-        // Now bump to generation 2
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-        let gen2 = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(gen2.generation, 2);
-
-        // Preflight with generation 1 should return gen2 (newer)
-        let result = preflight_check(dir.path(), gen1.generation).unwrap();
-        assert_eq!(
-            result.generation, 2,
-            "preflight must return the newer generation"
-        );
-
-        // Preflight with generation 2 should also return gen2 (unchanged)
-        let result = preflight_check(dir.path(), gen2.generation).unwrap();
-        assert_eq!(result.generation, 2);
-    }
-
-    /// Marker removal during preflight produces an error (no executor spawn).
-    #[test]
-    fn test_preflight_marker_removed_returns_error() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        // Remove the marker
-        pending::clear(dir.path()).unwrap();
-        // Preflight should error (nothing to do)
-        let result = preflight_check(dir.path(), 1);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_startup_recover_always_schedules_worker() {
-        let dir = TempDir::new().unwrap();
-        // Create a marker with a stale timestamp (created >5 min ago).
-        let stale_ms = unix_now_ms() - pending::STALE_PENDING_THRESHOLD_MS - 60_000;
-        pending::set_local_generation_with_timestamp(dir.path(), 1, stale_ms).unwrap();
-        // startup_recover should return the stale state (not None) — it always recovers.
-        let result = startup_recover(dir.path()).unwrap();
-        assert!(result.is_some());
-        let state = result.unwrap();
-        assert_eq!(state.generation, 1);
-    }
-
-    #[test]
-    fn test_debounce_result_ready_equality() {
-        let a = DebounceResult::Ready(PendingState {
-            generation: 1,
-            snapshot: PendingSnapshot::None,
-            created_at_unix_ms: 0,
-        });
-        let b = DebounceResult::Ready(PendingState {
-            generation: 1,
-            snapshot: PendingSnapshot::None,
-            created_at_unix_ms: 0,
-        });
-        assert_eq!(a, b);
-        assert_ne!(
-            DebounceResult::CancelledMarkerRemoved,
-            DebounceResult::Failed("x".into())
-        );
-    }
-
-    #[test]
-    fn test_clock_system_clock_methods() {
-        let clock = SystemClock;
-        let t1 = clock.now_instant();
-        let ms1 = clock.now_unix_ms();
-        std::thread::sleep(Duration::from_millis(10));
-        let t2 = clock.now_instant();
-        let ms2 = clock.now_unix_ms();
-        assert!(t2 >= t1);
-        assert!(ms2 >= ms1);
-        assert!(ms2 - ms1 < 1000);
-    }
-
-    // ── ExecutorCompletion classification tests ─────────────────────
-
-    #[test]
-    fn test_classify_completion_missing_pending_is_acknowledged() {
-        let dir = TempDir::new().unwrap();
-        // No pending marker — executor cleared it.
-        let result = classify_executor_completion(dir.path(), 1);
-        assert_eq!(result, ExecutorCompletion::AcknowledgedAndCleared);
-    }
-
-    #[test]
-    fn test_classify_completion_same_generation_is_false_success() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        // Pending still has generation 1, observed was 1 → false success.
-        let result = classify_executor_completion(dir.path(), 1);
-        assert_eq!(result, ExecutorCompletion::ExitZeroWithoutAcknowledgement);
-    }
-
-    #[test]
-    fn test_classify_completion_newer_generation_is_covered() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-        // Pending has generation 2, observed was 1 → covered by newer.
-        let result = classify_executor_completion(dir.path(), 1);
-        assert_eq!(
-            result,
-            ExecutorCompletion::AcknowledgedCoveredByNewer {
-                current_generation: 2
-            }
-        );
-    }
-
-    #[test]
-    fn test_classify_completion_lower_generation_is_corrupt() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        // Pending has generation 1, observed was 5 → corrupt/inconsistent.
-        let result = classify_executor_completion(dir.path(), 5);
-        assert_eq!(
-            result,
-            ExecutorCompletion::PendingGenerationLowerThanObserved
-        );
-    }
-
-    // ── Debounce tests ──────────────────────────────────────────────
-
-    #[test]
-    fn test_one_mutation_produces_one_ready_state() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(observed.generation, 1);
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
-        let deadline = start;
-        let result = debounce(
-            dir.path(),
-            observed.clone(),
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-        match result {
-            DebounceResult::Ready(state) => {
-                assert_eq!(
-                    state.generation, 1,
-                    "Ready must carry the correct generation"
-                );
-            }
-            other => panic!("expected Ready, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_rapid_mutations_produce_single_ready_for_final_generation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(observed.generation, 1);
-
-        for i in 0..5 {
-            pending::record_pending_mutation(
-                dir.path(),
-                PendingSnapshot::Mutation {
-                    kind: if i % 2 == 0 {
-                        crate::auto_sync::policy::MutationKind::SnippetCreate
-                    } else {
-                        crate::auto_sync::policy::MutationKind::SnippetUpdate
-                    },
-                },
-            )
-            .unwrap();
-        }
-
-        let latest = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(
-            latest.generation, 6,
-            "final generation must be 6 after 5 additional mutations"
-        );
-
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(600);
-        let deadline = start + Duration::from_secs(1);
-
-        let result = debounce(
-            dir.path(),
-            observed,
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-
-        match result {
-            DebounceResult::Ready(state) => {
-                assert_eq!(
-                    state.generation, 6,
-                    "Ready must return the final generation, not intermediate ones"
-                );
-            }
-            other => panic!("expected Ready with generation 6, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_wall_clock_skew_does_not_panic() {
-        let dir = TempDir::new().unwrap();
-        pending::set_local_generation_with_timestamp(dir.path(), 1, u64::MAX - 1000).unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(observed.generation, 1);
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(300);
-        let deadline = start + Duration::from_secs(1);
-
-        let result = debounce(
-            dir.path(),
-            observed,
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-
-        match result {
-            DebounceResult::Ready(state) => {
-                assert_eq!(
-                    state.generation, 1,
-                    "Ready must return without panicking on extreme timestamps"
-                );
-            }
-            other => panic!("expected Ready, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_debounce_returns_latest_generation_not_initial() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let initial = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(initial.generation, 1);
-
-        let clock = MockClock::new(Instant::now(), 1_000_000);
-        let start = clock.now_instant();
-        let max_lifetime = Duration::from_secs(300);
-        let max_delay = Duration::from_secs(600);
-        let deadline = start + Duration::from_secs(60);
-
-        // Before the deadline, update to gen 2.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-
-        let result = debounce(
-            dir.path(),
-            initial,
-            deadline,
-            start,
-            max_lifetime,
-            max_delay,
-            Duration::from_secs(2),
-            &clock,
-        );
-
-        match result {
-            DebounceResult::Ready(state) => {
-                assert_eq!(
-                    state.generation, 2,
-                    "Ready must return the latest generation, not the initial one"
-                );
-            }
-            other => panic!("expected Ready with generation 2, got {:?}", other),
-        }
-    }
-
-    // ── Active-sync tests ───────────────────────────────────────────
-
-    #[test]
-    fn test_follow_up_cycle_detects_newer_generation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let initial = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(initial.generation, 1);
-
-        // Simulate a sync completing for gen 1, but a newer mutation arrived.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert!(
-            current.generation > initial.generation,
-            "follow-up detection: current generation must be newer than initial"
-        );
-        assert_eq!(
-            current.generation, 2,
-            "follow-up detection: newer generation must be 2"
-        );
-    }
-
-    #[test]
-    fn test_failed_sync_preserves_newer_generation() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(current.generation, 2);
-
-        // Simulate a failed sync on gen 1 — it must not touch gen 2.
-        pending::record_failure(dir.path(), 1, "network").unwrap();
-
-        let after = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(
-            after.generation, 2,
-            "failed sync on gen 1 must preserve gen 2"
-        );
-        assert_eq!(
-            after.snapshot,
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
-            }
-        );
-    }
-
-    /// Workstream F: mutation during active sync triggers a follow-up cycle.
-    ///
-    /// The worker observes gen 1, launches sync. While sync is active, gen 2
-    /// arrives. On successful sync, the worker conditionally clears only gen 1
-    /// (which succeeds since gen 2 is now current, so gen 1 is already gone
-    /// or the conditional clear preserves gen 2). The worker then reads the
-    /// marker and detects a newer generation, starting a follow-up cycle.
-    #[test]
-    fn test_auto_sync_worker_follows_up_on_newer_generation() {
-        let dir = TempDir::new().unwrap();
-
-        // Step 1: Create gen 1 — the worker observes this and launches sync.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let observed = pending::read_state_from_dir(dir.path()).unwrap();
-        assert_eq!(observed.generation, 1);
-
-        // Step 2: While sync is active, gen 2 arrives (mutation during sync).
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate,
-            },
-        )
-        .unwrap();
-
-        // Step 3: Sync completes successfully — conditional clear of gen 1.
-        // Since gen 2 is current, clear_if_generation_matches(gen 1) returns
-        // GenerationChanged (gen 1 is not the current generation). The marker
-        // is preserved with gen 2.
-        let clear_result =
-            pending::clear_if_generation_matches(dir.path(), observed.generation).unwrap();
-        assert!(
-            matches!(
-                clear_result,
-                pending::ConditionalClearResult::GenerationChanged { current: 2 }
-            ),
-            "clearing gen 1 when gen 2 is current must return GenerationChanged"
-        );
-
-        // Step 4: Worker reads the marker for follow-up detection (lines 239-249).
-        let current = pending::read_state_from_dir(dir.path()).unwrap();
-        assert!(
-            current.generation > observed.generation,
-            "follow-up detection: current generation ({}) must be newer than observed ({})",
-            current.generation,
-            observed.generation
-        );
-        assert_eq!(current.generation, 2);
-        assert_eq!(
-            current.snapshot,
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetUpdate
-            }
-        );
-    }
-
-    /// Workstream G: startup recovery skips scheduling when execution lock is held.
-    ///
-    /// If another process (worker, manual sync, cron) already holds the
-    /// execution lock, startup_recover must return the pending state but
-    /// NOT schedule a duplicate worker.
-    #[test]
-    fn test_startup_recover_skips_scheduling_when_lock_held() {
-        let dir = TempDir::new().unwrap();
-
-        // Create pending state.
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let before_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
-
-        // Acquire the execution lock (simulating an active sync).
-        let _lock = crate::auto_sync::execution_lock::try_acquire(dir.path()).unwrap();
-        assert!(
-            crate::auto_sync::execution_lock::execution_lock_path(dir.path()).exists(),
-            "execution lock must exist while held"
-        );
-
-        // startup_recover should return the pending state but skip scheduling.
-        let result = startup_recover(dir.path()).unwrap();
-        assert!(
-            result.is_some(),
-            "pending state must be returned even when lock is held"
-        );
-        let state = result.unwrap();
-        assert_eq!(state.generation, 1);
-
-        // The pending marker must be byte-for-byte unchanged — no scheduling occurred.
-        let after_bytes = std::fs::read_to_string(pending::pending_path(dir.path())).unwrap();
-        assert_eq!(
-            before_bytes, after_bytes,
-            "pending marker must not be mutated when execution lock is held"
-        );
-
-        // Verify the lock is still held (we didn't release it).
-        assert!(
-            crate::auto_sync::execution_lock::execution_lock_path(dir.path()).exists(),
-            "execution lock must remain held after startup_recover"
-        );
-    }
-
-    /// Dead worker is recoverable: spawning to a nonexistent state dir
-    /// returns Failed, not a panic.
-    #[test]
-    fn test_dead_worker_is_recoverable() {
-        let nonexistent = Path::new("/nonexistent/state/dir/recovery-test");
-        let policy = AutoSyncPolicy {
-            enabled: true,
-            ..AutoSyncPolicy::default()
-        };
-        let outcome = execute_sync(nonexistent, &policy, 0);
-        assert_eq!(outcome, WorkerOutcome::Failed);
-    }
-
-    /// Foreground and detached paths classify the same injected error identically.
-    #[test]
-    fn test_foreground_detached_parity_classification() {
-        use crate::auto_sync::executor::ExecutorExitCode;
-        use crate::error::SyncFailureKind;
-
-        // Both paths use the same FailureClass classification
-        let err = crate::error::SnipError::sync_failure(
-            SyncFailureKind::ConnectFailed,
-            Some("connection refused"),
-        );
-        let class = FailureClass::from_error(&err);
-        assert_eq!(class, FailureClass::TransientNetwork);
-
-        // The same class maps to the same exit code
-        let code = ExecutorExitCode::from_failure_class(class);
-        assert_eq!(code, ExecutorExitCode::NetworkTimeout);
-
-        // And back again
-        let roundtrip = code.failure_class();
-        assert_eq!(roundtrip, FailureClass::TransientNetwork);
-    }
-
-    /// Startup recovery preserves backoff: if status has a future
-    /// next_attempt_at, startup_recover still schedules a worker
-    /// (the worker itself will check backoff via schedule_sync).
-    #[test]
-    fn test_startup_recovery_preserves_backoff_state() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: crate::auto_sync::policy::MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-
-        // Record a failure with active backoff
-        let future_ms = unix_now_ms() + 60_000;
-        status::record_failure(
-            dir.path(),
-            1,
-            FailureClass::TransientNetwork,
-            4,
-            3,
-            future_ms,
-            "connection failed",
-            0,
-        )
-        .unwrap();
-
-        // Verify backoff is active
-        let status = status::read_status(dir.path()).unwrap();
-        assert_eq!(status.next_attempt_at_unix_ms, future_ms);
-        assert_eq!(status.consecutive_failures, 3);
-
-        // Startup recovery should still return the pending state
-        let result = startup_recover(dir.path()).unwrap();
-        assert!(result.is_some());
-
-        // Backoff state must be preserved after recovery
-        let status = status::read_status(dir.path()).unwrap();
-        assert_eq!(status.next_attempt_at_unix_ms, future_ms);
-        assert_eq!(status.consecutive_failures, 3);
+        Err(error) => Err(error),
     }
 }

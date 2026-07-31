@@ -333,13 +333,12 @@ data.
 ### Auto-sync policy
 
 Auto-sync is disabled by default. When enabled, mutation commands (`new`, `edit`,
-`import`, `delete`, `library create/delete`) trigger a **detached one-shot
-worker** (`snp auto-sync-worker`) after the local change is committed. The
-worker spawns a killable executor subprocess (`snp auto-sync-execute`) for the
-actual sync work. All sync operations — worker, manual `snp sync`, explicit
-`--sync`, and cron — share a single `SyncExecutionLock` to prevent concurrent
-sync. The parent returns immediately — the user never waits on network
-round-trips.
+`import`, `delete`, `library create/delete`) trigger one **detached one-shot
+helper** (`snp auto-sync-worker`) after the local change is committed. The
+helper owns the shared `SyncExecutionLock` and runs the canonical sync operation
+directly. All sync operations — helper, manual `snp sync`, explicit `--sync`,
+and cron — share that lock. The parent returns immediately — the user never
+waits on network round-trips.
 
 Configure it via:
 
@@ -371,9 +370,9 @@ files persist on disk and may contain stale metadata.
 their metadata is diagnostic, and the next lock acquirer refreshes it after
 obtaining the kernel lock.
 
-The hidden worker reports failed sync execution with a nonzero internal exit
+The hidden helper reports failed sync execution with a nonzero internal exit
 status, so supervisors and diagnostics do not mistake a failed background sync
-for a successful one. The worker is re-executed using the current executable's
+for a successful one. The helper is re-executed using the current executable's
 native path representation, preserving valid non-UTF-8 Unix paths.
 
 ## CLI overview

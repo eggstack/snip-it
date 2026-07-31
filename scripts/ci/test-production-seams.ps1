@@ -118,23 +118,15 @@ sha256 = "$IndexSha"
     Write-Host 'PASS: failpoint did not abort production restore'
 
     Write-Host ''
-    Write-Host '=== Test 2: SNP_TEST_EXECUTOR_MODE does not bypass production executor ==='
-    $env:SNP_TEST_EXECUTOR_MODE = 'noop-success'
+    Write-Host '=== Test 2: removed executor command is not accepted ==='
     $StateDir = Join-Path $TmpDir 'state'
-    $stderr2 = Join-Path $TmpDir 'seam-stderr-2.txt'
-    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *> $stderr2
+    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *> $null
     $exitCode2 = $LASTEXITCODE
     if ($exitCode2 -eq 0) {
-        Write-Host 'FAIL: production executor exited 0 with noop-success mode (seam is active)'
+        Write-Host 'FAIL: removed auto-sync-execute command is still accepted'
         exit 1
     }
-    $stderrContent = Get-Content $stderr2 -Raw
-    if ($stderrContent -match '(?i)usage|invalid|unknown.*argument|missing.*required') {
-        Write-Host 'FAIL: executor stderr contains usage/parsing diagnostics:'
-        Write-Host $stderrContent
-        exit 1
-    }
-    Write-Host "PASS: noop-success mode did not bypass production executor (exit code: $exitCode2)"
+    Write-Host 'PASS: executor subprocess command is removed'
 
     Write-Host ''
     Write-Host '=== Test 3: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling ==='
@@ -156,7 +148,7 @@ sha256 = "$IndexSha"
     $EventsDir = Join-Path $TmpDir 'events'
     New-Item -ItemType Directory -Path $EventsDir -Force | Out-Null
     $env:SNP_TEST_EVENTS_DIR = $EventsDir
-    & $Binary auto-sync-execute --state-dir $StateDir --generation 1 *>$null
+    & $Binary auto-sync-worker --state-dir $StateDir *>$null
     $null = $LASTEXITCODE  # may fail due to unreachable server; that's expected
     if (Test-Path (Join-Path $EventsDir 'test-events.jsonl')) {
         Write-Host 'FAIL: production binary created event file'

@@ -234,7 +234,7 @@ to external consumers.*
 ## `auto_sync` module (`src/auto_sync/mod.rs`)
 
 *Entire module is `application-internal` — used by the binary for auto-sync
-worker/executor subprocess management.*
+detached auto-sync helper management.*
 
 ### Re-exports from `mod.rs`
 
@@ -251,14 +251,13 @@ worker/executor subprocess management.*
 | Submodule | Key public items |
 |-----------|-----------------|
 | `execution_lock` | `SyncExecutionLock`, `ExecutionLockContents`, `try_acquire`, `wait_acquire`, `process_alive` |
-| `executor` | `ExecutorExitCode`, `ExecutorCommand`, `run_executor`, `classify_sync_error` |
 | `lock` | `WorkerLock`, `WorkerLockContents`, `try_acquire`, `inspect`, `is_stale`, `process_alive` |
 | `notification` | `MutationContext`, `AutoSyncNotificationResult`, `SubcommandTag`, `notify_mutation`, `should_attempt_auto_sync_recovery`, `startup_recover_pending` |
 | `pending` | `PendingSnapshot`, `PendingState`, `ConditionalClearResult`, `record_pending_mutation`, `read_state`, `read_state_from_dir` |
 | `pending_lock` | `PendingTxnGuard`, `PendingTxnLockError`, `acquire_pending_txn` |
 | `policy` | `AutoSyncPolicy`, `FailureClass` (11 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |
 | `schedule` | `ScheduleDecision`, `Caller`, `schedule_sync`, `schedule_sync_from_config`, `schedule_and_spawn` |
-| `spawn` | `SpawnError`, `spawn_worker`, `spawn_executor`, `WORKER_SUBCOMMAND`, `EXECUTOR_SUBCOMMAND` |
+| `spawn` | `SpawnError`, `spawn_worker`, `WORKER_SUBCOMMAND` |
 | `status` | `AutoSyncStatus`, `StatusRead`, `read_status`, `write_status`, `record_success`, `record_failure`, `compute_config_fingerprint` |
 | `test_events` | `enabled`, `sink_path`, `emit` |
 | `worker` | `WorkerOutcome`, `SpawnResult`, `Clock`, `SystemClock`, `DebounceResult`, `run`, `debounce`, `preflight_check`, `startup_recover` |
@@ -372,7 +371,7 @@ worker/executor subprocess management.*
    binary-internal.
 
 2. **`pub mod auto_sync`** → `pub(crate)` — The entire auto-sync subsystem
-   (worker, executor, locks, pending, status, policy, schedule, spawn) is
+   (worker, locks, pending, status, policy, schedule, spawn) is
    binary-internal plumbing.  The re-exports in `mod.rs` expose ~30 items
    that no external consumer needs.
 

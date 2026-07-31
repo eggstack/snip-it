@@ -308,10 +308,7 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                         &state_dir,
                         observed_gen,
                         failure_class,
-                        crate::auto_sync::executor::ExecutorExitCode::from_failure_class(
-                            failure_class,
-                        )
-                        .to_exit_status(),
+                        -1,
                         0,
                         0,
                         &e.to_string(),
@@ -579,8 +576,7 @@ pub fn run_retry(library: Option<String>, runtime: &tokio::runtime::Runtime) -> 
                 &state_dir,
                 observed_gen,
                 failure_class,
-                crate::auto_sync::executor::ExecutorExitCode::from_failure_class(failure_class)
-                    .to_exit_status(),
+                -1,
                 0,
                 0,
                 &e.to_string(),

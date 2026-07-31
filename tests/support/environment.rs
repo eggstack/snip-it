@@ -57,8 +57,8 @@ impl TestEnvironment {
         cmd.env_remove("SNP_TEST_INJECT_ERROR");
         cmd.env_remove("SNP_TEST_MUTATION_BARRIER_DIR");
         // Test credential file: ensures deterministic credential availability
-        // for parent, worker, and executor subprocesses. Bypasses keychain
-        // entirely so the executor uses the real API key, not @keychain.
+        // for parent and detached worker processes. Bypasses keychain entirely
+        // so the helper uses the real API key, not @keychain.
         if let Some(ref cred_path) = self.credential_file {
             cmd.env("SNP_TEST_CREDENTIAL_FILE", cred_path);
         }

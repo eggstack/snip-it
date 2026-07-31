@@ -4,7 +4,7 @@
 //!
 //! Provides [`CliOutcome`] for typed command results, [`exit_code`]
 //! for centralized exit-code mapping, and [`OutputContext`] for
-//! enforcing machine-output purity rules. Internal worker/executor
+//! enforcing machine-output purity rules. Internal worker
 //! codes remain hidden.
 
 use std::io::Write;

@@ -55,9 +55,12 @@ pub enum CliOutcome {
 
 ## Internal Worker/Executor Codes
 
-Exit codes used by the auto-sync worker (`snp auto-sync-worker`) and executor (`snp auto-sync-execute`) subprocesses are internal. They are not part of the public CLI contract and may change without notice.
+The detached auto-sync worker's exit status is internal and is not part of the
+public CLI contract. A failed helper exits nonzero; successful and no-work
+outcomes exit zero.
 
-Worker/executor codes are defined in `src/auto_sync/executor.rs` as `ExecutorExitCode` and mapped by the worker's exit-code translation layer.
+Sync failure classification is recorded in `auto-sync-status.toml` by the helper;
+there is no executor exit-code translation layer.
 
 ## Execution Failure Exit Code
 

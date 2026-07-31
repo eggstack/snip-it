@@ -1,9 +1,9 @@
 //! **Layer: Test-only**
 //!
-//! Test-only event emission for worker/executor lifecycle tracking.
+//! Test-only event emission for detached-helper lifecycle tracking.
 //!
 //! When the `test-support` feature is enabled and the `SNP_TEST_EVENTS_DIR`
-//! environment variable is set, worker and executor processes emit structured
+//! environment variable is set, the worker emits structured
 //! JSON-lines events to `<SNP_TEST_EVENTS_DIR>/test-events.jsonl`. This allows
 //! integration tests to observe lifecycle events without timing-dependent
 //! coordination.

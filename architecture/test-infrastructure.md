@@ -4,7 +4,10 @@ Deterministic end-to-end testing infrastructure for the auto-sync subsystem. Reu
 
 ## Overview
 
-The Phase 05A test infrastructure tests two-process-per-cycle auto-sync with real binaries, real gRPC servers, and deterministic assertions. Tests prove exact sequences — not just "eventually consistent" behavior — including remote state effects, pending marker lifecycle, and status file truth.
+The auto-sync test infrastructure exercises the single detached helper with
+real binaries, real gRPC servers, and deterministic assertions. Tests prove
+exact sequences — not just "eventually consistent" behavior — including remote
+state effects, pending marker lifecycle, and status file truth.
 
 All tests exercise the `snp` binary as a subprocess, never as a library call, ensuring we test the real user-facing code path.
 
@@ -73,7 +76,8 @@ let has_op = server.wait_for_operation("sync", Duration::from_secs(5)).await;
 
 ### EventSink / EventWriter (`tests/support/event_sink.rs`)
 
-JSON-lines channel for cross-process lifecycle evidence. Child processes (workers, executors) write events; the test side reads and asserts.
+JSON-lines channel for detached-helper lifecycle evidence. The helper writes
+events; the test side reads and asserts.
 
 ```rust
 use support::event_sink::{EventSink, EventWriter};
@@ -85,14 +89,14 @@ sink.clear();
 // Child processes write events via EventWriter
 let writer = EventWriter::new(state_dir);
 writer.write("worker", "started", pid, Some(generation), None);
-writer.write("executor", "sync_completed", pid, Some(generation), None);
+writer.write("worker", "sync_completed", pid, Some(generation), None);
 
 // Test side: wait for specific events
 let event = sink.wait_for_event("worker", "started", Duration::from_secs(10));
 assert!(event.is_some(), "worker must emit started event");
 
-let gen_event = sink.wait_for_generation("executor", "sync_completed", 1, Duration::from_secs(10));
-assert!(gen_event.is_some(), "executor must complete for generation 1");
+let gen_event = sink.wait_for_generation("worker", "sync_completed", 1, Duration::from_secs(10));
+assert!(gen_event.is_some(), "helper must complete for generation 1");
 
 let count = sink.count_events("worker", "started");
 assert_eq!(count, 1, "exactly one worker spawn per mutation");
@@ -176,7 +180,7 @@ The canonical deterministic test (`tests/deterministic_e2e.rs:test_real_remote_e
 2. Register real client, enable auto-sync with debounce=2
 3. Create snippet via real `snp new` subprocess
 4. Observe pending generation G in `auto-sync-pending.toml`
-5. Wait for worker+executor lifecycle to complete
+5. Wait for the helper lifecycle to complete
 6. Verify server received the operation (remote state effect: snippet appears on pull)
 7. Verify status file contains success for generation G
 8. Verify pending marker is cleared for generation G
@@ -185,12 +189,12 @@ The canonical deterministic test (`tests/deterministic_e2e.rs:test_real_remote_e
 **Invariants proven:**
 - Remote effect occurs before pending clear
 - Local mutation always commits before any remote work
-- Pending clear is impossible with a no-op/failed executor
+- Pending clear is impossible when canonical sync fails
 - Status file truth is necessary but not sufficient alone
 
 ## Future Work
 
-- **Barrier synchronization** — Deterministic coordination points between test, worker, and executor processes (replacing `sleep`-based timing)
+- **Barrier synchronization** — Deterministic coordination points for helper tests (replacing `sleep`-based timing)
 - **Failpoint injection** — Configurable failure modes at specific pipeline stages (connection refused, partial sync, timeout) without needing unreachable servers
 - **Crash-window recovery** — Table-driven tests proving state consistency across 9 crash windows (requires barriers/failpoints)
 
