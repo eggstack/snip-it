@@ -11,7 +11,6 @@ fn snp_cmd() -> Command {
 }
 
 /// Get a PID that is guaranteed dead on all platforms.
-/// Spawns a short-lived child process and returns its PID after wait.
 fn dead_pid() -> u32 {
     let child = Command::new(env!("CARGO_BIN_EXE_snp"))
         .arg("--version")
@@ -445,17 +444,18 @@ fn test_sync_repair_dry_run_noop() {
 }
 
 #[test]
-fn test_sync_repair_dry_run_stale_lock() {
+fn test_sync_repair_ignores_malformed_persistent_locks() {
     let (_tmp, config_dir) = setup_test_env();
     write_sync_toml(&config_dir, true);
 
-    let lock_path = config_dir.join("auto-sync-execution.lock");
-    let pid = dead_pid();
-    fs::write(
-        &lock_path,
-        format!("pid = {pid}\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n"),
-    )
-    .unwrap();
+    let lock_paths = [
+        "auto-sync-execution.lock",
+        "auto-sync-worker.lock",
+        "auto-sync-pending.lock",
+    ];
+    for name in lock_paths {
+        fs::write(config_dir.join(name), b"malformed lock metadata").unwrap();
+    }
 
     let output = snp_in(&config_dir)
         .args(["sync", "repair", "--dry-run"])
@@ -464,36 +464,53 @@ fn test_sync_repair_dry_run_stale_lock() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("stale") || stdout.contains("dead") || stdout.contains("execution"),
-        "dry-run should detect stale lock: {stdout}"
+        !stdout.contains("execution_lock"),
+        "lock must be ignored: {stdout}"
+    );
+    assert!(
+        !stdout.contains("worker_lock"),
+        "lock must be ignored: {stdout}"
+    );
+    assert!(
+        !stdout.contains("pending_txn_lock"),
+        "lock must be ignored: {stdout}"
     );
 }
 
 #[test]
-fn test_sync_repair_apply_removes_stale_lock() {
+fn test_sync_repair_apply_preserves_persistent_locks() {
     let (_tmp, config_dir) = setup_test_env();
     write_sync_toml(&config_dir, true);
 
-    let lock_path = config_dir.join("auto-sync-execution.lock");
-    let pid = dead_pid();
-    fs::write(
-        &lock_path,
-        format!("pid = {pid}\nstarted_at_unix_ms = 1000\nnonce = \"test\"\n"),
-    )
-    .unwrap();
+    let lock_paths = [
+        "auto-sync-execution.lock",
+        "auto-sync-worker.lock",
+        "auto-sync-pending.lock",
+    ];
+    let sentinels: Vec<_> = lock_paths
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let bytes = format!("sentinel-{index}").into_bytes();
+            fs::write(config_dir.join(name), &bytes).unwrap();
+            bytes
+        })
+        .collect();
 
     let output = snp_in(&config_dir)
         .args(["sync", "repair", "--apply"])
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(
-        !lock_path.exists()
-            || fs::read_to_string(&lock_path)
-                .unwrap_or_default()
-                .is_empty(),
-        "stale lock should be removed or cleared after repair --apply"
-    );
+    for (name, expected) in lock_paths.iter().zip(sentinels.iter()) {
+        let path = config_dir.join(name);
+        assert!(
+            path.exists(),
+            "persistent lock should remain: {}",
+            path.display()
+        );
+        assert_eq!(fs::read(&path).unwrap(), *expected);
+    }
 }
 
 #[test]

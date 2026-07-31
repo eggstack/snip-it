@@ -700,9 +700,6 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
     let mut actions: Vec<RepairAction> = Vec::new();
 
     let status_path = crate::auto_sync::status::status_path(&state_dir);
-    let exec_lock_path = crate::auto_sync::execution_lock::execution_lock_path(&state_dir);
-    let worker_lock_path = crate::auto_sync::lock::lock_path(&state_dir);
-    let pending_txn_lock = state_dir.join(crate::auto_sync::pending_lock::PENDING_TXN_LOCK_NAME);
 
     match crate::auto_sync::status::read_status_typed(&state_dir) {
         crate::auto_sync::status::StatusRead::Corrupt(msg) => {
@@ -727,62 +724,6 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
         crate::auto_sync::status::StatusRead::Valid(_) => {}
     }
 
-    if let Some(contents) = crate::auto_sync::execution_lock::inspect(&exec_lock_path) {
-        if crate::auto_sync::execution_lock::is_stale(&contents) {
-            actions.push(RepairAction {
-                artifact: "execution_lock".to_string(),
-                action: "remove stale lock".to_string(),
-                reason: format!("dead pid={}", contents.pid),
-                applied: false,
-            });
-        }
-    } else if exec_lock_path.exists() {
-        actions.push(RepairAction {
-            artifact: "execution_lock".to_string(),
-            action: "remove malformed lock".to_string(),
-            reason: "unreadable lock file".to_string(),
-            applied: false,
-        });
-    }
-
-    if let Some(contents) = crate::auto_sync::lock::inspect(&worker_lock_path) {
-        if crate::auto_sync::lock::is_stale(&contents) {
-            actions.push(RepairAction {
-                artifact: "worker_lock".to_string(),
-                action: "remove stale lock".to_string(),
-                reason: format!("dead pid={}", contents.pid),
-                applied: false,
-            });
-        }
-    } else if worker_lock_path.exists() {
-        actions.push(RepairAction {
-            artifact: "worker_lock".to_string(),
-            action: "remove malformed lock".to_string(),
-            reason: "unreadable lock file".to_string(),
-            applied: false,
-        });
-    }
-
-    if pending_txn_lock.exists() {
-        let stale = match std::fs::read_to_string(&pending_txn_lock) {
-            Ok(contents) => {
-                match toml::from_str::<crate::process_file_lock::LockIdentity>(&contents) {
-                    Ok(c) => crate::auto_sync::execution_lock::is_stale(&c),
-                    Err(_) => true,
-                }
-            }
-            Err(_) => true,
-        };
-        if stale {
-            actions.push(RepairAction {
-                artifact: "pending_txn_lock".to_string(),
-                action: "remove stale lock".to_string(),
-                reason: "dead or malformed transaction lock".to_string(),
-                applied: false,
-            });
-        }
-    }
-
     for path in std::fs::read_dir(&state_dir).ok().into_iter().flatten() {
         let entry = match path {
             Ok(e) => e,
@@ -800,12 +741,9 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
         }
     }
 
-    for path in [
-        &status_path,
-        &exec_lock_path,
-        &worker_lock_path,
-        &pending_txn_lock,
-    ] {
+    // Persistent kernel-lock files are expected artifacts. Their metadata is
+    // diagnostic only, so repair must never inspect, rewrite, or remove them.
+    for path in [&status_path] {
         if path.exists() {
             #[cfg(unix)]
             {
@@ -880,18 +818,6 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
             let default_status = crate::auto_sync::status::AutoSyncStatus::default();
             let _ = crate::auto_sync::status::write_status(state_dir, &default_status);
         }
-    } else if action.artifact == "execution_lock" {
-        quarantine_and_remove(
-            state_dir,
-            &crate::auto_sync::execution_lock::execution_lock_path(state_dir),
-        )?;
-    } else if action.artifact == "worker_lock" {
-        quarantine_and_remove(state_dir, &crate::auto_sync::lock::lock_path(state_dir))?;
-    } else if action.artifact == "pending_txn_lock" {
-        quarantine_and_remove(
-            state_dir,
-            &state_dir.join(crate::auto_sync::pending_lock::PENDING_TXN_LOCK_NAME),
-        )?;
     } else if action.artifact.starts_with("temp:") {
         let name = action
             .artifact
@@ -918,23 +844,6 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
         }
     }
 
-    Ok(())
-}
-
-fn quarantine_and_remove(state_dir: &std::path::Path, path: &std::path::Path) -> SnipResult<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let quarantine_dir = state_dir.join(format!(".quarantine.{timestamp}"));
-    let _ = std::fs::create_dir_all(&quarantine_dir);
-    let name = path.file_name().unwrap_or_default();
-    let dest = quarantine_dir.join(name);
-    let _ = std::fs::copy(path, &dest);
-    let _ = std::fs::remove_file(path);
     Ok(())
 }
 
