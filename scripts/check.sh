@@ -7,6 +7,8 @@
 # belong in scripts/release-check.sh.
 #
 # Clippy compiles the workspace, so no standalone `cargo build` is needed.
+# Clippy uses default production features; test-only code is linted through
+# targets that explicitly enable test-support or test-helpers.
 # Unit tests are parallel-safe (each uses an isolated TempDir).
 set -euo pipefail
 
@@ -14,7 +16,7 @@ echo "=== Format check ==="
 cargo fmt --all -- --check
 
 echo "=== Clippy ==="
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 
 echo "=== Unit tests ==="
 cargo test --workspace --lib

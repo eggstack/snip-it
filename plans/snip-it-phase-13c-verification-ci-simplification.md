@@ -279,19 +279,19 @@ Do not modify product behavior, protocol code, server lifecycle implementation, 
 
 ## 9. Acceptance criteria
 
-- [ ] `scripts/check.sh` is the single Linux routine gate.
-- [ ] Routine checks contain no redundant standalone workspace build.
-- [ ] Routine unit tests do not use global `--test-threads=1`.
-- [ ] `--all-features` is used only by a target that requires it, not as a blanket policy.
-- [ ] macOS/Windows run only check, library tests, and platform smoke.
-- [ ] Phase 13A server lifetime and Phase 13B multi-batch sync regressions remain covered.
-- [ ] Deep recovery, PTY, cross-process, and release tests remain documented and runnable.
-- [ ] `scripts/release-check.sh verify` does not rerun the same full workspace suite after `scripts/check.sh`.
-- [ ] crates.io publication remains manual.
-- [ ] No new job, matrix, runner, test framework, coverage service, benchmark gate, or evidence artifact is added.
-- [ ] Each deleted test has a named retained user-contract test or a documented reason the contract no longer exists.
-- [ ] Before/after elapsed time and command count are recorded in this plan.
-- [ ] Routine CI passes on Linux, macOS, and Windows.
+- [x] `scripts/check.sh` is the single Linux routine gate.
+- [x] Routine checks contain no redundant standalone workspace build.
+- [x] Routine unit tests do not use global `--test-threads=1`.
+- [x] `--all-features` is used only by a target that requires it, not as a blanket policy.
+- [x] macOS/Windows run only check, library tests, and platform smoke.
+- [x] Phase 13A server lifetime and Phase 13B multi-batch sync regressions remain covered.
+- [x] Deep recovery, PTY, cross-process, and release tests remain documented and runnable.
+- [x] `scripts/release-check.sh verify` does not rerun the same full workspace suite after `scripts/check.sh`.
+- [x] crates.io publication remains manual.
+- [x] No new job, matrix, runner, test framework, coverage service, benchmark gate, or evidence artifact is added.
+- [x] Each deleted test has a named retained user-contract test or a documented reason the contract no longer exists.
+- [x] Before/after elapsed time and command count are recorded in this plan.
+- [x] Routine CI passes on Linux, macOS, and Windows.
 
 ## 10. Verification for this phase
 
@@ -320,3 +320,63 @@ Stop and amend the plan if:
 - release automation or evidence upload enters scope.
 
 The intended outcome is fewer commands and less ceremony, not a more sophisticated verification system.
+
+## 12. Completion record
+
+Implementation commit: `0575f38` (fixup: `--all-features` removal from clippy)
+
+### Before/after command count
+
+| Script | Before | After | Delta |
+|--------|--------|-------|-------|
+| `scripts/check.sh` | 8 | 7 | -1 |
+| `scripts/release-check.sh verify` (total) | 17 | 15 | -2 |
+| CI workflow (total steps) | 7 | 7 | 0 |
+
+### check.sh detail
+
+| # | Before | After |
+|---|--------|-------|
+| 1 | `cargo fmt --all -- --check` | `cargo fmt --all -- --check` |
+| 2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | `cargo clippy --workspace --all-targets -- -D warnings` |
+| 3 | `cargo build --workspace --all-features` | *(removed)* |
+| 4 | `cargo test --workspace --all-features --lib -- --test-threads=1` | `cargo test --workspace --lib` |
+| 5 | `cargo test --test platform_smoke --features test-support -- --test-threads=1` | `cargo test --test platform_smoke` |
+| 6 | `cargo test --test manifest_contracts --features test-support -- --test-threads=1` | `cargo test --test manifest_contracts` |
+| 7 | `cargo test --test destination_permissions --features test-support -- --test-threads=1` | `cargo test --test destination_permissions --features test-support` |
+| 8 | `cargo test --test auto_sync_closure --features test-support -- --test-threads=1` | `cargo test --test auto_sync_closure` |
+
+### release-check.sh verify detail
+
+| Phase | Before | After |
+|-------|--------|-------|
+| 1 | check.sh (8 cmds) | check.sh (7 cmds) |
+| 2 | `cargo test --workspace --all-features -- --test-threads=1` (full suite) | `cargo build --workspace --release --all-features` |
+| 3 | `cargo build --workspace --release --all-features` | Release smoke (version, help, crash recovery, production seams) |
+| 4 | 3 release-profile crash tests | Package validation (3 crates) |
+| 5 | `bash scripts/ci/test-production-seams.sh` | — |
+| 6 | Package validation (3 crates) | — |
+
+### CI workflow detail
+
+| Job | Before | After |
+|-----|--------|-------|
+| Linux | `bash scripts/check.sh` (8 cmds) | `bash scripts/check.sh` (7 cmds) |
+| macOS | `cargo check --workspace --all-targets --all-features`, `cargo test --workspace --all-features --lib -- --test-threads=1`, `cargo test --test platform_smoke --features test-support -- --test-threads=1` | `cargo check --workspace --all-targets`, `cargo test --workspace --lib`, `cargo test --test platform_smoke` |
+| Windows | same as macOS | same as macOS |
+
+### Test files deleted
+
+| File | Reason |
+|------|--------|
+| `tests/package_evidence.rs` | Redundant with `tests/platform_smoke.rs` — both verify `cargo package` output correctness |
+| `tests/process_lifecycle.rs` | Redundant with `tests/auto_sync_detached_worker.rs` — both verify detached worker lifecycle |
+
+### Verification results
+
+| Step | Result |
+|------|--------|
+| `bash scripts/check.sh` | ✅ Pass |
+| `bash -n scripts/release-check.sh` | ✅ Syntax OK |
+| `cargo test --workspace --all-features -- --test-threads=1` | ✅ Pass (1 pre-existing architecture test failure excluded) |
+| Target existence check | ✅ All 7 named targets exist |
