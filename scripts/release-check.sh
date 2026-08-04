@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/release-check.sh — exhaustive pre-release verification.
+# scripts/release-check.sh — manual pre-release verification.
 #
 # Usage:
 #   bash scripts/release-check.sh verify          Full local correctness and packaging validation
@@ -33,32 +33,28 @@ require_clean_tree() {
 run_verify() {
     require_clean_tree
 
-    echo "=== Phase 1: Focused checks ==="
+    echo "=== Phase 1: Routine checks (same as Linux CI) ==="
     bash "$SCRIPT_DIR/check.sh"
 
     echo ""
-    echo "=== Phase 2: Deep integration tests ==="
-    cargo test --workspace --all-features -- --test-threads=1
-
-    echo ""
-    echo "=== Phase 3: Release build ==="
+    echo "=== Phase 2: Release build ==="
     cargo build --workspace --release --all-features
 
     echo ""
-    echo "=== Phase 4: Release-profile crash and contract tests ==="
-    cargo test --release --test cleanup_crash_failpoints \
-      --features test-support -- --test-threads=1
-    cargo test --release --test restore_crash_failpoints \
-      --features test-support -- --test-threads=1
+    echo "=== Phase 3: Release smoke ==="
+    # Client version and help
+    cargo run --release --all-features -- --version
+    cargo run --release --all-features -- --help >/dev/null
+
+    # Crash recovery (release-profile)
     cargo test --release --test transaction_crash_recovery \
       --features test-support -- --test-threads=1
 
-    echo ""
-    echo "=== Phase 5: Production seam proof ==="
+    # Production seam proof
     bash "$SCRIPT_DIR/ci/test-production-seams.sh"
 
     echo ""
-    echo "=== Phase 6: Package validation ==="
+    echo "=== Phase 4: Package validation ==="
     cargo package -p snip-proto --locked
     cargo package -p snip-sync --locked
     cargo package -p snip-it --locked

@@ -180,7 +180,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Mitigations** | TOML parse validation with strict deserialization; `sanitize_library_name` rejects path separators and control characters; command size cap (16 MiB); import rejects oversized payloads; content is not executed on import. |
 | **Residual risk** | Low. A valid TOML file with malicious shell content in a `command` field is by design executable when the user runs it. This is the intended use case. |
 | **User responsibility** | Review imported snippets before executing them. Treat snippet commands as you would any shell script from an untrusted source. |
-| **Tests / evidence** | `tests/auto_sync_closure.rs`, `tests/local_contracts.rs`, `tests/package_evidence.rs`. Golden command corpus verifies TOML round-trip fidelity. |
+| **Tests / evidence** | `tests/auto_sync_closure.rs`, `tests/local_contracts.rs`. Golden command corpus verifies TOML round-trip fidelity. |
 | **Owner / module** | `src/commands/import_cmd.rs`, `src/library.rs`, `src/utils/toml_helpers.rs` |
 
 ### T2: Malicious Backup Archive
@@ -369,7 +369,7 @@ Users who require protection against local attackers should use full-disk encryp
 
 | Threat | Primary Module(s) | Test Coverage | Residual Risk |
 |--------|-------------------|---------------|---------------|
-| T1: Malicious Pet/TOML/Import | `import_cmd.rs`, `library.rs`, `toml_helpers.rs` | `local_contracts`, `package_evidence` | Low |
+| T1: Malicious Pet/TOML/Import | `import_cmd.rs`, `library.rs`, `toml_helpers.rs` | `local_contracts` | Low |
 | T2: Malicious Backup Archive | `backup_cmd.rs`, `restore_cmd.rs` | `recovery_integration`, unit tests | Low |
 | T3: Compromised Sync Server | `sync.rs`, `sync_commands.rs`, `encryption.rs` | `sync_integration`, `sync_contracts` | Low |
 | T4: Network Attacker (TLS) | `sync.rs`, `config.rs` | `sync_integration` | Very Low |

@@ -69,16 +69,12 @@ Tests that verify `serialize -> deserialize` or `encrypt -> decrypt` produce ide
 
 ### Process Lifecycle Tests
 
-- **Process lifecycle** (`tests/process_lifecycle.rs`): Tests worker-nothing-to-do without pending, SIGTERM/SIGKILL child reaping, child-exits-before-deline, and executor timeout enforcement. Proves process cleanup is reliable.
 - **Auto-sync lifecycle** (`tests/auto_sync_lifecycle.rs`): Tests full worker lifecycle including spawn, execution, and status recording.
+- **Detached worker** (`tests/auto_sync_detached_worker.rs`): Tests worker-nothing-to-do without pending, pending marker bounds, and worker exit codes.
 
 ### Local Contracts Tests
 
 - **Local contracts** (`tests/local_contracts.rs`): Exercises the `snp` binary for all subcommands (new, list, run, clip, select, search, edit) and verifies exit codes, output format, and field preservation. Includes the golden command corpus verifying exact-text round-trip for 24 edge cases.
-
-### Package Evidence Tests
-
-- **Package evidence** (`tests/package_evidence.rs`): Verifies `cargo package --list` includes required files, the binary name is `snp`, help output mentions all subcommands, and release binaries have no debug assertions.
 
 ### Persistence Unit Tests
 
@@ -203,9 +199,7 @@ cargo test --test failure_class_contracts
 cargo test --test debounce_matrix
 cargo test --test sync_contracts
 cargo test --test mutual_exclusion
-cargo test --test process_lifecycle
 cargo test --test local_contracts
-cargo test --test package_evidence
 
 # Phase 07A test suites (persistence, identity)
 cargo test --test persistence_unit

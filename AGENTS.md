@@ -30,13 +30,16 @@
 ## Build & Test Commands
 
 ```bash
-# Focused developer verification (same as Linux CI) — fmt, clippy, build, unit tests, selected integration tests
+# Focused developer verification (same as Linux CI) — fmt, clippy, unit tests, selected integration tests
 bash scripts/check.sh
 
-# Exhaustive pre-release verification (requires clean working tree)
+# Manual pre-release verification (requires clean working tree)
 bash scripts/release-check.sh verify
 
-# Production seam proof — verifies test-only env vars are inactive in production builds (no test-support)
+# Per-crate publish dry-run (manual)
+bash scripts/release-check.sh dry-run snip-it
+
+# Production seam proof — verifies test-only env vars are inactive in production builds
 bash scripts/ci/test-production-seams.sh
 
 # Build the workspace
@@ -54,14 +57,11 @@ cargo fmt
 ### Running Tests
 
 ```bash
-# All tests (unit + integration + server, single-threaded)
+# Unit tests only (parallel — each test uses isolated TempDir)
+cargo test --workspace --lib
+
+# All tests including integration (serial — for migration checks only)
 cargo test --workspace --all-features -- --test-threads=1
-
-# Unit tests only
-cargo test --workspace --all-features --lib -- --test-threads=1
-
-# Single focused auto-sync contract test by name
-cargo test --test auto_sync_closure --features test-support -- --test-threads=1
 
 # snip-sync tests (needs test-helpers feature)
 cargo test -p snip-sync --features test-helpers
@@ -84,7 +84,7 @@ cargo test -p snip-sync --features test-helpers
 snip-it/          Main crate — binary "snp" (src/main.rs)
 snip-proto/       Protobuf definitions, tonic-generated gRPC code
 snip-sync/        Sync server (gRPC + HTTP/axum)
-tests/            Integration tests (~50 files, see below)
+tests/            Integration tests (~45 files, see below)
 scripts/          check.sh, release-check.sh, ci/ helpers
 themes/           50 Halloy TOML theme files
 ```
@@ -215,6 +215,22 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 - Tests never use the developer's real config, keychain, or ports
 - `SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on all test commands
 - Golden command corpus: 24 edge cases verifying exact-text preservation
+
+### Test Classification
+
+| Class | Execution | Targets |
+|-------|-----------|---------|
+| Unit/pure | parallel | `cargo test --workspace --lib` — parsing, sorting, batching, serialization |
+| CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
+| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
+| Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
+| PTY | serial target | `pty_integration.rs` — real terminal pairs |
+| Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
+| Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
+| Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
+| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams |
+| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
 
 ## Reference Docs
 

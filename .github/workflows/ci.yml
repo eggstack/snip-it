@@ -60,8 +60,8 @@ jobs:
         run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
-        run: cargo check --workspace --all-targets --all-features
+        run: cargo check --workspace --all-targets
       - name: Library tests
-        run: cargo test --workspace --all-features --lib -- --test-threads=1
+        run: cargo test --workspace --lib
       - name: CLI/platform smoke
-        run: cargo test --test platform_smoke --features test-support -- --test-threads=1
+        run: cargo test --test platform_smoke

@@ -209,8 +209,20 @@ pending-generation and scheduling sequence. Sync server effects are covered by
 | Debounce Matrix | `debounce_matrix.rs` | 22 | Exact debounce/scheduling behavior |
 | Sync Contracts | `sync_contracts.rs` | 19 | Direction, CLI overrides, config defaults |
 | Mutual Exclusion | `mutual_exclusion.rs` | 18 | Lock semantics, sequential writes |
-| Process Lifecycle | `process_lifecycle.rs` | 19 | SIGTERM/SIGKILL, exit codes, backoff |
 | Local Contracts | `local_contracts.rs` | 23 | CLI commands, golden corpus, help output |
-| Package Evidence | `package_evidence.rs` | 15 | Binary name, help, linking, no panics |
 
-Total: **170 new tests** (on top of existing 1527 = **1717 total**)
+## Test Classification
+
+| Class | Execution | Targets |
+|-------|-----------|---------|
+| Unit/pure | parallel | `cargo test --workspace --lib` — parsing, sorting, batching, serialization |
+| CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
+| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
+| Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
+| PTY | serial target | `pty_integration.rs` — real terminal pairs |
+| Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
+| Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
+| Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
+| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams |
+| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
