@@ -42,24 +42,32 @@ Persistent lock-file presence is not an ownership signal.
 
 ## Environment Variables
 
+All environment variable overrides are strictly parsed. Missing variables fall
+back to file/default configuration. Present but invalid values cause startup to
+fail with an error naming the variable and the supplied value. Boolean
+variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`,
+`PERSIST_RATE_LIMITS`) accept case-insensitive `true`, `1`, `yes`, `on` and
+`false`, `0`, `no`, `off`; unknown values fail instead of silently falling
+back.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GRPC_HOST` | `127.0.0.1` | gRPC listen host |
-| `GRPC_PORT` | `50051` | gRPC listen port |
+| `GRPC_PORT` | `50051` | gRPC listen port (must be nonzero) |
 | `HTTP_HOST` | `127.0.0.1` | HTTP listen host |
-| `HTTP_PORT` | `50050` | HTTP listen port |
+| `HTTP_PORT` | `50050` | HTTP listen port (must be nonzero) |
 | `DATABASE_URL` | `snip_sync.db` | SQLite database path |
-| `DB_MAX_CONNECTIONS` | 10 | Max SQLite connections |
+| `DB_MAX_CONNECTIONS` | 10 | Max SQLite connections (must be ≥ 1) |
 | `PREMADE_DIR` | `./premade` | Premade library directory |
 | `CORS_ALLOWED_ORIGINS` | empty (deny-all) | Comma-separated origins |
-| `CORS_ALLOW_ALL` | `false` | Set to `true` or `1` to allow all origins |
+| `CORS_ALLOW_ALL` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow all origins |
 | `METRICS_USERNAME` | empty | Basic auth for /metrics |
 | `METRICS_PASSWORD` | empty | Basic auth for /metrics |
 | `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per API key |
 | `TRUSTED_PROXIES` | empty | Comma-separated trusted proxy IPs |
-| `PERSIST_RATE_LIMITS` | `false` | Persist rate limits to SQLite |
-| `TLS_ENABLED` | `false` | Enable native TLS |
-| `SNIP_SYNC_ALLOW_HTTP` | `false` | Allow plaintext HTTP (loopback only) |
+| `PERSIST_RATE_LIMITS` | `false` | Boolean: `true`/`1`/`yes`/`on` to persist rate limits to SQLite |
+| `TLS_ENABLED` | `false` | Boolean: `true`/`1`/`yes`/`on` to acknowledge TLS termination |
+| `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP (loopback only) |
 | `RUST_LOG` | `info` | Log level (via tracing) |
 
 ## gRPC Endpoints

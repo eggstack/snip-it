@@ -151,6 +151,13 @@ An existing configuration file is fail-closed: malformed TOML or an unreadable
 file stops startup with an error naming the path. Defaults are used only when
 the configuration file is missing (and the normal bootstrap path may create it).
 
+Environment variable overrides are strictly parsed: a present but invalid value
+(e.g., a non-numeric port) causes startup to fail with an error naming the
+variable and the supplied value. Boolean environment variables accept
+case-insensitive `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`;
+unknown values fail instead of silently falling back. Range validation rejects
+operationally nonsensical values (e.g., zero ports, zero connection limits).
+
 ```toml
 [server]
 grpc_host = "127.0.0.1"
@@ -191,11 +198,12 @@ Important environment variables:
 | `DATABASE_URL` | SQLite file path (not a remote database URL) |
 | `PREMADE_DIR` | Premade library directory |
 | `CONFIG_PATH` | Config file override |
-| `SNIP_SYNC_ALLOW_HTTP=true` | Explicit local plaintext mode |
-| `TLS_ENABLED=true` | Acknowledge TLS termination by a reverse proxy |
+| `SNIP_SYNC_ALLOW_HTTP=true` | Explicit local plaintext mode (boolean: `true`/`1`/`yes`/`on`) |
+| `TLS_ENABLED=true` | Acknowledge TLS termination by a reverse proxy (boolean: `true`/`1`/`yes`/`on`) |
 | `METRICS_USERNAME` / `METRICS_PASSWORD` | Enable authenticated `/metrics` |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins |
-| `CORS_ALLOW_ALL=true` | Allow all CORS origins (development only) |
+| `CORS_ALLOW_ALL=true` | Allow all CORS origins, development only (boolean: `true`/`1`/`yes`/`on`) |
+| `PERSIST_RATE_LIMITS=true` | Persist rate limits to SQLite between restarts (boolean: `true`/`1`/`yes`/`on`) |
 
 `/health` is unauthenticated and returns HTTP 200 only when the database is
 reachable. `/metrics` is disabled unless both metrics credentials are set.

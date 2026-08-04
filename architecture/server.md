@@ -189,18 +189,32 @@ All values can be overridden via environment variables.
 Configuration loading is fail-closed for existing files. A malformed or
 unreadable `config.toml` causes `serve` and `croncheck` to return an error that
 identifies the path; compiled defaults are used only when the file is absent.
-Environment variables retain precedence over TOML values.
+Environment variables retain precedence over TOML values. Environment variable
+overrides are strictly parsed: present but invalid values (e.g., a non-numeric
+port) cause startup to fail with an error naming the variable and value.
+Boolean environment variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`,
+`CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`, `1`,
+`yes`, `on` and `false`, `0`, `no`, `off`; unknown values fail. Range
+validation rejects operationally nonsensical values (zero ports, zero
+connection limits, zero timeouts).
 
 ## Process lifecycle
 
 `snip-sync serve` holds the server singleton kernel lock for its full runtime
 and publishes an identity-checked PID record in the state directory. The
-`stop` and `restart` commands accept both structured records and legacy numeric
-PID files on Unix. Stale numeric records are removed only after acquiring the
-server lock and rereading the unchanged record; live processes that do not
-appear to be `snip-sync` are refused unless `--force` is provided. The
-`snip-sync.server.lock` path is persistent metadata; ownership is determined by
-the operating-system lock, not by whether the file exists.
+server runs indefinitely until a process shutdown signal (Ctrl-C / SIGTERM) or
+an unexpected service failure. Normal operation has no arbitrary lifetime
+timeout; only the graceful drain phase after shutdown is bounded by the
+configured request timeout (default 30s). Both services share a single
+shutdown signal source; when one service fails unexpectedly, the sibling is
+notified and the orchestrator returns an error.
+
+The `stop` and `restart` commands accept both structured records and legacy
+numeric PID files on Unix. Stale numeric records are removed only after
+acquiring the server lock and rereading the unchanged record; live processes
+that do not appear to be `snip-sync` are refused unless `--force` is provided.
+The `snip-sync.server.lock` path is persistent metadata; ownership is
+determined by the operating-system lock, not by whether the file exists.
 
 ---
 

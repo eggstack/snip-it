@@ -154,7 +154,7 @@ pub struct CorsConfig {
     pub allowed_origins: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub grpc_host: String,
     pub grpc_port: u16,
@@ -192,6 +192,68 @@ pub enum ConfigLoadError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    #[error("invalid environment variable {name}={value:?}: {reason}")]
+    InvalidEnvironment {
+        name: &'static str,
+        value: String,
+        reason: String,
+    },
+    #[error("invalid configuration value {name}={value:?}: {reason}")]
+    InvalidRange {
+        name: &'static str,
+        value: String,
+        reason: String,
+    },
+}
+
+/// Parse an optional environment variable, returning the typed value if present and valid.
+///
+/// Missing variable → `Ok(None)`. Present and valid → `Ok(Some(value))`.
+/// Present and invalid → `Err(ConfigLoadError::InvalidEnvironment)`.
+pub fn parse_env<T>(
+    env: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+) -> Result<Option<T>, ConfigLoadError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env(name) {
+        Some(val) => match val.parse::<T>() {
+            Ok(parsed) => Ok(Some(parsed)),
+            Err(e) => Err(ConfigLoadError::InvalidEnvironment {
+                name,
+                value: val,
+                reason: e.to_string(),
+            }),
+        },
+        None => Ok(None),
+    }
+}
+
+/// Parse an optional boolean environment variable.
+///
+/// Accepted true values (case-insensitive): `true`, `1`, `yes`, `on`
+/// Accepted false values (case-insensitive): `false`, `0`, `no`, `off`
+///
+/// Missing variable → `Ok(None)`. Present and valid → `Ok(Some(bool))`.
+/// Present and invalid → `Err(ConfigLoadError::InvalidEnvironment)`.
+pub fn parse_bool_env(
+    env: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+) -> Result<Option<bool>, ConfigLoadError> {
+    match env(name) {
+        Some(val) => match val.to_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(Some(true)),
+            "false" | "0" | "no" | "off" => Ok(Some(false)),
+            _ => Err(ConfigLoadError::InvalidEnvironment {
+                name,
+                value: val,
+                reason: "expected one of: true, 1, yes, on, false, 0, no, off".to_string(),
+            }),
+        },
+        None => Ok(None),
+    }
 }
 
 impl Config {
@@ -220,26 +282,23 @@ impl Config {
 
         let server = config_file.server.unwrap_or_default();
 
-        Ok(Self {
+        let config = Self {
             grpc_host: env("GRPC_HOST")
                 .or_else(|| server.grpc_host.clone())
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
-            grpc_port: env("GRPC_PORT")
-                .and_then(|v| v.parse().ok())
+            grpc_port: parse_env(env, "GRPC_PORT")?
                 .or(server.grpc_port)
                 .unwrap_or(50051),
             http_host: env("HTTP_HOST")
                 .or_else(|| server.http_host.clone())
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
-            http_port: env("HTTP_PORT")
-                .and_then(|v| v.parse().ok())
+            http_port: parse_env(env, "HTTP_PORT")?
                 .or(server.http_port)
                 .unwrap_or(50050),
             db_path: env("DATABASE_URL")
                 .or_else(|| server.database.as_ref().and_then(|d| d.path.clone()))
                 .unwrap_or_else(|| paths::default_db_path().to_string_lossy().into_owned()),
-            db_max_connections: env("DB_MAX_CONNECTIONS")
-                .and_then(|v| v.parse().ok())
+            db_max_connections: parse_env(env, "DB_MAX_CONNECTIONS")?
                 .or(server.database.as_ref().and_then(|d| d.max_connections))
                 .unwrap_or(DEFAULT_DB_MAX_CONNECTIONS),
             premade_dir: env("PREMADE_DIR")
@@ -252,47 +311,37 @@ impl Config {
                         .map(PathBuf::from)
                 })
                 .unwrap_or_else(paths::default_premade_dir),
-            max_command_length: env("MAX_COMMAND_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_command_length: parse_env(env, "MAX_COMMAND_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_command_length))
                 .unwrap_or(DEFAULT_MAX_COMMAND_LENGTH),
-            max_description_length: env("MAX_DESCRIPTION_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_description_length: parse_env(env, "MAX_DESCRIPTION_LENGTH")?
                 .or(server
                     .limits
                     .as_ref()
                     .and_then(|l| l.max_description_length))
                 .unwrap_or(DEFAULT_MAX_DESCRIPTION_LENGTH),
-            max_tags: env("MAX_TAGS")
-                .and_then(|v| v.parse().ok())
+            max_tags: parse_env(env, "MAX_TAGS")?
                 .or(server.limits.as_ref().and_then(|l| l.max_tags))
                 .unwrap_or(DEFAULT_MAX_TAGS),
-            max_tag_length: env("MAX_TAG_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_tag_length: parse_env(env, "MAX_TAG_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_tag_length))
                 .unwrap_or(DEFAULT_MAX_TAG_LENGTH),
-            max_id_length: env("MAX_ID_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_id_length: parse_env(env, "MAX_ID_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_id_length))
                 .unwrap_or(DEFAULT_MAX_ID_LENGTH),
-            max_device_id_length: env("MAX_DEVICE_ID_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_device_id_length: parse_env(env, "MAX_DEVICE_ID_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_device_id_length))
                 .unwrap_or(DEFAULT_MAX_DEVICE_ID_LENGTH),
-            max_api_key_length: env("MAX_API_KEY_LENGTH")
-                .and_then(|v| v.parse().ok())
+            max_api_key_length: parse_env(env, "MAX_API_KEY_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_api_key_length))
                 .unwrap_or(DEFAULT_MAX_API_KEY_LENGTH),
-            request_timeout_secs: env("REQUEST_TIMEOUT_SECS")
-                .and_then(|v| v.parse().ok())
+            request_timeout_secs: parse_env(env, "REQUEST_TIMEOUT_SECS")?
                 .or(server.limits.as_ref().and_then(|l| l.request_timeout_secs))
                 .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
-            grpc_max_message_size: env("GRPC_MAX_MESSAGE_SIZE")
-                .and_then(|v| v.parse().ok())
+            grpc_max_message_size: parse_env(env, "GRPC_MAX_MESSAGE_SIZE")?
                 .or(server.limits.as_ref().and_then(|l| l.grpc_max_message_size))
                 .unwrap_or(DEFAULT_GRPC_MAX_MESSAGE_SIZE),
-            rate_limit_per_minute: env("RATE_LIMIT_PER_MINUTE")
-                .and_then(|v| v.parse().ok())
+            rate_limit_per_minute: parse_env(env, "RATE_LIMIT_PER_MINUTE")?
                 .or(server
                     .rate_limit
                     .as_ref()
@@ -307,8 +356,7 @@ impl Config {
                 })
                 .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
                 .unwrap_or_default(),
-            persist_rate_limits: env("PERSIST_RATE_LIMITS")
-                .map(|v| v == "true" || v == "1")
+            persist_rate_limits: parse_bool_env(env, "PERSIST_RATE_LIMITS")?
                 .or(server.rate_limit.as_ref().and_then(|r| r.persist))
                 .unwrap_or(false),
             metrics_username: env("METRICS_USERNAME")
@@ -325,7 +373,77 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
-        })
+        };
+
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), ConfigLoadError> {
+        if self.grpc_port == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "GRPC_PORT",
+                value: self.grpc_port.to_string(),
+                reason: "port must be nonzero".into(),
+            });
+        }
+        if self.http_port == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "HTTP_PORT",
+                value: self.http_port.to_string(),
+                reason: "port must be nonzero".into(),
+            });
+        }
+        if self.db_max_connections == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "DB_MAX_CONNECTIONS",
+                value: self.db_max_connections.to_string(),
+                reason: "must be at least 1".into(),
+            });
+        }
+        if self.request_timeout_secs == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "REQUEST_TIMEOUT_SECS",
+                value: self.request_timeout_secs.to_string(),
+                reason: "must be at least 1".into(),
+            });
+        }
+        if self.grpc_max_message_size == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "GRPC_MAX_MESSAGE_SIZE",
+                value: self.grpc_max_message_size.to_string(),
+                reason: "must be greater than 0".into(),
+            });
+        }
+        if self.max_command_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_COMMAND_LENGTH",
+                value: self.max_command_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_description_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_DESCRIPTION_LENGTH",
+                value: self.max_description_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_tags == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_TAGS",
+                value: self.max_tags.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_tag_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_TAG_LENGTH",
+                value: self.max_tag_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        Ok(())
     }
 
     pub fn ensure_config_file() {
@@ -2021,5 +2139,146 @@ mod tests {
                 .to_string()
                 .contains(&dir.path().display().to_string())
         );
+    }
+
+    #[test]
+    fn parse_env_valid_numeric_override() {
+        let env = |name: &str| match name {
+            "GRPC_PORT" => Some("60000".to_string()),
+            _ => None,
+        };
+        let val: Option<u16> = parse_env(&env, "GRPC_PORT").unwrap();
+        assert_eq!(val, Some(60000));
+    }
+
+    #[test]
+    fn parse_env_malformed_numeric_returns_invalid_environment() {
+        let env = |name: &str| match name {
+            "GRPC_PORT" => Some("not-a-number".to_string()),
+            _ => None,
+        };
+        let err = parse_env::<u16>(&env, "GRPC_PORT").unwrap_err();
+        match err {
+            ConfigLoadError::InvalidEnvironment { name, value, .. } => {
+                assert_eq!(name, "GRPC_PORT");
+                assert_eq!(value, "not-a-number");
+            }
+            other => panic!("expected InvalidEnvironment, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn parse_env_missing_variable_returns_none() {
+        let env = |_name: &str| -> Option<String> { None };
+        let val: Option<u16> = parse_env(&env, "GRPC_PORT").unwrap();
+        assert_eq!(val, None);
+    }
+
+    #[test]
+    fn parse_bool_env_accepted_true_spellings() {
+        for input in &["true", "1", "yes", "on", "TRUE", "Yes", "ON"] {
+            let env = |_: &str| Some(input.to_string());
+            let val = parse_bool_env(&env, "FLAG").unwrap();
+            assert_eq!(val, Some(true), "expected true for {input:?}");
+        }
+    }
+
+    #[test]
+    fn parse_bool_env_accepted_false_spellings() {
+        for input in &["false", "0", "no", "off", "FALSE", "No", "OFF"] {
+            let env = |_: &str| Some(input.to_string());
+            let val = parse_bool_env(&env, "FLAG").unwrap();
+            assert_eq!(val, Some(false), "expected false for {input:?}");
+        }
+    }
+
+    #[test]
+    fn parse_bool_env_unknown_value_fails() {
+        let env = |_: &str| Some("maybe".to_string());
+        let err = parse_bool_env(&env, "FLAG").unwrap_err();
+        match err {
+            ConfigLoadError::InvalidEnvironment { name, value, .. } => {
+                assert_eq!(name, "FLAG");
+                assert_eq!(value, "maybe");
+            }
+            other => panic!("expected InvalidEnvironment, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn parse_bool_env_missing_variable_returns_none() {
+        let env = |_name: &str| -> Option<String> { None };
+        let val = parse_bool_env(&env, "FLAG").unwrap();
+        assert_eq!(val, None);
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_grpc_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server]\ngrpc_port = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "GRPC_PORT"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_db_max_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.database]\nmax_connections = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "DB_MAX_CONNECTIONS"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_request_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.limits]\nrequest_timeout_secs = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "REQUEST_TIMEOUT_SECS"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_load_rejects_malformed_numeric_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let env = |name: &str| match name {
+            "GRPC_PORT" => Some("abc".to_string()),
+            _ => None,
+        };
+        let err = Config::load_from(&path, &env).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidEnvironment { name, .. } => assert_eq!(name, "GRPC_PORT"),
+            other => panic!("expected InvalidEnvironment, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_load_rejects_invalid_bool_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let env = |name: &str| match name {
+            "PERSIST_RATE_LIMITS" => Some("invalid".to_string()),
+            _ => None,
+        };
+        let err = Config::load_from(&path, &env).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidEnvironment { name, .. } => {
+                assert_eq!(name, "PERSIST_RATE_LIMITS")
+            }
+            other => panic!("expected InvalidEnvironment, got: {other}"),
+        }
     }
 }

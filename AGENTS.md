@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Phase 13A — Server Lifetime and Configuration Correctness
+
+- The server runs indefinitely until a process shutdown signal or unexpected service failure; normal operation has no arbitrary lifetime timeout.
+- Both services share a single `broadcast` shutdown signal; only the graceful drain phase after shutdown is bounded (default 30s).
+- Unexpected service/task failure notifies the sibling, drains, and returns an error — it is never swallowed into a log-only success.
+- Environment variable overrides are strictly parsed via `parse_env` and `parse_bool_env`; present but invalid values cause startup to fail.
+- Boolean env vars (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; unknown values fail.
+- Range validation rejects zero ports, zero connection limits, and zero timeouts after env/file/default resolution.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
