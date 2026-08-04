@@ -9,6 +9,17 @@
 - Boolean env vars (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; unknown values fail.
 - Range validation rejects zero ports, zero connection limits, and zero timeouts after env/file/default resolution.
 
+## Phase 13B — Bounded Sync Uploads and Clock-Skew Diagnostics
+
+- Sync uploads are byte-bounded using Prost `encoded_len()` to measure actual request size before transmission. The client ceiling defaults to 3.5 MiB (below the server's 4 MiB gRPC limit).
+- `build_upload_batches()` splits encrypted snippets into deterministic ID-sorted batches that fit within the ceiling. A single oversized item fails before any remote mutation.
+- The first upload batch goes via `Sync` RPC (upload + first response page); subsequent batches go via `PushSnippets` RPC (upload only). Response pages are paginated after all uploads complete.
+- `PushSnippets` is idempotent by snippet identity — retrying an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE newer`).
+- Server clock-skew rejection now reports the skew magnitude and corrective action (e.g., "updated_at is 742 seconds ahead of server time; synchronize the client clock and retry").
+- `InvalidArgument` gRPC errors containing timestamp-related messages map to `SyncFailureKind::ClockSkew` → `FailureClass::Configuration`.
+- `SyncFailureKind::RequestTooLarge` maps to `FailureClass::Configuration` (requires operator attention).
+- `sync_encrypted()` accumulates response pages via `accumulate_page()` helper to avoid variable lifecycle warnings.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

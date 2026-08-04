@@ -166,6 +166,8 @@ impl FailureClass {
                 SyncFailureKind::DecryptionFailed => FailureClass::Internal,
                 SyncFailureKind::LibraryNotFound => FailureClass::Configuration,
                 SyncFailureKind::Timeout => FailureClass::TransientTimeout,
+                SyncFailureKind::RequestTooLarge => FailureClass::Configuration,
+                SyncFailureKind::ClockSkew => FailureClass::Configuration,
             },
             SnipError::Runtime { message, detail } => {
                 let combined = format!("{message} {}", detail.as_deref().unwrap_or(""));

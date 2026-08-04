@@ -66,6 +66,10 @@ pub enum SyncFailureKind {
     LibraryNotFound,
     /// The bounded automatic-sync deadline expired.
     Timeout,
+    /// A single encrypted snippet exceeds the client request byte ceiling.
+    RequestTooLarge,
+    /// Server rejected a timestamp due to clock skew.
+    ClockSkew,
 }
 
 impl fmt::Display for SyncFailureKind {
@@ -90,6 +94,8 @@ impl fmt::Display for SyncFailureKind {
             Self::DecryptionFailed => write!(f, "Failed to decrypt snippet data"),
             Self::LibraryNotFound => write!(f, "Library not found"),
             Self::Timeout => write!(f, "Sync deadline expired"),
+            Self::RequestTooLarge => write!(f, "Snippet exceeds request size limit"),
+            Self::ClockSkew => write!(f, "Clock skew detected"),
         }
     }
 }

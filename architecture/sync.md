@@ -14,19 +14,42 @@ Wraps the tonic gRPC client for the `SnippetSync` service defined in `snip-proto
 pub struct SyncClient {
     client: SnippetSyncClient<Channel>,
     settings: SyncSettings,
+    limits: Option<SyncRunLimits>,
 }
 ```
 
 ### Key Methods
 
-- `sync_snippets()` — Full bidirectional sync
-- `get_snippets()` — Pull from server
-- `push_snippets()` — Push to server
-- `register_device()` — Device registration
-- `list_libraries()` / `create_library()` / `delete_library()` — Library management
+- `sync_encrypted()` — Full bidirectional sync with byte-bounded upload batching
+- `push_snippets_batch()` — Upload a batch via PushSnippets RPC
+- `health_check()` — Server health check
+- `register()` — Device registration
+- `list_libraries()` / `create_library()` — Library management
 - `list_premade()` / `get_premade()` / `search_premade()` — Premade libraries
 - `detect_device_conflict()` — Warn on device ID mismatch
-- `sync_with_retry()` — Custom retry for `sync()` (cannot use macro due to `&mut self` borrow)
+- `sync_with_retry()` — Custom retry for sync requests
+
+### Byte-Bounded Upload Batching
+
+The sync client splits encrypted snippets into byte-bounded batches before
+transmission. The ceiling is 3.5 MiB (below the server's 4 MiB gRPC default).
+
+```rust
+pub(crate) fn build_upload_batches(
+    encrypted_snippets: Vec<Snippet>,
+    library_id: &str,
+    last_sync: i64,
+    sync_limit: i32,
+    byte_ceiling: usize,
+) -> SnipResult<Vec<Vec<Snippet>>>
+```
+
+- Uses `prost::Message::encoded_len()` on a constructed `SyncRequest` to measure actual encoded size.
+- Batches are sorted by snippet ID for deterministic ordering across retries.
+- A single oversized item fails with `SyncFailureKind::RequestTooLarge` before any remote mutation.
+- First batch goes via `Sync` RPC (upload + first response page).
+- Remaining batches go via `PushSnippets` RPC (upload only).
+- Response pages are paginated after all uploads complete.
 
 ### Retry Logic
 
@@ -100,6 +123,8 @@ Merged snippets sorted by `updated_at` descending.
 - **API key transport**: Bearer token in gRPC `authorization` metadata (over TLS), NOT in request body
 - **Size limits**: 4 MiB gRPC max message, 10K snippets max, per-field length limits (command: 1024, description: 1024, tags: 50, tag length: 100)
 - **Server error sanitization**: Generic "Internal error" messages, detailed errors logged server-side only
+- **Clock-skew diagnostics**: Server validates timestamps in one `now` sample and reports skew magnitude (e.g., "updated_at is 742 seconds ahead of server time; synchronize the client clock and retry"). Client maps `InvalidArgument` with timestamp content to `SyncFailureKind::ClockSkew` → `FailureClass::Configuration`.
+- **Upload batching ceiling**: Client-side 3.5 MiB ceiling (below server 4 MiB default). `build_upload_batches()` uses Prost `encoded_len()`. Oversized single items fail with `SyncFailureKind::RequestTooLarge` before any remote mutation.
 
 ## Protocol Buffers (`snip-proto/`)
 

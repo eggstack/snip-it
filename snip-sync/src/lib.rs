@@ -719,16 +719,26 @@ impl SnipSyncService {
             }
         }
 
+        // Sample server time once to avoid micro-boundary disagreement
+        // between consecutive timestamp checks.
         let now = chrono::Utc::now().timestamp();
-        if snippet.updated_at > now + 300 {
-            return Err(Status::invalid_argument(
-                "Updated timestamp is more than 5 minutes in the future",
-            ));
+        let tolerance = 300; // 5 minutes
+
+        if snippet.updated_at > now + tolerance {
+            let skew = snippet.updated_at - now;
+            return Err(Status::invalid_argument(format!(
+                "updated_at is {} seconds ahead of server time; \
+                 synchronize the client clock and retry",
+                skew
+            )));
         }
-        if snippet.created_at > now + 300 {
-            return Err(Status::invalid_argument(
-                "Created timestamp is more than 5 minutes in the future",
-            ));
+        if snippet.created_at > now + tolerance {
+            let skew = snippet.created_at - now;
+            return Err(Status::invalid_argument(format!(
+                "created_at is {} seconds ahead of server time; \
+                 synchronize the client clock and retry",
+                skew
+            )));
         }
         if snippet.created_at < 0 || snippet.updated_at < 0 {
             return Err(Status::invalid_argument("Timestamps must be non-negative"));
@@ -1872,7 +1882,11 @@ mod tests {
         };
         let result = service.validate_snippet(&snippet);
         assert!(result.is_err());
-        assert!(result.unwrap_err().message().contains("future"));
+        let msg = result.unwrap_err().message().to_string();
+        assert!(
+            msg.contains("ahead of server time"),
+            "Expected clock skew message, got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -1892,6 +1906,59 @@ mod tests {
         let result = service.validate_snippet(&snippet);
         assert!(result.is_err());
         assert!(result.unwrap_err().message().contains("non-negative"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_clock_skew_reports_magnitude() {
+        let service = setup_test_service().await;
+        let now = chrono::Utc::now().timestamp();
+        let snippet = ProtoSnippet {
+            id: "skew-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: now,
+            updated_at: now + 742, // 742 seconds ahead
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().message().to_string();
+        assert!(
+            msg.contains("742"),
+            "Clock skew message should contain magnitude, got: {msg}"
+        );
+        assert!(
+            msg.contains("synchronize the client clock"),
+            "Clock skew message should contain corrective action, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_created_ahead_reports_skew() {
+        let service = setup_test_service().await;
+        let now = chrono::Utc::now().timestamp();
+        let snippet = ProtoSnippet {
+            id: "skew-created".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: now + 500,
+            updated_at: now, // updated_at is fine, only created_at is ahead
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().message().to_string();
+        assert!(
+            msg.contains("created_at"),
+            "Should mention created_at: {msg}"
+        );
+        assert!(msg.contains("500"), "Should contain skew magnitude: {msg}");
     }
 
     #[tokio::test]

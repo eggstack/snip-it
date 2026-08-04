@@ -13,6 +13,16 @@ Each snippet gets a new random salt, running Argon2 key derivation for every sin
 ## Sync Flow
 
 ```
+sync_encrypted() flow (sync.rs):
+1. Encrypt local snippets
+2. Build byte-bounded upload batches (Prost encoded_len, 3.5 MiB ceiling)
+3. Sort batches by snippet ID for deterministic ordering
+4. Send first batch via Sync RPC (upload + first response page)
+5. Send remaining batches via PushSnippets RPC (upload only)
+6. Paginate remaining response pages via Sync RPC (no upload)
+7. Aggregate and decrypt all server snippets
+8. Return merged SyncResponse
+
 run_sync() flow (sync_commands.rs:599-...):
 1. Validate config (api_key, device_id)
 2. Create SyncClient with TLS
@@ -57,6 +67,8 @@ content and the final cursor are durable.
 | `encrypt_snippet()` | `sync.rs:701` | Encrypt snippet for server |
 | `decrypt_snippet()` | `sync.rs:734` | Decrypt snippet from server |
 | `sync_with_retry()` | `sync.rs:380` | Retry logic with exponential backoff |
+| `build_upload_batches()` | `sync.rs:972` | Byte-bounded batch splitting using Prost encoded_len |
+| `accumulate_page()` | `sync.rs:410` | Decrypt and accumulate server snippets from a response page |
 | `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
 | `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
 | `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
@@ -81,6 +93,21 @@ Tests in `sync_commands.rs` (unit tests near end of file):
 - `test_local_deleted_not_resurrected_by_newer_server`
 - `test_proto_snippet_excludes_usage_metadata`
 - `test_merge_preserves_local_output_when_server_wins`
+
+Tests in `sync.rs` (batching and clock skew):
+- `test_build_upload_batches_empty_list`
+- `test_build_upload_batches_single_small_item`
+- `test_build_upload_batches_fits_one_request`
+- `test_build_upload_batches_exact_boundary_fit`
+- `test_build_upload_batches_one_byte_over_starts_new_batch`
+- `test_build_upload_batches_oversized_single_item`
+- `test_build_upload_batches_stable_id_ordering`
+- `test_build_upload_batches_metadata_overhead_included`
+- `test_build_upload_batches_no_batch_exceeds_ceiling`
+- `test_clock_skew_invalid_argument_is_typed`
+- `test_non_clock_skew_invalid_argument_is_generic`
+- `test_request_too_large_failure_class`
+- `test_clock_skew_failure_class`
 
 Focused coverage also includes equal-timestamp role swaps, same-device content
 fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
@@ -113,6 +140,8 @@ cover encryption and retry/timestamp behavior.
 | `EncryptionFailed` | Internal | sync.rs |
 | `DecryptionFailed` | Internal | sync.rs |
 | `Timeout` | TransientTimeout | sync.rs |
+| `RequestTooLarge` | Configuration | sync.rs |
+| `ClockSkew` | Configuration | sync.rs |
 
 ### FailureClass Enum
 
