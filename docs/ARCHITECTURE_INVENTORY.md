@@ -82,7 +82,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - `TerminalGuard` — RAII mouse capture cleanup
 - `MATCHER: LazyLock<SkimMatcherV2>` — pre-initialized fuzzy matcher
 - `FilterRequest` — incremental filter narrowing optimization
-- Theme system (`theme.rs`): Halloy TOML at `~/.config/snp/themes/<name>.toml`, bundled themes via LZMA
+- Theme system (`theme.rs`): Halloy TOML at `~/.config/snp/themes/<name>.toml`, bundled themes via gzip
 - Variable prompting UI (`variables.rs`): `VariablePromptResult` enum
 - Syntax highlighting (`highlight.rs`): pre-computed once at startup
 - `SnippetSelection` enum — `Selected(idx, copy_flag)`, `Delete(idx)`, `Cancelled`
@@ -203,7 +203,7 @@ Optional post-mutation background synchronization (Phase 12C). Disabled by defau
 | `tokio` | Async runtime (lazy-init) |
 | `tonic` | gRPC client |
 | `arboard` / `clipboard-win` | Clipboard |
-| `lzma-rs` | Bundled theme decompression |
+| `flate2` | Bundled theme decompression |
 | `chrono` | Timestamps |
 | `uuid` | Snippet ID generation |
 | `argon2` + `aes-gcm` | Encryption |

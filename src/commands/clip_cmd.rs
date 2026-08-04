@@ -55,7 +55,7 @@ pub fn run(
     library: Option<String>,
     _config: Option<PathBuf>,
     sort_opts: Option<crate::sort::SortOptions>,
-    runtime: &tokio::runtime::Runtime,
+    runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
     let _outcome = run_snippet_selection(
         filter,

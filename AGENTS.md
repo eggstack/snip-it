@@ -20,6 +20,16 @@
 - `SyncFailureKind::RequestTooLarge` maps to `FailureClass::Configuration` (requires operator attention).
 - `sync_encrypted()` accumulates response pages via `accumulate_page()` helper to avoid variable lifecycle warnings.
 
+## Phase 13D — Client Runtime and Dependency Footprint Reduction
+
+- Bundled themes use gzip compression (via `flate2`); `lzma-rs` has been removed. Regenerate with `python3 scripts/build_themes.py`.
+- Update archives use `.tar.gz` for all platforms including Windows; the `zip` crate has been removed. `extract_zip` and `validate_zip_entry_path` are gone.
+- Local-only commands (`select`, `list`, `get`, `validate`, `backup`, `new`, `edit`, `keybindings`, `completions`, `shell`, `doctor`, `status`, `repair`, `restore`, `import`) do not initialize the Tokio runtime. The `RUNTIME` lazy static is only accessed when `--sync` is requested or for explicit sync/register/premade commands.
+- `run_snippet_selection` accepts `Option<&tokio::runtime::Runtime>` — pass `None` when `do_sync` is false, `Some(&RUNTIME)` when true.
+- The auto-sync detached helper uses `Builder::new_current_thread()` instead of `new_multi_thread()`.
+- `chrono` default features are pruned to `clock` and `std` only (no `wasmbind`, `oldtime`).
+- Release profile includes `panic = "abort"` for smaller binaries (~19% reduction from baseline).
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

@@ -631,7 +631,7 @@ enum ShellIntegration {
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
-            return commands::run_cmd::run(None, false, None, None, &RUNTIME);
+            return commands::run_cmd::run(None, false, None, None, None);
         }
         Some(Commands::Version) => {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
@@ -726,7 +726,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 let result = snip_it::selector::resolve_selector(&selector)?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
-                        let outcome = commands::run_cmd::run_exact(&m.snippet, sync, &RUNTIME)?;
+                        let outcome = commands::run_cmd::run_exact(
+                            &m.snippet,
+                            sync,
+                            sync.then_some(&RUNTIME),
+                        )?;
                         match outcome {
                             CommandOutcome::ExecutionFailed { child_code } => {
                                 std::process::exit(child_code.unwrap_or(8));
@@ -760,8 +764,13 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     mode: sort,
                     favorites_first,
                 };
-                let outcome =
-                    commands::run_cmd::run(filter, sync, library, Some(sort_opts), &RUNTIME)?;
+                let outcome = commands::run_cmd::run(
+                    filter,
+                    sync,
+                    library,
+                    Some(sort_opts),
+                    sync.then_some(&RUNTIME),
+                )?;
                 match outcome {
                     CommandOutcome::ExecutionFailed { child_code } => {
                         std::process::exit(child_code.unwrap_or(8));
@@ -830,7 +839,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     mode: sort,
                     favorites_first,
                 };
-                commands::clip_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
+                commands::clip_cmd::run(
+                    filter,
+                    sync,
+                    library,
+                    None,
+                    Some(sort_opts),
+                    sync.then_some(&RUNTIME),
+                )?;
             }
         }
         Some(Commands::Search {
@@ -844,7 +860,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 mode: sort,
                 favorites_first,
             };
-            commands::search_cmd::run(filter, sync, library, None, Some(sort_opts), &RUNTIME)?;
+            commands::search_cmd::run(
+                filter,
+                sync,
+                library,
+                None,
+                Some(sort_opts),
+                sync.then_some(&RUNTIME),
+            )?;
         }
         Some(Commands::Select {
             filter,
@@ -868,7 +891,6 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 expanded,
                 output_file,
                 Some(sort_opts),
-                &RUNTIME,
             );
         }
         Some(Commands::Edit {

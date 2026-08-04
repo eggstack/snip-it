@@ -9,7 +9,7 @@ pub fn run(
     library: Option<String>,
     config: Option<PathBuf>,
     sort_opts: Option<crate::sort::SortOptions>,
-    runtime: &tokio::runtime::Runtime,
+    runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
     // Propagate --config to the snippet selection pipeline
     let effective_library = library.or_else(|| {

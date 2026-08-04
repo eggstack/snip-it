@@ -1,12 +1,9 @@
 //! Self-update archive security tests (Workstream I).
 //!
-//! Tests the validate_tar_entry and validate_zip_entry_path logic,
-//! HTTPS enforcement, and crafted archive rejection for the self-update
-//! subsystem.
+//! Tests the validate_tar_entry logic, HTTPS enforcement, and crafted
+//! archive rejection for the self-update subsystem.
 
-use std::io::Write;
-
-// === Path validation in tar/zip entries ===
+// === Path validation in tar entries ===
 //
 // The validation logic from `src/update.rs` checks path components for
 // RootDir, Prefix (absolute), and ParentDir (traversal). We replicate
@@ -208,173 +205,156 @@ fn test_checksum_verification_detects_mismatch() {
     assert_eq!(correct_hash.len(), 64);
 }
 
-// === ZIP entry path validation ===
+// === Crafted tar archive tests ===
 //
-// Replicates the validate_zip_entry_path logic from src/update.rs.
-
-fn validate_zip_entry_path(path: &std::path::Path) -> Result<(), String> {
-    let components: Vec<_> = path.components().collect();
-    for component in &components {
-        match component {
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err(format!(
-                    "rejecting absolute path in zip archive: {}",
-                    path.display()
-                ));
-            }
-            std::path::Component::ParentDir => {
-                return Err(format!(
-                    "rejecting parent traversal in zip archive: {}",
-                    path.display()
-                ));
-            }
-            _ => {}
-        }
-    }
-    if components.is_empty() {
-        return Err("empty path in zip archive".to_string());
-    }
-    Ok(())
-}
-
-#[test]
-fn test_rejects_absolute_path_in_zip_entry() {
-    let path = std::path::PathBuf::from("/etc/passwd");
-    assert!(validate_zip_entry_path(&path).is_err());
-}
-
-#[test]
-fn test_rejects_parent_traversal_in_zip_entry() {
-    let path = std::path::PathBuf::from("../etc/passwd");
-    assert!(validate_zip_entry_path(&path).is_err());
-}
-
-#[test]
-fn test_rejects_nested_traversal_in_zip_entry() {
-    let path = std::path::PathBuf::from("a/../../etc/passwd");
-    assert!(validate_zip_entry_path(&path).is_err());
-}
-
-#[test]
-fn test_accepts_valid_relative_zip_path() {
-    let path = std::path::PathBuf::from("snp");
-    assert!(validate_zip_entry_path(&path).is_ok());
-}
-
-#[test]
-fn test_accepts_nested_relative_zip_path() {
-    let path = std::path::PathBuf::from("bin/snp");
-    assert!(validate_zip_entry_path(&path).is_ok());
-}
-
-#[test]
-fn test_rejects_empty_zip_path() {
-    let path = std::path::PathBuf::from("");
-    assert!(validate_zip_entry_path(&path).is_err());
-}
-
-// === Crafted ZIP archive tests ===
-//
-// These tests create actual ZIP files with malicious content and verify
+// These tests create actual tar.gz files with malicious content and verify
 // that the extraction logic rejects them.
 
 #[test]
-fn test_zip_with_traversal_entry_rejected() {
+fn test_tar_with_traversal_entry_rejected() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let zip_path = tmp.path().join("malicious.zip");
+    let tar_path = tmp.path().join("malicious.tar.gz");
 
-    let zip_file = std::fs::File::create(&zip_path).unwrap();
-    let mut zip = zip::ZipWriter::new(zip_file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file("../etc/passwd", options).unwrap();
-    zip.write_all(b"malicious content").unwrap();
-    zip.finish().unwrap();
+    let tar_gz = std::fs::File::create(&tar_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+    let mut archive = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(17);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    archive
+        .append_data(
+            &mut header,
+            "../etc/passwd",
+            b"malicious content".as_slice(),
+        )
+        .unwrap();
+    archive.finish().unwrap();
+    let enc = archive.into_inner().unwrap();
+    enc.finish().unwrap();
 
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+    let file = std::fs::File::open(&tar_path).unwrap();
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+    let entries = archive.entries().unwrap();
     let mut has_traversal = false;
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).unwrap();
-        if let Some(name) = entry.enclosed_name() {
-            if validate_zip_entry_path(&name).is_err() {
-                has_traversal = true;
-            }
-        } else {
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap();
+        if validate_entry_path(&path).is_err() {
             has_traversal = true;
         }
     }
-    assert!(has_traversal, "ZIP with traversal entry should be rejected");
+    assert!(has_traversal, "tar with traversal entry should be rejected");
 }
 
 #[test]
-fn test_zip_with_absolute_entry_rejected() {
+fn test_tar_with_absolute_entry_rejected() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let zip_path = tmp.path().join("malicious.zip");
+    let tar_path = tmp.path().join("malicious.tar.gz");
 
-    let zip_file = std::fs::File::create(&zip_path).unwrap();
-    let mut zip = zip::ZipWriter::new(zip_file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file("/etc/passwd", options).unwrap();
-    zip.write_all(b"malicious content").unwrap();
-    zip.finish().unwrap();
+    let tar_gz = std::fs::File::create(&tar_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+    let mut archive = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(17);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    archive
+        .append_data(&mut header, "/etc/passwd", b"malicious content".as_slice())
+        .unwrap();
+    archive.finish().unwrap();
+    let enc = archive.into_inner().unwrap();
+    enc.finish().unwrap();
 
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+    let file = std::fs::File::open(&tar_path).unwrap();
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+    let entries = archive.entries().unwrap();
     let mut has_absolute = false;
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).unwrap();
-        if let Some(name) = entry.enclosed_name() {
-            if validate_zip_entry_path(&name).is_err() {
-                has_absolute = true;
-            }
-        } else {
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap();
+        if validate_entry_path(&path).is_err() {
             has_absolute = true;
         }
     }
     assert!(
         has_absolute,
-        "ZIP with absolute path entry should be rejected"
+        "tar with absolute path entry should be rejected"
     );
 }
 
 #[test]
-fn test_valid_zip_with_single_binary_accepted() {
+fn test_valid_tar_with_single_binary_accepted() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let zip_path = tmp.path().join("valid.zip");
+    let tar_path = tmp.path().join("valid.tar.gz");
 
-    let zip_file = std::fs::File::create(&zip_path).unwrap();
-    let mut zip = zip::ZipWriter::new(zip_file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file("snp", options).unwrap();
-    zip.write_all(b"fake binary content").unwrap();
-    zip.finish().unwrap();
+    let tar_gz = std::fs::File::create(&tar_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+    let mut archive = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(20);
+    header.set_mode(0o755);
+    header.set_entry_type(tar::EntryType::Regular);
+    archive
+        .append_data(&mut header, "snp", b"fake binary content".as_slice())
+        .unwrap();
+    archive.finish().unwrap();
+    let enc = archive.into_inner().unwrap();
+    enc.finish().unwrap();
 
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
-    assert_eq!(archive.len(), 1);
-    let entry = archive.by_index(0).unwrap();
-    let name = entry.enclosed_name().unwrap();
-    assert!(validate_zip_entry_path(&name).is_ok());
+    let file = std::fs::File::open(&tar_path).unwrap();
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+    let entries = archive.entries().unwrap();
+    let mut count = 0;
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap();
+        assert!(validate_entry_path(&path).is_ok());
+        count += 1;
+    }
+    assert_eq!(count, 1);
 }
 
 #[test]
-fn test_zip_with_nested_traversal_rejected() {
+fn test_tar_with_nested_traversal_rejected() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let zip_path = tmp.path().join("malicious.zip");
+    let tar_path = tmp.path().join("malicious.tar.gz");
 
-    let zip_file = std::fs::File::create(&zip_path).unwrap();
-    let mut zip = zip::ZipWriter::new(zip_file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file("a/../../etc/shadow", options).unwrap();
-    zip.write_all(b"malicious content").unwrap();
-    zip.finish().unwrap();
+    let tar_gz = std::fs::File::create(&tar_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+    let mut archive = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(17);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    archive
+        .append_data(
+            &mut header,
+            "a/../../etc/shadow",
+            b"malicious content".as_slice(),
+        )
+        .unwrap();
+    archive.finish().unwrap();
+    let enc = archive.into_inner().unwrap();
+    enc.finish().unwrap();
 
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
-    let entry = archive.by_index(0).unwrap();
-    let rejected = match entry.enclosed_name() {
-        Some(name) => validate_zip_entry_path(&name).is_err(),
-        None => true,
-    };
-    assert!(rejected, "ZIP with nested traversal should be rejected");
+    let file = std::fs::File::open(&tar_path).unwrap();
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+    let entries = archive.entries().unwrap();
+    let mut has_traversal = false;
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap();
+        if validate_entry_path(&path).is_err() {
+            has_traversal = true;
+        }
+    }
+    assert!(
+        has_traversal,
+        "tar with nested traversal should be rejected"
+    );
 }

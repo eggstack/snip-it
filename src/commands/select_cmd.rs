@@ -104,7 +104,6 @@ pub fn run(
     expanded: bool,
     output_file: Option<PathBuf>,
     sort_opts: Option<crate::sort::SortOptions>,
-    runtime: &tokio::runtime::Runtime,
 ) -> SnipResult<CommandOutcome> {
     let mode = if expanded {
         OutputMode::Expanded
@@ -119,7 +118,7 @@ pub fn run(
         library,
         false,
         sort_opts,
-        runtime,
+        None,
         |snippet, _copy_flag| {
             let result = process_snippet(snippet, mode, &cancelled)?;
             if let crate::ProcessResult::Done(cmd) = &result {

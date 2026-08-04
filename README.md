@@ -99,7 +99,7 @@ Release assets currently include:
 | Linux aarch64 | `snip-it-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Intel | `snip-it-v<VERSION>-x86_64-apple-darwin.tar.gz` |
 | macOS Apple Silicon | `snip-it-v<VERSION>-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `snip-it-v<VERSION>-x86_64-pc-windows-msvc.zip` |
+| Windows x86_64 | `snip-it-v<VERSION>-x86_64-pc-windows-msvc.tar.gz` |
 
 On Linux or macOS, extract the archive and install the binary:
 
@@ -108,7 +108,7 @@ tar xzf snp-*.tar.gz
 sudo mv snp /usr/local/bin/snp
 ```
 
-On Windows, extract the zip and move `snp.exe` to a directory on your `PATH`.
+On Windows, extract the archive and move `snp.exe` to a directory on your `PATH`.
 
 Each release also includes a `SHA256SUMS` file for verifying download integrity.
 

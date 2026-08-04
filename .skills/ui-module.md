@@ -8,7 +8,7 @@ src/ui/
 ├── theme.rs                     # Theme system (Halloy TOML + dark/bright fallback)
 ├── highlight.rs                 # Syntax highlighting for snippet commands
 ├── variables.rs                 # Variable prompting UI (prompt_variables_inner)
-└── _generated_bundled_themes.rs # LZMA-compressed bundled themes (build-time generated)
+└── _generated_bundled_themes.rs # gzip-compressed bundled themes (build-time generated)
 ```
 
 ## Key Types
@@ -36,7 +36,7 @@ src/ui/
 
 ### Halloy TOML Themes
 - 50 bundled themes in `themes/` directory (source of truth)
-- LZMA-compressed and base64-encoded at build time into `_generated_bundled_themes.rs`
+- gzip-compressed and base64-encoded at build time into `_generated_bundled_themes.rs`
 - `build.rs` re-invokes `scripts/build_themes.py` when themes/ is newer
 - Extracted to `~/.config/snp/themes/` on first launch
 - Active theme persisted in `~/.config/snp/themes.toml`
@@ -62,4 +62,4 @@ src/ui/
 - `ratatui` for terminal UI
 - `crossterm` for terminal events
 - `fuzzy-matcher` (skim algorithm) for filtering
-- `lzma-rs` for decompressing bundled themes
+- `flate2` for decompressing bundled themes

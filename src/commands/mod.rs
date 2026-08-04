@@ -270,7 +270,7 @@ pub fn run_snippet_selection<F>(
     library: Option<String>,
     do_sync: bool,
     sort_opts: Option<SortOptions>,
-    runtime: &tokio::runtime::Runtime,
+    runtime: Option<&tokio::runtime::Runtime>,
     mut process_fn: F,
 ) -> crate::error::SnipResult<crate::SelectionOutcome>
 where
@@ -341,7 +341,10 @@ where
                         ) {
                             Ok(_exec_lock) => {
                                 let observed = crate::auto_sync::observe_pending_generation();
-                                let sync_result = crate::sync_commands::run_default_sync(runtime);
+                                let sync_result =
+                                    crate::sync_commands::run_default_sync(runtime.expect(
+                                        "run_snippet_selection: runtime required when do_sync is true",
+                                    ));
                                 let sync_succeeded = sync_result.is_ok();
                                 if sync_result.is_err() {
                                     tracing::warn!("post-delete sync failed");
@@ -403,7 +406,9 @@ where
             &state_dir,
             std::time::Duration::from_secs(30),
         ) {
-            Ok(_exec_lock) => match crate::sync_commands::run_default_sync(runtime) {
+            Ok(_exec_lock) => match crate::sync_commands::run_default_sync(
+                runtime.expect("run_snippet_selection: runtime required when do_sync is true"),
+            ) {
                 Ok(()) => true,
                 Err(e) => {
                     tracing::warn!(error = %e, "Background sync failed");

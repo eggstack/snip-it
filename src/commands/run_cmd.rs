@@ -268,7 +268,7 @@ pub fn run(
     do_sync: bool,
     library: Option<String>,
     sort_opts: Option<crate::sort::SortOptions>,
-    runtime: &tokio::runtime::Runtime,
+    runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<crate::CommandOutcome> {
     let outcome = run_snippet_selection(
         filter,
@@ -294,7 +294,7 @@ pub fn run(
 pub fn run_exact(
     snippet: &Snippet,
     do_sync: bool,
-    _runtime: &tokio::runtime::Runtime,
+    _runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<crate::CommandOutcome> {
     let result = process_snippet(snippet, false)?;
     if let crate::ProcessResult::Failed { exit_code, .. } = result {

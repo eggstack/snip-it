@@ -2,10 +2,10 @@
 """
 Build script for bundled Halloy-compatible themes.
 
-Reads every `themes/*.toml` in the project root, LZMA-compresses each
-(using stdlib's `lzma` module with the XZ container format that matches
-the `lzma-rs` Rust crate's decoder), base64-encodes the bytes, and emits
-a single Rust source file at `src/ui/_generated_bundled_themes.rs`.
+Reads every `themes/*.toml` in the project root, gzip-compresses each
+(using stdlib's `gzip` module with the DEFLATE format that matches
+the `flate2` Rust crate's GzDecoder), base64-encodes the bytes, and
+emits a single Rust source file at `src/ui/_generated_bundled_themes.rs`.
 
 The `Cyber Red` theme is treated specially: it's `include_str!`'d directly
 so the binary always has a usable theme on the very first launch, before
@@ -20,8 +20,8 @@ This is also invoked automatically by `build.rs` whenever any file in
 from __future__ import annotations
 
 import base64
+import gzip
 import io
-import lzma
 import re
 import sys
 from pathlib import Path
@@ -51,14 +51,16 @@ def validate_filename(name: str) -> str:
     return name
 
 
-def compress_xz(data: bytes) -> bytes:
-    """LZMA-compress with the XZ container format (matches lzma-rs xz_decompress).
+def compress_gzip(data: bytes) -> bytes:
+    """Gzip-compress data (matches flate2::read::GzDecoder).
 
-    The default XZ preset (level 6) is a good speed/ratio balance. The
-    resulting bytes are typically ~30% of the original size for small
-    text files.
+    Uses the default gzip compression level. The resulting bytes are
+    typically ~40% of the original size for small text files.
     """
-    return lzma.compress(data, format=lzma.FORMAT_XZ, preset=6)
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as f:
+        f.write(data)
+    return buf.getvalue()
 
 
 def collect_themes() -> list[Path]:
@@ -83,7 +85,7 @@ def generate_rust(themes: list[Path]) -> str:
             default_path = path
             continue
         raw = path.read_bytes()
-        compressed = compress_xz(raw)
+        compressed = compress_gzip(raw)
         encoded = base64.b64encode(compressed).decode("ascii")
         bundled.append((basename, encoded))
 
@@ -108,9 +110,9 @@ def generate_rust(themes: list[Path]) -> str:
         "// Regenerate by running: python3 scripts/build_themes.py"
     )
     lines.append("//")
-    lines.append("// LZMA compression (XZ container) via Python's stdlib `lzma`.")
+    lines.append("// Gzip compression via Python's stdlib `gzip`.")
     lines.append(
-        "// Decoded at runtime by the `lzma-rs` crate (xz_decompress)."
+        "// Decoded at runtime by the `flate2` crate (GzDecoder)."
     )
     lines.append("//")
     lines.append(
@@ -120,7 +122,7 @@ def generate_rust(themes: list[Path]) -> str:
         "// published crate does not need the source `themes/` directory at"
     )
     lines.append(
-        "// build time. All other themes are LZMA-compressed in the table"
+        "// build time. All other themes are gzip-compressed in the table"
     )
     lines.append(
         "// below and decoded on first launch."
@@ -132,6 +134,7 @@ def generate_rust(themes: list[Path]) -> str:
     lines.append("")
     lines.append("use crate::error::SnipResult;")
     lines.append("use base64::Engine as _;")
+    lines.append("use std::io::Read as _;")
     lines.append("")
     lines.append(
         '/// Uncompressed hardcoded fallback theme. Embedded as a Rust raw'
@@ -165,7 +168,7 @@ def generate_rust(themes: list[Path]) -> str:
         f'pub const DEFAULT_BUNDLED: &str = r{delim}"{raw_default}"{delim};'
     )
     lines.append("")
-    lines.append("/// One bundled theme: a name and a base64-encoded LZMA-compressed TOML body.")
+    lines.append("/// One bundled theme: a name and a base64-encoded gzip-compressed TOML body.")
     lines.append("#[derive(Debug, Clone, Copy)]")
     lines.append("pub struct BundledTheme {")
     lines.append("    pub name: &'static str,")
@@ -196,7 +199,7 @@ def generate_rust(themes: list[Path]) -> str:
         "/// extraction. Do not call in hot paths — each call decodes"
     )
     lines.append(
-        "/// ~50 KiB of LZMA data."
+        "/// ~50 KiB of gzip data."
     )
     lines.append(
         "pub fn bundled_themes_decoded() -> SnipResult<std::vec::Vec<(String, String)>> {"
@@ -212,13 +215,11 @@ def generate_rust(themes: list[Path]) -> str:
     )
     lines.append("                })?;")
     lines.append("            let mut toml_bytes = std::vec::Vec::new();")
-    lines.append("            lzma_rs::xz_decompress(")
-    lines.append("                &mut compressed.as_slice(),")
-    lines.append("                &mut toml_bytes,")
-    lines.append("            )")
-    lines.append("            .map_err(|_| {")
+    lines.append("            flate2::read::GzDecoder::new(compressed.as_slice())")
+    lines.append("                .read_to_end(&mut toml_bytes)")
+    lines.append("                .map_err(|_| {")
     lines.append(
-        '                crate::SnipError::runtime_error("bundled theme: invalid xz stream", None)'
+        '                crate::SnipError::runtime_error("bundled theme: invalid gzip stream", None)'
     )
     lines.append("            })?;")
     lines.append(

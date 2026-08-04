@@ -64,7 +64,7 @@ The workspace has **463 lines** of duplicate dependency output. Key duplications
 **Recommendation**: Gate behind `self-update` feature. Library consumers don't need self-update capability.
 
 ### 5. Bundled themes (`bundled-themes` feature)
-**Dependencies**: `lzma-rs`, `unicode-width` (already used by TUI)
+**Dependencies**: `flate2`, `unicode-width` (already used by TUI)
 **Currently used by**: `scripts/build_themes.py` → `src/ui/_generated_bundled_themes.rs`
 **Recommendation**: Gate behind `bundled-themes` feature. The `include_str!` bundle adds binary size. Library consumers don't need themes.
 
@@ -120,4 +120,4 @@ libc = "0.2"
 | 3 | `auto-sync` | None (always on) | Moderate — removes process spawning |
 | 4 | `clipboard` | None (always on) | Minor — removes platform clipboard |
 | 5 | `self-update` | None (always on) | Minor — removes HTTP for updates |
-| 6 | `bundled-themes` | None (always on) | Minor — removes lzma-rs |
+| 6 | `bundled-themes` | None (always on) | Minor — removes flate2 |

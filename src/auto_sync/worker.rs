@@ -284,9 +284,8 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
         crate::config::SyncDirection::Pull => (false, true),
         crate::config::SyncDirection::Bidirectional => (false, false),
     };
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .thread_name("snp-auto-sync")
         .build()
     {
         Ok(runtime) => runtime,

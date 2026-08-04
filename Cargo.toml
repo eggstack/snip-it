@@ -101,7 +101,7 @@ fuzzy-matcher = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
@@ -119,12 +119,10 @@ crc32fast = "1.4"
 sha2 = "0.11"
 time = ">=0.3.36, <0.4"
 unicode-width = "0.2"
-lzma-rs = "0.3"
 shell-words = "1.1"
 tempfile = "3.10"
 tar = "0.4"
 flate2 = "1"
-zip = "2"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -134,6 +132,7 @@ snip-sync = { version = "0.1.2", path = "snip-sync", features = ["test-helpers"]
 portable-pty = "0.9"
 libc = "0.2"
 crc32fast = "1.4"
+flate2 = "1"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 keyring = "3"
 
@@ -142,6 +141,7 @@ lto = true
 codegen-units = 1
 opt-level = "z"
 strip = true
+panic = "abort"
 
 [workspace]
 members = ["snip-proto", "snip-sync"]
