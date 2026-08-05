@@ -1,6 +1,6 @@
 # Phase 13G — Corrective Closure for Sync Batching, Server Shutdown, and Phase Records
 
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -666,13 +666,18 @@ Prefer the smallest direct correction that proves the user-visible contract.
 
 ## 20. Completion record
 
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
-Implementation commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+Implementation commits:
+- `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+- `898a62b` — Phase 13G: Complete corrective closure — orchestration tests, process tests, docs, records
+- `00bee90` — Phase 13G: Fix server drain and SIGTERM test assertions
+
+Superseded by: Phase 13H (`75a55b1`) which fixed remaining defects found during post-13G review.
 
 Verification:
 - `cargo fmt --all -- --check`: PASS
-- `cargo clippy --workspace --all-targets -- -D warnings`: PASS
+- `cargo clippy --workspace --all-targets -D warnings`: PASS
 - `cargo test -p snip-it --lib sync`: PASS
 - `cargo test -p snip-sync --lib`: PASS
 - `cargo test --test sync_multibatch -- --test-threads=1`: PASS
@@ -680,6 +685,6 @@ Verification:
 - `bash scripts/check.sh`: PASS
 - `cargo doc -p snip-it --no-deps`: PASS
 
-Residual deviations: None
+Residual deviations: Superseded by 13H for: zero-batch panic, typed error flattening, double-poll of completed handles, drain timeout task detachment, orchestration test divergence, unbounded process waits, fresh-state partial-failure test.
 
-Release disposition: CLEARED
+Release disposition: Superseded — see Phase 13H for final release clearance.

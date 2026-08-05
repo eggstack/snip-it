@@ -611,15 +611,18 @@ Status: COMPLETE
 
 Implementation: single commit (all workstreams A–J)
 
+Implementation commit: `75a55b1` — Phase 13H: Final correctness closure for sync, orchestration, and tests
+
 Verification:
 - cargo fmt --all -- --check: PASS
 - cargo clippy --workspace --all-targets -- -D warnings: PASS
-- cargo test --workspace --lib: PASS (145 tests)
+- cargo test --workspace --lib: PASS (1101 tests)
 - cargo test -p snip-sync --lib: PASS (145 tests)
 - cargo test --test sync_multibatch -- --test-threads=1: PASS (3 tests)
 - cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
 - short Unix SIGTERM repeated run: 5/5 PASS
 - bash scripts/check.sh: PASS
+- bash scripts/release-check.sh verify: PASS (all 4 phases)
 - cargo doc -p snip-it --no-deps: PASS
 
 Residual deviations: none
