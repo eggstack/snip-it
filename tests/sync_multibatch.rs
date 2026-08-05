@@ -68,6 +68,8 @@ async fn build_file_service(db_path: &str) -> SnipSyncService {
         premade_manager,
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
         test_observer: None,
+        push_fail_after: Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX)),
+        push_fail_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
     }
 }
 
@@ -236,14 +238,20 @@ async fn test_sync_convergence_after_partial_upload() {
 /// some batches committed and others didn't, retrying with the same
 /// credentials against the same database produces the correct result
 /// with no duplicates.
+///
+/// Uses the deterministic push failure seam (push_fail_after) instead
+/// of timing-based server abort.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_partial_failure_convergence() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    // Phase 1: Start server, register, upload batches, crash mid-sync.
+    // Phase 1: Start server with push_fail_after=2 (fail on 3rd push batch).
     let service = build_file_service(db_path_str).await;
+    service
+        .push_fail_after
+        .store(2, std::sync::atomic::Ordering::SeqCst);
     let (addr, server_task, _captured) = start_test_server(service).await;
     let server_url = format!("http://{addr}");
 
@@ -268,20 +276,49 @@ async fn test_partial_failure_convergence() {
         })
         .collect();
 
-    // Spawn sync in background, then crash the server mid-upload.
-    let snippets_clone = snippets.clone();
-    let sync_task = tokio::spawn(async move {
-        client
-            .sync_encrypted_with_ceiling(snippets_clone, 0, "", TEST_BYTE_CEILING)
+    // Sync should fail deterministically on the 3rd push batch.
+    let sync_result = client
+        .sync_encrypted_with_ceiling(snippets.clone(), 0, "", TEST_BYTE_CEILING)
+        .await;
+    assert!(
+        sync_result.is_err(),
+        "first sync should fail due to push failure injection"
+    );
+
+    // Phase 2: The server retained partial state. Verify the DB has
+    // more than zero and fewer than all expected snippets.
+    {
+        let db = snip_sync::db::Database::connect(db_path_str, 1)
             .await
-    });
+            .unwrap();
+        let user_id = db
+            .get_user_by_api_key(&api_key)
+            .await
+            .unwrap()
+            .expect("user should exist");
+        let default_lib = db.get_default_library(&user_id).await.unwrap();
+        let (rows, _total) = db
+            .get_snippets(&user_id, &default_lib, 0, 200, 0, false)
+            .await
+            .unwrap();
+        assert!(
+            !rows.is_empty(),
+            "server should have retained some snippets after partial failure"
+        );
+        assert!(
+            rows.len() < MULTI_BATCH_COUNT,
+            "server should NOT have all {} snippets after partial failure, got {}",
+            MULTI_BATCH_COUNT,
+            rows.len()
+        );
+    }
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Phase 3: Stop the server, restart with push failure disabled.
     server_task.abort();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sync_task).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_task).await;
 
-    // Phase 2: Restart against the same database file.
     let service2 = build_file_service(db_path_str).await;
+    // push_fail_after defaults to u32::MAX (no failure).
     let (addr2, server_task2, _captured2) = start_test_server(service2).await;
     let server_url2 = format!("http://{addr2}");
 
@@ -310,8 +347,7 @@ async fn test_partial_failure_convergence() {
         MULTI_BATCH_COUNT
     );
 
-    // The caller does not advance the successful-sync cursor after failure.
-    // Verify by syncing again with the same cursor.
+    // Phase 4: Verify idempotent convergence with a second retry.
     let mut client3 = build_sync_client(&server_url2, &api_key).await;
     let response2 = client3
         .sync_encrypted_with_ceiling(snippets, 0, "", TEST_BYTE_CEILING)
@@ -328,7 +364,380 @@ async fn test_partial_failure_convergence() {
         MULTI_BATCH_COUNT
     );
 
+    // Phase 5: Verify the database has exactly one row per expected ID.
+    {
+        let db = snip_sync::db::Database::connect(db_path_str, 1)
+            .await
+            .unwrap();
+        let user_id = db
+            .get_user_by_api_key(&api_key)
+            .await
+            .unwrap()
+            .expect("user should exist");
+        let default_lib = db.get_default_library(&user_id).await.unwrap();
+        let (rows, _total) = db
+            .get_snippets(&user_id, &default_lib, 0, 200, 0, false)
+            .await
+            .unwrap();
+        let mut db_ids: Vec<&str> = rows.iter().map(|s| s.id.as_str()).collect();
+        db_ids.sort();
+        db_ids.dedup();
+        assert_eq!(
+            db_ids.len(),
+            MULTI_BATCH_COUNT,
+            "database should have exactly {} unique snippet IDs",
+            MULTI_BATCH_COUNT
+        );
+    }
+
     server_task2.abort();
+}
+
+// ── Zero-batch and pull-only tests ──────────────────────────────
+
+/// Empty local input against empty remote should succeed with no panic.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_zero_batch_empty_local_empty_remote() {
+    let service = build_file_service("sqlite::memory:").await;
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let (api_key, _device_id) = SyncClient::register(server_url.clone())
+        .await
+        .expect("register should succeed");
+
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let response = client
+        .sync_encrypted_with_ceiling(vec![], 0, "", TEST_BYTE_CEILING)
+        .await
+        .expect("zero-batch sync should succeed");
+
+    assert!(response.success);
+    assert!(
+        response.snippets.is_empty(),
+        "empty remote should return no snippets"
+    );
+
+    server_task.abort();
+}
+
+/// Seed remote state, then sync with empty local input and verify all
+/// remote IDs are returned (pull-only path).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_zero_batch_pull_only_seeded_remote() {
+    let service = build_file_service("sqlite::memory:").await;
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let (api_key, device_id) = SyncClient::register(server_url.clone())
+        .await
+        .expect("register should succeed");
+
+    // Seed the server with some snippets via a normal sync.
+    let mut setup_client = build_sync_client(&server_url, &api_key).await;
+    let now = chrono::Utc::now().timestamp();
+    let seed_snippets: Vec<Snippet> = (0..10)
+        .map(|i| Snippet {
+            id: format!("seed-{i:02}"),
+            description: format!("seed snippet {i}"),
+            command: format!("echo seed-{i}"),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            device_id: device_id.clone(),
+            deleted: false,
+            encrypted: false,
+        })
+        .collect();
+
+    let seed_resp = setup_client
+        .sync_encrypted(seed_snippets, 0, "")
+        .await
+        .expect("seed sync should succeed");
+    assert!(seed_resp.success);
+
+    // Now sync with empty local input — should pull all remote snippets.
+    let mut pull_client = build_sync_client(&server_url, &api_key).await;
+    let response = pull_client
+        .sync_encrypted_with_ceiling(vec![], 0, "", TEST_BYTE_CEILING)
+        .await
+        .expect("pull-only sync should succeed");
+
+    assert!(response.success);
+    let mut returned_ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
+    returned_ids.sort();
+    assert_eq!(
+        returned_ids.len(),
+        10,
+        "pull-only sync should return all 10 seeded snippets"
+    );
+    for i in 0..10 {
+        let expected_id = format!("seed-{i:02}");
+        assert!(
+            returned_ids.contains(&expected_id.as_str()),
+            "missing seed snippet {expected_id}"
+        );
+    }
+
+    server_task.abort();
+}
+
+/// Zero-batch sync retrieves more than one remote page when the page
+/// limit is small enough to require pagination.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_zero_batch_pagination() {
+    let service = build_file_service("sqlite::memory:").await;
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let (api_key, device_id) = SyncClient::register(server_url.clone())
+        .await
+        .expect("register should succeed");
+
+    // Seed 20 snippets via a normal sync (small enough to fit in one batch).
+    let mut setup_client = build_sync_client(&server_url, &api_key).await;
+    let now = chrono::Utc::now().timestamp();
+    let seed_snippets: Vec<Snippet> = (0..20)
+        .map(|i| Snippet {
+            id: format!("page-{i:02}"),
+            description: format!("pagination snippet {i}"),
+            command: format!("echo page-{i}"),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            device_id: device_id.clone(),
+            deleted: false,
+            encrypted: false,
+        })
+        .collect();
+
+    let seed_resp = setup_client
+        .sync_encrypted(seed_snippets, 0, "")
+        .await
+        .expect("seed sync should succeed");
+    assert!(seed_resp.success);
+
+    // Now pull with a small sync_limit to force multi-page pagination.
+    // The server's default page limit is 100, but we can set a smaller
+    // limit via the SyncSettings to force multiple round trips.
+    let settings = SyncSettings {
+        enabled: true,
+        server_url: server_url.clone(),
+        api_key: api_key.clone(),
+        device_id: String::new(),
+        sync_interval_minutes: 30,
+        auto_sync: false,
+        auto_sync_debounce_seconds: 2,
+        auto_sync_failure: snip_it::config::AutoSyncFailureMode::Warn,
+        auto_sync_max_delay_seconds: None,
+        auto_sync_timeout_seconds: None,
+        sync_direction: SyncDirection::Bidirectional,
+        clipboard_auto_clear_seconds: None,
+        sync_limit: Some(5), // Force pages of 5
+        credential_revision: 0,
+    };
+    let mut paginated_client = SyncClient::create(settings)
+        .await
+        .expect("SyncClient::create should succeed");
+
+    let response = paginated_client
+        .sync_encrypted_with_ceiling(vec![], 0, "", TEST_BYTE_CEILING)
+        .await
+        .expect("paginated pull should succeed");
+
+    assert!(response.success);
+    let mut returned_ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
+    returned_ids.sort();
+    assert_eq!(
+        returned_ids.len(),
+        20,
+        "paginated pull should retrieve all 20 snippets across multiple pages"
+    );
+
+    server_task.abort();
+}
+
+// ── Typed batch-context unit tests ───────────────────────────────
+
+/// ClockSkew retains its kind and configuration classification after
+/// add_batch_context.
+#[test]
+fn test_batch_context_preserves_clock_skew() {
+    let err = snip_it::SnipError::sync_failure(
+        snip_it::error::SyncFailureKind::ClockSkew,
+        Some("updated_at is 742 seconds ahead"),
+    );
+    let contextualized = snip_it::sync::add_batch_context(err, 2, 5);
+
+    match &contextualized {
+        snip_it::SnipError::SyncFailure { kind, detail } => {
+            assert!(
+                matches!(kind, snip_it::error::SyncFailureKind::ClockSkew),
+                "expected ClockSkew, got {kind:?}"
+            );
+            let detail = detail.as_deref().expect("detail should be present");
+            assert!(
+                detail.contains("batch 2/5"),
+                "detail should include batch context: {detail}"
+            );
+            assert!(
+                detail.contains("742 seconds"),
+                "detail should preserve original message: {detail}"
+            );
+        }
+        other => panic!("expected SyncFailure(ClockSkew), got {other:?}"),
+    }
+
+    assert_eq!(
+        snip_it::auto_sync::policy::FailureClass::from_error(&contextualized),
+        snip_it::auto_sync::policy::FailureClass::Configuration
+    );
+}
+
+/// Timeout retains its kind and classification after add_batch_context.
+#[test]
+fn test_batch_context_preserves_timeout() {
+    let err = snip_it::SnipError::sync_failure(
+        snip_it::error::SyncFailureKind::Timeout,
+        Some("deadline exceeded"),
+    );
+    let contextualized = snip_it::sync::add_batch_context(err, 1, 3);
+
+    match &contextualized {
+        snip_it::SnipError::SyncFailure { kind, detail } => {
+            assert!(
+                matches!(kind, snip_it::error::SyncFailureKind::Timeout),
+                "expected Timeout, got {kind:?}"
+            );
+            let detail = detail.as_deref().expect("detail should be present");
+            assert!(
+                detail.contains("batch 1/3"),
+                "detail should include batch context: {detail}"
+            );
+            assert!(
+                detail.contains("deadline exceeded"),
+                "detail should preserve original message: {detail}"
+            );
+        }
+        other => panic!("expected SyncFailure(Timeout), got {other:?}"),
+    }
+}
+
+/// Non-SyncFailure errors are wrapped as SyncRequestFailed with batch context.
+#[test]
+fn test_batch_context_wraps_non_sync_failure() {
+    let err = snip_it::SnipError::runtime_error("test op", Some("something broke"));
+    let contextualized = snip_it::sync::add_batch_context(err, 3, 4);
+
+    match &contextualized {
+        snip_it::SnipError::SyncFailure { kind, detail } => {
+            assert!(
+                matches!(kind, snip_it::error::SyncFailureKind::SyncRequestFailed),
+                "expected SyncRequestFailed, got {kind:?}"
+            );
+            let detail = detail.as_deref().expect("detail should be present");
+            assert!(
+                detail.contains("batch 3/4"),
+                "detail should include batch context: {detail}"
+            );
+        }
+        other => panic!("expected SyncFailure(SyncRequestFailed), got {other:?}"),
+    }
+}
+
+/// All-encryption-failed prepared input does not panic, returns failed
+/// IDs, and still retrieves remote snippets.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_all_encryption_failed_accounting() {
+    let service = build_file_service("sqlite::memory:").await;
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let (api_key, device_id) = SyncClient::register(server_url.clone())
+        .await
+        .expect("register should succeed");
+
+    // Seed the server with some snippets first.
+    let mut setup_client = build_sync_client(&server_url, &api_key).await;
+    let now = chrono::Utc::now().timestamp();
+    let seed_snippets: Vec<Snippet> = (0..5)
+        .map(|i| Snippet {
+            id: format!("remote-{i}"),
+            description: format!("remote snippet {i}"),
+            command: format!("echo remote-{i}"),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            device_id: device_id.clone(),
+            deleted: false,
+            encrypted: false,
+        })
+        .collect();
+    let seed_resp = setup_client
+        .sync_encrypted(seed_snippets, 0, "")
+        .await
+        .expect("seed sync should succeed");
+    assert!(seed_resp.success);
+
+    // Now attempt a sync where all local encryption fails.
+    let local_snippets: Vec<Snippet> = (0..3)
+        .map(|i| Snippet {
+            id: format!("local-fail-{i}"),
+            description: format!("local snippet {i}"),
+            command: format!("echo local-{i}"),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            device_id: device_id.clone(),
+            deleted: false,
+            encrypted: false,
+        })
+        .collect();
+
+    let mut client = build_sync_client(&server_url, &api_key).await;
+    let response = client
+        .sync_encrypted_with_custom_encrypt(local_snippets, 0, "", TEST_BYTE_CEILING, |_s| {
+            Err(snip_it::SnipError::runtime_error(
+                "encrypt",
+                Some("injected failure"),
+            ))
+        })
+        .await
+        .expect("sync should not panic even when all encryption fails");
+
+    // All local snippets should be in skipped_ids.
+    assert_eq!(
+        response.skipped_ids.len(),
+        3,
+        "all 3 local snippet IDs should be in skipped_ids"
+    );
+    for i in 0..3 {
+        let expected_id = format!("local-fail-{i}");
+        assert!(
+            response.skipped_ids.contains(&expected_id),
+            "skipped_ids should contain {expected_id}"
+        );
+    }
+    assert_eq!(response.skipped_count, 3, "skipped_count should be 3");
+
+    // Remote snippets should still be returned.
+    assert_eq!(
+        response.snippets.len(),
+        5,
+        "remote snippets should still be returned despite local encryption failure"
+    );
+
+    // Overall success is true because server returned snippets even
+    // though all local encryption failed. The success flag reflects
+    // whether any usable data was exchanged, not whether local
+    // encryption succeeded.
+    assert!(
+        response.success,
+        "success should be true when server returned snippets"
+    );
+
+    server_task.abort();
 }
 
 async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {

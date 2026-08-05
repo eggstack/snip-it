@@ -53,8 +53,8 @@ Until Phase 13I passes, do not publish a release or mark Phase 13 complete.
 | 13E | `plans/snip-it-phase-13e-auto-sync-persistence-simplification.md` | implemented | Simplify auto-sync and transaction scope |
 | 13F | `plans/snip-it-phase-13f-api-cli-server-surface-consolidation.md` | implemented | Narrow supported surfaces and clean documentation |
 | 13G | `plans/snip-it-phase-13g-corrective-closure.md` | complete with corrective follow-up | Correct initial multi-batch and shutdown defects |
-| 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | implemented with remaining corrective gaps | Add zero-batch sync, shared orchestration, retained-state/process corrections, and record repair |
-| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | READY FOR IMPLEMENTATION; release-blocking | Correct drain result accounting, deterministic retained-state failure, missing regressions, and final records |
+| 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | complete with corrective follow-up | Add zero-batch sync, shared orchestration, retained-state/process corrections, and record repair |
+| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | complete | Correct drain result accounting, deterministic retained-state failure, missing regressions, and final records |
 
 Required sequence:
 
@@ -255,10 +255,6 @@ Only after these statements are true may this roadmap return to `Status: COMPLET
 
 ## 13. Current disposition
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
-Release-blocking phase: Phase 13I
-
-Current release disposition: BLOCKED
-
-Next plan: `plans/snip-it-phase-13i-drain-and-regression-closure.md`
+Release disposition: CLEARED

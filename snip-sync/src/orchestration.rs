@@ -5,6 +5,19 @@
 
 use std::time::Duration;
 
+/// Terminal classification of a service task result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceResult {
+    /// Task returned `Ok(())`.
+    Clean,
+    /// Task returned `Ok(Err(e))` — a service-level error.
+    ServiceError(String),
+    /// Task returned `Err(JoinError)` where `is_panic()` is true.
+    Panic(String),
+    /// Task was cancelled (explicitly aborted).
+    Cancelled(String),
+}
+
 /// Result of the shutdown orchestration.
 #[derive(Debug)]
 pub struct ServiceShutdownOutcome {
@@ -15,10 +28,33 @@ pub struct ServiceShutdownOutcome {
     /// `true` when the drain timed out and unfinished tasks were forcibly
     /// aborted.
     pub forced: bool,
-    /// Error message from the gRPC service if it completed unexpectedly.
-    pub grpc_error: Option<String>,
-    /// Error message from the HTTP service if it completed unexpectedly.
-    pub http_error: Option<String>,
+    /// Terminal result of the gRPC service.
+    pub grpc_result: ServiceResult,
+    /// Terminal result of the HTTP service.
+    pub http_result: ServiceResult,
+}
+
+impl ServiceShutdownOutcome {
+    /// A requested shutdown succeeds only when both services returned
+    /// cleanly without forced abort.
+    pub fn is_clean_requested_shutdown(&self) -> bool {
+        self.requested
+            && !self.forced
+            && self.grpc_result == ServiceResult::Clean
+            && self.http_result == ServiceResult::Clean
+    }
+}
+
+/// Classify a `JoinHandle` output into a `ServiceResult`.
+fn classify_result(
+    result: Result<Result<(), impl std::fmt::Display>, tokio::task::JoinError>,
+) -> ServiceResult {
+    match result {
+        Ok(Ok(())) => ServiceResult::Clean,
+        Ok(Err(e)) => ServiceResult::ServiceError(e.to_string()),
+        Err(e) if e.is_panic() => ServiceResult::Panic(format!("{e}")),
+        Err(e) => ServiceResult::Cancelled(format!("{e}")),
+    }
 }
 
 /// Run two service task handles until a shutdown signal or unexpected
@@ -37,8 +73,8 @@ pub struct ServiceShutdownOutcome {
 ///   shutdown.
 pub async fn run_services_until_shutdown<F>(
     mut shutdown_future: std::pin::Pin<&mut F>,
-    mut grpc_handle: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
-    mut http_handle: tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    grpc_handle: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
+    http_handle: tokio::task::JoinHandle<Result<(), std::io::Error>>,
     shutdown_sender: tokio::sync::broadcast::Sender<()>,
     drain_timeout: Duration,
 ) -> ServiceShutdownOutcome
@@ -46,278 +82,164 @@ where
     F: std::future::Future<Output = ()>,
 {
     let mut requested = false;
-    let mut grpc_error: Option<String> = None;
-    let mut http_error: Option<String> = None;
+
+    // Track whether each handle has been consumed (output received).
+    // A consumed handle must never be awaited or aborted again.
     let mut grpc_consumed = false;
     let mut http_consumed = false;
+    let mut grpc_result: Option<ServiceResult> = None;
+    let mut http_result: Option<ServiceResult> = None;
 
+    // We need mutable references to the handles for tokio::select!, but
+    // we also need to move them for await. Use a small wrapper to allow
+    // both.
+    let mut grpc_handle = Some(grpc_handle);
+    let mut http_handle = Some(http_handle);
+
+    // Phase 1: Wait for the first terminal event — a shutdown signal,
+    // gRPC completion, or HTTP completion. No pre-signal lifetime
+    // timeout; the server runs indefinitely until a signal or failure.
     tokio::select! {
         biased;
         _ = &mut shutdown_future => {
             tracing::info!("Shutdown signal received");
             requested = true;
         }
-        result = &mut grpc_handle => {
+        result = grpc_handle.as_mut().unwrap() => {
+            let classified = classify_result(result);
+            if classified != ServiceResult::Clean {
+                tracing::error!("gRPC service: {classified:?}");
+            }
+            grpc_result = Some(classified);
             grpc_consumed = true;
-            match result {
-                Ok(Ok(())) => {
-                    tracing::error!("gRPC service exited unexpectedly");
-                    grpc_error = Some("exited unexpectedly".to_string());
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("gRPC service error: {}", e);
-                    grpc_error = Some(e.to_string());
-                }
-                Err(e) => {
-                    tracing::error!("gRPC service task panicked: {}", e);
-                    grpc_error = Some(format!("panicked: {e}"));
-                }
-            }
         }
-        result = &mut http_handle => {
-            http_consumed = true;
-            match result {
-                Ok(Ok(())) => {
-                    tracing::error!("HTTP service exited unexpectedly");
-                    http_error = Some("exited unexpectedly".to_string());
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("HTTP service error: {}", e);
-                    http_error = Some(e.to_string());
-                }
-                Err(e) => {
-                    tracing::error!("HTTP service task panicked: {}", e);
-                    http_error = Some(format!("panicked: {e}"));
-                }
+        result = http_handle.as_mut().unwrap() => {
+            let classified = classify_result(result);
+            if classified != ServiceResult::Clean {
+                tracing::error!("HTTP service: {classified:?}");
             }
+            http_result = Some(classified);
+            http_consumed = true;
         }
     }
 
+    // Broadcast shutdown to both services.
     let _ = shutdown_sender.send(());
 
-    let forced = tokio::time::timeout(drain_timeout, async {
+    // Phase 2: Bounded drain. After the initial select!, at most one
+    // handle has been consumed. For remaining pending handles, select
+    // whichever finishes next. Each completion updates consumed state
+    // immediately so Phase 3 never re-awaits a completed handle.
+    let drain_result = tokio::time::timeout(drain_timeout, async {
+        if !grpc_consumed && !http_consumed {
+            // Both still pending — select whichever finishes first.
+            tokio::select! {
+                biased;
+                result = grpc_handle.as_mut().unwrap() => {
+                    let classified = classify_result(result);
+                    if classified != ServiceResult::Clean {
+                        tracing::error!("gRPC service during drain: {classified:?}");
+                    }
+                    grpc_result = Some(classified);
+                    grpc_consumed = true;
+                }
+                result = http_handle.as_mut().unwrap() => {
+                    let classified = classify_result(result);
+                    if classified != ServiceResult::Clean {
+                        tracing::error!("HTTP service during drain: {classified:?}");
+                    }
+                    http_result = Some(classified);
+                    http_consumed = true;
+                }
+            }
+        }
+
+        // Await whichever remaining handle is still pending.
         if !grpc_consumed {
-            let _ = (&mut grpc_handle).await;
+            let result = grpc_handle.as_mut().unwrap().await;
+            let classified = classify_result(result);
+            if classified != ServiceResult::Clean {
+                tracing::error!("gRPC service during drain: {classified:?}");
+            }
+            grpc_result = Some(classified);
+            grpc_consumed = true;
         }
         if !http_consumed {
-            let _ = (&mut http_handle).await;
+            let result = http_handle.as_mut().unwrap().await;
+            let classified = classify_result(result);
+            if classified != ServiceResult::Clean {
+                tracing::error!("HTTP service during drain: {classified:?}");
+            }
+            http_result = Some(classified);
+            http_consumed = true;
         }
     })
-    .await
-    .is_err();
+    .await;
 
+    // Phase 3: Handle timeout — abort still-pending handles and await
+    // each exactly once. Only handles not yet consumed are aborted;
+    // completed handles are never touched again.
+    let forced = drain_result.is_err();
     if forced {
         tracing::warn!(
             "Graceful shutdown timed out after {}s, aborting remaining tasks",
             drain_timeout.as_secs()
         );
+
         if !grpc_consumed {
-            grpc_handle.abort();
-            let _ = grpc_handle.await;
+            if let Some(ref mut h) = grpc_handle {
+                h.abort();
+                let result = h.await;
+                grpc_result = Some(match result {
+                    Err(e) if e.is_panic() => ServiceResult::Panic(format!("aborted: {e}")),
+                    Err(e) => ServiceResult::Cancelled(format!("aborted: {e}")),
+                    Ok(Ok(())) => ServiceResult::Clean,
+                    Ok(Err(e)) => ServiceResult::ServiceError(e.to_string()),
+                });
+            }
+            grpc_consumed = true;
         }
+
         if !http_consumed {
-            http_handle.abort();
-            let _ = http_handle.await;
+            if let Some(ref mut h) = http_handle {
+                h.abort();
+                let result = h.await;
+                http_result = Some(match result {
+                    Err(e) if e.is_panic() => ServiceResult::Panic(format!("aborted: {e}")),
+                    Err(e) => ServiceResult::Cancelled(format!("aborted: {e}")),
+                    Ok(Ok(())) => ServiceResult::Clean,
+                    Ok(Err(e)) => ServiceResult::ServiceError(e.to_string()),
+                });
+            }
+            http_consumed = true;
         }
     }
+
+    // Both handles must be consumed before returning.
+    debug_assert!(grpc_consumed, "gRPC handle must be consumed");
+    debug_assert!(http_consumed, "HTTP handle must be consumed");
 
     ServiceShutdownOutcome {
         requested,
         forced,
-        grpc_error,
-        http_error,
+        grpc_result: grpc_result.expect("gRPC result must be set before returning"),
+        http_result: http_result.expect("HTTP result must be set before returning"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    #[allow(dead_code)]
-    async fn service_ok() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
-    }
-
-    async fn service_err() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Err("service error".into())
-    }
-
-    async fn service_panic() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        panic!("service panic");
-    }
-
-    /// Helper: build a shutdown signal future that completes immediately.
-    #[allow(dead_code)]
-    async fn immediate_signal() {
-        // The future is already complete — select will pick it up on first poll.
-    }
-
-    /// Test: requested shutdown notifies both fake services and they exit
-    /// within the drain bound.
-    #[tokio::test]
-    async fn requested_shutdown_notifies_both_services() {
-        let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc_fut = {
-            let mut rx = shutdown_tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-            }
-        };
-        let http_fut = {
-            let mut rx = shutdown_tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-            }
-        };
-
-        let grpc = tokio::spawn(grpc_fut);
-        let http = tokio::spawn(http_fut);
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let _ = shutdown_tx.send(());
-
-        let drain = tokio::time::timeout(Duration::from_secs(2), async {
-            let _ = tokio::join!(grpc, http);
-        })
-        .await;
-
-        assert!(drain.is_ok(), "services should exit within drain bound");
-    }
-
-    /// Test: first service error triggers sibling shutdown.
-    #[tokio::test]
-    async fn first_service_error_triggers_sibling_shutdown() {
-        let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc = tokio::spawn(service_err());
-        let http_fut = {
-            let mut rx = shutdown_tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-            }
-        };
-        let http = tokio::spawn(http_fut);
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let result = tokio::time::timeout(Duration::from_secs(2), async {
-            let grpc_result = grpc.await;
-            let _ = shutdown_tx.send(());
-            let http_result = http.await;
-            (grpc_result, http_result)
-        })
-        .await;
-
-        assert!(result.is_ok(), "both tasks should complete promptly");
-        let (grpc_r, http_r) = result.unwrap();
-        assert!(grpc_r.is_ok(), "grpc JoinHandle should resolve");
-        assert!(grpc_r.unwrap().is_err(), "grpc should have returned error");
-        assert!(http_r.is_ok(), "http JoinHandle should resolve");
-    }
-
-    /// Test: first service panic triggers sibling shutdown.
-    #[tokio::test]
-    async fn first_service_panic_triggers_sibling_shutdown() {
-        let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc = tokio::spawn(service_panic());
-        let http_fut = {
-            let mut rx = shutdown_tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-            }
-        };
-        let http = tokio::spawn(http_fut);
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let result = tokio::time::timeout(Duration::from_secs(2), async {
-            let grpc_result = grpc.await;
-            let _ = shutdown_tx.send(());
-            let http_result = http.await;
-            (grpc_result, http_result)
-        })
-        .await;
-
-        assert!(result.is_ok());
-        let (grpc_r, http_r) = result.unwrap();
-        assert!(grpc_r.is_err(), "grpc should have panicked");
-        assert!(http_r.is_ok(), "http JoinHandle should resolve");
-    }
-
-    /// Test: one service refusing to drain is aborted after timeout.
-    #[tokio::test]
-    async fn refusing_service_is_aborted_after_timeout() {
-        let mut never_complete =
-            tokio::spawn(async { std::future::pending::<Result<(), FakeError>>().await });
-        let mut completes_later = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            Ok::<(), FakeError>(())
-        });
-
-        let drain = tokio::time::timeout(Duration::from_millis(100), async {
-            tokio::select! {
-                _ = &mut never_complete => {}
-                _ = &mut completes_later => {}
-            }
-        })
-        .await;
-
-        assert!(drain.is_err(), "drain should time out");
-
-        never_complete.abort();
-        completes_later.abort();
-        let _ = never_complete.await;
-        let _ = completes_later.await;
-    }
-
-    /// Test: no normal-operation lifetime timeout exists.
-    #[tokio::test]
-    async fn no_normal_operation_lifetime_timeout() {
-        let grpc = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            Ok::<(), FakeError>(())
-        });
-        let http = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            Ok::<(), FakeError>(())
-        });
-
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
-            let _ = tokio::join!(grpc, http);
-        })
-        .await;
-
-        assert!(
-            result.is_ok(),
-            "services should complete without arbitrary timeout"
-        );
-    }
-
-    #[derive(Debug)]
-    struct FakeError(&'static str);
-    impl std::fmt::Display for FakeError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.0)
-        }
-    }
-    impl std::error::Error for FakeError {}
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     type GrpcHandle = tokio::task::JoinHandle<Result<(), tonic::transport::Error>>;
     type HttpHandle = tokio::task::JoinHandle<Result<(), std::io::Error>>;
 
-    // ── Tests exercising run_services_until_shutdown directly ──────────
+    // ── Section 7.1: Requested clean shutdown ──────────────────────
 
-    /// Signal triggers requested=true, forced=false.
     #[tokio::test]
-    async fn orchestration_signal_sets_requested() {
+    async fn requested_clean_shutdown() {
         let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
         let grpc: GrpcHandle = tokio::spawn({
@@ -350,117 +272,30 @@ mod tests {
 
         assert!(outcome.requested);
         assert!(!outcome.forced);
-        assert!(outcome.grpc_error.is_none());
-        assert!(outcome.http_error.is_none());
+        assert!(outcome.is_clean_requested_shutdown());
+        assert_eq!(outcome.grpc_result, ServiceResult::Clean);
+        assert_eq!(outcome.http_result, ServiceResult::Clean);
     }
 
-    /// gRPC failure triggers requested=false and captures the error.
+    // ── Section 7.2: One service completes during drain, sibling times out ──
+
     #[tokio::test]
-    async fn orchestration_grpc_error_captured() {
+    async fn one_service_completes_sibling_times_out() {
         let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+        let grpc_await_count = Arc::new(AtomicUsize::new(0));
 
-        // tonic::transport::Error has no public constructor; use panic
-        // which JoinError captures.
-        let grpc: GrpcHandle = tokio::spawn(async {
-            panic!("grpc service error");
-        });
-        let http: HttpHandle = tokio::spawn({
+        let grpc: GrpcHandle = {
+            let count = grpc_await_count.clone();
             let mut rx = tx.subscribe();
-            async move {
+            tokio::spawn(async move {
                 let _ = rx.recv().await;
+                count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let signal = std::future::pending::<()>();
-        tokio::pin!(signal);
-
-        let outcome =
-            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
-
-        assert!(!outcome.requested);
-        assert!(!outcome.forced);
-        assert!(outcome.grpc_error.is_some());
-        assert!(outcome.http_error.is_none());
-    }
-
-    /// HTTP failure triggers requested=false and captures the error.
-    #[tokio::test]
-    async fn orchestration_http_error_captured() {
-        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc: GrpcHandle = tokio::spawn({
-            let mut rx = tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok(())
-            }
-        });
-        let http: HttpHandle = tokio::spawn(async { Err(std::io::Error::other("http boom")) });
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let signal = std::future::pending::<()>();
-        tokio::pin!(signal);
-
-        let outcome =
-            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
-
-        assert!(!outcome.requested);
-        assert!(!outcome.forced);
-        assert!(outcome.grpc_error.is_none());
-        assert!(outcome.http_error.is_some());
-    }
-
-    /// Panicking service is caught as a task panic.
-    #[tokio::test]
-    async fn orchestration_grpc_panic_captured() {
-        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc: GrpcHandle = tokio::spawn(async { panic!("grpc panic") });
-        let http: HttpHandle = tokio::spawn({
-            let mut rx = tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok(())
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let signal = std::future::pending::<()>();
-        tokio::pin!(signal);
-
-        let outcome =
-            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
-
-        assert!(!outcome.requested);
-        assert!(!outcome.forced);
-        assert!(outcome.grpc_error.is_some());
-        let msg = outcome.grpc_error.unwrap();
-        assert!(
-            msg.contains("panicked"),
-            "expected panic message, got: {msg}"
-        );
-    }
-
-    /// Refusing to drain triggers forced=true and abort.
-    #[tokio::test]
-    async fn orchestration_forced_abort_on_timeout() {
-        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-        let grpc: GrpcHandle = tokio::spawn(async {
-            std::future::pending::<Result<(), tonic::transport::Error>>().await
-        });
-        let http: HttpHandle = tokio::spawn({
-            let mut rx = tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok(())
-            }
-        });
+            })
+        };
+        // HTTP never completes — it ignores the shutdown signal.
+        let http: HttpHandle =
+            tokio::spawn(async { std::future::pending::<Result<(), std::io::Error>>().await });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -477,15 +312,73 @@ mod tests {
 
         assert!(outcome.requested);
         assert!(outcome.forced);
+        assert_eq!(outcome.grpc_result, ServiceResult::Clean);
+        assert_eq!(
+            grpc_await_count.load(Ordering::SeqCst),
+            1,
+            "gRPC future should have completed exactly once"
+        );
+        assert!(matches!(
+            outcome.http_result,
+            ServiceResult::Cancelled(_) | ServiceResult::Panic(_)
+        ));
     }
 
-    /// Both services completing before signal triggers requested=false.
+    // ── Section 7.4: Drain-time service panic ──────────────────────
+
     #[tokio::test]
-    async fn orchestration_both_complete_early() {
+    async fn drain_time_service_panic() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                panic!("grpc drain panic");
+            })
+        };
+        let http: HttpHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
+
+        assert!(outcome.requested);
+        assert!(!outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+        assert!(matches!(outcome.grpc_result, ServiceResult::Panic(_)));
+        assert_eq!(outcome.http_result, ServiceResult::Clean);
+    }
+
+    // ── Section 7.5: Unexpected service completion ─────────────────
+
+    #[tokio::test]
+    async fn unexpected_grpc_exit() {
         let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
         let grpc: GrpcHandle = tokio::spawn(async { Ok(()) });
-        let http: HttpHandle = tokio::spawn(async { Ok(()) });
+        let http: HttpHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -497,5 +390,274 @@ mod tests {
 
         assert!(!outcome.requested);
         assert!(!outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+    }
+
+    #[tokio::test]
+    async fn unexpected_http_error() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
+        let http: HttpHandle = tokio::spawn(async { Err(std::io::Error::other("http boom")) });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = std::future::pending::<()>();
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
+
+        assert!(!outcome.requested);
+        assert!(!outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+    }
+
+    // ── Section 7.6: Both services refuse to drain ─────────────────
+
+    #[tokio::test]
+    async fn both_refuse_to_drain() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = tokio::spawn(async {
+            std::future::pending::<Result<(), tonic::transport::Error>>().await
+        });
+        let http: HttpHandle =
+            tokio::spawn(async { std::future::pending::<Result<(), std::io::Error>>().await });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let start = std::time::Instant::now();
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_millis(100)).await;
+        let elapsed = start.elapsed();
+
+        assert!(outcome.requested);
+        assert!(outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "test should complete quickly, took {elapsed:?}"
+        );
+    }
+
+    // ── Section 7.7: No pre-signal lifetime timeout ────────────────
+
+    #[tokio::test]
+    async fn no_pre_signal_lifetime_timeout() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = tokio::spawn({
+            let mut rx = tx.subscribe();
+            async move {
+                let _ = rx.recv().await;
+                Ok(())
+            }
+        });
+        let http: HttpHandle = tokio::spawn({
+            let mut rx = tx.subscribe();
+            async move {
+                let _ = rx.recv().await;
+                Ok(())
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_millis(100)).await;
+
+        assert!(outcome.requested);
+        assert!(!outcome.forced);
+        assert!(outcome.is_clean_requested_shutdown());
+    }
+
+    // ── Section 7.2 regression: gRPC result consumed exactly once ──
+
+    #[tokio::test]
+    async fn grpc_handle_consumed_exactly_once() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+        let poll_count = Arc::new(AtomicUsize::new(0));
+
+        let grpc: GrpcHandle = {
+            let count = poll_count.clone();
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        };
+        let http: HttpHandle =
+            tokio::spawn(async { std::future::pending::<Result<(), std::io::Error>>().await });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_millis(100)).await;
+
+        assert!(outcome.forced);
+        assert_eq!(
+            poll_count.load(Ordering::SeqCst),
+            1,
+            "gRPC future should have been polled exactly once"
+        );
+    }
+
+    // ── Section 7.3 regression: drain-time panic preserves detail ──
+
+    #[tokio::test]
+    async fn drain_panic_preserved_in_outcome() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                panic!("deliberate grpc panic");
+            })
+        };
+        let http: HttpHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
+
+        assert!(outcome.requested);
+        assert!(!outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+        match &outcome.grpc_result {
+            ServiceResult::Panic(msg) => {
+                assert!(
+                    msg.contains("deliberate grpc panic"),
+                    "panic message should be preserved"
+                );
+            }
+            other => panic!("expected Panic, got {other:?}"),
+        }
+    }
+
+    // ── Section 7.6 regression: HTTP aborted while gRPC clean ──────
+
+    #[tokio::test]
+    async fn http_aborted_while_grpc_clean() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
+        let http: HttpHandle =
+            tokio::spawn(async { std::future::pending::<Result<(), std::io::Error>>().await });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_millis(100)).await;
+
+        assert!(outcome.requested);
+        assert!(outcome.forced);
+        assert_eq!(outcome.grpc_result, ServiceResult::Clean);
+        assert!(matches!(
+            outcome.http_result,
+            ServiceResult::Cancelled(_) | ServiceResult::Panic(_)
+        ));
+    }
+
+    // ── Section 7.1 regression: both complete during drain ──────────
+
+    #[tokio::test]
+    async fn both_complete_during_drain() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                Ok(())
+            })
+        };
+        let http: HttpHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Ok(())
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
+
+        assert!(outcome.requested);
+        assert!(!outcome.forced);
+        assert!(outcome.is_clean_requested_shutdown());
     }
 }

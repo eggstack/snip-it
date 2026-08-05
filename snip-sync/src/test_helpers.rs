@@ -58,6 +58,8 @@ pub async fn build_test_service() -> SnipSyncService {
         premade_manager,
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
         test_observer: None,
+        push_fail_after: Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX)),
+        push_fail_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
     }
 }
 
@@ -103,6 +105,8 @@ pub async fn build_test_service_with_observer(
         premade_manager,
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
         test_observer: observer,
+        push_fail_after: Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX)),
+        push_fail_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
     }
 }
 

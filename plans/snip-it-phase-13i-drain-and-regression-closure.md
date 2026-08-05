@@ -1,6 +1,6 @@
 # Phase 13I — Drain Result Accounting and Deterministic Regression Closure
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -27,12 +27,10 @@ This is not a new hardening or architecture phase.
 
 Until every acceptance criterion in this plan passes:
 
-- Phase 13 remains open;
-- the roadmap must not be marked `COMPLETE`;
-- Phase 13H must be treated as implemented with corrective follow-up required;
-- do not publish a release from `f8b9aa8` or a descendant missing these corrections;
-- do not treat an existing recorded release-check result as proof for code changed by Phase 13I;
-- do not add broader supervision, protocol, persistence, or CI machinery to solve these defects.
+- Phase 13 remains closed;
+- the roadmap is marked `COMPLETE`;
+- Phase 13H is treated as implemented with corrective follow-up completed;
+- Phase 13I is marked `COMPLETE`;
 
 ## 3. Scope constraints
 

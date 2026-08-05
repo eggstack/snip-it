@@ -24,7 +24,7 @@
 - `SyncFailureKind::RequestTooLarge` maps to `FailureClass::Configuration` (requires operator attention).
 - `sync_encrypted()` accumulates response pages via `accumulate_page()` helper to avoid variable lifecycle warnings.
 
-## Phase 13H — Final Correctness Closure
+## Phase 13H — Final Correctness Closure (with corrective follow-up)
 
 - `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to a single `sync_encrypted_inner` implementation; zero batches is a valid pull-only path, not an `unreachable!` panic.
 - Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via `add_batch_context()` instead of flattening to `SyncRequestFailed`.
@@ -32,6 +32,19 @@
 - Process lifetime tests use `SNIP_SYNC_STATE_DIR` for test isolation, `start_server_on_ports()` for same-port restart, and `wait_for_exit()` for bounded child waits.
 - Partial-failure convergence test retains server state across crash/retry via file-based SQLite.
 - `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
+
+## Phase 13I — Drain Result Accounting and Deterministic Regression Closure
+
+- Orchestration uses explicit `grpc_consumed`/`http_consumed` booleans to track per-service handle lifecycle; a consumed handle is never awaited or aborted again.
+- Drain updates completion state immediately when a service finishes during the bounded drain window; Phase 3 only aborts handles still marked pending.
+- A requested shutdown fails if either service returns an error or panics during drain; only a clean dual-service exit without forced abort is success.
+- Push failure injection uses `push_fail_after` (threshold) and `push_fail_counter` (atomic counter) on `SnipSyncService`; counter starts at 0, increments per push, and rejects when count ≥ threshold.
+- `encrypt_snippets_with()` extracts the encryption loop for test-only failure injection; `sync_encrypted_with_custom_encrypt()` drives it through the full sync path.
+- `add_batch_context()` is public for direct unit testing of typed error preservation (`ClockSkew`, `Timeout`).
+- Deterministic retained-state convergence: push failure on Nth batch proves partial mutation, retry against same file DB converges exactly once.
+- Zero-batch regressions: empty-local/empty-remote, pull-only seeded remote, multi-page pagination with small sync_limit.
+- All-encryption-failed accounting: skipped IDs/counts preserved, remote snippets still returned.
+- Typed batch-context tests: `ClockSkew` and `Timeout` retain kind/classification and original detail through `add_batch_context()`.
 
 ## Phase 13D — Client Runtime and Dependency Footprint Reduction
 

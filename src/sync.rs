@@ -358,18 +358,7 @@ impl SyncClient {
         self.ensure_budget()?;
         let api_key = self.settings.api_key.clone();
 
-        let mut encrypted_snippets = Vec::new();
-        let mut encrypt_failed_ids = Vec::new();
-
-        for s in &local_snippets {
-            match encrypt_snippet(&api_key, s) {
-                Ok(es) => encrypted_snippets.push(es),
-                Err(e) => {
-                    encrypt_failed_ids.push(s.id.clone());
-                    tracing::warn!("Failed to encrypt snippet {}: {}", s.id, e);
-                }
-            }
-        }
+        let (encrypted_snippets, encrypt_failed_ids) = encrypt_snippets(&api_key, &local_snippets);
 
         let encrypt_failed_count = encrypt_failed_ids.len();
         let mut all_skipped_ids = encrypt_failed_ids;
@@ -491,6 +480,181 @@ impl SyncClient {
 
                 // All uploads complete. Request the authoritative first
                 // response page via an empty-upload Sync at offset zero.
+                let request = SyncRequest {
+                    api_key: String::new(),
+                    local_snippets: Vec::new(),
+                    last_sync_timestamp: last_sync,
+                    library_id: library_id.to_string(),
+                    limit: self.settings.sync_limit_value(),
+                    offset: 0,
+                };
+                let response = self.sync_with_retry(request, &api_key).await?;
+                let has_more = response.has_more;
+                let snippets_len = response.snippets.len();
+                let server_timestamp = response.server_timestamp;
+                let message = response.message.clone();
+                let total_count = response.total_count;
+
+                Self::accumulate_page(
+                    &response,
+                    &api_key,
+                    &mut all_server_snippets,
+                    &mut server_decrypt_failed_count,
+                    &mut all_skipped_ids,
+                );
+                offset = snippets_len as i32;
+
+                return self
+                    .paginate_remaining(
+                        last_sync,
+                        library_id,
+                        &api_key,
+                        &mut offset,
+                        &mut all_server_snippets,
+                        &mut server_decrypt_failed_count,
+                        &mut all_skipped_ids,
+                        server_timestamp,
+                        message,
+                        total_count,
+                        has_more,
+                        snippets_len,
+                        encrypt_failed_count,
+                    )
+                    .await;
+            }
+        }
+    }
+
+    /// Test-only: sync with a custom encrypt function that can inject
+    /// failures. Used by the all-encryption-failed regression test.
+    pub async fn sync_encrypted_with_custom_encrypt(
+        &mut self,
+        local_snippets: Vec<crate::proto::Snippet>,
+        last_sync: i64,
+        library_id: &str,
+        byte_ceiling: usize,
+        encrypt_fn: impl Fn(&crate::proto::Snippet) -> SnipResult<crate::proto::Snippet>
+        + Send
+        + Sync
+        + 'static,
+    ) -> SnipResult<crate::proto::SyncResponse> {
+        self.ensure_budget()?;
+        let api_key = self.settings.api_key.clone();
+
+        let (encrypted_snippets, encrypt_failed_ids) =
+            encrypt_snippets_with(&local_snippets, encrypt_fn);
+
+        let encrypt_failed_count = encrypt_failed_ids.len();
+        let mut all_skipped_ids = encrypt_failed_ids;
+
+        let batches = build_upload_batches(
+            encrypted_snippets,
+            library_id,
+            last_sync,
+            self.settings.sync_limit_value(),
+            byte_ceiling,
+        )?;
+
+        let mut all_server_snippets = Vec::new();
+        let mut server_decrypt_failed_count = 0usize;
+        let mut offset = 0;
+        let total_batches = batches.len();
+
+        match total_batches {
+            0 => {
+                let request = SyncRequest {
+                    api_key: String::new(),
+                    local_snippets: Vec::new(),
+                    last_sync_timestamp: last_sync,
+                    library_id: library_id.to_string(),
+                    limit: self.settings.sync_limit_value(),
+                    offset: 0,
+                };
+                let response = self.sync_with_retry(request, &api_key).await?;
+                let has_more = response.has_more;
+                let snippets_len = response.snippets.len();
+                let server_timestamp = response.server_timestamp;
+                let message = response.message.clone();
+                let total_count = response.total_count;
+
+                Self::accumulate_page(
+                    &response,
+                    &api_key,
+                    &mut all_server_snippets,
+                    &mut server_decrypt_failed_count,
+                    &mut all_skipped_ids,
+                );
+                offset = snippets_len as i32;
+
+                return self
+                    .paginate_remaining(
+                        last_sync,
+                        library_id,
+                        &api_key,
+                        &mut offset,
+                        &mut all_server_snippets,
+                        &mut server_decrypt_failed_count,
+                        &mut all_skipped_ids,
+                        server_timestamp,
+                        message,
+                        total_count,
+                        has_more,
+                        snippets_len,
+                        encrypt_failed_count,
+                    )
+                    .await;
+            }
+            1 => {
+                let batch = &batches[0];
+                let request = SyncRequest {
+                    api_key: String::new(),
+                    local_snippets: batch.clone(),
+                    last_sync_timestamp: last_sync,
+                    library_id: library_id.to_string(),
+                    limit: self.settings.sync_limit_value(),
+                    offset,
+                };
+                let response = self.sync_with_retry(request, &api_key).await?;
+                let has_more = response.has_more;
+                let snippets_len = response.snippets.len();
+                let server_timestamp = response.server_timestamp;
+                let message = response.message.clone();
+                let total_count = response.total_count;
+
+                Self::accumulate_page(
+                    &response,
+                    &api_key,
+                    &mut all_server_snippets,
+                    &mut server_decrypt_failed_count,
+                    &mut all_skipped_ids,
+                );
+                offset = offset.saturating_add(snippets_len as i32);
+
+                return self
+                    .paginate_remaining(
+                        last_sync,
+                        library_id,
+                        &api_key,
+                        &mut offset,
+                        &mut all_server_snippets,
+                        &mut server_decrypt_failed_count,
+                        &mut all_skipped_ids,
+                        server_timestamp,
+                        message,
+                        total_count,
+                        has_more,
+                        snippets_len,
+                        encrypt_failed_count,
+                    )
+                    .await;
+            }
+            _ => {
+                for (batch_idx, batch) in batches.iter().enumerate() {
+                    self.push_snippets_batch(batch, library_id)
+                        .await
+                        .map_err(|e| add_batch_context(e, batch_idx + 1, total_batches))?;
+                }
+
                 let request = SyncRequest {
                     api_key: String::new(),
                     local_snippets: Vec::new(),
@@ -1124,6 +1288,36 @@ pub fn encrypt_snippet(
     })
 }
 
+/// Encrypt a batch of snippets, returning the successfully encrypted
+/// snippets and the IDs that failed encryption.
+fn encrypt_snippets(
+    api_key: &str,
+    snippets: &[crate::proto::Snippet],
+) -> (Vec<crate::proto::Snippet>, Vec<String>) {
+    encrypt_snippets_with(snippets, |s| encrypt_snippet(api_key, s))
+}
+
+/// Encrypt a batch of snippets using the provided encrypt function,
+/// returning the successfully encrypted snippets and the IDs that
+/// failed. Used by tests to inject encryption failures.
+fn encrypt_snippets_with(
+    snippets: &[crate::proto::Snippet],
+    encrypt_fn: impl Fn(&crate::proto::Snippet) -> SnipResult<crate::proto::Snippet>,
+) -> (Vec<crate::proto::Snippet>, Vec<String>) {
+    let mut encrypted = Vec::new();
+    let mut failed_ids = Vec::new();
+    for s in snippets {
+        match encrypt_fn(s) {
+            Ok(es) => encrypted.push(es),
+            Err(e) => {
+                failed_ids.push(s.id.clone());
+                tracing::warn!("Failed to encrypt snippet {}: {}", s.id, e);
+            }
+        }
+    }
+    (encrypted, failed_ids)
+}
+
 /// Decrypts a snippet's encrypted fields received from the sync server.
 pub fn decrypt_snippet(
     api_key: &str,
@@ -1281,7 +1475,7 @@ pub(crate) fn build_upload_batches(
 /// `SyncFailureKind`. This replaces the previous pattern of wrapping
 /// every error as `SyncRequestFailed`, which lost typed classifications
 /// such as `ClockSkew`, `Timeout`, and authentication failures.
-fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError {
+pub fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError {
     match error {
         SnipError::SyncFailure { kind, detail } => {
             let ctx = format!("batch {batch}/{total}");

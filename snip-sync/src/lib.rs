@@ -507,6 +507,15 @@ pub struct SnipSyncService {
     /// sanitized events to the observer.
     #[cfg(any(test, feature = "test-helpers"))]
     pub test_observer: Option<Arc<dyn crate::test_observer::TestRequestObserver>>,
+    /// Test-only: fail `PushSnippets` after this many successful calls.
+    /// Each successful push decrements the counter; when it reaches zero
+    /// the next push returns an internal error. Set to `None` to disable.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub push_fail_after: Arc<std::sync::atomic::AtomicU32>,
+    /// Test-only: internal counter for push failure injection.
+    /// Starts at 0 and increments on each PushSnippets call.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub push_fail_counter: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl SnipSyncService {
@@ -1057,6 +1066,29 @@ impl SnippetSync for SnipSyncService {
                 DEFAULT_MAX_SYNC_SNIPPETS,
                 req.snippets.len()
             )));
+        }
+
+        // Test-only failure injection: fail on the Nth PushSnippets call.
+        // push_fail_after stores the 1-indexed failure point. A value of
+        // u32::MAX means "disabled" (never fail). The internal counter
+        // starts at 0 and increments on each push; when it reaches the
+        // threshold the push is rejected.
+        #[cfg(feature = "test-helpers")]
+        {
+            let threshold = self
+                .push_fail_after
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if threshold != u32::MAX {
+                let count = self
+                    .push_fail_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                if count >= threshold {
+                    self.record_request_duration("push_snippets", start);
+                    self.record_request_finished("push_snippets", false);
+                    return Err(Status::internal("test-injected push failure"));
+                }
+            }
         }
 
         let mut accepted = 0;
@@ -1744,6 +1776,8 @@ mod tests {
             #[cfg(any(test, feature = "test-helpers"))]
             captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
             test_observer: None,
+            push_fail_after: Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX)),
+            push_fail_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 

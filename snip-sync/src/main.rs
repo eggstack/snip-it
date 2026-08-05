@@ -218,6 +218,10 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
         #[cfg(feature = "test-helpers")]
         test_observer: None,
+        #[cfg(feature = "test-helpers")]
+        push_fail_after: Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX)),
+        #[cfg(feature = "test-helpers")]
+        push_fail_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
     };
 
     let cors_allow_all =
