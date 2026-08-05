@@ -218,7 +218,7 @@ determined by the operating-system lock, not by whether the file exists.
 
 ---
 
-## Security Properties (Phase 09A)
+## Security Properties
 
 - API keys stored as Argon2id hashes (16 MiB, 3 iterations, 4 parallelism)
 - API key lookup: 8-char prefix for indexed lookup, Argon2id verification

@@ -291,7 +291,7 @@ detached auto-sync helper management.*
 | `notification` | `MutationContext`, `AutoSyncNotificationResult`, `SubcommandTag`, `notify_mutation`, `should_attempt_auto_sync_recovery`, `startup_recover_pending` |
 | `pending` | `PendingSnapshot`, `PendingState`, `ConditionalClearResult`, `record_pending_mutation`, `read_state`, `read_state_from_dir` |
 | `pending_lock` | `PendingTxnGuard`, `PendingTxnLockError`, `acquire_pending_txn` |
-| `policy` | `AutoSyncPolicy`, `FailureClass` (11 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |
+| `policy` | `AutoSyncPolicy`, `FailureClass` (4 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |
 | `schedule` | `ScheduleDecision`, `Caller`, `schedule_sync`, `schedule_sync_from_config`, `schedule_and_spawn` |
 | `spawn` | `SpawnError`, `spawn_worker`, `WORKER_SUBCOMMAND` |
 | `status` | `AutoSyncStatus`, `StatusRead`, `read_status`, `write_status`, `record_success`, `record_failure`, `compute_config_fingerprint` |

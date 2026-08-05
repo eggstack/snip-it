@@ -20,7 +20,7 @@
 
 ## Overview
 
-snip-it uses a layered persistence architecture centered on editable TOML files. Phase 07A standardizes atomic writes, defines stable identity, and adds validation/backup/restore/repair workflows.
+snip-it uses a layered persistence architecture centered on editable TOML files. Atomic writes are standardized, stable identity is defined, and validation/backup/restore/repair workflows are supported.
 
 The persistence stack has four layers:
 
@@ -236,7 +236,7 @@ pub struct StagedFile {
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Phase 11C fix**: ownership verification observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
 
 ### API
 
@@ -269,7 +269,7 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 
 `RollingBack { next_rollback_position }` uses rollback-order coordinates: `rollback_order = (0..files.len()).rev()`. `next_rollback_position == N` means positions `0..N` have been rolled back. Each rollback action verifies the pre-transaction bytes or expected absence after completion.
 
-### Artifact Path Validation (Phase 11L)
+### Artifact Path Validation
 
 All transaction artifact paths (backup, staged, destination) are validated by `validate_contained_path` before use. The validation has three layers:
 
@@ -627,7 +627,7 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 
 ---
 
-## Security Properties (Phase 09A)
+## Security Properties
 
 - All sensitive files created with 0o600 permissions
 - Config directory created with 0o700 permissions

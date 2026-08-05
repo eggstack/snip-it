@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-**File**: `src/main.rs` (331 lines)
+**File**: `src/main.rs`
 
 The binary `snp` is built with `clap` for argument parsing. On startup:
 
@@ -60,6 +60,7 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
 | `status` | — | `status_cmd` | No | Show auto-sync status |
+| `data` | `d` | `DataCommands` | No | Advanced data maintenance subcommand group (`validate`, `backup`, `restore`, `repair`, `status`) |
 | `update` | — | `update_cmd` | No | Check for and install an update |
 | `shell` | — | `shell_cmd` | No | Generate interactive shell integration |
 | `completions` | — | `completions_cmd` | No | Generate shell completions |
@@ -70,9 +71,9 @@ CLI — it does not appear in `--help` output and is used internally by the
 detached helper protocol. See
 [auto_sync.md](auto_sync.md) for the full architecture.
 
-## Startup Recovery Classification (Phase 10)
+## Startup Recovery Classification
 
-`classify_command()` in `src/main.rs:1191` maps every `Commands` variant to a
+`classify_command()` in `src/main.rs` maps every `Commands` variant to a
 `StartupRecoveryPolicy` that gates whether auto-sync recovery runs before
 dispatch. This prevents read-only commands from triggering network work.
 
@@ -101,7 +102,7 @@ requires selecting a policy, enforced by the compiler (no catch-all arm).
 
 ## Shared Command Utilities
 
-**File**: `src/commands/mod.rs` (271 lines)
+**File**: `src/commands/mod.rs`
 
 Provides functions shared across command modules:
 
@@ -131,7 +132,7 @@ and no empty/whitespace-only input. Source resolution completes before library
 mutation, so partial failures cannot corrupt the snippet collection. The editor
 command specification is parsed with `shell-words` — no shell is invoked.
 
-## Exact Selectors (Phase 08A)
+## Exact Selectors
 
 `run`, `clip`, and `edit` support `--id`, `--description-exact`, and `--command-exact`
 flags that bypass the TUI entirely. When any of these flags is provided, the command
@@ -145,7 +146,7 @@ to the action (execute, copy, or edit output field).
 These flags conflict with `--filter` (TUI fuzzy filter) and with each other.
 See [selector.md](selector.md) for the full resolution model.
 
-## Exit Codes (Phase 08A)
+## Exit Codes
 
 All commands map outcomes to stable exit codes via `CliOutcome`:
 

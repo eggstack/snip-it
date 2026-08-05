@@ -5,7 +5,7 @@ Guide agents through working with the encryption module (`src/encryption.rs`).
 
 ## Argon2 Memory Cost
 
-**Location**: `src/encryption.rs:37`
+**Location**: `src/encryption.rs`
 ```rust
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
 ```
@@ -17,7 +17,7 @@ Memory cost is set to `1 << 14` (16 MiB). OWASP recommends a minimum of 19 MiB (
 ## Key Derivation
 
 ```rust
-// Uses hash_password with string-encoded salt (encryption.rs:160-207)
+// Uses hash_password with string-encoded salt
 let hash = argon2.hash_password(api_key.as_bytes(), &salt_string)?;
 let hash_output = hash.hash.ok_or_else(...)?;
 let hash_bytes = hash_output.as_bytes();
@@ -57,7 +57,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:303-304`). The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError`. The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
 
 ## Security Properties
 

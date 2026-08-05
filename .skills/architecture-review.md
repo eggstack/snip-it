@@ -71,12 +71,12 @@ Output to `plans/<module>_review.md` with:
 - **Push-only counter**: `completed` should increment regardless of `has_failures`
 
 ### Known Historical Fixes (verify they're still in place)
-- Encryption `drop(key)` now zeroizes via `std::mem::take` before drop (`encryption.rs:229`)
+- Encryption `drop(key)` now zeroizes via `std::mem::take` before drop
 - Clipboard debug→warn for auto-clear failures
 - Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs`
 - Premade TOCTOU: read from `canonical_path` not original `path`
 - Health RPC verifies database connectivity via `db.ping()`
-- `CryptoError` integrates with `SnipError` via `From` impl (`error.rs:303-304`)
+- `CryptoError` integrates with `SnipError` via `From` impl
 - `From<io::Error>` auto-conversion with kind-based operation strings (`error.rs`)
 
 ## Phase 06A Checklist

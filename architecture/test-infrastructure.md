@@ -1,4 +1,4 @@
-# Test Infrastructure (Phase 05A)
+# Test Infrastructure
 
 Deterministic end-to-end testing infrastructure for the auto-sync subsystem. Reusable components in `tests/support/` that provide isolated environments, server event tracking, and cross-process lifecycle evidence.
 

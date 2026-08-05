@@ -23,7 +23,7 @@ sync_encrypted() flow (sync.rs):
 7. Aggregate and decrypt all server snippets
 8. Return merged SyncResponse
 
-run_sync() flow (sync_commands.rs:599-...):
+run_sync() flow (sync_commands.rs):
 1. Validate config (api_key, device_id)
 2. Create SyncClient with TLS
 3. Health check
@@ -62,13 +62,13 @@ content and the final cursor are durable.
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `run_sync()` | `sync_commands.rs:599` | Main sync orchestration |
-| `merge_snippets()` | `sync_commands.rs:1127` | Merge algorithm |
-| `encrypt_snippet()` | `sync.rs:701` | Encrypt snippet for server |
-| `decrypt_snippet()` | `sync.rs:734` | Decrypt snippet from server |
-| `sync_with_retry()` | `sync.rs:380` | Retry logic with exponential backoff |
-| `build_upload_batches()` | `sync.rs:972` | Byte-bounded batch splitting using Prost encoded_len |
-| `accumulate_page()` | `sync.rs:410` | Decrypt and accumulate server snippets from a response page |
+| `run_sync()` | `sync_commands.rs` | Main sync orchestration |
+| `merge_snippets()` | `sync_commands.rs` | Merge algorithm |
+| `encrypt_snippet()` | `sync.rs` | Encrypt snippet for server |
+| `decrypt_snippet()` | `sync.rs` | Decrypt snippet from server |
+| `sync_with_retry()` | `sync.rs` | Retry logic with exponential backoff |
+| `build_upload_batches()` | `sync.rs` | Byte-bounded batch splitting using Prost encoded_len |
+| `accumulate_page()` | `sync.rs` | Decrypt and accumulate server snippets from a response page |
 | `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
 | `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
 | `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
@@ -114,7 +114,7 @@ fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
 and preservation of corrupt markers. Existing integration coverage continues to
 cover encryption and retry/timestamp behavior.
 
-## Failure Classification and Retry (Phase 03, simplified Phase 13E)
+## Failure Classification and Retry
 
 ### SyncFailureKind Enum
 
@@ -186,7 +186,7 @@ Auto-sync delegates error classification to `FailureClass::from_error()` in `pol
 
 The scheduler does not probe the execution lock. Worker acquisition is the sole execution authority.
 
-## Status Snapshot (Phase 04A)
+## Status Snapshot
 
 `capture_snapshot()` in `src/status_snapshot.rs` produces a read-only `StatusSnapshot` aggregating all auto-sync artifacts. `snp status` exposes this as JSON (`--json`) or human-readable text.
 
@@ -196,7 +196,7 @@ The scheduler does not probe the execution lock. Worker acquisition is the sole 
 
 **Diagnostic codes:** CONFIG_LOAD_FAILED, NOT_CONFIGURED, PENDING_CORRUPT, PENDING_INACCESSIBLE, EXECUTION_LOCK_STALE, EXECUTION_LOCK_MALFORMED, EXECUTION_LOCK_INACCESSIBLE, WORKER_LOCK_STALE, WORKER_LOCK_MALFORMED, WORKER_LOCK_INACCESSIBLE, ATTENTION_REQUIRED, STATUS_CORRUPT.
 
-## Recovery Commands (Phase 04A)
+## Recovery Commands
 
 | Command | Purpose | Acquires lock? | Clears pending? |
 |---------|---------|---------------|-----------------|

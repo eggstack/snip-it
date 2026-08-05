@@ -104,7 +104,7 @@ pub enum CryptoError {
 - Invalid base64, truncated payload
 - Tampered ciphertext/nonce/salt all detected
 
-## Security Audit (Phase 09A)
+## Security Audit
 
 - Argon2id V0x13, 16 MiB memory, 3 iterations, 4 parallelism, 32-byte output — meets OWASP minimum recommendations
 - Random 16-byte salt per encryption via OsRng (CSPRNG) — no salt reuse

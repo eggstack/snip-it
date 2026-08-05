@@ -49,7 +49,7 @@ Three enums have `#[non_exhaustive]`:
 - `SelectionOutcome` (`src/lib.rs:78`) — may gain partial-selection states
 - `SnippetSort` (`src/sort.rs:34`) — will grow with new sort modes
 - `AutoSyncFailureMode` (`src/config.rs:44`) — may gain new modes
-- `FailureClass` (`src/auto_sync/policy.rs`) — 11 variants, may grow
+- `FailureClass` (`src/auto_sync/policy.rs`) — 4 variants, may grow
 - `ExecutorExitCode` (`src/auto_sync/executor.rs:24`) — may grow
 - `WorkerOutcome` (`src/auto_sync/worker.rs:28`) — may grow
 - `SpawnError` (`src/auto_sync/spawn.rs:16`) — may grow

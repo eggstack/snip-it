@@ -198,7 +198,7 @@ pub struct AutoSyncPolicy {
 }
 ```
 
-**Note:** The `max_retries` field was removed in Phase 06A — it was never read. Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc!` macro).
+**Note:** Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc!` macro).
 
 ### AutoSyncFailureMode
 
@@ -312,7 +312,7 @@ pub enum WorkerOutcome {
 
 ### FailureClass
 
-Collapsed from 11 variants to 4 in Phase 13E:
+Four variants classify sync errors:
 
 ```rust
 pub enum FailureClass {
@@ -337,17 +337,10 @@ Retry dispositions by class:
 
 | FailureClass | RetryDisposition | Rationale |
 |--------------|------------------|-----------|
-| DeferredDisabled | NoRetry | User must explicitly enable |
-| DeferredNotConfigured | NoRetry | User must fix configuration |
-| TransientNetwork | Retryable | Network conditions are ephemeral |
-| TransientTimeout | Retryable | Server may be temporarily slow |
-| Authentication | NoRetry | Re-attempting with same credentials won't help |
-| Configuration | NoRetry | Requires manual intervention |
-| Conflict | NoRetry | Merge conflicts need user resolution |
-| Partial | Retryable | Unsynced snippets remain in pending state |
-| LocalPersistence | NoRetry | Disk/permission issues persist |
-| CredentialStore | Retryable | Keyring may become available again |
-| Internal | NoRetry | Bug requires code fix |
+| Transient | Retryable | Network, timeout, and partial failures are ephemeral |
+| Configuration | NoRetry | Auth, config, or credential failures require user correction |
+| LocalFailure | NoRetry | Persistence, conflict, and corruption issues persist |
+| Internal | Retryable | Bounded retry (3 attempts), then RequiresAttention |
 
 Classified from `SnipError` via `FailureClass::from_error()` in `policy.rs`,
 which applies typed variant matching with a fallback heuristic for legacy runtime
@@ -507,17 +500,17 @@ Diagnostics emitted:
 8. Pending marker schema is versioned (v2) with CRC32 integrity.
 9. Conditional clear keyed on observed generation prevents stale workers from
    clobbering fresh state.
-10. **Release 5F:** All sync operations share one `SyncExecutionLock`; no concurrent sync possible.
-11. **Phase 12C:** The helper runs canonical sync directly; local I/O is not force-cancelled by a child process.
-12. **Phase 12C:** Startup recovery is suppressed for the hidden helper and explicit sync commands.
+10. All sync operations share one `SyncExecutionLock`; no concurrent sync possible.
+11. The helper runs canonical sync directly; local I/O is not force-cancelled by a child process.
+12. Startup recovery is suppressed for the hidden helper and explicit sync commands.
 
-## Auto-Sync Mutation Trigger Integration (Release 5C)
+## Auto-Sync Mutation Trigger Integration
 
 **Module**: `src/auto_sync/notification.rs`
 
-Release 5C wires all syncable local mutations into the auto-sync coordinator
-via the central mutation notification API. Auto-sync is now operational —
-it triggers automatically after successful local mutations when enabled.
+All syncable local mutations are wired into the auto-sync coordinator
+via the central mutation notification API. Auto-sync triggers automatically
+after successful local mutations when enabled.
 
 ### Central Mutation Notification API
 

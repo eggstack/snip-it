@@ -8,7 +8,7 @@ Guide agents through working with the snip-sync server (`snip-sync/src/`).
 - **TLS**: Server defaults to HTTP. Production deployments must use a reverse proxy with TLS. `TLS_ENABLED` env var available for native TLS. Documentation at startup and in `config.rs` notes this requirement.
 - **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS. When not set and no origins configured, cross-origin requests are blocked.
 - **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. Registration rate limits use IP address (not client-controlled device_id). `RATE_LIMIT_PER_MINUTE` controls limit.
-- **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs:14`.
+- **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs`.
 
 ## Server Architecture
 
