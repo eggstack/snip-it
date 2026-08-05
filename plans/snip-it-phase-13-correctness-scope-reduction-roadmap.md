@@ -1,6 +1,6 @@
 # Phase 13 Roadmap — Correctness Repair, Verification Reduction, and Lightweight Scope Recovery
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
 Original baseline: `b62d0f50078f7656eca3c9abf58e2ad290562029`
 
@@ -46,14 +46,14 @@ Until Phase 13H passes, do not publish a release or mark Phase 13 complete.
 
 | Phase | Plan | State | Goal |
 |---|---|---|---|
-| 13A | `plans/snip-it-phase-13a-server-lifetime-config-correctness.md` | implemented; final closure depends on 13H | Correct server lifetime, shutdown, and fail-closed configuration parsing |
-| 13B | `plans/snip-it-phase-13b-sync-request-sizing-clock-diagnostics.md` | implemented; final closure depends on 13H | Bound sync requests and preserve correct diagnostics |
+| 13A | `plans/snip-it-phase-13a-server-lifetime-config-correctness.md` | implemented | Correct server lifetime, shutdown, and fail-closed configuration parsing |
+| 13B | `plans/snip-it-phase-13b-sync-request-sizing-clock-diagnostics.md` | implemented | Bound sync requests and preserve correct diagnostics |
 | 13C | `plans/snip-it-phase-13c-verification-ci-simplification.md` | implemented | Reduce routine verification and CI ceremony |
 | 13D | `plans/snip-it-phase-13d-client-runtime-dependency-footprint.md` | implemented | Reduce runtime/dependency footprint without feature loss |
 | 13E | `plans/snip-it-phase-13e-auto-sync-persistence-simplification.md` | implemented | Simplify auto-sync and transaction scope |
 | 13F | `plans/snip-it-phase-13f-api-cli-server-surface-consolidation.md` | implemented | Narrow supported surfaces and clean documentation |
 | 13G | `plans/snip-it-phase-13g-corrective-closure.md` | implemented with remaining corrective gaps | Correct initial multi-batch and shutdown defects |
-| 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | READY FOR IMPLEMENTATION; release-blocking | Correct zero-batch sync, typed error preservation, real task abort/drain, retained-state recovery, and closure records |
+| 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | COMPLETE | Correct zero-batch sync, typed error preservation, real task abort/drain, retained-state recovery, and closure records |
 
 Required sequence:
 
@@ -252,10 +252,10 @@ Only after these statements are true may this roadmap return to `Status: COMPLET
 
 ## 11. Current disposition
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
-Release-blocking phase: Phase 13H
+Release-blocking phase: none
 
-Current release disposition: BLOCKED
+Current release disposition: CLEARED
 
 Next plan: `plans/snip-it-phase-13h-final-correctness-closure.md`

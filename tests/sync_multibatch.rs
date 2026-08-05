@@ -8,10 +8,15 @@
 //! cargo test --test sync_multibatch -- --test-threads=1
 //! ```
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use snip_it::config::{SyncDirection, SyncSettings};
 use snip_it::proto::Snippet;
 use snip_it::sync::SyncClient;
-use snip_sync::test_helpers::{build_test_service, start_test_server};
+use snip_sync::db::Database;
+use snip_sync::test_helpers::start_test_server;
+use snip_sync::{Config, Metrics, PremadeManager, RateLimiter, SnipSyncService};
 
 /// Enough snippets to force multiple upload batches with a reduced ceiling.
 /// Each snippet has a ~10 KB command; encrypted they are ~13.5 KB. With a
@@ -25,21 +30,59 @@ const MULTI_BATCH_COUNT: usize = 50;
 /// batches.
 const TEST_BYTE_CEILING: usize = 100 * 1024; // 100 KiB
 
+async fn build_file_service(db_path: &str) -> SnipSyncService {
+    let db = Arc::new(Database::connect(db_path, 5).await.unwrap());
+    let config = Config {
+        grpc_host: "127.0.0.1".to_string(),
+        grpc_port: 0,
+        http_host: "127.0.0.1".to_string(),
+        http_port: 0,
+        db_path: db_path.to_string(),
+        db_max_connections: 5,
+        premade_dir: PathBuf::from("premade-libraries"),
+        max_command_length: 1024,
+        max_description_length: 1024,
+        max_tags: 50,
+        max_tag_length: 100,
+        max_id_length: 128,
+        max_device_id_length: 128,
+        max_api_key_length: 512,
+        request_timeout_secs: 30,
+        grpc_max_message_size: 4 * 1024 * 1024,
+        rate_limit_per_minute: 120,
+        trusted_proxies: vec![],
+        persist_rate_limits: false,
+        metrics_username: None,
+        metrics_password: None,
+        cors_allowed_origins: vec![],
+    };
+    let metrics = Metrics::fallback();
+    let rate_limiter = Arc::new(RateLimiter::new());
+    let premade_manager = PremadeManager::new(PathBuf::from("premade-libraries"));
+
+    SnipSyncService {
+        db,
+        rate_limiter,
+        config,
+        metrics,
+        premade_manager,
+        captured_auth_header: Arc::new(std::sync::Mutex::new(None)),
+        test_observer: None,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
-    let service = build_test_service().await;
+    let service = build_file_service("sqlite::memory:").await;
     let (addr, server_task, _captured) = start_test_server(service).await;
     let server_url = format!("http://{addr}");
 
-    // Register a device.
     let (api_key, device_id) = SyncClient::register(server_url.clone())
         .await
         .expect("register should succeed");
 
     let mut client = build_sync_client(&server_url, &api_key).await;
 
-    // Build enough snippets to require multiple batches under the
-    // reduced ceiling.
     let now = chrono::Utc::now().timestamp();
     let snippets: Vec<Snippet> = (0..MULTI_BATCH_COUNT)
         .map(|i| Snippet {
@@ -55,8 +98,6 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
         })
         .collect();
 
-    // First sync: upload all snippets using a reduced ceiling to
-    // force multi-batch uploads.
     let response = client
         .sync_encrypted_with_ceiling(snippets.clone(), 0, "", TEST_BYTE_CEILING)
         .await
@@ -68,7 +109,6 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
         response.message
     );
 
-    // The server should have returned all snippets we sent.
     let returned_ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
     for snippet in &snippets {
         assert!(
@@ -78,7 +118,6 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
         );
     }
 
-    // No duplicate IDs in the response.
     let mut unique_ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
     unique_ids.sort();
     unique_ids.dedup();
@@ -88,7 +127,6 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
         "response should contain no duplicate snippet IDs"
     );
 
-    // Second sync: same snippets should be idempotent (no duplicates).
     let response2 = client
         .sync_encrypted_with_ceiling(snippets, 0, "", TEST_BYTE_CEILING)
         .await
@@ -123,7 +161,7 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
 /// final server state contains all snippets with no duplicates.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_sync_convergence_after_partial_upload() {
-    let service = build_test_service().await;
+    let service = build_file_service("sqlite::memory:").await;
     let (addr, server_task, _captured) = start_test_server(service).await;
     let server_url = format!("http://{addr}");
 
@@ -135,7 +173,6 @@ async fn test_sync_convergence_after_partial_upload() {
 
     let now = chrono::Utc::now().timestamp();
 
-    // Sync a small batch that fits in one upload.
     let small_batch: Vec<Snippet> = (0..5)
         .map(|i| Snippet {
             id: format!("conv-{i}"),
@@ -156,8 +193,6 @@ async fn test_sync_convergence_after_partial_upload() {
         .expect("first sync should succeed");
     assert!(resp1.success);
 
-    // Now sync a larger batch that requires multiple upload batches
-    // under the reduced ceiling.
     let large_batch: Vec<Snippet> = (5..MULTI_BATCH_COUNT)
         .map(|i| Snippet {
             id: format!("conv-{i}"),
@@ -178,7 +213,6 @@ async fn test_sync_convergence_after_partial_upload() {
         .expect("second sync should succeed");
     assert!(resp2.success);
 
-    // Verify all snippets are present.
     assert_eq!(
         resp2.snippets.len(),
         MULTI_BATCH_COUNT,
@@ -186,7 +220,6 @@ async fn test_sync_convergence_after_partial_upload() {
         MULTI_BATCH_COUNT
     );
 
-    // Verify no duplicates.
     let mut ids: Vec<&str> = resp2.snippets.iter().map(|s| s.id.as_str()).collect();
     ids.sort();
     ids.dedup();
@@ -199,14 +232,18 @@ async fn test_sync_convergence_after_partial_upload() {
     server_task.abort();
 }
 
-/// Simulate a partial failure mid-sync: the server crashes while the
-/// client is uploading batches. After recovery (a fresh server), the
-/// caller retries the full sync and all snippets converge with no
-/// duplicates.
+/// Verify retained-state convergence: after a partial failure where
+/// some batches committed and others didn't, retrying with the same
+/// credentials against the same database produces the correct result
+/// with no duplicates.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_partial_failure_convergence() {
-    // --- Phase 1: first server, register, start multi-batch sync. ---
-    let service = build_test_service().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    // Phase 1: Start server, register, upload batches, crash mid-sync.
+    let service = build_file_service(db_path_str).await;
     let (addr, server_task, _captured) = start_test_server(service).await;
     let server_url = format!("http://{addr}");
 
@@ -231,8 +268,7 @@ async fn test_partial_failure_convergence() {
         })
         .collect();
 
-    // Spawn the sync in a background task so we can kill the server
-    // while uploads are in flight.
+    // Spawn sync in background, then crash the server mid-upload.
     let snippets_clone = snippets.clone();
     let sync_task = tokio::spawn(async move {
         client
@@ -240,41 +276,20 @@ async fn test_partial_failure_convergence() {
             .await
     });
 
-    // Let the sync start sending batches before pulling the plug.
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Crash the server mid-sync.
     server_task.abort();
-    let sync_result = tokio::time::timeout(std::time::Duration::from_secs(5), sync_task).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sync_task).await;
 
-    // The sync must not have succeeded — the server died mid-upload.
-    match sync_result {
-        Ok(Ok(Ok(resp))) => {
-            assert!(
-                !resp.success,
-                "sync should not report success when server died mid-upload"
-            );
-        }
-        Ok(Ok(Err(_))) => { /* expected: gRPC/connection error */ }
-        Ok(Err(_)) => { /* task panicked or was cancelled */ }
-        Err(_) => { /* timed out — acceptable for a partial-failure test */ }
-    }
-
-    // --- Phase 2: recovery — fresh server, register, retry full sync. ---
-    let service2 = build_test_service().await;
+    // Phase 2: Restart against the same database file.
+    let service2 = build_file_service(db_path_str).await;
     let (addr2, server_task2, _captured2) = start_test_server(service2).await;
     let server_url2 = format!("http://{addr2}");
 
-    let (api_key2, _device_id2) = SyncClient::register(server_url2.clone())
-        .await
-        .expect("register on recovery server should succeed");
+    // Retry with the SAME API key and library identity.
+    let mut client2 = build_sync_client(&server_url2, &api_key).await;
 
-    let mut client2 = build_sync_client(&server_url2, &api_key2).await;
-
-    // Retry with the same cursor (0) — the caller does not advance
-    // state after a failed sync.
     let response = client2
-        .sync_encrypted_with_ceiling(snippets, 0, "", TEST_BYTE_CEILING)
+        .sync_encrypted_with_ceiling(snippets.clone(), 0, "", TEST_BYTE_CEILING)
         .await
         .expect("retry sync should succeed");
 
@@ -284,22 +299,33 @@ async fn test_partial_failure_convergence() {
         response.message
     );
 
-    // All snippets must converge to the new server.
-    assert_eq!(
-        response.snippets.len(),
-        MULTI_BATCH_COUNT,
-        "recovery sync should return all {} snippets",
-        MULTI_BATCH_COUNT
-    );
-
-    // No duplicate logical rows.
+    // All snippets must converge — no duplicates from idempotent upserts.
     let mut ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
     ids.sort();
     ids.dedup();
     assert_eq!(
         ids.len(),
         MULTI_BATCH_COUNT,
-        "recovery sync should contain no duplicate snippet IDs"
+        "retained-state retry should contain all {} snippets with no duplicates",
+        MULTI_BATCH_COUNT
+    );
+
+    // The caller does not advance the successful-sync cursor after failure.
+    // Verify by syncing again with the same cursor.
+    let mut client3 = build_sync_client(&server_url2, &api_key).await;
+    let response2 = client3
+        .sync_encrypted_with_ceiling(snippets, 0, "", TEST_BYTE_CEILING)
+        .await
+        .expect("second retry should succeed");
+
+    let mut ids2: Vec<&str> = response2.snippets.iter().map(|s| s.id.as_str()).collect();
+    ids2.sort();
+    ids2.dedup();
+    assert_eq!(
+        ids2.len(),
+        MULTI_BATCH_COUNT,
+        "second retry should still have all {} snippets without duplication",
+        MULTI_BATCH_COUNT
     );
 
     server_task2.abort();

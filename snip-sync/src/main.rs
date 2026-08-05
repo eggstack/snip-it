@@ -349,7 +349,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
     let grpc_shutdown_rx = shutdown_tx.subscribe();
-    let mut grpc_handle = tokio::spawn(async move {
+    let grpc_handle = tokio::spawn(async move {
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(grpc_listener);
         let result = tonic::transport::Server::builder()
             .timeout(timeout)
@@ -375,7 +375,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     });
 
     let mut http_shutdown_rx = shutdown_tx.subscribe();
-    let mut http_handle = tokio::spawn(async move {
+    let http_handle = tokio::spawn(async move {
         tracing::info!("HTTP server listening on http://{}", http_addr);
 
         axum::serve(http_listener, app)
@@ -402,65 +402,35 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     #[cfg(not(unix))]
     let sigterm_fut = std::future::pending::<()>();
 
-    let terminal = tokio::select! {
-        biased;
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Ctrl-C received, initiating shutdown");
-            true
-        }
-        _ = sigterm_fut => {
-            tracing::info!("SIGTERM received, initiating shutdown");
-            true
-        }
-        result = &mut grpc_handle => {
-            match result {
-                Ok(Ok(())) => tracing::error!("gRPC service exited unexpectedly"),
-                Ok(Err(e)) => tracing::error!("gRPC service error: {}", e),
-                Err(e) => tracing::error!("gRPC service task panicked: {}", e),
+    // Build the shutdown signal future based on platform.
+    #[cfg(unix)]
+    let shutdown_signal = async {
+        tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Ctrl-C received, initiating shutdown");
             }
-            false
-        }
-        result = &mut http_handle => {
-            match result {
-                Ok(Ok(())) => tracing::error!("HTTP service exited unexpectedly"),
-                Ok(Err(e)) => tracing::error!("HTTP service error: {}", e),
-                Err(e) => tracing::error!("HTTP service task panicked: {}", e),
+            _ = sigterm_fut => {
+                tracing::info!("SIGTERM received, initiating shutdown");
             }
-            false
         }
     };
-
-    // Broadcast shutdown for all terminal events: both signal-triggered
-    // and unexpected service failure. The remaining service(s) will
-    // observe the broadcast and begin graceful shutdown.
-    let _ = shutdown_tx.send(());
-
-    // Graceful drain is bounded by the configured timeout (or a 30s
-    // default for unexpected failures). The timeout starts only after
-    // the terminal event, not during normal operation.
-    let drain_timeout = if terminal {
-        timeout
-    } else {
-        Duration::from_secs(30)
+    #[cfg(not(unix))]
+    let shutdown_signal = async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Ctrl-C received, initiating shutdown");
     };
 
-    // Await both task handles inside the real drain timeout. One handle
-    // already completed via select; the other receives the broadcast and
-    // should shut down promptly. On timeout, the async block is dropped
-    // which drops the JoinHandles, cancelling any refusing tasks.
-    let forced = tokio::time::timeout(drain_timeout, async {
-        let _ = grpc_handle.await;
-        let _ = http_handle.await;
-    })
-    .await
-    .is_err();
+    tokio::pin!(shutdown_signal);
 
-    if forced {
-        tracing::warn!(
-            "Graceful shutdown timed out after {}s, aborting remaining tasks",
-            drain_timeout.as_secs()
-        );
-    }
+    let outcome = snip_sync::orchestration::run_services_until_shutdown(
+        shutdown_signal.as_mut(),
+        grpc_handle,
+        http_handle,
+        shutdown_tx,
+        timeout,
+    )
+    .await;
 
     // Signal the persistence task only after both servers have stopped, then
     // wait for its final database snapshot to complete before dropping the
@@ -480,7 +450,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
 
     tracing::info!("Server shutdown complete");
 
-    if !terminal || forced {
+    if !outcome.requested || outcome.forced {
         return Err("One or more services exited unexpectedly".into());
     }
 

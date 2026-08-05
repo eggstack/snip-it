@@ -24,6 +24,15 @@
 - `SyncFailureKind::RequestTooLarge` maps to `FailureClass::Configuration` (requires operator attention).
 - `sync_encrypted()` accumulates response pages via `accumulate_page()` helper to avoid variable lifecycle warnings.
 
+## Phase 13H — Final Correctness Closure
+
+- `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to a single `sync_encrypted_inner` implementation; zero batches is a valid pull-only path, not an `unreachable!` panic.
+- Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via `add_batch_context()` instead of flattening to `SyncRequestFailed`.
+- Server shutdown orchestration uses a shared `run_services_until_shutdown()` helper called by both `serve_inner` and deterministic tests; the first terminal event is captured explicitly, a completed handle is never polled twice, and refusing tasks are explicitly aborted and awaited.
+- Process lifetime tests use `SNIP_SYNC_STATE_DIR` for test isolation, `start_server_on_ports()` for same-port restart, and `wait_for_exit()` for bounded child waits.
+- Partial-failure convergence test retains server state across crash/retry via file-based SQLite.
+- `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
+
 ## Phase 13D — Client Runtime and Dependency Footprint Reduction
 
 - Bundled themes use gzip compression (via `flate2`); `lzma-rs` has been removed. Regenerate with `python3 scripts/build_themes.py`.

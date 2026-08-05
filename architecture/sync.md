@@ -57,6 +57,9 @@ pub(crate) fn build_upload_batches(
 
 All upload batches are sent before any response page is requested:
 
+- **Zero batches** (pull-only): An empty-upload `Sync(offset=0)` fetches the
+  authoritative first response page. This is the normal path for empty local
+  collections or when all local snippets fail encryption.
 - **One batch**: `Sync(batch, offset=0)` carries the upload and returns the
   first response page in one RPC. Paginate remaining response pages.
 - **Two or more batches**: Each batch is sent via `PushSnippets` (upload only).
@@ -71,6 +74,10 @@ an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE new
 ### Retry Logic
 
 The `retry_grpc!` macro implements exponential backoff with jitter for transient failures.
+
+Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` via
+`add_batch_context()` — a clock-skew error remains `ClockSkew` /
+`FailureClass::Configuration` even when batch context is attached.
 
 ## Sync Orchestration (`sync_commands.rs`)
 

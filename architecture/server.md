@@ -218,6 +218,15 @@ remain owned by the orchestrator and are awaited inside the real drain timeout.
 Persistence shutdown occurs only after both request-serving tasks have completed
 or been aborted.
 
+The shutdown coordination logic lives in a shared `run_services_until_shutdown()`
+helper (`snip-sync/src/orchestration.rs`) called by both `serve_inner` and
+deterministic orchestration tests. The helper selects on the shutdown signal and
+both service handles, captures the first terminal event, broadcasts shutdown,
+then drains remaining handles inside the configured timeout. Handles are awaited
+by mutable reference — not moved — so a completed handle is never polled twice.
+If the drain timeout expires, every unfinished handle is explicitly aborted and
+awaited. `ServiceShutdownOutcome` carries the result to the caller.
+
 The `stop` and `restart` commands accept both structured records and legacy
 numeric PID files on Unix. Stale numeric records are removed only after
 acquiring the server lock and rereading the unchanged record; live processes

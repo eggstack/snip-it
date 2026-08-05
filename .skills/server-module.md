@@ -40,6 +40,14 @@ records on Unix; stale legacy records are cleaned only after lock acquisition,
 while live unrelated processes are refused unless `--force` is explicit.
 Persistent lock-file presence is not an ownership signal.
 
+### Shutdown Orchestration (Phase 13H)
+
+- Shutdown coordination lives in a shared `run_services_until_shutdown()` helper in `orchestration.rs`.
+- `serve_inner` and deterministic tests call the same helper — production and test paths are identical.
+- Both service task handles are awaited by mutable reference; a completed handle is never polled twice.
+- On timeout (default 30s graceful drain), unfinished handles are explicitly aborted and awaited — they are not silently dropped.
+- `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
+
 ## Environment Variables
 
 All environment variable overrides are strictly parsed. Missing variables fall

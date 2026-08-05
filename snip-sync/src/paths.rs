@@ -26,6 +26,9 @@ pub fn data_dir() -> PathBuf {
 }
 
 pub fn state_dir() -> PathBuf {
+    if let Ok(val) = std::env::var("SNIP_SYNC_STATE_DIR") {
+        return PathBuf::from(val);
+    }
     #[allow(clippy::redundant_closure)]
     dirs::state_dir()
         .unwrap_or_else(|| data_dir())

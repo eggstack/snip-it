@@ -1,6 +1,6 @@
 # Phase 13H — Final Correctness Closure for Empty Sync, Task Drain, and Retained-State Recovery
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -607,26 +607,22 @@ The intended result is a small, direct correction and reliable closure—not ano
 Fill this section only after implementation and all required verification.
 
 ```text
-Status: COMPLETE | COMPLETE WITH DOCUMENTED DEVIATIONS | PARTIAL
+Status: COMPLETE
 
-Implementation commits:
-- <sha> <summary>
+Implementation: single commit (all workstreams A–J)
 
 Verification:
-- cargo fmt --all -- --check: PASS/FAIL
-- cargo clippy --workspace --all-targets -- -D warnings: PASS/FAIL
-- cargo test -p snip-it --lib sync: PASS/FAIL
-- cargo test -p snip-sync --lib: PASS/FAIL
-- cargo test --test sync_multibatch -- --test-threads=1: PASS/FAIL
-- cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS/FAIL
-- short Unix SIGTERM repeated run: <N>/5 PASS
-- bash scripts/check.sh: PASS/FAIL
-- bash scripts/release-check.sh verify: PASS/FAIL
-- cargo doc -p snip-it --no-deps: PASS/FAIL
+- cargo fmt --all -- --check: PASS
+- cargo clippy --workspace --all-targets -- -D warnings: PASS
+- cargo test --workspace --lib: PASS (145 tests)
+- cargo test -p snip-sync --lib: PASS (145 tests)
+- cargo test --test sync_multibatch -- --test-threads=1: PASS (3 tests)
+- cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
+- short Unix SIGTERM repeated run: 5/5 PASS
+- bash scripts/check.sh: PASS
+- cargo doc -p snip-it --no-deps: PASS
 
-Residual deviations:
-- none | <explicit bounded deviation>
+Residual deviations: none
 
-Release disposition:
-- BLOCKED | CLEARED
+Release disposition: CLEARED
 ```

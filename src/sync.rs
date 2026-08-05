@@ -303,9 +303,11 @@ impl SyncClient {
     /// # Upload strategy
     ///
     /// All upload batches are sent before any response page is requested.
+    /// For zero batches: an empty-upload `Sync(offset=0)` fetches the
+    /// authoritative first response page (pull-only path).
     /// For one batch: `Sync(batch, offset=0)` carries the upload and returns
-    /// the first response page. For two or more batches: each batch is sent
-    /// via `PushSnippets` (upload only), then a final empty-upload
+    /// the first response page in one RPC. For two or more batches: each batch
+    /// is sent via `PushSnippets` (upload only), then a final empty-upload
     /// `Sync(offset=0)` fetches the authoritative first response page.
     /// This ordering ensures that `has_more == false` on the first response
     /// cannot truncate uploads, and the final response describes server state
@@ -316,156 +318,13 @@ impl SyncClient {
         last_sync: i64,
         library_id: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
-        self.ensure_budget()?;
-        let api_key = self.settings.api_key.clone();
-
-        let mut encrypted_snippets = Vec::new();
-        let mut encrypt_failed_ids = Vec::new();
-
-        for s in &local_snippets {
-            match encrypt_snippet(&api_key, s) {
-                Ok(es) => encrypted_snippets.push(es),
-                Err(e) => {
-                    encrypt_failed_ids.push(s.id.clone());
-                    tracing::warn!("Failed to encrypt snippet {}: {}", s.id, e);
-                }
-            }
-        }
-
-        let encrypt_failed_count = encrypt_failed_ids.len();
-        let mut all_skipped_ids = encrypt_failed_ids;
-
-        // Build byte-bounded upload batches. Each batch is measured against
-        // PushSnippetsRequest. For a single batch the caller must also verify
-        // the batch fits SyncRequest.
-        let batches = build_upload_batches(
-            encrypted_snippets,
-            library_id,
+        self.sync_encrypted_inner(
+            local_snippets,
             last_sync,
-            self.settings.sync_limit_value(),
+            library_id,
             DEFAULT_CLIENT_REQUEST_CEILING,
-        )?;
-
-        let mut all_server_snippets = Vec::new();
-        let mut server_decrypt_failed_count = 0usize;
-        let mut offset = 0;
-        let total_batches = batches.len();
-
-        // Phase 1: Upload all batches before requesting any response page.
-        for (batch_idx, batch) in batches.iter().enumerate() {
-            if batch_idx == 0 && total_batches == 1 {
-                // Single batch: send via Sync (efficient — carries upload
-                // and returns the first response page in one RPC).
-                let request = SyncRequest {
-                    api_key: String::new(),
-                    local_snippets: batch.clone(),
-                    last_sync_timestamp: last_sync,
-                    library_id: library_id.to_string(),
-                    limit: self.settings.sync_limit_value(),
-                    offset,
-                };
-                let response = self.sync_with_retry(request, &api_key).await?;
-                let has_more = response.has_more;
-                let snippets_len = response.snippets.len();
-                let server_timestamp = response.server_timestamp;
-                let message = response.message.clone();
-                let total_count = response.total_count;
-
-                Self::accumulate_page(
-                    &response,
-                    &api_key,
-                    &mut all_server_snippets,
-                    &mut server_decrypt_failed_count,
-                    &mut all_skipped_ids,
-                );
-                offset = offset.saturating_add(snippets_len as i32);
-
-                // Paginate remaining response pages.
-                return self
-                    .paginate_remaining(
-                        last_sync,
-                        library_id,
-                        &api_key,
-                        &mut offset,
-                        &mut all_server_snippets,
-                        &mut server_decrypt_failed_count,
-                        &mut all_skipped_ids,
-                        server_timestamp,
-                        message,
-                        total_count,
-                        has_more,
-                        snippets_len,
-                        encrypt_failed_count,
-                    )
-                    .await;
-            } else {
-                // Multi-batch: upload via PushSnippets (upload only, no
-                // response page). The authoritative response comes after all
-                // uploads complete.
-                self.push_snippets_batch(batch, library_id)
-                    .await
-                    .map_err(|e| {
-                        SnipError::sync_failure(
-                            SyncFailureKind::SyncRequestFailed,
-                            Some(&format!(
-                                "batch {}/{} failed: {}",
-                                batch_idx + 1,
-                                total_batches,
-                                e
-                            )),
-                        )
-                    })?;
-            }
-        }
-
-        // Phase 2: All uploads complete. Request the authoritative first
-        // response page via an empty-upload Sync at offset zero.
-        if total_batches > 1 {
-            let request = SyncRequest {
-                api_key: String::new(),
-                local_snippets: Vec::new(),
-                last_sync_timestamp: last_sync,
-                library_id: library_id.to_string(),
-                limit: self.settings.sync_limit_value(),
-                offset: 0,
-            };
-            let response = self.sync_with_retry(request, &api_key).await?;
-            let has_more = response.has_more;
-            let snippets_len = response.snippets.len();
-            let server_timestamp = response.server_timestamp;
-            let message = response.message.clone();
-            let total_count = response.total_count;
-
-            Self::accumulate_page(
-                &response,
-                &api_key,
-                &mut all_server_snippets,
-                &mut server_decrypt_failed_count,
-                &mut all_skipped_ids,
-            );
-            offset = snippets_len as i32;
-
-            return self
-                .paginate_remaining(
-                    last_sync,
-                    library_id,
-                    &api_key,
-                    &mut offset,
-                    &mut all_server_snippets,
-                    &mut server_decrypt_failed_count,
-                    &mut all_skipped_ids,
-                    server_timestamp,
-                    message,
-                    total_count,
-                    has_more,
-                    snippets_len,
-                    encrypt_failed_count,
-                )
-                .await;
-        }
-
-        // Unreachable: single-batch case returns above.
-        unreachable!("single-batch path should have returned during upload phase");
+        )
+        .await
     }
 
     /// Encrypt and sync with a custom byte ceiling (for testing).
@@ -475,6 +334,21 @@ impl SyncClient {
     /// allows integration tests to force multi-batch uploads with fewer
     /// snippets by setting a lower ceiling.
     pub async fn sync_encrypted_with_ceiling(
+        &mut self,
+        local_snippets: Vec<crate::proto::Snippet>,
+        last_sync: i64,
+        library_id: &str,
+        byte_ceiling: usize,
+    ) -> SnipResult<crate::proto::SyncResponse> {
+        self.sync_encrypted_inner(local_snippets, last_sync, library_id, byte_ceiling)
+            .await
+    }
+
+    /// Unified sync implementation shared by `sync_encrypted` and
+    /// `sync_encrypted_with_ceiling`. Handles zero, one, and multiple
+    /// upload batches, including the pull-only path (zero local snippets
+    /// or all encryption failures).
+    async fn sync_encrypted_inner(
         &mut self,
         local_snippets: Vec<crate::proto::Snippet>,
         last_sync: i64,
@@ -513,8 +387,56 @@ impl SyncClient {
         let mut offset = 0;
         let total_batches = batches.len();
 
-        for (batch_idx, batch) in batches.iter().enumerate() {
-            if batch_idx == 0 && total_batches == 1 {
+        match total_batches {
+            0 => {
+                // Zero batches: pull-only path. Send an empty-upload
+                // SyncRequest at offset zero to retrieve remote snippets.
+                let request = SyncRequest {
+                    api_key: String::new(),
+                    local_snippets: Vec::new(),
+                    last_sync_timestamp: last_sync,
+                    library_id: library_id.to_string(),
+                    limit: self.settings.sync_limit_value(),
+                    offset: 0,
+                };
+                let response = self.sync_with_retry(request, &api_key).await?;
+                let has_more = response.has_more;
+                let snippets_len = response.snippets.len();
+                let server_timestamp = response.server_timestamp;
+                let message = response.message.clone();
+                let total_count = response.total_count;
+
+                Self::accumulate_page(
+                    &response,
+                    &api_key,
+                    &mut all_server_snippets,
+                    &mut server_decrypt_failed_count,
+                    &mut all_skipped_ids,
+                );
+                offset = snippets_len as i32;
+
+                return self
+                    .paginate_remaining(
+                        last_sync,
+                        library_id,
+                        &api_key,
+                        &mut offset,
+                        &mut all_server_snippets,
+                        &mut server_decrypt_failed_count,
+                        &mut all_skipped_ids,
+                        server_timestamp,
+                        message,
+                        total_count,
+                        has_more,
+                        snippets_len,
+                        encrypt_failed_count,
+                    )
+                    .await;
+            }
+            1 => {
+                // Single batch: send via Sync (efficient — carries upload
+                // and returns the first response page in one RPC).
+                let batch = &batches[0];
                 let request = SyncRequest {
                     api_key: String::new(),
                     local_snippets: batch.clone(),
@@ -556,68 +478,62 @@ impl SyncClient {
                         encrypt_failed_count,
                     )
                     .await;
-            } else {
-                self.push_snippets_batch(batch, library_id)
-                    .await
-                    .map_err(|e| {
-                        SnipError::sync_failure(
-                            SyncFailureKind::SyncRequestFailed,
-                            Some(&format!(
-                                "batch {}/{} failed: {}",
-                                batch_idx + 1,
-                                total_batches,
-                                e
-                            )),
-                        )
-                    })?;
             }
-        }
+            _ => {
+                // Multi-batch: upload via PushSnippets (upload only, no
+                // response page). Preserve the original typed error instead
+                // of flattening to SyncRequestFailed.
+                for (batch_idx, batch) in batches.iter().enumerate() {
+                    self.push_snippets_batch(batch, library_id)
+                        .await
+                        .map_err(|e| add_batch_context(e, batch_idx + 1, total_batches))?;
+                }
 
-        if total_batches > 1 {
-            let request = SyncRequest {
-                api_key: String::new(),
-                local_snippets: Vec::new(),
-                last_sync_timestamp: last_sync,
-                library_id: library_id.to_string(),
-                limit: self.settings.sync_limit_value(),
-                offset: 0,
-            };
-            let response = self.sync_with_retry(request, &api_key).await?;
-            let has_more = response.has_more;
-            let snippets_len = response.snippets.len();
-            let server_timestamp = response.server_timestamp;
-            let message = response.message.clone();
-            let total_count = response.total_count;
+                // All uploads complete. Request the authoritative first
+                // response page via an empty-upload Sync at offset zero.
+                let request = SyncRequest {
+                    api_key: String::new(),
+                    local_snippets: Vec::new(),
+                    last_sync_timestamp: last_sync,
+                    library_id: library_id.to_string(),
+                    limit: self.settings.sync_limit_value(),
+                    offset: 0,
+                };
+                let response = self.sync_with_retry(request, &api_key).await?;
+                let has_more = response.has_more;
+                let snippets_len = response.snippets.len();
+                let server_timestamp = response.server_timestamp;
+                let message = response.message.clone();
+                let total_count = response.total_count;
 
-            Self::accumulate_page(
-                &response,
-                &api_key,
-                &mut all_server_snippets,
-                &mut server_decrypt_failed_count,
-                &mut all_skipped_ids,
-            );
-            offset = snippets_len as i32;
-
-            return self
-                .paginate_remaining(
-                    last_sync,
-                    library_id,
+                Self::accumulate_page(
+                    &response,
                     &api_key,
-                    &mut offset,
                     &mut all_server_snippets,
                     &mut server_decrypt_failed_count,
                     &mut all_skipped_ids,
-                    server_timestamp,
-                    message,
-                    total_count,
-                    has_more,
-                    snippets_len,
-                    encrypt_failed_count,
-                )
-                .await;
-        }
+                );
+                offset = snippets_len as i32;
 
-        unreachable!("single-batch path should have returned during upload phase");
+                return self
+                    .paginate_remaining(
+                        last_sync,
+                        library_id,
+                        &api_key,
+                        &mut offset,
+                        &mut all_server_snippets,
+                        &mut server_decrypt_failed_count,
+                        &mut all_skipped_ids,
+                        server_timestamp,
+                        message,
+                        total_count,
+                        has_more,
+                        snippets_len,
+                        encrypt_failed_count,
+                    )
+                    .await;
+            }
+        }
     }
 
     /// Paginate remaining response pages after the first response page has
@@ -1359,6 +1275,30 @@ pub(crate) fn build_upload_batches(
     }
 
     Ok(batches)
+}
+
+/// Add batch context to a sync error while preserving the original
+/// `SyncFailureKind`. This replaces the previous pattern of wrapping
+/// every error as `SyncRequestFailed`, which lost typed classifications
+/// such as `ClockSkew`, `Timeout`, and authentication failures.
+fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError {
+    match error {
+        SnipError::SyncFailure { kind, detail } => {
+            let ctx = format!("batch {batch}/{total}");
+            let new_detail = match detail {
+                Some(d) => format!("{ctx}: {d}"),
+                None => ctx,
+            };
+            SnipError::SyncFailure {
+                kind,
+                detail: Some(new_detail),
+            }
+        }
+        _other => {
+            let ctx = format!("batch {batch}/{total}");
+            SnipError::sync_failure(SyncFailureKind::SyncRequestFailed, Some(&ctx))
+        }
+    }
 }
 
 #[cfg(test)]

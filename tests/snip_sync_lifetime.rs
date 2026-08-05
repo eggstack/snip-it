@@ -9,7 +9,7 @@
 //! cargo test --test snip_sync_lifetime -- --ignored --test-threads=1
 //! ```
 
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -37,19 +37,12 @@ fn check_health(addr: SocketAddr) -> bool {
     resp.starts_with("HTTP/1.1 200") || resp.starts_with("HTTP/1.0 200")
 }
 
-/// Spawn the server and return (child, http_addr). Reads stderr until
-/// both listen lines appear, then parses the HTTP address.
 fn find_snip_sync_binary() -> String {
-    // CARGO_BIN_EXE_snip-sync is set when snip-sync is a direct binary
-    // dependency. For workspace binaries, we locate it through the
-    // target directory relative to the test binary.
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_snip-sync") {
         return path;
     }
-    // Fall back: find the binary relative to the test binary's location.
     let test_bin = std::env::current_exe().expect("current_exe should be set");
     let deps_dir = test_bin.parent().expect("test binary should have a parent");
-    // The snip-sync binary is in target/debug/ (not deps/).
     let target_debug = deps_dir
         .parent()
         .expect("deps should be under target/debug");
@@ -60,19 +53,40 @@ fn find_snip_sync_binary() -> String {
     panic!("Cannot find snip-sync binary. Build it first with: cargo build -p snip-sync");
 }
 
-/// Reserve a random available port on localhost, then release it.
 fn reserve_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let port = addr.port();
-    // Release the port immediately so the server can bind to it.
     drop(listener);
     port
 }
 
-/// Spawn the server and return (child, http_addr). Reads stderr until
-/// both listen lines appear, then parses the HTTP address.
-fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
+/// Wait for a child process to exit within a bounded deadline.
+/// If the deadline is exceeded, kill the process and panic.
+fn wait_for_exit(child: &mut std::process::Child, deadline: Duration) -> std::process::ExitStatus {
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) => {
+                if start.elapsed() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("server process did not exit within {deadline:?}");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => panic!("failed to wait on server process: {e}"),
+        }
+    }
+}
+
+/// Spawn the server on specific ports. Returns (child, http_addr).
+fn start_server_on_ports(
+    tmp: &tempfile::TempDir,
+    grpc_port: u16,
+    http_port: u16,
+) -> (std::process::Child, SocketAddr) {
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
     let state_dir = tmp.path().join("state");
@@ -83,15 +97,13 @@ fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
     let config_path = config_dir.join("config.toml");
     std::fs::write(&config_path, "").unwrap();
 
-    let grpc_port = reserve_port();
-    let http_port = reserve_port();
-
     let exe = find_snip_sync_binary();
     let mut child = Command::new(exe)
         .arg("serve")
         .env("CONFIG_PATH", &config_path)
         .env("DATABASE_URL", data_dir.join("test.db"))
         .env("SNIP_SYNC_ALLOW_HTTP", "true")
+        .env("SNIP_SYNC_STATE_DIR", state_dir.to_str().unwrap())
         .env("GRPC_PORT", grpc_port.to_string())
         .env("HTTP_PORT", http_port.to_string())
         .stdout(Stdio::null())
@@ -99,15 +111,15 @@ fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
         .spawn()
         .expect("failed to spawn snip-sync serve");
 
-    let stderr = child.stderr.take().unwrap();
-    let reader = BufReader::new(stderr);
+    let _stderr = child.stderr.take().unwrap();
 
-    // Poll health endpoint with bounded startup deadline.
     let http_addr: SocketAddr = format!("127.0.0.1:{http_port}").parse().unwrap();
     let start = std::time::Instant::now();
     let deadline = Duration::from_secs(10);
     loop {
         if start.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
             panic!("server did not become healthy within {deadline:?}");
         }
         if check_health(http_addr) {
@@ -116,55 +128,44 @@ fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    // Drain remaining stderr lines so the pipe doesn't block.
-    // We don't parse logs for readiness; health polling is authoritative.
-    drop(reader);
-
     (child, http_addr)
+}
+
+/// Spawn the server on random ports. Returns (child, http_addr, grpc_port, http_port).
+fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr, u16, u16) {
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+    let (child, http_addr) = start_server_on_ports(tmp, grpc_port, http_port);
+    (child, http_addr, grpc_port, http_port)
 }
 
 #[test]
 #[ignore = "runs for 35+ seconds; invoke explicitly with --ignored"]
 fn server_remains_healthy_beyond_30_seconds() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut child, http_addr) = start_server(&tmp);
+    let (mut child, http_addr, _grpc, _http) = start_server(&tmp);
 
-    // Verify the server is healthy immediately.
     assert!(
         check_health(http_addr),
-        "server should be healthy immediately after start"
+        "server should be healthy immediately"
     );
 
-    // Wait beyond the old 30-second timeout boundary.
     std::thread::sleep(Duration::from_secs(35));
 
-    // Verify the server is still healthy.
     assert!(
         check_health(http_addr),
-        "server should still be healthy after 35 seconds"
+        "server should still be healthy after 35s"
     );
 
-    // Send SIGTERM for a clean shutdown.
     #[cfg(unix)]
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
     }
 
-    // Wait for exit with timeout. Capture the exit status directly.
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let status = child.wait();
-        let _ = tx.send(status);
-    });
+    let status = wait_for_exit(&mut child, Duration::from_secs(15));
 
     #[cfg(unix)]
     {
-        let result = rx.recv_timeout(Duration::from_secs(15));
-        assert!(
-            result.is_ok(),
-            "server should exit within 15s of SIGTERM after healthy run"
-        );
-        let status = result.unwrap().expect("failed to wait on server process");
         use std::os::unix::process::ExitStatusExt;
         assert_eq!(
             status.code(),
@@ -174,11 +175,6 @@ fn server_remains_healthy_beyond_30_seconds() {
         );
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = rx.recv_timeout(Duration::from_secs(15));
-    }
-
     drop(tmp);
 }
 
@@ -186,23 +182,17 @@ fn server_remains_healthy_beyond_30_seconds() {
 #[ignore = "runs for 10+ seconds; invoke explicitly with --ignored"]
 fn server_exits_cleanly_on_signal() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut child, http_addr) = start_server(&tmp);
+    let (mut child, http_addr, grpc_port, http_port) = start_server(&tmp);
 
-    // Wait briefly for startup.
     std::thread::sleep(Duration::from_secs(2));
 
-    // Send SIGTERM.
     #[cfg(unix)]
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
     }
 
-    // Wait for exit with timeout.
-    let status = child.wait().expect("failed to wait on server process");
+    let status = wait_for_exit(&mut child, Duration::from_secs(15));
 
-    // Assert the server exited within the drain bound (the wait above
-    // would have blocked otherwise). On Unix a clean exit has a nonzero
-    // exit code of 0, not a signal-based termination.
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
@@ -217,20 +207,18 @@ fn server_exits_cleanly_on_signal() {
     // Wait briefly for PID file removal and lock release.
     std::thread::sleep(Duration::from_secs(1));
 
-    // Confirm singleton lock release: a replacement server on the same
-    // ports should start and become healthy.
-    let (mut replacement, _repl_addr) = start_server(&tmp);
+    // Start replacement on the SAME ports with the SAME state dir.
+    let (mut replacement, _repl_addr) = start_server_on_ports(&tmp, grpc_port, http_port);
     assert!(
         check_health(http_addr),
         "replacement server should be healthy after singleton lock release"
     );
 
-    // Clean up the replacement server.
     #[cfg(unix)]
     unsafe {
         libc::kill(replacement.id() as i32, libc::SIGTERM);
     }
-    let _ = replacement.wait();
+    let _ = wait_for_exit(&mut replacement, Duration::from_secs(15));
 
     drop(tmp);
 }

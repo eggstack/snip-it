@@ -39,6 +39,11 @@ run_sync() flow (sync_commands.rs):
 
 **Note:** Encryption failures are tracked via `skipped_count`/`skipped_ids` in the response. `last_sync` is NOT updated when there are failures, preventing permanent snippet loss.
 
+### Implementation Notes (Phase 13H)
+
+- `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to a single `sync_encrypted_inner` implementation. Zero batches is a valid pull-only path — it sends an empty-upload `Sync(offset=0)` to retrieve remote snippets, not an `unreachable!` panic.
+- Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via `add_batch_context()` instead of flattening to `SyncRequestFailed`.
+
 ## Merge Strategy
 
 Live versions use deterministic ordering by `(updated_at, device_id,
