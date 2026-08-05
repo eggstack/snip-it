@@ -703,7 +703,7 @@ Implementation commits:
 - c08cac1 Phase 13I: drain result accounting, deterministic regressions, docs
 
 Closure/record commit:
-- (this commit)
+- 18e7ddb Phase 13I corrective: add drain-time service error test, fill completion record
 
 Verification:
 - cargo fmt --all -- --check: PASS
