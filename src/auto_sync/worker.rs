@@ -54,7 +54,6 @@ impl Clock for SystemClock {
 pub enum DebounceResult {
     Ready(PendingState),
     CancelledMarkerRemoved,
-    DeferredMaximumLifetime(PendingState),
     Failed(String),
 }
 
@@ -82,7 +81,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
     let start = clock.now_instant();
 
     loop {
-        if start.elapsed() >= policy.worker_lifetime {
+        if start.elapsed() >= policy.max_lifetime {
             return WorkerOutcome::NothingToDo;
         }
         let pending_state = match pending::read_state_from_dir(state_dir) {
@@ -100,16 +99,15 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 pending_state.created_at_unix_ms,
                 policy.debounce,
                 start,
-                policy.worker_lifetime,
+                policy.max_lifetime,
                 &clock,
             ),
             start,
-            policy.worker_lifetime,
-            policy.max_delay,
+            policy.max_lifetime,
             policy.debounce,
             &clock,
         ) {
-            DebounceResult::Ready(state) | DebounceResult::DeferredMaximumLifetime(state) => state,
+            DebounceResult::Ready(state) => state,
             DebounceResult::CancelledMarkerRemoved => return WorkerOutcome::NothingToDo,
             DebounceResult::Failed(error) => {
                 return record_sync_failure(
@@ -178,7 +176,6 @@ pub fn debounce(
     initial_deadline: Instant,
     start: Instant,
     max_lifetime: Duration,
-    max_delay: Duration,
     debounce_duration: Duration,
     clock: &dyn Clock,
 ) -> DebounceResult {
@@ -236,9 +233,6 @@ pub fn debounce(
             Ok(_) => {}
             Err(pending::PendingError::NotFound) => return DebounceResult::CancelledMarkerRemoved,
             Err(error) => return DebounceResult::Failed(error.to_string()),
-        }
-        if clock.now_instant().duration_since(start) >= max_delay {
-            return DebounceResult::DeferredMaximumLifetime(current);
         }
     }
 }

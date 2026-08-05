@@ -4,7 +4,6 @@ use crate::config::{AutoSyncFailureMode, DEFAULT_SYNC_TIMEOUT_SECS, SyncSettings
 use std::time::Duration;
 
 pub const MAX_DEBOUNCE_SECS: u64 = 300;
-pub const DEFAULT_WORKER_LIFETIME_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct AutoSyncPolicy {
@@ -15,9 +14,10 @@ pub struct AutoSyncPolicy {
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
     pub sync_timeout: Duration,
-    pub max_delay: Duration,
-    /// Maximum time the worker stays alive before exiting.
-    pub worker_lifetime: Duration,
+    /// Maximum time the worker stays alive before exiting. This is the
+    /// sole pre-sync debounce window — the worker exits when this
+    /// expires regardless of how many debounce cycles have completed.
+    pub max_lifetime: Duration,
 }
 
 /// Resolve configured sync direction with optional foreground CLI overrides.
@@ -43,8 +43,7 @@ impl AutoSyncPolicy {
             debounce: settings.auto_sync_debounce(),
             failure_mode: settings.auto_sync_failure.clone(),
             sync_timeout: settings.auto_sync_timeout(),
-            max_delay: settings.auto_sync_max_delay(),
-            worker_lifetime: Duration::from_secs(DEFAULT_WORKER_LIFETIME_SECS),
+            max_lifetime: settings.auto_sync_max_delay(),
         }
     }
 
@@ -61,8 +60,7 @@ impl Default for AutoSyncPolicy {
             debounce: Duration::from_secs(2),
             failure_mode: AutoSyncFailureMode::Warn,
             sync_timeout: Duration::from_secs(DEFAULT_SYNC_TIMEOUT_SECS),
-            max_delay: Duration::from_secs(300),
-            worker_lifetime: Duration::from_secs(DEFAULT_WORKER_LIFETIME_SECS),
+            max_lifetime: Duration::from_secs(300),
         }
     }
 }

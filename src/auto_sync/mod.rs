@@ -9,11 +9,11 @@ pub mod pending;
 pub mod pending_lock;
 pub mod policy;
 pub mod schedule;
-pub mod spawn;
 pub mod status;
 pub mod test_events;
 pub mod worker;
 
+pub use execution_lock::{SpawnError, WORKER_SUBCOMMAND, spawn_worker};
 pub use notification::{
     AutoSyncNotificationResult, MutationContext, StartupRecoveryPolicy, SubcommandTag,
     clear_pending_after_explicit_sync, notify_local_mutation, notify_mutation,

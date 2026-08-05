@@ -38,6 +38,11 @@
 - `auto_sync::lock::WorkerLock` is re-exported from `execution_lock.rs` for backward compatibility; the worker lock types were merged into `execution_lock.rs`.
 - `ScheduleError::ExecutionLock` and `ScheduleDecision::AlreadyActive` were removed — the scheduler no longer probes the execution lock.
 - `WorkerLockError` replaces `LockError` in the worker lock module.
+- `worker_lifetime` and `max_delay` merged into a single `max_lifetime` field on `AutoSyncPolicy`; the `DeferredMaximumLifetime` debounce variant is removed.
+- Transaction state `BackupsDurable` retained for backward-compatible recovery of old journals; new transactions use `Prepared` → `Committing` → `CleaningUp` directly.
+- `advance_to_committed_local` retained for backward-compatible recovery of old `CommittedLocal` journals; new transactions record pending after commit without using the transaction state machine.
+- Auto-sync `spawn.rs` merged into `execution_lock.rs`; `auto_sync::spawn` module removed.
+- Status file now rejects unknown schema versions (future-version files return `StatusRead::Corrupt`).
 
 ## Phase 12B Auto-Sync Correctness Closure
 

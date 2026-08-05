@@ -324,7 +324,7 @@ fn test_worker_argv_contains_no_command_bodies() {
     cmd.stderr(Stdio::null());
     let _ = cmd.output();
 
-    // The argv the worker saw is constructed by spawn::spawn_worker.
+    // The argv the worker saw is constructed by execution_lock::spawn_worker.
     // No command bodies, descriptions, or credential strings should
     // appear there. The build also enforces no secret fields through
     // the WorkerLockContents schema (no command/description fields).

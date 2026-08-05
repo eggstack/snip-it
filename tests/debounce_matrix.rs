@@ -81,7 +81,6 @@ fn test_zero_debounce_one_mutation_one_attempt() {
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
     let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::from_secs(300);
     let deadline = start;
 
     let result = debounce(
@@ -90,7 +89,6 @@ fn test_zero_debounce_one_mutation_one_attempt() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::ZERO,
         &clock,
     );
@@ -128,8 +126,7 @@ fn test_positive_debounce_coalesces_mutations() {
     let (instant, unix_ms) = mock_clock_now();
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
-    let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::from_secs(600);
+    let max_lifetime = Duration::from_secs(600);
     let deadline = start + Duration::from_secs(2);
 
     let result = debounce(
@@ -138,7 +135,6 @@ fn test_positive_debounce_coalesces_mutations() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::from_secs(2),
         &clock,
     );
@@ -152,14 +148,13 @@ fn test_positive_debounce_coalesces_mutations() {
 }
 
 #[test]
-fn test_max_delay_forces_attempt() {
+fn test_zero_max_lifetime_returns_ready_immediately() {
     let dir = TempDir::new().unwrap();
     let observed = create_mutation(dir.path());
     let (instant, unix_ms) = mock_clock_now();
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
-    let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::ZERO;
+    let max_lifetime = Duration::ZERO;
     let deadline = start + Duration::from_secs(60);
 
     let result = debounce(
@@ -168,16 +163,15 @@ fn test_max_delay_forces_attempt() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::from_secs(2),
         &clock,
     );
 
     match result {
-        DebounceResult::DeferredMaximumLifetime(state) => {
+        DebounceResult::Ready(state) => {
             assert_eq!(state.generation, 1);
         }
-        other => panic!("expected DeferredMaximumLifetime(gen=1), got {other:?}"),
+        other => panic!("expected Ready(gen=1), got {other:?}"),
     }
 }
 
@@ -189,7 +183,6 @@ fn test_marker_removed_during_debounce_cancels() {
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
     let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::from_secs(300);
     let deadline = start - Duration::from_secs(10);
 
     pending::clear(dir.path()).unwrap();
@@ -200,7 +193,6 @@ fn test_marker_removed_during_debounce_cancels() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::from_secs(2),
         &clock,
     );
@@ -218,7 +210,6 @@ fn test_mutation_during_debounce_promotes_generation() {
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
     let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::from_secs(300);
     let deadline = start + Duration::from_secs(60);
 
     pending::record_pending_mutation(
@@ -235,7 +226,6 @@ fn test_mutation_during_debounce_promotes_generation() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::from_secs(2),
         &clock,
     );
@@ -272,8 +262,7 @@ fn test_debounce_returns_final_generation_not_initial() {
     let (instant, unix_ms) = mock_clock_now();
     let clock = MockClock::new(instant, unix_ms);
     let start = clock.now_instant();
-    let max_lifetime = Duration::from_secs(300);
-    let max_delay = Duration::from_secs(600);
+    let max_lifetime = Duration::from_secs(600);
     let deadline = start + Duration::from_secs(60);
 
     let result = debounce(
@@ -282,7 +271,6 @@ fn test_debounce_returns_final_generation_not_initial() {
         deadline,
         start,
         max_lifetime,
-        max_delay,
         Duration::from_secs(2),
         &clock,
     );

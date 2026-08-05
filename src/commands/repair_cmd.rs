@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 pub enum RepairAction {
     /// Prune orphaned usage entries (usage index entries for snippets that no longer exist).
     PruneOrphanedUsage,
-    /// Roll back an interrupted transaction (Prepared, BackupsDurable, Committing, RollingBack).
+    /// Roll back an interrupted transaction (Prepared, Committing, RollingBack).
     RollbackTransaction {
         /// Transaction ID to roll back.
         transaction_id: String,

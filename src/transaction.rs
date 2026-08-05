@@ -13,11 +13,8 @@
 //! ## State machine
 //!
 //! ```text
-//! Prepared → BackupsDurable → Committing{pos} → CommittedLocal{pending}
-//!          → CleaningUp{outcome: Commit, next_step: Validate} → ... → (journal removed)
-//!
-//! Prepared → BackupsDurable → RollingBack{pos} → CleaningUp{outcome: Rollback, next_step: Validate}
-//!          → ... → (journal removed)
+//! Prepared → Committing{pos} → CleaningUp{outcome, step} → (journal removed)
+//! Prepared → RollingBack{pos} → CleaningUp{outcome, step} → (journal removed)
 //! ```
 //!
 //! `CleaningUp` is interruptible and restartable: `finalize_transaction_cleanup`
@@ -25,9 +22,8 @@
 //!
 //! New transactions never persist terminal `Committed` or `RolledBack` states.
 //! The journal is removed during cleanup, making the absence of a journal the
-//! true terminal indicator. Legacy `Committed` and `RolledBack` journals (from
-//! older versions) are handled as `CleaningUp` with the appropriate outcome
-//! during recovery.
+//! true terminal indicator. Legacy `Committed`, `RolledBack`, and
+//! `CommittedLocal` journals (from older versions) are handled during recovery.
 
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
@@ -294,39 +290,50 @@ pub enum CleanupStep {
 }
 
 /// State machine for a transaction.
+///
+/// ```text
+/// Prepared → Committing{pos} → CleaningUp{outcome, step} → (journal removed)
+/// Prepared → RollingBack{pos} → CleaningUp{outcome, step} → (journal removed)
+/// ```
+///
+/// New transactions never persist terminal `Committed` or `RolledBack` states.
+/// The journal is removed during cleanup, making the absence of a journal the
+/// true terminal indicator. Legacy `Committed`, `RolledBack`,
+/// `BackupsDurable`, and `CommittedLocal` journals (from older versions) are
+/// handled during recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionState {
     /// Transaction is prepared; backups taken, staged files ready.
     Prepared,
     /// All backup files are durably written to disk.
+    /// Legacy state from older versions — treated as `Prepared` by recovery.
     BackupsDurable,
     /// Live replacement is in progress; tracks completed positions.
-    ///
-    /// `next_commit_position == N` means positions `0..N` have already been
-    /// installed and verified; position `N` is next.
     Committing {
         /// Number of completed and verified file installations.
         next_commit_position: usize,
     },
     /// All destinations installed and verified; pending sync intent is
-    /// being durably recorded. The `pending` field tracks the finalization
-    /// state of the pending marker.
+    /// being durably recorded.
+    ///
+    /// This state is used only for backward-compatible recovery of
+    /// journals from older versions. New transactions transition
+    /// directly from `Committing` to `CleaningUp`.
     CommittedLocal {
         /// Pending finalization state — whether and how the pending
         /// marker has been durably recorded.
         pending: PendingFinalization,
     },
     /// Transaction has been committed; staged files are in place.
+    /// Legacy terminal state — only present in journals from older versions.
     Committed,
     /// Rollback is in progress; tracks rollback-order position.
-    ///
-    /// `next_rollback_position == N` means positions `0..N` in the
-    /// rollback order have been restored and verified.
     RollingBack {
         /// Number of completed rollback actions in rollback order.
         next_rollback_position: usize,
     },
     /// Transaction was rolled back; backups restored.
+    /// Legacy terminal state — only present in journals from older versions.
     RolledBack,
     /// Cleanup is in progress; tracks cleanup outcome and step.
     ///
@@ -348,8 +355,8 @@ impl TransactionState {
     /// Returns true if this state represents an interrupted (non-terminal) transaction.
     ///
     /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`,
-    /// `CommittedLocal`, and `RollingBack`. Terminal states (`Committed`,
-    /// `RolledBack`, `Failed`) are not interruptible.
+    /// `CommittedLocal`, `RollingBack`, and `CleaningUp`. Terminal states
+    /// (`Committed`, `RolledBack`, `Failed`) are not interruptible.
     #[allow(dead_code)]
     pub fn is_interruptible(&self) -> bool {
         matches!(
@@ -1303,10 +1310,12 @@ fn persist_journal(state_dir: &Path, journal: &TransactionJournal) -> SnipResult
     crate::utils::atomic::write_private_atomic(&jpath, &content, "txn")
 }
 
-/// Advance the journal to `BackupsDurable`.
+/// Persist the journal after backups are durably written.
 ///
-/// Call after all backup files have been durably written to disk, before
-/// any live replacement begins.
+/// This is a compatibility shim — the `BackupsDurable` state is retained
+/// for backward-compatible recovery of old journals. New code may call
+/// this function, but the state machine treats `BackupsDurable` as
+/// equivalent to `Prepared` for recovery classification.
 pub fn advance_to_backups_durable(
     state_dir: &Path,
     journal: &mut TransactionJournal,
@@ -1346,11 +1355,12 @@ pub fn advance_to_rolling_back(
     persist_journal(state_dir, journal)
 }
 
-/// Advance the journal to `CommittedLocal` finalization state.
+/// Persist the journal in `CommittedLocal` finalization state.
 ///
-/// This is persisted after all destinations are installed and verified,
-/// before the pending sync intent is durably recorded. The `pending`
-/// parameter tracks the finalization state of the pending marker.
+/// This state is used only for backward-compatible recovery of journals
+/// from older versions. New transactions transition directly from
+/// `Committing` to `CleaningUp` (pending sync intent is recorded
+/// separately after the transaction state machine completes).
 pub fn advance_to_committed_local(
     state_dir: &Path,
     journal: &mut TransactionJournal,
@@ -2465,8 +2475,8 @@ pub fn gate_mutation_on_interrupted_transactions(
 
 /// Check for interrupted transactions on startup (compatibility wrapper).
 ///
-/// Returns journals in interruptible states (Prepared, BackupsDurable,
-/// Committing, RollingBack, CommittedLocal, CleaningUp). This is a narrow
+/// Returns journals in interruptible states (Prepared, Committing,
+/// RollingBack, CommittedLocal, CleaningUp). This is a narrow
 /// compatibility wrapper over the complete scanner and classifier. New code
 /// should use `scan_transaction_journals` + `classify_journal_recovery`
 /// directly.

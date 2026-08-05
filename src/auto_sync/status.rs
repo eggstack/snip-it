@@ -90,6 +90,7 @@ pub fn status_path(state_dir: &Path) -> PathBuf {
 }
 
 /// Typed result of reading the status file.
+#[derive(Debug)]
 pub enum StatusRead {
     /// Status file does not exist.
     Missing,
@@ -111,6 +112,15 @@ pub fn read_status_typed(state_dir: &Path) -> StatusRead {
         Ok(s) => s,
         Err(e) => return StatusRead::Corrupt(format!("parse error: {e}")),
     };
+
+    // Reject unknown schema versions — a file written by a newer version
+    // must not be silently processed as if current.
+    if status.schema > SCHEMA_VERSION {
+        return StatusRead::Corrupt(format!(
+            "unsupported schema version {}: expected <= {}",
+            status.schema, SCHEMA_VERSION
+        ));
+    }
 
     // Validate integrity
     let stored = status.integrity;
@@ -446,6 +456,48 @@ mod tests {
     fn test_status_not_found() {
         let dir = TempDir::new().unwrap();
         assert!(read_status(dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_status_rejects_future_schema_version() {
+        let dir = TempDir::new().unwrap();
+        // Write a status file with schema = 999 (future version)
+        let content = r#"
+schema = 999
+pending_generation = 1
+last_attempt_generation = 1
+last_attempt_at_unix_ms = 0
+last_success_at_unix_ms = 0
+last_result = "success"
+last_failure_class = ""
+consecutive_failures = 0
+next_attempt_at_unix_ms = 0
+executor_exit_code = 0
+attention_required = false
+message = ""
+config_fingerprint = 0
+integrity = 0
+"#;
+        std::fs::write(status_path(dir.path()), content).unwrap();
+
+        match read_status_typed(dir.path()) {
+            StatusRead::Corrupt(msg) => {
+                assert!(
+                    msg.contains("unsupported schema"),
+                    "error should mention schema: {msg}"
+                );
+            }
+            other => panic!("expected Corrupt for future schema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_status_accepts_current_schema_version() {
+        let dir = TempDir::new().unwrap();
+        let status = AutoSyncStatus::default();
+        write_status(dir.path(), &status).unwrap();
+        let loaded = read_status(dir.path()).unwrap();
+        assert_eq!(loaded.schema, SCHEMA_VERSION);
     }
 
     #[test]

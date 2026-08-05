@@ -6,9 +6,9 @@
 //! pending state, policy, execution lock, backoff, and failure class
 //! to determine whether spawning is appropriate.
 
+use crate::auto_sync::execution_lock;
 use crate::auto_sync::pending;
 use crate::auto_sync::policy::{AutoSyncPolicy, FailureClass};
-use crate::auto_sync::spawn;
 use crate::auto_sync::status;
 use std::path::Path;
 
@@ -35,7 +35,7 @@ pub enum ScheduleDecision {
 #[derive(Debug)]
 pub enum ScheduleError {
     Pending(pending::PendingError),
-    Spawn(spawn::SpawnError),
+    Spawn(execution_lock::SpawnError),
 }
 
 impl std::fmt::Display for ScheduleError {
@@ -154,7 +154,7 @@ pub fn schedule_existing_pending(
 ) -> Result<ScheduleDecision, ScheduleError> {
     let decision = schedule_sync(state_dir, policy, caller)?;
     if decision == ScheduleDecision::SpawnNow
-        && let Err(e) = spawn::spawn_worker(state_dir)
+        && let Err(e) = execution_lock::spawn_worker(state_dir)
     {
         tracing::warn!(error = %e, "schedule_existing_pending: failed to spawn worker");
         return Err(ScheduleError::Spawn(e));
@@ -164,7 +164,7 @@ pub fn schedule_existing_pending(
 
 /// The sole authority for translating a `SpawnNow` decision into an actual
 /// worker spawn. All automatic scheduling paths must call this function
-/// rather than calling `spawn::spawn_worker` directly.
+/// rather than calling `execution_lock::spawn_worker` directly.
 pub fn schedule_and_spawn(
     state_dir: &Path,
     policy: &AutoSyncPolicy,
@@ -173,7 +173,7 @@ pub fn schedule_and_spawn(
     let decision = schedule_sync(state_dir, policy, caller)?;
     if decision == ScheduleDecision::SpawnNow
         && !test_worker_spawn_suppressed()
-        && let Err(e) = spawn::spawn_worker(state_dir)
+        && let Err(e) = execution_lock::spawn_worker(state_dir)
     {
         tracing::warn!(error = %e, "schedule_and_spawn: failed to spawn worker");
         return Err(ScheduleError::Spawn(e));
@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn test_spawn_worker_only_called_from_scheduler() {
         let src = include_str!("schedule.rs");
-        // The only production call to spawn::spawn_worker should be in schedule_and_spawn.
+        // The only production call to execution_lock::spawn_worker should be in schedule_and_spawn.
         let lines: Vec<&str> = src.lines().collect();
         let mut production_calls = 0;
         for (i, line) in lines.iter().enumerate() {
@@ -475,7 +475,8 @@ mod tests {
             if trimmed.starts_with("//") || trimmed.starts_with("#[") {
                 continue;
             }
-            if trimmed.contains("spawn::spawn_worker") || trimmed.contains("spawn_worker(") {
+            if trimmed.contains("execution_lock::spawn_worker") || trimmed.contains("spawn_worker(")
+            {
                 // Check if this is the schedule_and_spawn function or a test
                 let in_test = lines[..i].iter().any(|l| l.contains("#[cfg(test)]"));
                 if !in_test {

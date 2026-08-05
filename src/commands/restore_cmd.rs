@@ -744,7 +744,7 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
 ///
 /// For replace/create mode: reads the backup file bytes and returns them.
 ///
-/// This must be called during preparation (before BackupsDurable), not
+/// This must be called during preparation (before Committing), not
 /// inside the live commit loop.
 fn compute_library_intended_bytes(
     backup_file: &Path,
@@ -1140,7 +1140,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
     // Build the journal with backup paths for rollback and durable staged
     // paths for commit. All artifacts are written, synced, and verified
-    // before BackupsDurable is persisted.
+    // before the journal is persisted at Prepared state.
     let staged_dir_base = artifact_dir.join("staged");
     crate::transaction::create_private_dir(&staged_dir_base).map_err(|e| {
         SnipError::runtime_error(
@@ -1160,7 +1160,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
 
         // Compute intended replacement bytes and write to a durable staged file.
         // The staged file is written, synced, and verified before
-        // BackupsDurable is persisted. The commit loop will move
+        // the journal is persisted at Prepared state. The commit loop will move
         // this content to the live destination.
         let intended_bytes = match staged.action {
             crate::transaction::StagedAction::Delete => {
@@ -1241,7 +1241,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         staged.new_hash = verified_hash;
     }
 
-    // Persist BackupsDurable state before any live writes.
+    // Persist Prepared state with all backup/staged paths before any live writes.
     // A crash after this point is recoverable: the journal contains all
     // backup paths needed for rollback and all staged paths needed for
     // commit. All artifacts have been synced and verified from disk.
