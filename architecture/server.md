@@ -206,8 +206,17 @@ server runs indefinitely until a process shutdown signal (Ctrl-C / SIGTERM) or
 an unexpected service failure. Normal operation has no arbitrary lifetime
 timeout; only the graceful drain phase after shutdown is bounded by the
 configured request timeout (default 30s). Both services share a single
-shutdown signal source; when one service fails unexpectedly, the sibling is
+broadcast shutdown signal; when one service fails unexpectedly, the sibling is
 notified and the orchestrator returns an error.
+
+On Unix, the server registers both `tokio::signal::ctrl_c()` and
+`tokio::signal::unix::SignalKind::terminate()` so that `snip-sync stop`
+(which sends SIGTERM) triggers the same graceful shutdown path as Ctrl-C.
+gRPC uses Tonic's `serve_with_incoming_shutdown` for connection-aware draining;
+HTTP uses `axum::serve().with_graceful_shutdown`. Both service task handles
+remain owned by the orchestrator and are awaited inside the real drain timeout.
+Persistence shutdown occurs only after both request-serving tasks have completed
+or been aborted.
 
 The `stop` and `restart` commands accept both structured records and legacy
 numeric PID files on Unix. Stale numeric records are removed only after

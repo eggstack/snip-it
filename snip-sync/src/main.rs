@@ -351,14 +351,19 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     let grpc_shutdown_rx = shutdown_tx.subscribe();
     let grpc_handle = tokio::spawn(async move {
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(grpc_listener);
-        let server = tonic::transport::Server::builder()
+        let result = tonic::transport::Server::builder()
             .timeout(timeout)
             .add_service(
                 SnippetSyncServer::new(grpc_service)
                     .max_decoding_message_size(grpc_max_message_size as usize)
                     .max_encoding_message_size(grpc_max_message_size as usize),
             )
-            .serve_with_incoming(incoming);
+            .serve_with_incoming_shutdown(incoming, async move {
+                let mut rx = grpc_shutdown_rx;
+                let _ = rx.recv().await;
+                tracing::info!("Shutdown signal received, stopping gRPC server...");
+            })
+            .await;
 
         tracing::info!(
             "gRPC server listening on http://{} (timeout: {}s)",
@@ -366,89 +371,87 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
             timeout.as_secs()
         );
 
-        let mut shutdown_rx = grpc_shutdown_rx;
-        tokio::select! {
-            result = server => {
-                if let Err(e) = result {
-                    tracing::error!("gRPC server error: {}", e);
-                }
-            }
-            _ = shutdown_rx.recv() => {
-                tracing::info!("Shutdown signal received, stopping gRPC server...");
-            }
-        }
+        result
     });
 
     let mut http_shutdown_rx = shutdown_tx.subscribe();
     let http_handle = tokio::spawn(async move {
         tracing::info!("HTTP server listening on http://{}", http_addr);
 
-        if let Err(e) = axum::serve(http_listener, app)
+        axum::serve(http_listener, app)
             .with_graceful_shutdown(async move {
                 let _ = http_shutdown_rx.recv().await;
                 tracing::info!("Shutdown signal received, stopping HTTP server...");
             })
             .await
-        {
-            tracing::error!(error = %e, "HTTP server error");
-        }
     });
 
-    // Wait for the first terminal event: either Ctrl-C or an unexpected
-    // service failure. The normal-operation wait has no arbitrary
-    // lifetime timeout.
+    // Wait for the first terminal event: a process signal, or an
+    // unexpected service failure. The normal-operation wait has no
+    // arbitrary lifetime timeout.
+    //
+    // On Unix we also listen for SIGTERM so that `snip-sync stop`
+    // triggers the same graceful shutdown path as Ctrl-C.
+    #[cfg(unix)]
+    let mut sigterm_stream =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .map_err(|e| format!("Failed to register SIGTERM handler: {e}"))?;
+
+    #[cfg(unix)]
+    let sigterm_fut = sigterm_stream.recv();
+    #[cfg(not(unix))]
+    let sigterm_fut = std::future::pending::<()>();
+
     let terminal = tokio::select! {
         biased;
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Shutdown signal received");
-            true // requested shutdown
+            tracing::info!("Ctrl-C received, initiating shutdown");
+            true
+        }
+        _ = sigterm_fut => {
+            tracing::info!("SIGTERM received, initiating shutdown");
+            true
         }
         result = grpc_handle => {
             match result {
-                Ok(()) => {
-                    tracing::error!("gRPC service exited unexpectedly");
-                    false
-                }
-                Err(e) => {
-                    tracing::error!("gRPC service task panicked: {}", e);
-                    false
-                }
+                Ok(Ok(())) => tracing::error!("gRPC service exited unexpectedly"),
+                Ok(Err(e)) => tracing::error!("gRPC service error: {}", e),
+                Err(e) => tracing::error!("gRPC service task panicked: {}", e),
             }
+            false
         }
         result = http_handle => {
             match result {
-                Ok(()) => {
-                    tracing::error!("HTTP service exited unexpectedly");
-                    false
-                }
-                Err(e) => {
-                    tracing::error!("HTTP service task panicked: {}", e);
-                    false
-                }
+                Ok(Ok(())) => tracing::error!("HTTP service exited unexpectedly"),
+                Ok(Err(e)) => tracing::error!("HTTP service error: {}", e),
+                Err(e) => tracing::error!("HTTP service task panicked: {}", e),
             }
+            false
         }
     };
 
     if !terminal {
-        // An unexpected failure occurred. We need to shut down the
-        // remaining service. Try to send the signal; if it has already
-        // been dropped, the service is already gone.
+        // An unexpected failure occurred. Shut down the remaining service.
         let _ = shutdown_tx.send(());
     }
 
     // Graceful drain is bounded by the configured timeout (or a 30s
-    // default). The timeout starts only after the terminal event, not
-    // during normal operation.
+    // default for unexpected failures). The timeout starts only after
+    // the terminal event, not during normal operation.
     let drain_timeout = if terminal {
         timeout
     } else {
         Duration::from_secs(30)
     };
 
-    let drain_result =
-        tokio::time::timeout(drain_timeout, async { /* drain completes when tasks exit */
-        })
-        .await;
+    // Give both tasks time to finish after the broadcast signal.
+    // Both tasks subscribe to the broadcast channel and will terminate
+    // promptly when they receive it. The drain timeout provides the
+    // hard bound for in-flight requests to complete.
+    let drain_result = tokio::time::timeout(drain_timeout, async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    })
+    .await;
 
     if drain_result.is_err() {
         tracing::warn!(

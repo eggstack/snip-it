@@ -33,4 +33,7 @@ cargo test --test destination_permissions --features test-support
 echo "=== Single-helper auto-sync contracts ==="
 cargo test --test auto_sync_closure
 
+echo "=== Multi-batch sync contracts ==="
+cargo test --test sync_multibatch -- --test-threads=1
+
 echo "=== All checks passed ==="

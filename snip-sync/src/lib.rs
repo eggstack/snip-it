@@ -443,6 +443,34 @@ impl Config {
                 reason: "must be nonzero".into(),
             });
         }
+        if self.max_id_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_ID_LENGTH",
+                value: self.max_id_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_device_id_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_DEVICE_ID_LENGTH",
+                value: self.max_device_id_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_api_key_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_API_KEY_LENGTH",
+                value: self.max_api_key_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.rate_limit_per_minute == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "RATE_LIMIT_PER_MINUTE",
+                value: self.rate_limit_per_minute.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
         Ok(())
     }
 
@@ -2347,5 +2375,71 @@ mod tests {
             }
             other => panic!("expected InvalidEnvironment, got: {other}"),
         }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_max_id_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.limits]\nmax_id_length = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "MAX_ID_LENGTH"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_max_device_id_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.limits]\nmax_device_id_length = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "MAX_DEVICE_ID_LENGTH"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_max_api_key_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.limits]\nmax_api_key_length = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "MAX_API_KEY_LENGTH"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_rate_limit_per_minute() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.rate_limit]\nrequests_per_minute = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => {
+                assert_eq!(name, "RATE_LIMIT_PER_MINUTE")
+            }
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_accepts_valid_boundary_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[server.limits]\nmax_id_length = 1\nmax_device_id_length = 1\nmax_api_key_length = 1\n[server.rate_limit]\nrequests_per_minute = 1\n",
+        )
+        .unwrap();
+        let config = Config::load_from(&path, &|_| None).unwrap();
+        assert_eq!(config.max_id_length, 1);
+        assert_eq!(config.max_device_id_length, 1);
+        assert_eq!(config.max_api_key_length, 1);
+        assert_eq!(config.rate_limit_per_minute, 1);
     }
 }

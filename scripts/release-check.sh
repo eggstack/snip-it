@@ -50,6 +50,12 @@ run_verify() {
     cargo test --release --test transaction_crash_recovery \
       --features test-support -- --test-threads=1
 
+    # Multi-batch sync (release-profile)
+    cargo test --release --test sync_multibatch -- --test-threads=1
+
+    # Server lifetime regression
+    cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1
+
     # Production seam proof
     bash "$SCRIPT_DIR/ci/test-production-seams.sh"
 

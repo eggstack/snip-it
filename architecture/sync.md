@@ -44,12 +44,29 @@ pub(crate) fn build_upload_batches(
 ) -> SnipResult<Vec<Vec<Snippet>>>
 ```
 
-- Uses `prost::Message::encoded_len()` on a constructed `SyncRequest` to measure actual encoded size.
+- Uses `prost::Message::encoded_len()` on a constructed `SyncRequest` (the
+  larger of the two request envelopes) to measure actual encoded size. Batches
+  that fit `SyncRequest` also fit `PushSnippetsRequest`.
 - Batches are sorted by snippet ID for deterministic ordering across retries.
-- A single oversized item fails with `SyncFailureKind::RequestTooLarge` before any remote mutation.
-- First batch goes via `Sync` RPC (upload + first response page).
-- Remaining batches go via `PushSnippets` RPC (upload only).
-- Response pages are paginated after all uploads complete.
+- A single oversized item fails with `SyncFailureKind::RequestTooLarge` before
+  any remote mutation.
+- After an overflow split, the new singleton is immediately re-validated so an
+  oversized item following a small item is caught before any remote mutation.
+
+### Upload Strategy
+
+All upload batches are sent before any response page is requested:
+
+- **One batch**: `Sync(batch, offset=0)` carries the upload and returns the
+  first response page in one RPC. Paginate remaining response pages.
+- **Two or more batches**: Each batch is sent via `PushSnippets` (upload only).
+  After all uploads succeed, an empty-upload `Sync(offset=0)` fetches the
+  authoritative first response page. Paginate remaining response pages.
+
+This ordering ensures that `has_more == false` on the first response cannot
+truncate uploads, and the final response describes server state after all
+successful uploads. `PushSnippets` is idempotent by snippet identity — retrying
+an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE newer`).
 
 ### Retry Logic
 

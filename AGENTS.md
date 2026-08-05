@@ -3,17 +3,21 @@
 ## Phase 13A — Server Lifetime and Configuration Correctness
 
 - The server runs indefinitely until a process shutdown signal or unexpected service failure; normal operation has no arbitrary lifetime timeout.
-- Both services share a single `broadcast` shutdown signal; only the graceful drain phase after shutdown is bounded (default 30s).
+- Both services share a single broadcast shutdown signal; only the graceful drain phase after shutdown is bounded (default 30s).
+- On Unix, the server registers both `tokio::signal::ctrl_c()` and `tokio::signal::unix::SignalKind::terminate()` so `snip-sync stop` triggers the same graceful shutdown path as Ctrl-C.
+- gRPC uses Tonic's `serve_with_incoming_shutdown` for connection-aware draining; HTTP uses `axum::serve().with_graceful_shutdown`.
+- Both service task handles remain owned by the orchestrator and are awaited inside the real drain timeout.
 - Unexpected service/task failure notifies the sibling, drains, and returns an error — it is never swallowed into a log-only success.
+- Persistence shutdown occurs only after both request-serving tasks have completed or been aborted.
 - Environment variable overrides are strictly parsed via `parse_env` and `parse_bool_env`; present but invalid values cause startup to fail.
 - Boolean env vars (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; unknown values fail.
-- Range validation rejects zero ports, zero connection limits, and zero timeouts after env/file/default resolution.
+- Range validation rejects zero ports, zero connection limits, zero timeouts, and zero values for `MAX_ID_LENGTH`, `MAX_DEVICE_ID_LENGTH`, `MAX_API_KEY_LENGTH`, and `RATE_LIMIT_PER_MINUTE` after env/file/default resolution.
 
 ## Phase 13B — Bounded Sync Uploads and Clock-Skew Diagnostics
 
 - Sync uploads are byte-bounded using Prost `encoded_len()` to measure actual request size before transmission. The client ceiling defaults to 3.5 MiB (below the server's 4 MiB gRPC limit).
-- `build_upload_batches()` splits encrypted snippets into deterministic ID-sorted batches that fit within the ceiling. A single oversized item fails before any remote mutation.
-- The first upload batch goes via `Sync` RPC (upload + first response page); subsequent batches go via `PushSnippets` RPC (upload only). Response pages are paginated after all uploads complete.
+- `build_upload_batches()` splits encrypted snippets into deterministic ID-sorted batches that fit within the ceiling. Each batch is measured against `SyncRequest` (the larger envelope); batches that fit `SyncRequest` also fit `PushSnippetsRequest`. A single oversized item fails before any remote mutation. After an overflow split, the new singleton is immediately re-validated.
+- For one upload batch: `Sync(batch, offset=0)` carries the upload and returns the first response page. For two or more batches: each batch goes via `PushSnippets` (upload only), then an empty-upload `Sync(offset=0)` fetches the authoritative first response page. Response pages are paginated after all uploads complete.
 - `PushSnippets` is idempotent by snippet identity — retrying an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE newer`).
 - Server clock-skew rejection now reports the skew magnitude and corrective action (e.g., "updated_at is 742 seconds ahead of server time; synchronize the client clock and retry").
 - `InvalidArgument` gRPC errors containing timestamp-related messages map to `SyncFailureKind::ClockSkew` → `FailureClass::Configuration`.
