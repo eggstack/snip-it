@@ -43,8 +43,8 @@ run_verify() {
     echo ""
     echo "=== Phase 3: Release smoke ==="
     # Client version and help
-    cargo run --release --all-features -- --version
-    cargo run --release --all-features -- --help >/dev/null
+    cargo run --release --all-features --bin snp -- --version
+    cargo run --release --all-features --bin snp -- --help >/dev/null
 
     # Crash recovery (release-profile)
     cargo test --release --test transaction_crash_recovery \
