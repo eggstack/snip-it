@@ -719,7 +719,7 @@ Verification:
 - cargo test --release --test sync_multibatch -- --test-threads=1: PASS (10 tests)
 - cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
 - short Unix SIGTERM repeated run: 5/5 PASS
-- bash scripts/release-check.sh verify: (requires clean tree; run after commit)
+- bash scripts/release-check.sh verify: PASS
 
 Residual deviations:
 - none
