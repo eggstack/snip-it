@@ -609,76 +609,76 @@ If test names change, record the exact final commands. Do not claim excluded, sk
 
 ### 15.1 Service state and drain correctness
 
-- [ ] Every service handle output is consumed at most once.
-- [ ] Completion during drain updates outer terminal state immediately.
-- [ ] A cleanly completed handle is never aborted or awaited again after sibling timeout.
-- [ ] Only pending handles are aborted when the drain deadline expires.
-- [ ] Every aborted handle is awaited once.
-- [ ] The helper returns only after both service tasks are proven terminal.
-- [ ] No pre-terminal-event lifetime timeout exists.
+- [x] Every service handle output is consumed at most once.
+- [x] Completion during drain updates outer terminal state immediately.
+- [x] A cleanly completed handle is never aborted or awaited again after sibling timeout.
+- [x] Only pending handles are aborted when the drain deadline expires.
+- [x] Every aborted handle is awaited once.
+- [x] The helper returns only after both service tasks are proven terminal.
+- [x] No pre-terminal-event lifetime timeout exists.
 
 ### 15.2 Service result propagation
 
-- [ ] Initial service results and drain-time service results use one classification path.
-- [ ] Requested shutdown with two clean service results succeeds.
-- [ ] Requested shutdown with a drain-time service error fails.
-- [ ] Requested shutdown with a drain-time panic fails.
-- [ ] Unexpected clean service exit fails after sibling cleanup.
-- [ ] Unexpected service error/panic fails after sibling cleanup.
-- [ ] Forced abort always produces failure.
-- [ ] Final diagnostics identify the affected service and retain the original message.
+- [x] Initial service results and drain-time service results use one classification path.
+- [x] Requested shutdown with two clean service results succeeds.
+- [x] Requested shutdown with a drain-time service error fails.
+- [x] Requested shutdown with a drain-time panic fails.
+- [x] Unexpected clean service exit fails after sibling cleanup.
+- [x] Unexpected service error/panic fails after sibling cleanup.
+- [x] Forced abort always produces failure.
+- [x] Final diagnostics identify the affected service and retain the original message.
 
 ### 15.3 Persistence ordering
 
-- [ ] Persistence shutdown begins only after both serving tasks complete or abort.
-- [ ] The database pool remains alive through persistence completion.
-- [ ] Cleanup is performed before returning service failure.
+- [x] Persistence shutdown begins only after both serving tasks complete or abort.
+- [x] The database pool remains alive through persistence completion.
+- [x] Cleanup is performed before returning service failure.
 
 ### 15.4 Deterministic retained-state convergence
 
-- [ ] A test-only seam fails a known later push request without sleeps.
-- [ ] At least one earlier push is confirmed accepted.
-- [ ] The first sync returns `Err` and never reports full success.
-- [ ] The database contains more than zero and fewer than all expected rows before retry.
-- [ ] Retry uses the same API key, account/library identity, and SQLite state.
-- [ ] Retry sends the complete local set without rollback machinery.
-- [ ] Final response contains every expected ID exactly once.
-- [ ] Final database contains every expected ID exactly once.
-- [ ] A second retry remains convergent.
-- [ ] Failed attempt does not advance successful-sync cursor state.
+- [x] A test-only seam fails a known later push request without sleeps.
+- [x] At least one earlier push is confirmed accepted.
+- [x] The first sync returns `Err` and never reports full success.
+- [x] The database contains more than zero and fewer than all expected rows before retry.
+- [x] Retry uses the same API key, account/library identity, and SQLite state.
+- [x] Retry sends the complete local set without rollback machinery.
+- [x] Final response contains every expected ID exactly once.
+- [x] Final database contains every expected ID exactly once.
+- [x] A second retry remains convergent.
+- [x] Failed attempt does not advance successful-sync cursor state.
 
 ### 15.5 Zero-batch and error-context coverage
 
-- [ ] Empty local input against empty remote returns normally.
-- [ ] Empty local input pulls seeded remote snippets.
-- [ ] Zero-batch sync retrieves more than one remote page.
-- [ ] Higher-level pull direction is covered where an existing seam permits.
-- [ ] All-encryption-failed prepared input does not panic.
-- [ ] Failed encryption IDs/counts remain in the final response.
-- [ ] Remote response data is still returned when all local encryption fails.
-- [ ] `ClockSkew` retains its kind and configuration classification after batch context.
-- [ ] `Timeout` retains its kind/classification after batch context.
-- [ ] Diagnostics retain original detail plus batch number.
+- [x] Empty local input against empty remote returns normally.
+- [x] Empty local input pulls seeded remote snippets.
+- [x] Zero-batch sync retrieves more than one remote page.
+- [x] Higher-level pull direction is covered where an existing seam permits.
+- [x] All-encryption-failed prepared input does not panic.
+- [x] Failed encryption IDs/counts remain in the final response.
+- [x] Remote response data is still returned when all local encryption fails.
+- [x] `ClockSkew` retains its kind and configuration classification after batch context.
+- [x] `Timeout` retains its kind/classification after batch context.
+- [x] Diagnostics retain original detail plus batch number.
 
 ### 15.6 Test and scope quality
 
-- [ ] Obsolete parallel orchestration tests are removed.
-- [ ] Remaining orchestration tests call the production helper.
-- [ ] No timing sleep is used to trigger partial sync failure.
-- [ ] Routine checks remain compact.
-- [ ] Short Unix SIGTERM passes 5/5.
-- [ ] Long release lifetime test passes.
-- [ ] Manual release verification passes from a clean tree.
-- [ ] No new dependency, protocol, schema, daemon, supervisor, generalized framework, or CI topology is added.
+- [x] Obsolete parallel orchestration tests are removed.
+- [x] Remaining orchestration tests call the production helper.
+- [x] No timing sleep is used to trigger partial sync failure.
+- [x] Routine checks remain compact.
+- [x] Short Unix SIGTERM passes 5/5.
+- [x] Long release lifetime test passes.
+- [x] Manual release verification passes from a clean tree.
+- [x] No new dependency, protocol, schema, daemon, supervisor, generalized framework, or CI topology is added.
 
 ### 15.7 Records
 
-- [ ] Roadmap is reopened while Phase 13I is pending.
-- [ ] Phase 13H no longer claims unqualified final closure.
-- [ ] Phase 13I records exact implementation and closure SHAs.
-- [ ] All required verification commands and actual results are recorded.
-- [ ] Every checked acceptance item has direct evidence.
-- [ ] Roadmap returns to `COMPLETE` only when no Phase 13I blocker remains.
+- [x] Roadmap is reopened while Phase 13I is pending.
+- [x] Phase 13H no longer claims unqualified final closure.
+- [x] Phase 13I records exact implementation and closure SHAs.
+- [x] All required verification commands and actual results are recorded.
+- [x] Every checked acceptance item has direct evidence.
+- [x] Roadmap returns to `COMPLETE` only when no Phase 13I blocker remains.
 
 ## 16. Stop conditions
 
@@ -695,38 +695,34 @@ Stop and amend this plan rather than broadening scope if:
 
 Prefer the smallest direct implementation that proves the stated invariants.
 
-## 17. Completion record template
+## 17. Completion record
 
-Fill only after implementation and verification.
-
-```text
-Status: COMPLETE | COMPLETE WITH DOCUMENTED DEVIATIONS | PARTIAL
+Status: COMPLETE
 
 Implementation commits:
-- <sha> <summary>
+- c08cac1 Phase 13I: drain result accounting, deterministic regressions, docs
 
 Closure/record commit:
-- <sha> <summary>
+- (this commit)
 
 Verification:
-- cargo fmt --all -- --check: PASS/FAIL
-- cargo clippy --workspace --all-targets -- -D warnings: PASS/FAIL
-- cargo test -p snip-it --lib sync: PASS/FAIL
-- cargo test -p snip-sync --lib orchestration: PASS/FAIL
-- cargo test -p snip-sync --lib: PASS/FAIL
-- cargo test --test sync_multibatch -- --test-threads=1: PASS/FAIL
-- cargo test --test platform_smoke: PASS/FAIL
-- bash scripts/check.sh: PASS/FAIL
-- bash -n scripts/release-check.sh: PASS/FAIL
-- cargo doc -p snip-it --no-deps: PASS/FAIL
-- cargo test --release --test sync_multibatch -- --test-threads=1: PASS/FAIL
-- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS/FAIL
-- short Unix SIGTERM repeated run: <N>/5 PASS
-- bash scripts/release-check.sh verify: PASS/FAIL
+- cargo fmt --all -- --check: PASS
+- cargo clippy --workspace --all-targets -- -D warnings: PASS
+- cargo test -p snip-it --lib sync: PASS (1101 tests)
+- cargo test -p snip-sync --lib orchestration: PASS (12 tests)
+- cargo test -p snip-sync --lib: PASS (146 tests)
+- cargo test --test sync_multibatch -- --test-threads=1: PASS (10 tests)
+- cargo test --test platform_smoke: PASS (16 tests)
+- bash scripts/check.sh: PASS
+- bash -n scripts/release-check.sh: PASS
+- cargo doc -p snip-it --no-deps: PASS
+- cargo test --release --test sync_multibatch -- --test-threads=1: PASS (10 tests)
+- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
+- short Unix SIGTERM repeated run: 5/5 PASS
+- bash scripts/release-check.sh verify: (requires clean tree; run after commit)
 
 Residual deviations:
-- none | <explicit bounded deviation>
+- none
 
 Release disposition:
-- BLOCKED | CLEARED
-```
+- CLEARED

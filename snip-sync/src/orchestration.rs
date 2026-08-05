@@ -365,6 +365,52 @@ mod tests {
         assert_eq!(outcome.http_result, ServiceResult::Clean);
     }
 
+    // ── Section 7.3: Drain-time service error ─────────────────────
+
+    #[tokio::test]
+    async fn drain_time_service_error() {
+        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        // gRPC returns cleanly after receiving shutdown.
+        let grpc: GrpcHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Ok(())
+            })
+        };
+        // HTTP returns an error after receiving shutdown.
+        let http: HttpHandle = {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                let _ = rx.recv().await;
+                Err(std::io::Error::other("http service error"))
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let signal = {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(());
+            }
+        };
+        tokio::pin!(signal);
+
+        let outcome =
+            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_secs(2)).await;
+
+        assert!(outcome.requested);
+        assert!(!outcome.forced);
+        assert!(!outcome.is_clean_requested_shutdown());
+        assert_eq!(outcome.grpc_result, ServiceResult::Clean);
+        assert!(matches!(
+            outcome.http_result,
+            ServiceResult::ServiceError(_)
+        ));
+    }
+
     // ── Section 7.5: Unexpected service completion ─────────────────
 
     #[tokio::test]
@@ -534,7 +580,7 @@ mod tests {
         );
     }
 
-    // ── Section 7.3 regression: drain-time panic preserves detail ──
+    // ── Section 7.4 regression: drain-time panic preserves detail ──
 
     #[tokio::test]
     async fn drain_panic_preserved_in_outcome() {
