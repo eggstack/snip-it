@@ -245,16 +245,8 @@ pub fn record_failure(
     status.consecutive_failures = consecutive_failures;
     status.next_attempt_at_unix_ms = next_attempt_at_unix_ms;
     status.executor_exit_code = exit_code;
-    status.attention_required = failure_class.is_deferred()
-        || matches!(
-            failure_class,
-            FailureClass::Authentication
-                | FailureClass::Configuration
-                | FailureClass::CredentialStore
-                | FailureClass::Conflict
-                | FailureClass::Partial
-                | FailureClass::LocalPersistence
-        );
+    status.attention_required =
+        failure_class.is_deferred() || matches!(failure_class, FailureClass::LocalFailure);
     status.message = sanitize_message(message);
     status.config_fingerprint = config_fingerprint;
 
@@ -474,7 +466,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             5000,
@@ -484,8 +476,8 @@ mod tests {
         .unwrap();
         let status = read_status(dir.path()).unwrap();
         assert_eq!(status.pending_generation, 1);
-        assert_eq!(status.last_result, "transient_network_failure");
-        assert_eq!(status.last_failure_class, "transient_network");
+        assert_eq!(status.last_result, "transient_failure");
+        assert_eq!(status.last_failure_class, "transient");
         assert_eq!(status.consecutive_failures, 1);
         assert_eq!(status.next_attempt_at_unix_ms, 5000);
         assert_eq!(status.executor_exit_code, 4);
@@ -498,7 +490,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -555,7 +547,7 @@ mod tests {
             record_failure(
                 dir.path(),
                 i as u64,
-                FailureClass::TransientNetwork,
+                FailureClass::Transient,
                 4,
                 i,
                 0,
@@ -579,7 +571,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -600,7 +592,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             0,
@@ -620,7 +612,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -647,7 +639,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -675,7 +667,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -698,7 +690,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             5000,
@@ -719,7 +711,7 @@ mod tests {
         record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,

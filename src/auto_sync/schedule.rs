@@ -6,7 +6,6 @@
 //! pending state, policy, execution lock, backoff, and failure class
 //! to determine whether spawning is appropriate.
 
-use crate::auto_sync::execution_lock;
 use crate::auto_sync::pending;
 use crate::auto_sync::policy::{AutoSyncPolicy, FailureClass};
 use crate::auto_sync::spawn;
@@ -21,8 +20,6 @@ use std::path::Path;
 pub enum ScheduleDecision {
     /// Conditions are met; spawn a worker immediately.
     SpawnNow,
-    /// A worker or foreground sync is already active (execution lock held).
-    AlreadyActive,
     /// Backoff is active; spawn no earlier than the given unix timestamp (ms).
     DeferredUntil(u64),
     /// Auto-sync is disabled in policy.
@@ -38,7 +35,6 @@ pub enum ScheduleDecision {
 #[derive(Debug)]
 pub enum ScheduleError {
     Pending(pending::PendingError),
-    ExecutionLock(execution_lock::ExecutionLockError),
     Spawn(spawn::SpawnError),
 }
 
@@ -46,7 +42,6 @@ impl std::fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pending(error) => write!(f, "pending state error: {error}"),
-            Self::ExecutionLock(error) => write!(f, "execution lock error: {error}"),
             Self::Spawn(error) => write!(f, "worker spawn error: {error}"),
         }
     }
@@ -84,23 +79,6 @@ pub fn schedule_sync(
         Err(e) => return Err(ScheduleError::Pending(e)),
     };
 
-    // Check execution lock. Attempt a nonblocking acquisition so the
-    // kernel is the sole authority for mutual exclusion; if we cannot
-    // acquire, another process holds it.
-    match execution_lock::try_acquire(state_dir) {
-        Ok(_guard) => {
-            // Drop immediately — we only wanted to test availability.
-        }
-        Err(execution_lock::ExecutionLockError::AlreadyHeld { pid, .. }) => {
-            tracing::debug!(
-                owner_pid = pid,
-                "schedule_sync: execution lock held by another process"
-            );
-            return Ok(ScheduleDecision::AlreadyActive);
-        }
-        Err(e) => return Err(ScheduleError::ExecutionLock(e)),
-    }
-
     // Check backoff status (unless explicit retry bypasses it)
     if caller != Caller::ExplicitRetry {
         match status::read_status_typed(state_dir) {
@@ -121,15 +99,9 @@ pub fn schedule_sync(
                     let last_class = FailureClass::from_code(&status.last_failure_class);
                     match last_class.retry_disposition(status.consecutive_failures) {
                         crate::auto_sync::policy::RetryDisposition::RequiresAttention
-                        | crate::auto_sync::policy::RetryDisposition::NoAutomaticRetry => {
-                            if last_class.is_deferred()
-                                || matches!(
-                                    last_class,
-                                    FailureClass::Authentication
-                                        | FailureClass::CredentialStore
-                                        | FailureClass::Configuration
-                                )
-                            {
+                        | crate::auto_sync::policy::RetryDisposition::NoAutomaticRetry
+                        | crate::auto_sync::policy::RetryDisposition::WaitForConfigurationChange => {
+                            if last_class.is_deferred() {
                                 let current_fingerprint = status::compute_config_fingerprint(
                                     &crate::config::get_sync_settings(),
                                 );
@@ -277,52 +249,6 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_lock_io_error_is_not_spawn_now() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        std::fs::create_dir(execution_lock::execution_lock_path(dir.path())).unwrap();
-        let result = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation);
-        assert!(matches!(result, Err(ScheduleError::ExecutionLock(_))));
-        assert!(pending::pending_path(dir.path()).exists());
-    }
-
-    #[test]
-    fn test_live_pid_metadata_without_kernel_lock_does_not_block_recovery() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let identity = crate::process_file_lock::LockIdentity {
-            schema_version: crate::process_file_lock::LOCK_IDENTITY_SCHEMA_VERSION,
-            purpose: execution_lock::EXECUTION_LOCK_PURPOSE.to_string(),
-            pid: std::process::id(),
-            start_token: None,
-            nonce: "diagnostic-only".to_string(),
-            acquired_at_unix_ms: 0,
-        };
-        std::fs::write(
-            execution_lock::execution_lock_path(dir.path()),
-            toml::to_string(&identity).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap(),
-            ScheduleDecision::SpawnNow
-        );
-    }
-
-    #[test]
     fn test_spawn_now_with_pending() {
         let dir = TempDir::new().unwrap();
         pending::record_pending_mutation(
@@ -333,26 +259,7 @@ mod tests {
         )
         .unwrap();
         let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
-        // May be SpawnNow or AlreadyActive depending on lock state
-        assert!(
-            decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive
-        );
-    }
-
-    #[test]
-    fn test_already_active_when_lock_held() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-        let decision =
-            schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
-        assert_eq!(decision, ScheduleDecision::AlreadyActive);
+        assert_eq!(decision, ScheduleDecision::SpawnNow);
     }
 
     #[test]
@@ -371,7 +278,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             future_ms,
@@ -399,7 +306,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             future_ms,
@@ -431,7 +338,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -443,7 +350,7 @@ mod tests {
         let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert!(matches!(
             decision,
-            ScheduleDecision::RequiresAttention(FailureClass::Authentication)
+            ScheduleDecision::RequiresAttention(FailureClass::Configuration)
         ));
     }
 
@@ -492,7 +399,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,
@@ -514,21 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_lock_busy_returns_already_active() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-        let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
-        assert_eq!(decision, ScheduleDecision::AlreadyActive);
-    }
-
-    #[test]
     fn test_mutation_during_backoff_does_not_spawn() {
         let dir = TempDir::new().unwrap();
         pending::record_pending_mutation(
@@ -544,7 +436,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             3,
             future_ms,
@@ -566,35 +458,6 @@ mod tests {
             assert!(
                 matches!(decision, ScheduleDecision::DeferredUntil(_)),
                 "mutation {i} should be deferred, got {decision:?}"
-            );
-        }
-    }
-
-    /// 20 mutations while execution lock is held produce zero SpawnNow decisions.
-    #[test]
-    fn test_mutation_during_active_lock_does_not_spawn() {
-        let dir = TempDir::new().unwrap();
-        pending::record_pending_mutation(
-            dir.path(),
-            PendingSnapshot::Mutation {
-                kind: MutationKind::SnippetCreate,
-            },
-        )
-        .unwrap();
-        let _lock = execution_lock::try_acquire(dir.path()).unwrap();
-        for i in 0..20 {
-            pending::record_pending_mutation(
-                dir.path(),
-                PendingSnapshot::Mutation {
-                    kind: MutationKind::SnippetCreate,
-                },
-            )
-            .unwrap();
-            let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
-            assert_eq!(
-                decision,
-                ScheduleDecision::AlreadyActive,
-                "mutation {i} while lock held must be AlreadyActive, got {decision:?}"
             );
         }
     }

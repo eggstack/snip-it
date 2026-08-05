@@ -1122,7 +1122,7 @@ mod tests {
         ));
         assert_eq!(
             crate::auto_sync::policy::FailureClass::from_error(&error),
-            crate::auto_sync::policy::FailureClass::TransientTimeout
+            crate::auto_sync::policy::FailureClass::Transient
         );
     }
 

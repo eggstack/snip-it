@@ -213,6 +213,108 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
+// ── Worker lock (merged from lock.rs) ──────────────────────────
+
+pub const WORKER_LOCK_NAME: &str = "auto-sync-worker.lock";
+pub const WORKER_LOCK_PURPOSE: &str = "auto-sync-worker";
+
+#[derive(Debug)]
+pub enum WorkerLockError {
+    Io(std::io::Error),
+    AlreadyHeld { pid: u32, nonce: String },
+}
+
+impl std::fmt::Display for WorkerLockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::AlreadyHeld { pid, nonce } => write!(
+                f,
+                "auto-sync worker lock already held (pid={pid}, nonce={nonce})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WorkerLockError {}
+
+impl From<ProcessFileLockError> for WorkerLockError {
+    fn from(err: ProcessFileLockError) -> Self {
+        match err {
+            ProcessFileLockError::Busy { owner } => {
+                let pid = owner.as_ref().map(|o| o.pid).unwrap_or(0);
+                let nonce = owner.as_ref().map(|o| o.nonce.clone()).unwrap_or_default();
+                Self::AlreadyHeld { pid, nonce }
+            }
+            ProcessFileLockError::Timeout { owner } => {
+                let pid = owner.as_ref().map(|o| o.pid).unwrap_or(0);
+                let nonce = owner.as_ref().map(|o| o.nonce.clone()).unwrap_or_default();
+                Self::AlreadyHeld { pid, nonce }
+            }
+            ProcessFileLockError::Io(e) => Self::Io(e),
+            ProcessFileLockError::UnsupportedPlatform => Self::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "process file lock is not supported on this platform",
+            )),
+        }
+    }
+}
+
+/// RAII guard for the auto-sync worker lock.
+pub struct WorkerLock {
+    inner: ProcessFileLock,
+}
+
+impl WorkerLock {
+    pub fn nonce(&self) -> &str {
+        self.inner.nonce()
+    }
+
+    pub fn path(&self) -> &Path {
+        self.inner.path()
+    }
+
+    pub fn read_owner_via_handle(&self) -> Option<LockIdentity> {
+        self.inner.read_identity_via_handle().ok().flatten()
+    }
+}
+
+impl std::fmt::Debug for WorkerLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerLock")
+            .field("path", &self.inner.path())
+            .field("nonce", &self.inner.nonce())
+            .finish()
+    }
+}
+
+pub fn worker_lock_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(WORKER_LOCK_NAME)
+}
+
+pub fn try_acquire_worker(state_dir: &Path) -> Result<WorkerLock, WorkerLockError> {
+    let path = worker_lock_path(state_dir);
+    let inner = process_file_lock::try_acquire(&path, WORKER_LOCK_PURPOSE)?;
+    Ok(WorkerLock { inner })
+}
+
+pub fn worker_inspect(path: &Path) -> Option<LockIdentity> {
+    process_file_lock::read_owner(path)
+}
+
+pub fn worker_is_stale(contents: &LockIdentity) -> bool {
+    !process_alive(contents.pid)
+}
+
+pub fn wait_acquire_worker(
+    state_dir: &Path,
+    timeout: Duration,
+) -> Result<WorkerLock, WorkerLockError> {
+    let path = worker_lock_path(state_dir);
+    let inner = process_file_lock::wait_acquire(&path, WORKER_LOCK_PURPOSE, timeout)?;
+    Ok(WorkerLock { inner })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

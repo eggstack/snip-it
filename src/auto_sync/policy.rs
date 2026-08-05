@@ -105,82 +105,65 @@ impl MutationOrigin {
 
 /// Typed failure classification for sync operations.
 ///
-/// Each variant represents a distinct operational failure mode with
-/// specific retry and operator-attention semantics. The taxonomy is
-/// used by the backoff calculator, status persistence, and schedule
-/// decision function.
+/// Collapsed to distinct user-action categories: transient retryable
+/// failure, configuration/authentication failure requiring user correction,
+/// local persistence/corruption failure requiring repair, and internal
+/// errors with bounded retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum FailureClass {
-    /// Auto-sync is disabled in configuration.
-    DeferredDisabled,
-    /// Sync is not configured (no server URL, no API key).
-    DeferredNotConfigured,
-    /// Transient network connectivity failure (DNS, connection refused, unreachable).
-    TransientNetwork,
-    /// Transient timeout (server did not respond in time).
-    TransientTimeout,
-    /// Authentication or credential failure (bad API key, unregistered).
-    Authentication,
-    /// Configuration error that requires operator intervention.
+    /// Transient network, timeout, or partial sync failure — retry with backoff.
+    Transient,
+    /// Configuration, authentication, or credential failure — requires user correction.
     Configuration,
-    /// Synchronization conflict (merge failure, partial sync).
-    Conflict,
-    /// Partial sync completion (some libraries succeeded, some failed).
-    Partial,
-    /// Local persistence failure (could not write library files).
-    LocalPersistence,
-    /// Credential storage (keychain) failure.
-    CredentialStore,
-    /// Internal or genuinely unclassified error.
+    /// Local persistence, conflict, or corruption failure — requires repair.
+    LocalFailure,
+    /// Internal or unclassified error — bounded retry, then requires attention.
     Internal,
 }
 
 impl FailureClass {
-    /// Classify a `SnipError` into a failure class.
-    ///
-    /// For `SyncFailure` variants, uses direct variant matching (no string analysis).
-    /// For `Runtime` variants, falls back to heuristic matching on the error message
-    /// since `SnipError::Runtime` does not carry typed error categories.
     pub fn from_error(err: &crate::error::SnipError) -> Self {
         use crate::error::{SnipError, SyncFailureKind};
         match err {
             SnipError::SyncFailure { kind, .. } => match kind {
-                SyncFailureKind::NotConfigured => FailureClass::DeferredNotConfigured,
-                SyncFailureKind::ConnectFailed => FailureClass::TransientNetwork,
-                SyncFailureKind::HealthCheckFailed => FailureClass::TransientNetwork,
-                SyncFailureKind::AuthenticationFailed => FailureClass::Authentication,
-                SyncFailureKind::SyncRequestFailed => FailureClass::TransientNetwork,
+                SyncFailureKind::NotConfigured => FailureClass::Configuration,
+                SyncFailureKind::ConnectFailed => FailureClass::Transient,
+                SyncFailureKind::HealthCheckFailed => FailureClass::Transient,
+                SyncFailureKind::AuthenticationFailed => FailureClass::Configuration,
+                SyncFailureKind::SyncRequestFailed => FailureClass::Transient,
                 SyncFailureKind::CreateLibraryFailed => FailureClass::Configuration,
-                SyncFailureKind::GetPremadeLibraryFailed => FailureClass::TransientNetwork,
-                SyncFailureKind::RegistrationFailed => FailureClass::Authentication,
-                SyncFailureKind::LibraryManagerInitFailed => FailureClass::LocalPersistence,
-                SyncFailureKind::LibraryModeInitFailed => FailureClass::LocalPersistence,
-                SyncFailureKind::LibrariesDirReadFailed => FailureClass::LocalPersistence,
+                SyncFailureKind::GetPremadeLibraryFailed => FailureClass::Transient,
+                SyncFailureKind::RegistrationFailed => FailureClass::Configuration,
+                SyncFailureKind::LibraryManagerInitFailed => FailureClass::LocalFailure,
+                SyncFailureKind::LibraryModeInitFailed => FailureClass::LocalFailure,
+                SyncFailureKind::LibrariesDirReadFailed => FailureClass::LocalFailure,
                 SyncFailureKind::NoLibrariesToSync => FailureClass::Internal,
-                SyncFailureKind::SaveMergedLibraryFailed => FailureClass::LocalPersistence,
-                SyncFailureKind::PartialSyncFailure => FailureClass::Partial,
-                SyncFailureKind::PremadePartialFailure => FailureClass::Partial,
+                SyncFailureKind::SaveMergedLibraryFailed => FailureClass::LocalFailure,
+                SyncFailureKind::PartialSyncFailure => FailureClass::Transient,
+                SyncFailureKind::PremadePartialFailure => FailureClass::Transient,
                 SyncFailureKind::EncryptionFailed => FailureClass::Internal,
                 SyncFailureKind::DecryptionFailed => FailureClass::Internal,
                 SyncFailureKind::LibraryNotFound => FailureClass::Configuration,
-                SyncFailureKind::Timeout => FailureClass::TransientTimeout,
+                SyncFailureKind::Timeout => FailureClass::Transient,
                 SyncFailureKind::RequestTooLarge => FailureClass::Configuration,
                 SyncFailureKind::ClockSkew => FailureClass::Configuration,
             },
             SnipError::Runtime { message, detail } => {
                 let combined = format!("{message} {}", detail.as_deref().unwrap_or(""));
                 let lower = combined.to_lowercase();
-                if lower.contains("not configured") || lower.contains("sync not enabled") {
-                    FailureClass::DeferredNotConfigured
-                } else if lower.contains("api key")
+                if lower.contains("not configured")
+                    || lower.contains("sync not enabled")
+                    || lower.contains("api key")
                     || lower.contains("auth")
                     || lower.contains("unauthorized")
                     || lower.contains("forbidden")
                     || lower.contains("permission denied")
+                    || lower.contains("credential")
+                    || lower.contains("keychain")
                 {
-                    FailureClass::Authentication
+                    FailureClass::Configuration
                 } else if lower.contains("health check")
                     || lower.contains("server")
                     || lower.contains("network")
@@ -190,27 +173,23 @@ impl FailureClass {
                     || lower.contains("connect")
                     || lower.contains("unavailable")
                     || lower.contains("unreachable")
+                    || lower.contains("timeout")
+                    || lower.contains("timed out")
+                    || lower.contains("failed to sync")
+                    || lower.contains("some libraries")
+                    || lower.contains("skipped")
                 {
-                    FailureClass::TransientNetwork
-                } else if lower.contains("timeout") || lower.contains("timed out") {
-                    FailureClass::TransientTimeout
+                    FailureClass::Transient
                 } else if lower.contains("failed to save")
                     || lower.contains("failed to read")
                     || lower.contains("failed to initialize")
                     || lower.contains("failed to create")
                     || lower.contains("i/o")
                     || lower.contains("permission")
+                    || lower.contains("conflict")
+                    || lower.contains("merge")
                 {
-                    FailureClass::LocalPersistence
-                } else if lower.contains("conflict") || lower.contains("merge") {
-                    FailureClass::Conflict
-                } else if lower.contains("failed to sync")
-                    || lower.contains("some libraries")
-                    || lower.contains("skipped")
-                {
-                    FailureClass::Partial
-                } else if lower.contains("credential") || lower.contains("keychain") {
-                    FailureClass::CredentialStore
+                    FailureClass::LocalFailure
                 } else {
                     FailureClass::Internal
                 }
@@ -221,69 +200,48 @@ impl FailureClass {
                     || lower.contains("connect")
                     || lower.contains("network")
                 {
-                    FailureClass::TransientNetwork
+                    FailureClass::Transient
                 } else {
-                    FailureClass::LocalPersistence
+                    FailureClass::LocalFailure
                 }
             }
-            SnipError::Toml { .. } => FailureClass::LocalPersistence,
+            SnipError::Toml { .. } => FailureClass::LocalFailure,
             _ => FailureClass::Internal,
         }
     }
 
-    /// Serialize to a stable short code for persistence.
     pub fn as_code(&self) -> &'static str {
         match self {
-            Self::DeferredDisabled => "deferred_disabled",
-            Self::DeferredNotConfigured => "deferred_not_configured",
-            Self::TransientNetwork => "transient_network",
-            Self::TransientTimeout => "transient_timeout",
-            Self::Authentication => "authentication",
+            Self::Transient => "transient",
             Self::Configuration => "configuration",
-            Self::Conflict => "conflict",
-            Self::Partial => "partial",
-            Self::LocalPersistence => "local_persistence",
-            Self::CredentialStore => "credential_store",
+            Self::LocalFailure => "local_failure",
             Self::Internal => "internal",
         }
     }
 
-    /// Deserialize from a stable short code.
     pub fn from_code(code: &str) -> Self {
         match code {
-            "deferred_disabled" => Self::DeferredDisabled,
-            "deferred_not_configured" => Self::DeferredNotConfigured,
-            "transient_network" => Self::TransientNetwork,
-            "transient_timeout" => Self::TransientTimeout,
-            "authentication" => Self::Authentication,
+            "transient" => Self::Transient,
             "configuration" => Self::Configuration,
-            "conflict" => Self::Conflict,
-            "partial" => Self::Partial,
-            "local_persistence" => Self::LocalPersistence,
-            "credential_store" => Self::CredentialStore,
+            "local_failure" => Self::LocalFailure,
             "internal" => Self::Internal,
+            // Legacy codes for backward compatibility
+            "deferred_disabled"
+            | "deferred_not_configured"
+            | "authentication"
+            | "credential_store" => Self::Configuration,
+            "transient_network" | "transient_timeout" | "partial" => Self::Transient,
+            "conflict" | "local_persistence" => Self::LocalFailure,
             _ => Self::Internal,
         }
     }
 
-    /// Whether this failure class allows automatic retry.
     pub fn allows_automatic_retry(&self) -> bool {
-        matches!(
-            self,
-            Self::TransientNetwork | Self::TransientTimeout | Self::Internal
-        )
+        matches!(self, Self::Transient | Self::Internal)
     }
 
-    /// Whether this failure class is deferred (waiting for config change).
     pub fn is_deferred(&self) -> bool {
-        matches!(
-            self,
-            Self::DeferredDisabled
-                | Self::DeferredNotConfigured
-                | Self::Configuration
-                | Self::Authentication
-                | Self::CredentialStore
-        )
+        matches!(self, Self::Configuration)
     }
 }
 
@@ -306,24 +264,13 @@ pub enum RetryDisposition {
 }
 
 impl FailureClass {
-    /// Map this failure class to a retry disposition.
-    ///
-    /// The backoff calculator uses this to determine the delay before
-    /// the next attempt. `consecutive_failures` is used for exponential
-    /// backoff calculation in the `RetryAfter` case.
     pub fn retry_disposition(&self, consecutive_failures: u32) -> RetryDisposition {
         match self {
-            Self::DeferredDisabled | Self::DeferredNotConfigured => {
-                RetryDisposition::WaitForConfigurationChange
-            }
-            Self::TransientNetwork | Self::TransientTimeout => {
+            Self::Configuration => RetryDisposition::WaitForConfigurationChange,
+            Self::Transient => {
                 RetryDisposition::RetryAfter(transient_backoff(consecutive_failures))
             }
-            Self::Authentication | Self::Configuration | Self::CredentialStore => {
-                RetryDisposition::RequiresAttention
-            }
-            Self::Conflict | Self::Partial => RetryDisposition::RequiresAttention,
-            Self::LocalPersistence => RetryDisposition::RequiresAttention,
+            Self::LocalFailure => RetryDisposition::RequiresAttention,
             Self::Internal => {
                 if consecutive_failures < 3 {
                     RetryDisposition::RetryAfter(transient_backoff(consecutive_failures))
@@ -488,16 +435,16 @@ mod tests {
     #[test]
     fn test_failure_class_code_roundtrip() {
         for class in [
-            FailureClass::DeferredDisabled,
-            FailureClass::DeferredNotConfigured,
-            FailureClass::TransientNetwork,
-            FailureClass::TransientTimeout,
-            FailureClass::Authentication,
             FailureClass::Configuration,
-            FailureClass::Conflict,
-            FailureClass::Partial,
-            FailureClass::LocalPersistence,
-            FailureClass::CredentialStore,
+            FailureClass::Configuration,
+            FailureClass::Transient,
+            FailureClass::Transient,
+            FailureClass::Configuration,
+            FailureClass::Configuration,
+            FailureClass::LocalFailure,
+            FailureClass::Transient,
+            FailureClass::LocalFailure,
+            FailureClass::Configuration,
             FailureClass::Internal,
         ] {
             assert_eq!(FailureClass::from_code(class.as_code()), class);
@@ -506,24 +453,24 @@ mod tests {
 
     #[test]
     fn test_failure_class_allows_automatic_retry() {
-        assert!(FailureClass::TransientNetwork.allows_automatic_retry());
-        assert!(FailureClass::TransientTimeout.allows_automatic_retry());
+        assert!(FailureClass::Transient.allows_automatic_retry());
+        assert!(FailureClass::Transient.allows_automatic_retry());
         assert!(FailureClass::Internal.allows_automatic_retry());
-        assert!(!FailureClass::Authentication.allows_automatic_retry());
-        assert!(!FailureClass::Conflict.allows_automatic_retry());
-        assert!(!FailureClass::LocalPersistence.allows_automatic_retry());
-        assert!(!FailureClass::DeferredDisabled.allows_automatic_retry());
+        assert!(!FailureClass::Configuration.allows_automatic_retry());
+        assert!(!FailureClass::LocalFailure.allows_automatic_retry());
+        assert!(!FailureClass::LocalFailure.allows_automatic_retry());
+        assert!(!FailureClass::Configuration.allows_automatic_retry());
     }
 
     #[test]
     fn test_failure_class_is_deferred() {
-        assert!(FailureClass::DeferredDisabled.is_deferred());
-        assert!(FailureClass::DeferredNotConfigured.is_deferred());
         assert!(FailureClass::Configuration.is_deferred());
-        assert!(FailureClass::Authentication.is_deferred());
-        assert!(FailureClass::CredentialStore.is_deferred());
-        assert!(!FailureClass::TransientNetwork.is_deferred());
-        assert!(!FailureClass::Conflict.is_deferred());
+        assert!(FailureClass::Configuration.is_deferred());
+        assert!(FailureClass::Configuration.is_deferred());
+        assert!(FailureClass::Configuration.is_deferred());
+        assert!(FailureClass::Configuration.is_deferred());
+        assert!(!FailureClass::Transient.is_deferred());
+        assert!(!FailureClass::LocalFailure.is_deferred());
     }
 
     // ── Table-driven classification tests (SyncFailure variants) ────
@@ -534,10 +481,7 @@ mod tests {
             crate::error::SyncFailureKind::NotConfigured,
             None,
         );
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::DeferredNotConfigured
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
@@ -546,10 +490,7 @@ mod tests {
             crate::error::SyncFailureKind::ConnectFailed,
             Some("connection refused"),
         );
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
@@ -558,10 +499,7 @@ mod tests {
             crate::error::SyncFailureKind::HealthCheckFailed,
             None,
         );
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
@@ -570,7 +508,7 @@ mod tests {
             crate::error::SyncFailureKind::AuthenticationFailed,
             Some("unauthorized"),
         );
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
@@ -579,10 +517,7 @@ mod tests {
             crate::error::SyncFailureKind::SyncRequestFailed,
             Some("tonic status: cancelled"),
         );
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
@@ -600,10 +535,7 @@ mod tests {
             crate::error::SyncFailureKind::SaveMergedLibraryFailed,
             Some("disk full"),
         );
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::LocalPersistence
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     #[test]
@@ -612,7 +544,7 @@ mod tests {
             crate::error::SyncFailureKind::PartialSyncFailure,
             None,
         );
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Partial);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
@@ -621,7 +553,7 @@ mod tests {
             crate::error::SyncFailureKind::RegistrationFailed,
             Some("device limit reached"),
         );
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
@@ -638,19 +570,13 @@ mod tests {
     #[test]
     fn test_classify_not_configured() {
         let err = crate::error::SnipError::runtime_error("Sync not configured", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::DeferredNotConfigured
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
     fn test_classify_sync_disabled() {
         let err = crate::error::SnipError::runtime_error("sync not enabled", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::DeferredNotConfigured
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
@@ -659,75 +585,57 @@ mod tests {
             "Sync is enabled but no API key configured",
             None,
         );
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Authentication);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Configuration);
     }
 
     #[test]
     fn test_classify_health_check() {
         let err = crate::error::SnipError::runtime_error("Server health check failed", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
     fn test_classify_server_unreachable() {
         let err =
             crate::error::SnipError::runtime_error("Server is not reachable", Some("timeout"));
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
     fn test_classify_network() {
         let err = crate::error::SnipError::runtime_error("network error", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientNetwork
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
     fn test_classify_timeout() {
         let err = crate::error::SnipError::runtime_error("request timed out", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::TransientTimeout
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
     fn test_classify_partial_failure() {
         let err = crate::error::SnipError::runtime_error("Some libraries failed to sync", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Partial);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::Transient);
     }
 
     #[test]
     fn test_classify_conflict() {
         let err = crate::error::SnipError::runtime_error("merge conflict detected", None);
-        assert_eq!(FailureClass::from_error(&err), FailureClass::Conflict);
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     #[test]
     fn test_classify_library_manager() {
         let err =
             crate::error::SnipError::runtime_error("Failed to initialize library manager", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::LocalPersistence
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     #[test]
     fn test_classify_save() {
         let err = crate::error::SnipError::runtime_error("Failed to save merged library", None);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::LocalPersistence
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     #[test]
@@ -740,46 +648,40 @@ mod tests {
     fn test_classify_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         let err: crate::error::SnipError = io_err.into();
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::LocalPersistence
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     #[test]
     fn test_classify_toml() {
         let toml_err = toml::from_str::<toml::Value>("invalid = [toml").unwrap_err();
         let err = crate::error::SnipError::toml_error("parse config", toml_err);
-        assert_eq!(
-            FailureClass::from_error(&err),
-            FailureClass::LocalPersistence
-        );
+        assert_eq!(FailureClass::from_error(&err), FailureClass::LocalFailure);
     }
 
     // ── Retry disposition tests ────────────────────────────────────
 
     #[test]
     fn test_retry_disposition_deferred_disabled() {
-        let disp = FailureClass::DeferredDisabled.retry_disposition(0);
+        let disp = FailureClass::Configuration.retry_disposition(0);
         assert_eq!(disp, RetryDisposition::WaitForConfigurationChange);
     }
 
     #[test]
     fn test_retry_disposition_deferred_not_configured() {
-        let disp = FailureClass::DeferredNotConfigured.retry_disposition(0);
+        let disp = FailureClass::Configuration.retry_disposition(0);
         assert_eq!(disp, RetryDisposition::WaitForConfigurationChange);
     }
 
     #[test]
     fn test_retry_disposition_transient_network() {
-        let disp = FailureClass::TransientNetwork.retry_disposition(0);
+        let disp = FailureClass::Transient.retry_disposition(0);
         assert!(matches!(disp, RetryDisposition::RetryAfter(_)));
     }
 
     #[test]
-    fn test_retry_disposition_authentication() {
-        let disp = FailureClass::Authentication.retry_disposition(0);
-        assert_eq!(disp, RetryDisposition::RequiresAttention);
+    fn test_retry_disposition_configuration_waits_for_change() {
+        let disp = FailureClass::Configuration.retry_disposition(0);
+        assert_eq!(disp, RetryDisposition::WaitForConfigurationChange);
     }
 
     #[test]

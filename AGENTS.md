@@ -30,9 +30,18 @@
 - `chrono` default features are pruned to `clock` and `std` only (no `wasmbind`, `oldtime`).
 - Release profile includes `panic = "abort"` for smaller binaries (~19% reduction from baseline).
 
+## Phase 13E — Auto-Sync and Persistence Simplification
+
+- Worker acquisition is the sole sync execution authority. The scheduler does not probe the execution lock before spawn; concurrent helpers exit cheaply when the lock is held.
+- `FailureClass` collapsed from 11 variants to 4: `Transient` (network/timeout/partial), `Configuration` (auth/config/credential), `LocalFailure` (persistence/conflict/corruption), `Internal` (unclassified). Legacy status codes are read compatibly via `from_code()`.
+- Configuration/authentication failures defer until config change or explicit retry (`WaitForConfigurationChange`); transient failures retry with exponential backoff; local failures require repair; internal errors retry bounded (3 attempts).
+- `auto_sync::lock::WorkerLock` is re-exported from `execution_lock.rs` for backward compatibility; the worker lock types were merged into `execution_lock.rs`.
+- `ScheduleError::ExecutionLock` and `ScheduleDecision::AlreadyActive` were removed — the scheduler no longer probes the execution lock.
+- `WorkerLockError` replaces `LockError` in the worker lock module.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
-- `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read, execution-lock, and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
+- `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
 - Startup recovery and scheduling use the kernel-backed execution lock as the sole ownership authority. Persistent PID/nonce metadata is diagnostic only.
 - Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt/inconsistent state: preserve the marker, log the failure, and do not spawn sync work.
 - The detached helper runs canonical sync directly; network/request retry bounds remain in the sync client and no child executor is supervised.

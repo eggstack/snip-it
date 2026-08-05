@@ -727,7 +727,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::TransientNetwork,
+            FailureClass::Transient,
             4,
             1,
             future_ms,
@@ -767,7 +767,7 @@ mod tests {
         status::record_failure(
             dir.path(),
             1,
-            FailureClass::Authentication,
+            FailureClass::Configuration,
             3,
             1,
             0,

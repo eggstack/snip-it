@@ -161,8 +161,8 @@ treat `ESRCH` as absent and `EPERM` or unknown errors conservatively as alive.
 
 Three thin wrappers in `src/auto_sync/` consume the primitive and preserve the existing public types and error variants:
 
-- `auto_sync::lock::WorkerLock` — wraps the worker lock acquisition.
 - `auto_sync::execution_lock::SyncExecutionLock` — wraps the sync execution lock with `try_acquire` and `wait_acquire` semantics.
+- `auto_sync::execution_lock::WorkerLock` — wraps the worker lock acquisition (merged from former `lock.rs`).
 - `auto_sync::pending_lock::PendingTxnGuard` — short-lived pending-marker mutex.
 
 `snip-sync`'s `server_lock::ServerLock` provides the same primitive for the server singleton at `<state_dir>/snip-sync.server.lock`. The server holds it for the full runtime; a crash releases the kernel lock automatically.
@@ -645,8 +645,7 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The UUID is assigne
 |------|---------|
 | `src/utils/atomic.rs` | Atomic write primitive, durability classes, temp file guard |
 | `src/process_file_lock.rs` | Kernel-backed cross-process file lock primitive |
-| `src/auto_sync/lock.rs` | Auto-sync worker lock wrapper |
-| `src/auto_sync/execution_lock.rs` | Auto-sync execution lock wrapper |
+| `src/auto_sync/execution_lock.rs` | Auto-sync execution lock and worker lock wrappers |
 | `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
 | `snip-sync/src/server_lock.rs` | snip-sync server singleton kernel lock |
 | `snip-sync/src/process.rs` | PID record parser, atomic publication, identity-checked cleanup |

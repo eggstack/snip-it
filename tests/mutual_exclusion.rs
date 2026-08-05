@@ -44,7 +44,22 @@ fn test_execution_lock_survives_across_functions() {
 }
 
 #[test]
-fn test_schedule_already_active_when_lock_held() {
+fn test_schedule_spawn_now_when_pending_exists() {
+    let dir = TempDir::new().unwrap();
+    pending::record_pending_mutation(
+        dir.path(),
+        PendingSnapshot::Mutation {
+            kind: MutationKind::SnippetCreate,
+        },
+    )
+    .unwrap();
+    let decision =
+        schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
+    assert_eq!(decision, ScheduleDecision::SpawnNow);
+}
+
+#[test]
+fn test_schedule_spawn_now_even_with_lock_held() {
     let dir = TempDir::new().unwrap();
     pending::record_pending_mutation(
         dir.path(),
@@ -56,26 +71,11 @@ fn test_schedule_already_active_when_lock_held() {
     let _lock = execution_lock::try_acquire(dir.path()).unwrap();
     let decision =
         schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
-    assert_eq!(decision, ScheduleDecision::AlreadyActive);
+    assert_eq!(decision, ScheduleDecision::SpawnNow);
 }
 
 #[test]
-fn test_schedule_spawn_now_when_no_lock() {
-    let dir = TempDir::new().unwrap();
-    pending::record_pending_mutation(
-        dir.path(),
-        PendingSnapshot::Mutation {
-            kind: MutationKind::SnippetCreate,
-        },
-    )
-    .unwrap();
-    let decision =
-        schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
-    assert!(decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive);
-}
-
-#[test]
-fn test_20_mutations_during_lock_all_already_active() {
+fn test_20_mutations_with_lock_all_spawn_now() {
     let dir = TempDir::new().unwrap();
     pending::record_pending_mutation(
         dir.path(),
@@ -97,8 +97,8 @@ fn test_20_mutations_during_lock_all_already_active() {
             schedule::schedule_sync(dir.path(), &enabled_policy(), Caller::Mutation).unwrap();
         assert_eq!(
             decision,
-            ScheduleDecision::AlreadyActive,
-            "mutation {i} while lock held must be AlreadyActive"
+            ScheduleDecision::SpawnNow,
+            "mutation {i} while lock held must be SpawnNow (worker handles contention)"
         );
     }
 }

@@ -31,29 +31,51 @@ force-cancelled.
 - Local mutation succeeds before remote work begins.
 - `SyncExecutionLock` serializes automatic, manual, explicit `--sync`, and cron
   sync operations. The helper owns it for the complete cycle.
+- The scheduler never probes the execution lock. Worker acquisition is the sole
+  execution authority; concurrent spawn attempts may produce redundant helper
+  processes, but only one performs sync work while others exit cheaply.
 - Pending generations are monotonic. Lower or corrupt state fails closed.
 - `clear_if_generation_matches` is the automatic acknowledgement boundary.
   `GenerationChanged` preserves newer work; `Missing` is treated as already
   cleared; clear errors preserve recoverability and record failure.
-- Authentication/configuration failures require attention. Transient failures
-  retain pending intent and durable backoff. A failed helper exits without an
-  immediate follow-up attempt, even if a newer generation appeared.
+- Configuration/authentication failures defer until config change or explicit
+  retry. Transient failures retain pending intent and durable backoff. A failed
+  helper exits without an immediate follow-up attempt, even if a newer
+  generation appeared.
 - Persistent lock metadata is diagnostic only; kernel-backed ownership is the
   authority.
 
+## Failure classification
+
+`FailureClass` has four variants representing distinct user actions:
+
+| Variant | User action | Retry |
+|---------|------------|-------|
+| `Transient` | Retryable network/timeout/partial failure | Exponential backoff |
+| `Configuration` | Auth/config/credential failure | Defer until config change or explicit retry |
+| `LocalFailure` | Persistence/conflict/corruption | Requires repair |
+| `Internal` | Unclassified error | Bounded retry (3 attempts), then requires attention |
+
+Legacy status codes are read compatibly via `from_code()`.
+
 ## Module layout
 
-- `policy.rs` — policy, failure classification, retry disposition, and
-  direction resolution.
+- `policy.rs` — policy, failure classification (`FailureClass`, 4 variants),
+  retry disposition, direction resolution, and `MutationKind`/`MutationOrigin`.
 - `pending.rs` / `pending_lock.rs` — durable generation marker and its short
   transaction lock.
-- `execution_lock.rs` — shared kernel-backed sync lock.
+- `execution_lock.rs` — shared kernel-backed sync lock (includes worker lock
+  types for backward compatibility).
+- `lock.rs` — re-exports from `execution_lock` for backward compatibility.
 - `schedule.rs` / `notification.rs` — pending recording and detached spawn.
+  Scheduler does not probe the execution lock; worker handles contention.
 - `spawn.rs` — current-executable lookup, platform detachment, and stream
   routing for the single helper.
 - `worker.rs` — debounce, preflight, direct canonical sync, exact-generation
   clear, status, and bounded follow-up loop.
 - `status.rs` — durable result, backoff, and operator-attention state.
+- `test_events.rs` — test-only lifecycle event emission (compile-time no-op in
+  production).
 
 ## Hidden command
 
@@ -67,7 +89,7 @@ is suppressed from startup recovery recursion.
 `auto_sync_max_delay_seconds` prevents starvation. Manual sync and cron retain
 their existing timeout behavior. Automatic sync uses
 `auto_sync_timeout_seconds` as a per-attempt network/retry budget; a deadline
-records `TransientTimeout`, preserves pending intent, and does not promise
+records `Transient`, preserves pending intent, and does not promise
 cancellation of local I/O. Auto-sync defaults and command surface are
 unchanged.
 

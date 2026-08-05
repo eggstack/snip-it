@@ -349,7 +349,7 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
             Err(error) => record_sync_failure(
                 state_dir,
                 generation,
-                FailureClass::LocalPersistence,
+                FailureClass::LocalFailure,
                 &format!("pending clear failed after successful sync: {error}"),
             ),
         },

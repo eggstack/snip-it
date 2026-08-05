@@ -309,7 +309,7 @@ fn test_startup_recovery_schedules_worker() {
 }
 
 #[test]
-fn test_startup_recovery_skips_when_lock_held() {
+fn test_startup_recovery_schedules_even_with_lock_held() {
     let dir = TempDir::new().unwrap();
     create_mutation(dir.path());
     let _lock = try_acquire(dir.path()).unwrap();
@@ -317,8 +317,8 @@ fn test_startup_recovery_skips_when_lock_held() {
     let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
     assert_eq!(
         decision,
-        ScheduleDecision::AlreadyActive,
-        "startup with pending + lock held must produce AlreadyActive, got {decision:?}"
+        ScheduleDecision::SpawnNow,
+        "startup with pending + lock held must produce SpawnNow (worker handles contention), got {decision:?}"
     );
 }
 
@@ -331,8 +331,9 @@ fn test_startup_recovery_preserves_stale_pending() {
     assert_eq!(state.generation, 1);
 
     let decision = schedule_sync(dir.path(), &enabled_policy(), Caller::StartupRecovery).unwrap();
-    assert!(
-        decision == ScheduleDecision::SpawnNow || decision == ScheduleDecision::AlreadyActive,
+    assert_eq!(
+        decision,
+        ScheduleDecision::SpawnNow,
         "pending marker must still be scheduled regardless of age, got {decision:?}"
     );
 }
@@ -346,7 +347,7 @@ fn test_backoff_active_defers_scheduling() {
     status::record_failure(
         dir.path(),
         1,
-        FailureClass::TransientNetwork,
+        FailureClass::Transient,
         4,
         1,
         future_ms,
@@ -371,7 +372,7 @@ fn test_backoff_expired_allows_spawn() {
     status::record_failure(
         dir.path(),
         1,
-        FailureClass::TransientNetwork,
+        FailureClass::Transient,
         4,
         1,
         past_ms,
@@ -396,7 +397,7 @@ fn test_attention_required_blocks_scheduling() {
     status::record_failure(
         dir.path(),
         1,
-        FailureClass::Authentication,
+        FailureClass::Configuration,
         3,
         1,
         0,
@@ -409,7 +410,7 @@ fn test_attention_required_blocks_scheduling() {
     assert!(
         matches!(
             decision,
-            ScheduleDecision::RequiresAttention(FailureClass::Authentication)
+            ScheduleDecision::RequiresAttention(FailureClass::Configuration)
         ),
         "auth failure must produce RequiresAttention(Authentication), got {decision:?}"
     );

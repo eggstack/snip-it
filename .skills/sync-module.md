@@ -114,7 +114,7 @@ fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
 and preservation of corrupt markers. Existing integration coverage continues to
 cover encryption and retry/timestamp behavior.
 
-## Failure Classification and Retry (Phase 03)
+## Failure Classification and Retry (Phase 03, simplified Phase 13E)
 
 ### SyncFailureKind Enum
 
@@ -122,44 +122,39 @@ cover encryption and retry/timestamp behavior.
 
 | Variant | Maps to FailureClass | Source |
 |---------|---------------------|--------|
-| `NotConfigured` | DeferredNotConfigured | sync_commands.rs |
-| `ConnectFailed` | TransientNetwork | sync.rs |
-| `HealthCheckFailed` | TransientNetwork | sync_commands.rs |
-| `AuthenticationFailed` | Authentication | sync.rs |
-| `SyncRequestFailed` | TransientNetwork | sync.rs |
+| `NotConfigured` | Configuration | sync_commands.rs |
+| `ConnectFailed` | Transient | sync.rs |
+| `HealthCheckFailed` | Transient | sync_commands.rs |
+| `AuthenticationFailed` | Configuration | sync.rs |
+| `SyncRequestFailed` | Transient | sync.rs |
 | `CreateLibraryFailed` | Configuration | sync.rs |
-| `GetPremadeLibraryFailed` | TransientNetwork | sync.rs |
-| `RegistrationFailed` | Authentication | sync.rs |
-| `LibraryManagerInitFailed` | LocalPersistence | sync_commands.rs |
-| `LibraryModeInitFailed` | LocalPersistence | sync_commands.rs |
-| `LibrariesDirReadFailed` | LocalPersistence | sync_commands.rs |
+| `GetPremadeLibraryFailed` | Transient | sync.rs |
+| `RegistrationFailed` | Configuration | sync.rs |
+| `LibraryManagerInitFailed` | LocalFailure | sync_commands.rs |
+| `LibraryModeInitFailed` | LocalFailure | sync_commands.rs |
+| `LibrariesDirReadFailed` | LocalFailure | sync_commands.rs |
 | `NoLibrariesToSync` | Internal | sync_commands.rs |
-| `SaveMergedLibraryFailed` | LocalPersistence | sync_commands.rs |
-| `PartialSyncFailure` | Partial | sync_commands.rs |
-| `PremadePartialFailure` | Partial | sync_commands.rs |
+| `SaveMergedLibraryFailed` | LocalFailure | sync_commands.rs |
+| `PartialSyncFailure` | Transient | sync_commands.rs |
+| `PremadePartialFailure` | Transient | sync_commands.rs |
 | `EncryptionFailed` | Internal | sync.rs |
 | `DecryptionFailed` | Internal | sync.rs |
-| `Timeout` | TransientTimeout | sync.rs |
+| `Timeout` | Transient | sync.rs |
 | `RequestTooLarge` | Configuration | sync.rs |
 | `ClockSkew` | Configuration | sync.rs |
 
 ### FailureClass Enum
 
-`FailureClass` (`src/auto_sync/policy.rs`) classifies sync errors into 11 variants:
+`FailureClass` (`src/auto_sync/policy.rs`) classifies sync errors into 4 variants:
 
 | Variant | Meaning | Retry Disposition |
 |---------|---------|-------------------|
-| `DeferredDisabled` | Auto-sync disabled at runtime | WaitForConfigurationChange |
-| `DeferredNotConfigured` | Missing api_key, server_url, or library mapping | WaitForConfigurationChange |
-| `TransientNetwork` | DNS, connection refused, TLS handshake failure | RetryAfter(exponential backoff) |
-| `TransientTimeout` | gRPC deadline exceeded or sync timeout hit | RetryAfter(exponential backoff) |
-| `Authentication` | Invalid API key, expired token, auth rejected | RequiresAttention |
-| `Configuration` | Corrupt config, bad schema, invalid library path | RequiresAttention |
-| `Conflict` | Merge conflict or protocol version mismatch | RequiresAttention |
-| `Partial` | Some snippets synced, others failed | RequiresAttention |
-| `LocalPersistence` | Disk full, permission denied on config dir | RequiresAttention |
-| `CredentialStore` | Keyring/keychain unavailable or locked | RequiresAttention |
-| `Internal` | Unrecoverable bug or unexpected invariant violation | RetryAfter (bounded to 3 attempts) |
+| `Transient` | Network, timeout, or partial sync failure | RetryAfter(exponential backoff) |
+| `Configuration` | Auth, config, or credential failure | WaitForConfigurationChange |
+| `LocalFailure` | Persistence, conflict, or corruption | RequiresAttention |
+| `Internal` | Unclassified error | RetryAfter (bounded to 3 attempts), then RequiresAttention |
+
+Legacy status codes (`deferred_disabled`, `deferred_not_configured`, `authentication`, `credential_store`, `transient_network`, `transient_timeout`, `partial`, `conflict`, `local_persistence`) are read compatibly via `from_code()`.
 
 ### Classification: Variant-Based (Not String Matching)
 
@@ -185,10 +180,11 @@ Auto-sync delegates error classification to `FailureClass::from_error()` in `pol
 
 1. Policy configured and enabled.
 2. Pending marker exists with valid work.
-3. Execution lock is not held by a live process.
-4. Backoff delay has elapsed (unless explicit retry).
-5. Failure class allows automatic retry.
-6. Config change releases deferred failures (authentication/credential/configuration).
+3. Backoff delay has elapsed (unless explicit retry).
+4. Failure class does not require attention (config/auth/local failures defer; transient and bounded-internal retry).
+5. Config change releases deferred failures.
+
+The scheduler does not probe the execution lock. Worker acquisition is the sole execution authority.
 
 ## Status Snapshot (Phase 04A)
 
