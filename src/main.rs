@@ -373,6 +373,12 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         json: bool,
     },
+    /// Advanced data maintenance commands
+    #[command(alias = "d")]
+    Data {
+        #[command(subcommand)]
+        command: DataCommands,
+    },
     /// Generate shell completions
     #[command(alias = "g")]
     Completions {
@@ -387,7 +393,7 @@ enum Commands {
     },
     /// Create a secret-free backup snapshot
     Backup {
-        /// Output directory (default: ~/.config/snp/backups/<timestamp>/)
+        /// Output directory (default: ~/.config/snp/backups/\{timestamp\}/)
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Include usage metadata in backup
@@ -517,6 +523,79 @@ enum ShellCommands {
         /// Shell to generate integration for
         #[arg(value_enum)]
         shell: ShellIntegration,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DataCommands {
+    /// Validate snippet data (read-only)
+    #[command(alias = "v")]
+    Validate {
+        /// Validate a specific library
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Treat warnings as errors
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        strict: bool,
+        /// Output as JSON
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
+    /// Create a secret-free backup snapshot
+    #[command(alias = "b")]
+    Backup {
+        /// Output directory (default: ~/.config/snp/backups/\{timestamp\}/)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Include usage metadata in backup
+        #[arg(long)]
+        include_usage: bool,
+        /// Include sync.toml in backup (API key redacted)
+        #[arg(long)]
+        include_sync_state: bool,
+        /// Backup format
+        #[arg(long, value_enum, default_value = "directory")]
+        format: commands::backup_cmd::BackupFormat,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore from a backup snapshot
+    #[command(alias = "r")]
+    Restore {
+        /// Path to the backup directory
+        #[arg(value_name = "BACKUP_DIR")]
+        backup: PathBuf,
+        /// Restore mode
+        #[arg(long, value_enum, default_value = "merge")]
+        mode: commands::restore_cmd::RestoreMode,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Repair configuration and library files
+    #[command(alias = "r")]
+    Repair {
+        /// Show planned repairs without making changes
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        dry_run: bool,
+        /// Apply safe repairs (creates backup first)
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        apply: bool,
+        /// Repair a specific library
+        #[arg(short, long)]
+        library: Option<String>,
+        /// Output as JSON
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
+    /// Show auto-sync status (read-only)
+    #[command(alias = "s")]
+    Status {
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        sync_only: bool,
     },
 }
 
@@ -1171,6 +1250,49 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Status { json, sync_only }) => {
             commands::status_cmd::run(json, sync_only)?;
         }
+        Some(Commands::Data { command }) => match command {
+            DataCommands::Validate {
+                library,
+                strict,
+                json,
+            } => {
+                commands::validate_cmd::run(library, strict, json)?;
+            }
+            DataCommands::Backup {
+                output,
+                include_usage,
+                include_sync_state,
+                format,
+                json,
+            } => {
+                commands::backup_cmd::run(output, include_usage, include_sync_state, format, json)?;
+            }
+            DataCommands::Restore { backup, mode, json } => {
+                commands::restore_cmd::run(backup, mode, json)?;
+            }
+            DataCommands::Repair {
+                dry_run,
+                apply,
+                library,
+                json,
+            } => {
+                let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
+                match status {
+                    commands::repair_cmd::RepairExitStatus::Clean
+                    | commands::repair_cmd::RepairExitStatus::Repaired
+                    | commands::repair_cmd::RepairExitStatus::DryRun => {}
+                    commands::repair_cmd::RepairExitStatus::PartialFailure => {
+                        std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
+                    }
+                    commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
+                        std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
+                    }
+                }
+            }
+            DataCommands::Status { json, sync_only } => {
+                commands::status_cmd::run(json, sync_only)?;
+            }
+        },
         Some(Commands::Get {
             id,
             description_exact,
@@ -1267,6 +1389,21 @@ fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
         }
         | Commands::Repair { dry_run: true, .. } => StartupRecoveryPolicy::SuppressReadOnly,
 
+        // Data subcommand group: classify by subcommand
+        Commands::Data { command } => match command {
+            DataCommands::Validate { .. }
+            | DataCommands::Status { .. }
+            | DataCommands::Backup { .. } => StartupRecoveryPolicy::SuppressReadOnly,
+            DataCommands::Restore {
+                mode: commands::restore_cmd::RestoreMode::DryRun,
+                ..
+            } => StartupRecoveryPolicy::SuppressReadOnly,
+            DataCommands::Repair { dry_run: true, .. } => StartupRecoveryPolicy::SuppressReadOnly,
+            DataCommands::Repair { .. } | DataCommands::Restore { .. } => {
+                StartupRecoveryPolicy::Allow
+            }
+        },
+
         // Mutation commands: allow recovery
         Commands::New { .. }
         | Commands::Run { .. }
@@ -1303,6 +1440,9 @@ fn startup_services(cmd: Option<&Commands>) -> StartupServices {
             | Commands::Repair { .. }
             | Commands::Restore { .. }
             | Commands::Premade { .. }
+            | Commands::Data {
+                command: DataCommands::Repair { .. } | DataCommands::Restore { .. },
+            }
             | Commands::Library {
                 command:
                     LibraryCommands::Create { .. }
@@ -1321,6 +1461,12 @@ fn startup_services(cmd: Option<&Commands>) -> StartupServices {
         | Some(Commands::Get { .. })
         | Some(Commands::Validate { .. })
         | Some(Commands::Backup { .. })
+        | Some(Commands::Data {
+            command:
+                DataCommands::Validate { .. }
+                | DataCommands::Backup { .. }
+                | DataCommands::Status { .. },
+        })
         | Some(Commands::Library {
             command: LibraryCommands::List | LibraryCommands::Show { .. },
         }) => StartupServices::Minimal,

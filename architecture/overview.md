@@ -117,8 +117,8 @@ The CLI is the primary interface for users. The entry point is `src/main.rs` whi
 - Pending generations are monotonic; lower generation = corrupt state
 
 **Merge Strategy** (see [sync.md](sync.md)):
-- Last-write-wins based on `updated_at` timestamp
-- Server `deleted: true` → local copy marked deleted (preserved)
+- Live conflicts use `(updated_at, device_id, SHA-256(synced fields))` for deterministic resolution
+- Explicit deletions win over live content, including when the live copy has a later timestamp (no-resurrection)
 - Local-only fields (`output`, `folders`, `favorite`) preserved when server wins
 
 ---

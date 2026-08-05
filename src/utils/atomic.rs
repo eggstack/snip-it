@@ -249,7 +249,7 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
 /// 8. Syncs the parent directory where supported.
 /// 9. When `preserve_permissions` is set and the target existed, restores
 ///    the original permissions on the renamed file.
-/// 10. On any failure the temp file is cleaned up via [`TempFileGuard`].
+/// 10. On any failure the temp file is cleaned up via `TempFileGuard`.
 #[allow(dead_code)]
 pub fn atomic_replace(
     target: &Path,

@@ -148,7 +148,8 @@ pub enum SnipError {
 
     /// Typed sync failure with variant-based classification.
     ///
-    /// Carries a [`SyncFailureKind`] for direct mapping to [`FailureClass`]
+    /// Carries a [`SyncFailureKind`] for direct mapping to
+    /// [`FailureClass`](crate::auto_sync::policy::FailureClass)
     /// without string matching. The `detail` field carries the upstream error
     /// message for display/logging.
     SyncFailure {

@@ -43,7 +43,7 @@ Uses `fuzzy-matcher` crate with `SkimMatcherV2`:
 
 Halloy-compatible TOML themes with a 10-color palette:
 
-- 50 bundled themes (LZMA-compressed at build time from `themes/`)
+- 50 bundled themes (gzip-compressed at build time from `themes/`)
 - Extracted to `~/.config/snp/themes/` on first launch
 - Active theme persisted in `~/.config/snp/themes.toml`
 - Default theme: `Cyber Red` (hardcoded fallback)

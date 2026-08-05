@@ -312,19 +312,14 @@ pub enum WorkerOutcome {
 
 ### FailureClass
 
+Collapsed from 11 variants to 4 in Phase 13E:
+
 ```rust
 pub enum FailureClass {
-    DeferredDisabled,        // Auto-sync disabled at runtime
-    DeferredNotConfigured,   // Missing api_key, server_url, or library mapping
-    TransientNetwork,        // DNS, connection refused, TLS handshake failure
-    TransientTimeout,        // gRPC deadline exceeded or sync timeout hit
-    Authentication,          // Invalid API key, expired token, auth rejected
-    Configuration,           // Corrupt config, bad schema, invalid library path
-    Conflict,                // Merge conflict or protocol version mismatch
-    Partial,                 // Some snippets synced, others failed (encryption errors)
-    LocalPersistence,        // Disk full, permission denied on config dir
-    CredentialStore,         // Keyring/keychain unavailable or locked
-    Internal,                // Unrecoverable bug or unexpected invariant violation
+    Transient,       // Network, timeout, partial — retry with backoff
+    Configuration,   // Auth, config, credential — defer until config change
+    LocalFailure,    // Persistence, conflict, corruption — requires repair
+    Internal,        // Unclassified — bounded retry (3 attempts)
 }
 ```
 

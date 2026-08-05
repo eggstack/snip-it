@@ -1,6 +1,6 @@
 # snip-it Public API Inventory
 
-Generated: Phase 06A Workstream A
+Updated: Phase 13F — API, CLI, Server, and Documentation Surface Consolidation
 
 ## Overview
 
@@ -17,43 +17,64 @@ library — it is a standalone binary.  The public surface exists because:
 3. A handful of types are exposed for `#[derive(clap::ValueEnum)]` on CLI
    arguments (e.g., `sort::SnippetSort`).
 
-Four modules are correctly marked `pub(crate)`: `clipboard`, `library`,
-`sync_commands`, and `utils`.  Several additional modules are also `pub(crate)`:
-`diagnostics`, `encryption`, `local_data`, `migration`, `output`, `status_snapshot`,
-`test_failpoints`, and (conditionally) `transaction`.  Everything else is `pub`.
+### Phase 13F changes
+
+- Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`,
+  `proto`, `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`.
+- Root-level TUI types (`SnippetData`, `ProcessResult`, `CommandOutcome`,
+  `SelectionOutcome`) are `#[doc(hidden)]`.
+- The crate root doc comment now lists the supported API explicitly.
+- The `data` subcommand group was added (`snp data validate|backup|restore|repair|status`).
 
 ---
 
 ## Root-level exports (`src/lib.rs`)
 
+### Supported API (stable)
+
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod auto_sync` | **application-internal** | Auto-sync subsystem; used by binary + integration tests only |
+| `pub use error::{SnipError, SnipResult}` | **stable-public** | Core error types |
+| `pub use library::{LibraryConfig, LibraryMeta, Snippet, Snippets, load_library, save_library}` | **stable-public** | Domain data model and persistence |
+| `pub use utils::atomic::{AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic}` | **stable-public** | Atomic file writes |
+
+### Implementation-only (#[doc(hidden)])
+
+| Item | Classification | Notes |
+|------|---------------|-------|
+| `pub mod auto_sync` | **application-internal** | Auto-sync subsystem; binary + integration tests only |
 | `pub mod commands` | **application-internal** | CLI command implementations; no external consumer |
-| `pub mod config` | **provisional-public** | `SyncSettings`, `SyncDirection`, constants; could be useful for library consumers |
-| `pub mod encryption` | **pub(crate)** | AES-256-GCM encryption; internal to crate |
-| `pub mod error` | **stable-public** | `SnipError`, `SnipResult`, `SyncFailureKind` — core error types |
-| `pub mod logging` | **application-internal** | Logging infrastructure; not intended for external use |
+| `pub mod logging` | **application-internal** | Logging infrastructure; not for external use |
+| `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock |
 | `pub mod proto` | **integration-test-only** | Prost-generated gRPC types; needed by sync integration tests |
+| `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
 | `pub mod sync` | **integration-test-only** | `SyncClient`; used by sync integration tests |
 | `pub mod ui` | **application-internal** | TUI interface; not for external consumers |
-| `pub mod diagnostics` | **pub(crate)** | Import/doctor report types; internal to crate |
-| `pub mod output` | **pub(crate)** | Output field rendering; internal to crate |
-| `pub mod sort` | **stable-public** | `SnippetSort`, `SortOptions`, `rank_snippets`; used by CLI args and tests |
-| `pub mod status_snapshot` | **pub(crate)** | Status projection for `snp status` and doctor |
 | `pub mod usage` | **application-internal** | Local-only usage metadata; not for external use |
-| `pub use error::{SnipError, SnipResult}` | **stable-public** | Re-exported for convenience |
 | `pub struct SnippetData` | **application-internal** | Parallel vectors for TUI display; internal glue |
 | `pub enum ProcessResult` | **application-internal** | TUI selection result; internal glue |
 | `pub enum CommandOutcome` | **application-internal** | CLI-level exit code mapping; internal glue |
 | `pub enum SelectionOutcome` | **application-internal** | Raw TUI selection result; internal glue |
-| `pub mod outcome` | **application-internal** | `CliOutcome` enum and exit code mapping |
-| `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
-| `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
-| `pub(crate) mod local_data` | **application-internal** | Local data lock coordination |
-| `pub(crate) mod migration` | **application-internal** | Schema versioning for TOML migrations |
-| `pub(crate) mod test_failpoints` | **application-internal** | Test-only failpoint hooks (compiled with `test-support`) |
-| `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary with journal, lock, begin/commit/rollback |
+
+### Crate-internal (pub(crate))
+
+| Item | Classification | Notes |
+|------|---------------|-------|
+| `pub mod config` | **provisional-public** | `SyncSettings`, `SyncDirection`, constants; could be useful for library consumers |
+| `pub mod outcome` | **provisional-public** | `CliOutcome` enum and exit code mapping; useful for exit-code-aware consumers |
+| `pub mod sort` | **stable-public** | `SnippetSort`, `SortOptions`, `rank_snippets`; used by CLI args and tests |
+| `pub(crate) mod clipboard` | **pub(crate)** | Clipboard integration; internal |
+| `pub(crate) mod diagnostics` | **pub(crate)** | Import/doctor report types; internal |
+| `pub(crate) mod encryption` | **pub(crate)** | AES-256-GCM encryption; internal |
+| `pub(crate) mod library` | **pub(crate)** | Snippet/library data structures; re-exported at root |
+| `pub(crate) mod local_data` | **pub(crate)** | Local data lock coordination |
+| `pub(crate) mod migration` | **pub(crate)** | Schema versioning for TOML migrations |
+| `pub(crate) mod output` | **pub(crate)** | Output field rendering; internal |
+| `pub(crate) mod status_snapshot` | **pub(crate)** | Status projection for `snp status` and doctor |
+| `pub(crate) mod sync_commands` | **pub(crate)** | Sync orchestration; internal |
+| `pub(crate) mod test_failpoints` | **pub(crate)** | Test-only failpoint hooks |
+| `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary; test-support only |
+| `pub(crate) mod utils` | **pub(crate)** | Utility functions; internal |
 
 ---
 

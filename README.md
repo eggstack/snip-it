@@ -406,13 +406,9 @@ snp edit         Edit a snippet library in $EDITOR (--output, --output-stdin, --
 snp library      Create, list, select, or delete libraries
 snp premade      Browse and download premade libraries
 snp import       Import snippets from external formats (e.g., pet)
-snp validate     Validate snippet libraries and configuration
-snp backup       Backup snippet libraries (--output, --include-usage, --include-config, --include-sync-state)
-snp restore      Restore snippets from a backup (--mode dry-run|merge|replace)
-snp repair       Repair snippet libraries and sync artifacts (--dry-run, --apply)
+snp data         Advanced data maintenance (validate, backup, restore, repair, status)
 snp doctor       Diagnose pet file, library, environment, or shell init syntax
 snp register     Register with a snip-sync server
-snp status       Show auto-sync status (--json, --sync-only)
 snp sync         Push, pull, or bidirectionally sync libraries
 snp sync config  View or update auto-sync policy
 snp sync retry   Retry a failed auto-sync now
@@ -425,6 +421,10 @@ snp update       Check for and install an update
 snp shell        Generate interactive shell integration
 snp completions  Generate shell completions
 ```
+
+The legacy top-level spellings (`snp validate`, `snp backup`, `snp restore`,
+`snp repair`, `snp status`) remain as compatibility aliases and behave
+identically to their `snp data` equivalents.
 
 Run `snp <command> --help` for command-specific options.
 

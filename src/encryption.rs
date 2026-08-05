@@ -14,7 +14,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! // Internal API — not available to external consumers.
 //! // use snip_it::encryption::{decrypt, encrypt};
 //! ```

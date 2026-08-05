@@ -44,6 +44,15 @@
 - Auto-sync `spawn.rs` merged into `execution_lock.rs`; `auto_sync::spawn` module removed.
 - Status file now rejects unknown schema versions (future-version files return `StatusRead::Corrupt`).
 
+## Phase 13F — API, CLI, Server, and Documentation Surface Consolidation
+
+- Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`, `proto`, `selector`, `sync`, `ui`, `usage`) are `#[doc(hidden)]` in `lib.rs`. They remain `pub` for binary and integration-test crate access but are not part of the supported external API.
+- Root-level TUI types (`SnippetData`, `ProcessResult`, `CommandOutcome`, `SelectionOutcome`) are `#[doc(hidden)]`.
+- The supported Rust API is: `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library`, `AtomicWriteOptions`, `AtomicWriteReport`, `Durability`, `atomic_replace`, `write_private_atomic`, `SnipError`, `SnipResult`, `SnippetSort`, `SortOptions`, `rank_snippets`, `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode`, `CliOutcome`, `exit_code::*`, `OutputContext`.
+- The `data` subcommand group (`snp data validate|backup|restore|repair|status`) is the canonical home for advanced data maintenance. Legacy top-level spellings (`snp validate`, `snp backup`, `snp restore`, `snp repair`, `snp status`) remain as compatibility aliases with identical exit codes and output.
+- `FailureClass` in `architecture/sync.md` corrected to 4-variant enum (Phase 13E collapse).
+- Architecture docs: LZMA → gzip for bundled themes, merge strategy corrected to no-resurrection behavior.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
