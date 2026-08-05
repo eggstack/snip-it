@@ -1,6 +1,6 @@
 # Phase 13D — Client Runtime and Dependency Footprint Reduction
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -311,3 +311,18 @@ Stop a workstream when:
 - an optimization weakens update extraction, cryptography, keychain, or error handling.
 
 Record rejected experiments succinctly and move on. The phase succeeds through selective removal, not by exhausting every possible compiler optimization.
+
+## 15. Completion record
+
+Status: COMPLETE
+
+Implementation commit: `181a142` — Phase 13D: Client runtime and dependency footprint reduction
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Acceptance criteria: All items satisfied. lzma-rs removed, themes use gzip, zip crate removed, local commands avoid Tokio init, panic=abort applied.
+
+Release-blocking: No (cleared by 13G)

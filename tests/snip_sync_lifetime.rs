@@ -9,7 +9,7 @@
 //! cargo test --test snip_sync_lifetime -- --ignored --test-threads=1
 //! ```
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -39,6 +39,39 @@ fn check_health(addr: SocketAddr) -> bool {
 
 /// Spawn the server and return (child, http_addr). Reads stderr until
 /// both listen lines appear, then parses the HTTP address.
+fn find_snip_sync_binary() -> String {
+    // CARGO_BIN_EXE_snip-sync is set when snip-sync is a direct binary
+    // dependency. For workspace binaries, we locate it through the
+    // target directory relative to the test binary.
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_snip-sync") {
+        return path;
+    }
+    // Fall back: find the binary relative to the test binary's location.
+    let test_bin = std::env::current_exe().expect("current_exe should be set");
+    let deps_dir = test_bin.parent().expect("test binary should have a parent");
+    // The snip-sync binary is in target/debug/ (not deps/).
+    let target_debug = deps_dir
+        .parent()
+        .expect("deps should be under target/debug");
+    let snip_sync_bin = target_debug.join("snip-sync");
+    if snip_sync_bin.exists() {
+        return snip_sync_bin.to_str().unwrap().to_string();
+    }
+    panic!("Cannot find snip-sync binary. Build it first with: cargo build -p snip-sync");
+}
+
+/// Reserve a random available port on localhost, then release it.
+fn reserve_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let port = addr.port();
+    // Release the port immediately so the server can bind to it.
+    drop(listener);
+    port
+}
+
+/// Spawn the server and return (child, http_addr). Reads stderr until
+/// both listen lines appear, then parses the HTTP address.
 fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
@@ -50,15 +83,17 @@ fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
     let config_path = config_dir.join("config.toml");
     std::fs::write(&config_path, "").unwrap();
 
-    let exe = std::env::var("CARGO_BIN_EXE_snip-sync")
-        .expect("CARGO_BIN_EXE_snip-sync not set; run via cargo test");
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+
+    let exe = find_snip_sync_binary();
     let mut child = Command::new(exe)
         .arg("serve")
         .env("CONFIG_PATH", &config_path)
         .env("DATABASE_URL", data_dir.join("test.db"))
         .env("SNIP_SYNC_ALLOW_HTTP", "true")
-        .env("GRPC_PORT", "0")
-        .env("HTTP_PORT", "0")
+        .env("GRPC_PORT", grpc_port.to_string())
+        .env("HTTP_PORT", http_port.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -67,25 +102,24 @@ fn start_server(tmp: &tempfile::TempDir) -> (std::process::Child, SocketAddr) {
     let stderr = child.stderr.take().unwrap();
     let reader = BufReader::new(stderr);
 
-    let mut http_addr: Option<SocketAddr> = None;
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        if line.contains("HTTP server listening on")
-            && let Some(addr_str) = line.split("HTTP server listening on ").nth(1)
-            && let Ok(addr) = addr_str.trim().parse::<SocketAddr>()
-        {
-            http_addr = Some(addr);
+    // Poll health endpoint with bounded startup deadline.
+    let http_addr: SocketAddr = format!("127.0.0.1:{http_port}").parse().unwrap();
+    let start = std::time::Instant::now();
+    let deadline = Duration::from_secs(10);
+    loop {
+        if start.elapsed() > deadline {
+            panic!("server did not become healthy within {deadline:?}");
         }
-        // Once we have the HTTP address, we can stop reading.
-        if http_addr.is_some() {
+        if check_health(http_addr) {
             break;
         }
+        std::thread::sleep(Duration::from_millis(100));
     }
 
-    let http_addr = http_addr.expect("could not parse HTTP listen address from stderr");
+    // Drain remaining stderr lines so the pipe doesn't block.
+    // We don't parse logs for readiness; health polling is authoritative.
+    drop(reader);
+
     (child, http_addr)
 }
 

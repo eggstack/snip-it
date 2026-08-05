@@ -1,6 +1,6 @@
 # Phase 13E — Auto-Sync and Persistence Simplification
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -427,3 +427,18 @@ Stop and amend the plan if:
 - scope drifts into protocol, TUI, server deployment, or release packaging.
 
 This phase is successful only if the architecture becomes visibly smaller and easier to reason about.
+
+## 17. Completion record
+
+Status: COMPLETE
+
+Implementation commits: `aa62bb4` + `a0df1ab` — Phase 13E: Auto-sync and persistence simplification
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Acceptance criteria: All items satisfied. Execution-lock probe removed, failure classes collapsed to 4 variants, module count reduced, one-file mutations bypass journals, legacy states retained for on-disk recovery only.
+
+Release-blocking: No (cleared by 13G)

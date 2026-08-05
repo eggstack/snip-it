@@ -1,6 +1,6 @@
 # Phase 13C — Verification, CI, and Release-Ceremony Simplification
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -323,7 +323,9 @@ The intended outcome is fewer commands and less ceremony, not a more sophisticat
 
 ## 12. Completion record
 
-Implementation commit: `0575f38` (fixup: `--all-features` removal from clippy)
+Implementation commits: `0575f38` + `33b27da` — Phase 13C: Simplify CI, check scripts, and remove stale tests
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
 
 ### Before/after command count
 
@@ -380,3 +382,9 @@ Implementation commit: `0575f38` (fixup: `--all-features` removal from clippy)
 | `bash -n scripts/release-check.sh` | ✅ Syntax OK |
 | `cargo test --workspace --all-features -- --test-threads=1` | ✅ Pass (1 pre-existing architecture test failure excluded) |
 | Target existence check | ✅ All 7 named targets exist |
+
+### Corrected regression coverage claims
+
+Phase 13G added `sync_multibatch` to routine checks and `snip_sync_lifetime` to release checks. These targets now cover the Phase 13A server lifetime and Phase 13B multi-batch sync regressions that 13C originally claimed were covered.
+
+Release-blocking: No (cleared by 13G)

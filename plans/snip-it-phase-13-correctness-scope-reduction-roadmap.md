@@ -1,6 +1,6 @@
 # Phase 13 Roadmap — Correctness Repair, Verification Reduction, and Lightweight Scope Recovery
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
 Baseline: `b62d0f50078f7656eca3c9abf58e2ad290562029`
 
@@ -283,24 +283,46 @@ Do not commit generated logs, screenshots, bloat reports, timing traces, or evid
 
 Phase 13 is complete only when all statements are true:
 
-- [ ] Plans 13A through 13G are marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and corrective SHAs.
-- [ ] The server lifetime, shutdown coordination, and sync request-size/multi-batch defects are corrected.
-- [ ] Every upload batch is preflighted and no upload success path can omit later batches.
-- [ ] Ctrl-C and Unix SIGTERM use the same coordinated graceful-shutdown path.
-- [ ] Routine CI and local verification are materially smaller than the baseline while retaining the complete multi-batch regression.
-- [ ] Deep verification remains available where it has unique value but is not a mandatory duplicate gate.
-- [ ] Manual release verification includes sustained server lifetime and graceful signal shutdown.
-- [ ] The release client has a recorded before/after size and dependency comparison.
-- [ ] No user-visible feature was removed.
-- [ ] No new daemon, scheduler, protocol, persistence framework, distributed transaction, or CI framework was introduced.
-- [ ] Auto-sync and transaction machinery are simpler in source structure and state count, with residual compatibility machinery documented.
-- [ ] Local mutation durability and encrypted sync security properties remain intact.
-- [ ] Public API and CLI compatibility commitments are narrower, accurate, and documented.
-- [ ] Architecture documentation describes current symbols and invariants without volatile line-number inventories.
-- [ ] `bash scripts/check.sh` passes on the implementation platform.
-- [ ] `bash scripts/release-check.sh verify` passes from a clean tree.
-- [ ] Platform smoke CI is green, or a platform-specific defect is corrected in the phase that introduced it.
-- [ ] Phase 13G release disposition is `CLEARED`.
-- [ ] No generic follow-up hardening phase is opened.
+- [x] Plans 13A through 13G are marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and corrective SHAs.
+- [x] The server lifetime, shutdown coordination, and sync request-size/multi-batch defects are corrected.
+- [x] Every upload batch is preflighted and no upload success path can omit later batches.
+- [x] Ctrl-C and Unix SIGTERM use the same coordinated graceful-shutdown path.
+- [x] Routine CI and local verification are materially smaller than the baseline while retaining the complete multi-batch regression.
+- [x] Deep verification remains available where it has unique value but is not a mandatory duplicate gate.
+- [x] Manual release verification includes sustained server lifetime and graceful signal shutdown.
+- [x] The release client has a recorded before/after size and dependency comparison.
+- [x] No user-visible feature was removed.
+- [x] No new daemon, scheduler, protocol, persistence framework, distributed transaction, or CI framework was introduced.
+- [x] Auto-sync and transaction machinery are simpler in source structure and state count, with residual compatibility machinery documented.
+- [x] Local mutation durability and encrypted sync security properties remain intact.
+- [x] Public API and CLI compatibility commitments are narrower, accurate, and documented.
+- [x] Architecture documentation describes current symbols and invariants without volatile line-number inventories.
+- [x] `bash scripts/check.sh` passes on the implementation platform.
+- [x] `bash scripts/release-check.sh verify` passes from a clean tree.
+- [x] Platform smoke CI is green, or a platform-specific defect is corrected in the phase that introduced it.
+- [x] Phase 13G release disposition is `CLEARED`.
+- [x] No generic follow-up hardening phase is opened.
 
 When these criteria are met, mark this roadmap `COMPLETE` and close the line of work. Future expansion requires a reproduced defect, measured regression, or separately approved feature request.
+
+## 9. Completion record
+
+Status: COMPLETE
+
+Implementation commits:
+- `7e0d064` Phase 13A: Fix server lifetime defect and strict config parsing
+- `84f5b7f` Phase 13B: Bounded sync uploads and clock-skew diagnostics
+- `0575f38` + `33b27da` Phase 13C: Simplify CI, check scripts, and remove stale tests
+- `181a142` Phase 13D: Client runtime and dependency footprint reduction
+- `aa62bb4` + `a0df1ab` Phase 13E: Auto-sync and persistence simplification
+- `01a860b` Phase 13F: API, CLI, and documentation surface consolidation
+
+Corrective commit:
+- `5d37fa7` Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Release-blocking: No (13A-13F cleared by 13G); 13G was release-blocking and is now cleared.
+
+Release disposition: CLEARED

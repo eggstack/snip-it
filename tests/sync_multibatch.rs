@@ -199,6 +199,112 @@ async fn test_sync_convergence_after_partial_upload() {
     server_task.abort();
 }
 
+/// Simulate a partial failure mid-sync: the server crashes while the
+/// client is uploading batches. After recovery (a fresh server), the
+/// caller retries the full sync and all snippets converge with no
+/// duplicates.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_partial_failure_convergence() {
+    // --- Phase 1: first server, register, start multi-batch sync. ---
+    let service = build_test_service().await;
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let (api_key, device_id) = SyncClient::register(server_url.clone())
+        .await
+        .expect("register should succeed");
+
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let now = chrono::Utc::now().timestamp();
+    let snippets: Vec<Snippet> = (0..MULTI_BATCH_COUNT)
+        .map(|i| Snippet {
+            id: format!("pf-{i:04}", i = i),
+            description: format!("partial-failure snippet {i}"),
+            command: format!("echo snippet-{i} && {}", "x".repeat(10_000)),
+            tags: vec![format!("batch{}", i % 3)],
+            created_at: now,
+            updated_at: now,
+            device_id: device_id.clone(),
+            deleted: false,
+            encrypted: false,
+        })
+        .collect();
+
+    // Spawn the sync in a background task so we can kill the server
+    // while uploads are in flight.
+    let snippets_clone = snippets.clone();
+    let sync_task = tokio::spawn(async move {
+        client
+            .sync_encrypted_with_ceiling(snippets_clone, 0, "", TEST_BYTE_CEILING)
+            .await
+    });
+
+    // Let the sync start sending batches before pulling the plug.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Crash the server mid-sync.
+    server_task.abort();
+    let sync_result = tokio::time::timeout(std::time::Duration::from_secs(5), sync_task).await;
+
+    // The sync must not have succeeded — the server died mid-upload.
+    match sync_result {
+        Ok(Ok(Ok(resp))) => {
+            assert!(
+                !resp.success,
+                "sync should not report success when server died mid-upload"
+            );
+        }
+        Ok(Ok(Err(_))) => { /* expected: gRPC/connection error */ }
+        Ok(Err(_)) => { /* task panicked or was cancelled */ }
+        Err(_) => { /* timed out — acceptable for a partial-failure test */ }
+    }
+
+    // --- Phase 2: recovery — fresh server, register, retry full sync. ---
+    let service2 = build_test_service().await;
+    let (addr2, server_task2, _captured2) = start_test_server(service2).await;
+    let server_url2 = format!("http://{addr2}");
+
+    let (api_key2, _device_id2) = SyncClient::register(server_url2.clone())
+        .await
+        .expect("register on recovery server should succeed");
+
+    let mut client2 = build_sync_client(&server_url2, &api_key2).await;
+
+    // Retry with the same cursor (0) — the caller does not advance
+    // state after a failed sync.
+    let response = client2
+        .sync_encrypted_with_ceiling(snippets, 0, "", TEST_BYTE_CEILING)
+        .await
+        .expect("retry sync should succeed");
+
+    assert!(
+        response.success,
+        "retry sync should succeed, got: {}",
+        response.message
+    );
+
+    // All snippets must converge to the new server.
+    assert_eq!(
+        response.snippets.len(),
+        MULTI_BATCH_COUNT,
+        "recovery sync should return all {} snippets",
+        MULTI_BATCH_COUNT
+    );
+
+    // No duplicate logical rows.
+    let mut ids: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        MULTI_BATCH_COUNT,
+        "recovery sync should contain no duplicate snippet IDs"
+    );
+
+    server_task2.abort();
+}
+
 async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {
     let settings = SyncSettings {
         enabled: true,

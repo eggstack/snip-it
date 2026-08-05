@@ -1,6 +1,6 @@
 # Phase 13B — Bounded Sync Uploads and Clock-Skew Diagnostics
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -353,3 +353,18 @@ Stop and amend the roadmap if:
 - tests require production telemetry or broad failpoint infrastructure.
 
 The correct response to those conditions is design review, not scope expansion inside Phase 13B.
+
+## 12. Completion record
+
+Status: COMPLETE
+
+Implementation commit: `84f5b7f` — Phase 13B: Bounded sync uploads and clock-skew diagnostics
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Acceptance criteria: All items satisfied. 13G corrected early-return batching defect, singleton overflow validation, and request-envelope mismatch.
+
+Release-blocking: No (cleared by 13G)

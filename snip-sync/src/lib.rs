@@ -17,6 +17,7 @@ pub mod cli;
 pub mod db;
 pub mod editor;
 pub mod metrics;
+pub mod orchestration;
 pub mod paths;
 pub mod premade;
 pub mod process;

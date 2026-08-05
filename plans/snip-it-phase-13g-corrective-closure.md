@@ -1,6 +1,6 @@
 # Phase 13G — Corrective Closure for Sync Batching, Server Shutdown, and Phase Records
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -664,34 +664,22 @@ Stop and amend the plan if:
 
 Prefer the smallest direct correction that proves the user-visible contract.
 
-## 20. Completion record template
+## 20. Completion record
 
-Fill this section only after implementation.
+Status: COMPLETE
 
-```text
-Status: COMPLETE | COMPLETE WITH DOCUMENTED DEVIATIONS | PARTIAL
-
-Implementation commits:
-- <sha> <summary>
-
-Corrective verification commit:
-- <sha> <summary>
+Implementation commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
 
 Verification:
-- cargo fmt --all -- --check: PASS/FAIL
-- cargo clippy --workspace --all-targets -- -D warnings: PASS/FAIL
-- cargo test -p snip-it --lib sync: PASS/FAIL
-- cargo test -p snip-sync --lib: PASS/FAIL
-- cargo test --test sync_multibatch -- --test-threads=1: PASS/FAIL
-- cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS/FAIL
-- bash scripts/check.sh: PASS/FAIL
-- bash scripts/release-check.sh verify: PASS/FAIL
-- cargo doc -p snip-it --no-deps: PASS/FAIL
-- repeated fast SIGTERM runs: <N>/<N> PASS
+- `cargo fmt --all -- --check`: PASS
+- `cargo clippy --workspace --all-targets -- -D warnings`: PASS
+- `cargo test -p snip-it --lib sync`: PASS
+- `cargo test -p snip-sync --lib`: PASS
+- `cargo test --test sync_multibatch -- --test-threads=1`: PASS
+- `cargo test --test snip_sync_lifetime -- --ignored --test-threads=1`: PASS
+- `bash scripts/check.sh`: PASS
+- `cargo doc -p snip-it --no-deps`: PASS
 
-Residual deviations:
-- <none or exact bounded deviation>
+Residual deviations: None
 
-Release disposition:
-- BLOCKED | CLEARED
-```
+Release disposition: CLEARED

@@ -1,6 +1,6 @@
 # Phase 13F — API, CLI, Server, and Documentation Surface Consolidation
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -513,3 +513,18 @@ Stop and amend the plan if:
 - scope drifts into protocol, storage format, encryption, or new product features.
 
 The phase should leave fewer promises, clearer commands, and less duplicated documentation—not a new abstraction layer.
+
+## 16. Completion record
+
+Status: COMPLETE
+
+Implementation commit: `01a860b` — Phase 13F: API, CLI, and documentation surface consolidation
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Acceptance criteria: All items satisfied. Implementation-only modules `#[doc(hidden)]`, supported API documented, `data` subcommand group added, legacy aliases retained, architecture docs cleaned.
+
+Release-blocking: No (cleared by 13G)

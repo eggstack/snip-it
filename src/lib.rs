@@ -5,14 +5,14 @@
 //! typed errors, and atomic file writes.  Everything else (TUI, CLI
 //! command implementations, auto-sync internals, logging, sync client,
 //! encryption, process locks, protobuf types) is an implementation
-//! detail and may change without a semver bump.
+//! detail and are not documented for external use; they may be changed
+//! in a semver-appropriate release.
 //!
 //! ## Supported types and functions
 //!
 //! | Module | Public items |
 //! |--------|-------------|
 //! | crate root | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library` |
-//! | crate root | `SnippetData`, `ProcessResult`, `CommandOutcome`, `SelectionOutcome` |
 //! | crate root | `AtomicWriteOptions`, `AtomicWriteReport`, `Durability`, `atomic_replace`, `write_private_atomic` |
 //! | [`error`] | `SnipError`, `SnipResult`, `SyncFailureKind` |
 //! | [`sort`] | `SnippetSort`, `SortOptions`, `rank_snippets` |

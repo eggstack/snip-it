@@ -1,6 +1,6 @@
 # Phase 13A — Server Lifetime, Coordinated Shutdown, and Configuration Correctness
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -320,3 +320,18 @@ Stop and amend the plan rather than expanding scope if:
 - server lifetime correctness cannot be isolated from unrelated client changes.
 
 Those conditions indicate implementation drift, not a need for broader architecture.
+
+## 11. Completion record
+
+Status: COMPLETE
+
+Implementation commit: `7e0d064` — Phase 13A: Fix server lifetime defect and strict config parsing
+
+Corrective commit: `5d37fa7` — Phase 13G: Fix sync batching, server shutdown, and config validation
+
+Verification:
+- `bash scripts/check.sh`: PASS
+
+Acceptance criteria: All items satisfied. 13G corrected residual shutdown and config-validation defects.
+
+Release-blocking: No (cleared by 13G)
