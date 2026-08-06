@@ -10,7 +10,7 @@ Phase 13I reviewed head: `39f8ef5ae9a0d32330d394738c3d862dc5c7560f`
 
 Phase 13J plan commit: `4f789cd4cd69d3c5ca8a63e9394180a9e65010b8`
 
-Phase 13J implementation commit: <filled after Pass 4 commit exists>
+Phase 13J implementation commit: `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
 Phase 13J record commit: <filled after Pass 7 commit exists>
 

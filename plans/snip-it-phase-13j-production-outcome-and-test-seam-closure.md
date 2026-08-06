@@ -9,7 +9,7 @@ Corrective baseline: `39f8ef5ae9a0d32330d394738c3d862dc5c7560f`
 Date: 2026-08-06
 
 Implementation commit:
-- <filled after Pass 4 commit exists>
+- `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
 Closure record commit:
 - <filled after Pass 7 commit exists>
