@@ -10,6 +10,10 @@ Phase 13I reviewed head: `39f8ef5ae9a0d32330d394738c3d862dc5c7560f`
 
 Phase 13J plan commit: `4f789cd4cd69d3c5ca8a63e9394180a9e65010b8`
 
+Phase 13J implementation commit: <filled after Pass 4 commit exists>
+
+Phase 13J record commit: <filled after Pass 7 commit exists>
+
 Date opened: 2026-08-04
 
 Last review: 2026-08-06
@@ -57,7 +61,7 @@ Until Phase 13J passes, do not publish a release or mark Phase 13 complete.
 | 13G | `plans/snip-it-phase-13g-corrective-closure.md` | complete with corrective follow-up | Correct initial multi-batch and shutdown defects |
 | 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | complete with corrective follow-up | Add zero-batch sync, shared orchestration, retained-state/process corrections, and record repair |
 | 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | implemented with corrective follow-up required | Add drain result accounting, deterministic retained-state failure, and missing regressions |
-| 13J | `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md` | READY FOR IMPLEMENTATION; release-blocking | Wire production outcome, consolidate test seams, tighten proof, and close records |
+| 13J | `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md` | IMPLEMENTED; VERIFICATION PENDING; release-blocking | Wire production outcome, consolidate test seams, tighten proof, and close records |
 
 Required sequence:
 
@@ -264,7 +268,7 @@ Only after these statements are true may this roadmap return to `Status: COMPLET
 
 Status: CORRECTIVE CLOSURE REQUIRED
 
-Release-blocking phase: Phase 13J
+Release-blocking phase: Phase 13J (implementation committed; final record pending)
 
 Current release disposition: BLOCKED
 

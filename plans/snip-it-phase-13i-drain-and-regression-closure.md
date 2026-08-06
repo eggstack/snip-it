@@ -1,12 +1,23 @@
 # Phase 13I — Drain Result Accounting and Deterministic Regression Closure
 
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
 Corrective baseline: `f8b9aa8445a8d9a4385e505df94a275df2dde4a9`
 
 Date: 2026-08-05
+
+Implementation commits (corrective line):
+- `c08cac1` Phase 13I primary implementation: drain result accounting, deterministic regressions, and orchestration fixes
+- `5f10c68` Phase 13I corrective: drain-time service error test and initial completion record fill
+- `18e7ddb` Phase 13I: release-check.sh verify result record update
+- `39f8ef5` Phase 13I: closure-SHA record correction (final historical SHA on this line)
+
+This phase is historically complete. Its `serve_inner` continued to check
+only `requested` and `forced`, which still permitted requested shutdowns
+with a service error or panic to return success. That production wiring was
+closed by Phase 13J.
 
 ## 1. Purpose
 
@@ -697,32 +708,33 @@ Prefer the smallest direct implementation that proves the stated invariants.
 
 ## 17. Completion record
 
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
-Implementation commits:
-- c08cac1 Phase 13I: drain result accounting, deterministic regressions, docs
+Implementation commits (in order):
+- `c08cac1` Phase 13I primary implementation: drain result accounting, deterministic regressions, and orchestration fixes
+- `5f10c68` Phase 13I corrective: drain-time service error test and initial completion record fill
+- `18e7ddb` Phase 13I: release-check.sh verify result record update
+- `39f8ef5` Phase 13I: closure-SHA record correction (final historical SHA on this line)
 
-Closure/record commit:
-- 18e7ddb Phase 13I corrective: add drain-time service error test, fill completion record
-
-Verification:
+Verification (against `39f8ef5`, before Phase 13J):
 - cargo fmt --all -- --check: PASS
 - cargo clippy --workspace --all-targets -- -D warnings: PASS
-- cargo test -p snip-it --lib sync: PASS (1101 tests)
+- cargo test -p snip-it --lib sync: PASS
 - cargo test -p snip-sync --lib orchestration: PASS (12 tests)
-- cargo test -p snip-sync --lib: PASS (146 tests)
-- cargo test --test sync_multibatch -- --test-threads=1: PASS (10 tests)
-- cargo test --test platform_smoke: PASS (16 tests)
+- cargo test -p snip-sync --lib: PASS
+- cargo test --test sync_multibatch -- --test-threads=1: PASS
+- cargo test --test platform_smoke: PASS
 - bash scripts/check.sh: PASS
 - bash -n scripts/release-check.sh: PASS
 - cargo doc -p snip-it --no-deps: PASS
-- cargo test --release --test sync_multibatch -- --test-threads=1: PASS (10 tests)
-- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
+- cargo test --release --test sync_multibatch -- --test-threads=1: PASS
+- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS
 - short Unix SIGTERM repeated run: 5/5 PASS
 - bash scripts/release-check.sh verify: PASS
 
-Residual deviations:
-- none
+Residual deviations (closed by Phase 13J):
+- `serve_inner` checked only `requested` and `forced`; requested shutdown with a service error or panic could return success after cleanup. Closed by Phase 13J wiring `ensure_clean_requested_shutdown()`.
+- `sync_encrypted_with_custom_encrypt` duplicated the zero/one/many batch transport as a public test seam; `add_batch_context` was public solely to allow an integration test to call it. Closed by Phase 13J.
 
 Release disposition:
-- CLEARED
+- BLOCKED until Phase 13J closes

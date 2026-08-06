@@ -76,8 +76,18 @@ an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE new
 The `retry_grpc!` macro implements exponential backoff with jitter for transient failures.
 
 Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` via
-`add_batch_context()` — a clock-skew error remains `ClockSkew` /
+the private `add_batch_context()` helper — a clock-skew error remains `ClockSkew` /
 `FailureClass::Configuration` even when batch context is attached.
+
+### Single Prepared Transport
+
+`sync_encrypted` and `sync_encrypted_with_ceiling` both delegate to
+`sync_encrypted_inner`, which runs real encryption and then calls the private
+`sync_prepared_encrypted_inner`. That helper owns the entire zero/one/many
+batch transport logic. A test-only `sync_encrypted_with_test_encrypt` method
+inside the unit-test module accepts an injected encrypt function and drives the
+same prepared transport; it is `#[cfg(test)]` only and never reachable from
+production.
 
 ## Sync Orchestration (`sync_commands.rs`)
 

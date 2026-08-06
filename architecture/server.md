@@ -225,7 +225,13 @@ both service handles, captures the first terminal event, broadcasts shutdown,
 then drains remaining handles inside the configured timeout. Handles are awaited
 by mutable reference — not moved — so a completed handle is never polled twice.
 If the drain timeout expires, every unfinished handle is explicitly aborted and
-awaited. `ServiceShutdownOutcome` carries the result to the caller.
+awaited. `ServiceShutdownOutcome` carries the result to the caller, and
+`serve_inner` evaluates `ensure_clean_requested_shutdown()` to decide between
+`Ok(())` and an error after persistence cleanup. A requested shutdown fails if
+either service returned an error or panicked during drain, if any service
+exited unexpectedly without a signal, or if the drain timeout forced an abort;
+both classifications and the original detail are preserved in the failure
+diagnostic.
 
 The `stop` and `restart` commands accept both structured records and legacy
 numeric PID files on Unix. Stale numeric records are removed only after

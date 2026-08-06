@@ -43,6 +43,22 @@ impl ServiceShutdownOutcome {
             && self.grpc_result == ServiceResult::Clean
             && self.http_result == ServiceResult::Clean
     }
+
+    /// Production decision method used by `serve_inner`. Returns `Ok(())`
+    /// only for a requested, unforced, dual-clean shutdown. Returns an
+    /// `Err` containing both service classifications and the original
+    /// detail for every other case: forced abort, unexpected clean exit,
+    /// or any service error/panic.
+    pub fn ensure_clean_requested_shutdown(&self) -> Result<(), String> {
+        if self.is_clean_requested_shutdown() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "service shutdown was not clean: requested={}, forced={}, grpc={:?}, http={:?}",
+            self.requested, self.forced, self.grpc_result, self.http_result,
+        ))
+    }
 }
 
 /// Classify a `JoinHandle` output into a `ServiceResult`.
@@ -259,12 +275,10 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        // Signal completes immediately so the helper itself must be the
+        // sole sender on the broadcast shutdown channel. Services cannot
+        // wake from any test-side send.
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -273,6 +287,10 @@ mod tests {
         assert!(outcome.requested);
         assert!(!outcome.forced);
         assert!(outcome.is_clean_requested_shutdown());
+        assert!(
+            outcome.ensure_clean_requested_shutdown().is_ok(),
+            "production decision method must return Ok for clean requested shutdown"
+        );
         assert_eq!(outcome.grpc_result, ServiceResult::Clean);
         assert_eq!(outcome.http_result, ServiceResult::Clean);
     }
@@ -299,12 +317,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -322,6 +335,13 @@ mod tests {
             outcome.http_result,
             ServiceResult::Cancelled(_) | ServiceResult::Panic(_)
         ));
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("forced shutdown must fail production check");
+        assert!(
+            err.contains("forced=true"),
+            "diagnostic should mention forced: {err}"
+        );
     }
 
     // ── Section 7.4: Drain-time service panic ──────────────────────
@@ -347,12 +367,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -363,6 +378,17 @@ mod tests {
         assert!(!outcome.is_clean_requested_shutdown());
         assert!(matches!(outcome.grpc_result, ServiceResult::Panic(_)));
         assert_eq!(outcome.http_result, ServiceResult::Clean);
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("panic must fail production check");
+        assert!(
+            err.contains("grpc"),
+            "diagnostic should mention grpc: {err}"
+        );
+        assert!(
+            err.contains("grpc drain panic"),
+            "diagnostic should retain original panic detail: {err}"
+        );
     }
 
     // ── Section 7.3: Drain-time service error ─────────────────────
@@ -390,12 +416,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -409,6 +430,17 @@ mod tests {
             outcome.http_result,
             ServiceResult::ServiceError(_)
         ));
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("drain-time error must fail production check");
+        assert!(
+            err.contains("http"),
+            "diagnostic should mention http: {err}"
+        );
+        assert!(
+            err.contains("http service error"),
+            "diagnostic should retain original error detail: {err}"
+        );
     }
 
     // ── Section 7.5: Unexpected service completion ─────────────────
@@ -428,7 +460,12 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = std::future::pending::<()>();
+        // Signal held pending via oneshot — helper must wake from gRPC
+        // completion, not from a test-side broadcast send.
+        let (_signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
+        let signal = async move {
+            let _ = signal_rx.await;
+        };
         tokio::pin!(signal);
 
         let outcome =
@@ -437,6 +474,13 @@ mod tests {
         assert!(!outcome.requested);
         assert!(!outcome.forced);
         assert!(!outcome.is_clean_requested_shutdown());
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("unexpected clean service exit must fail production check");
+        assert!(
+            err.contains("requested=false"),
+            "diagnostic should mention requested=false: {err}"
+        );
     }
 
     #[tokio::test]
@@ -454,7 +498,10 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = std::future::pending::<()>();
+        let (_signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
+        let signal = async move {
+            let _ = signal_rx.await;
+        };
         tokio::pin!(signal);
 
         let outcome =
@@ -463,6 +510,13 @@ mod tests {
         assert!(!outcome.requested);
         assert!(!outcome.forced);
         assert!(!outcome.is_clean_requested_shutdown());
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("unexpected service error must fail production check");
+        assert!(
+            err.contains("http"),
+            "diagnostic should mention http: {err}"
+        );
     }
 
     // ── Section 7.6: Both services refuse to drain ─────────────────
@@ -479,12 +533,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let start = std::time::Instant::now();
@@ -499,45 +548,93 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "test should complete quickly, took {elapsed:?}"
         );
+        let err = outcome
+            .ensure_clean_requested_shutdown()
+            .expect_err("forced abort must fail production check");
+        assert!(
+            err.contains("forced=true"),
+            "diagnostic should mention forced: {err}"
+        );
     }
 
     // ── Section 7.7: No pre-signal lifetime timeout ────────────────
 
     #[tokio::test]
     async fn no_pre_signal_lifetime_timeout() {
-        let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+        let drain_timeout = Duration::from_millis(100);
 
-        let grpc: GrpcHandle = tokio::spawn({
-            let mut rx = tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok(())
-            }
-        });
-        let http: HttpHandle = tokio::spawn({
-            let mut rx = tx.subscribe();
-            async move {
-                let _ = rx.recv().await;
-                Ok(())
-            }
-        });
+        // ── Phase A: helper remains pending while no terminal event ──
+        // The helper must not start the drain timeout until a terminal
+        // event has occurred. We construct the helper with a held-pending
+        // oneshot signal and no pre-completing services, then assert that
+        // it does not complete within 2× the drain timeout.
+        {
+            let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+            let (_signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
+            let grpc: GrpcHandle = {
+                let mut rx = tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = rx.recv().await;
+                    Ok(())
+                })
+            };
+            let http: HttpHandle = {
+                let mut rx = tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = rx.recv().await;
+                    Ok(())
+                })
+            };
+            let mut signal = Box::pin(async move {
+                let _ = signal_rx.await;
+            });
+            let helper_fut =
+                run_services_until_shutdown(signal.as_mut(), grpc, http, tx, drain_timeout);
+            let phase_a_result = tokio::time::timeout(drain_timeout * 2, helper_fut).await;
+            assert!(
+                phase_a_result.is_err(),
+                "helper must remain pending for at least 2× drain timeout when no terminal event has occurred"
+            );
+        }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
-        tokio::pin!(signal);
-
-        let outcome =
-            run_services_until_shutdown(signal, grpc, http, tx, Duration::from_millis(100)).await;
-
-        assert!(outcome.requested);
-        assert!(!outcome.forced);
-        assert!(outcome.is_clean_requested_shutdown());
+        // ── Phase B: signal triggers and helper completes cleanly ──
+        // Trigger the oneshot BEFORE polling the helper so the first
+        // poll sees the signal ready, then verify a clean requested
+        // shutdown.
+        {
+            let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+            let (signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
+            let grpc: GrpcHandle = {
+                let mut rx = tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = rx.recv().await;
+                    Ok(())
+                })
+            };
+            let http: HttpHandle = {
+                let mut rx = tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = rx.recv().await;
+                    Ok(())
+                })
+            };
+            let mut signal = Box::pin(async move {
+                let _ = signal_rx.await;
+            });
+            let _ = signal_tx.send(());
+            let helper_fut =
+                run_services_until_shutdown(signal.as_mut(), grpc, http, tx, drain_timeout);
+            let outcome = tokio::time::timeout(Duration::from_secs(5), helper_fut)
+                .await
+                .expect("helper should complete within 5s after signal trigger");
+            assert!(outcome.requested);
+            assert!(!outcome.forced);
+            assert!(outcome.is_clean_requested_shutdown());
+            assert!(
+                outcome.ensure_clean_requested_shutdown().is_ok(),
+                "production decision method must return Ok for clean requested shutdown"
+            );
+        }
     }
 
     // ── Section 7.2 regression: gRPC result consumed exactly once ──
@@ -561,12 +658,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -603,12 +695,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -646,12 +733,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =
@@ -691,12 +773,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let signal = {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(());
-            }
-        };
+        let signal = std::future::ready(());
         tokio::pin!(signal);
 
         let outcome =

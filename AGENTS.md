@@ -39,12 +39,21 @@
 - Drain updates completion state immediately when a service finishes during the bounded drain window; Phase 3 only aborts handles still marked pending.
 - A requested shutdown fails if either service returns an error or panics during drain; only a clean dual-service exit without forced abort is success.
 - Push failure injection uses `push_fail_after` (threshold) and `push_fail_counter` (atomic counter) on `SnipSyncService`; counter starts at 0, increments per push, and rejects when count ≥ threshold.
-- `encrypt_snippets_with()` extracts the encryption loop for test-only failure injection; `sync_encrypted_with_custom_encrypt()` drives it through the full sync path.
-- `add_batch_context()` is public for direct unit testing of typed error preservation (`ClockSkew`, `Timeout`).
+- `encrypt_snippets_with()` extracts the encryption loop for test-only failure injection.
 - Deterministic retained-state convergence: push failure on Nth batch proves partial mutation, retry against same file DB converges exactly once.
 - Zero-batch regressions: empty-local/empty-remote, pull-only seeded remote, multi-page pagination with small sync_limit.
 - All-encryption-failed accounting: skipped IDs/counts preserved, remote snippets still returned.
 - Typed batch-context tests: `ClockSkew` and `Timeout` retain kind/classification and original detail through `add_batch_context()`.
+
+## Phase 13J — Production Outcome Wiring and Test-Seam Closure
+
+- `serve_inner` consumes the same `ensure_clean_requested_shutdown()` decision method exercised by orchestration unit tests. Requested shutdown with a service error, panic, or forced abort now returns failure after persistence cleanup; the previous boolean-only check (`requested && !forced`) was incomplete.
+- Both service classifications and the original error/panic detail are retained in the production failure diagnostic.
+- Exactly one method (`sync_prepared_encrypted_inner`) owns the zero/one/many batch transport logic. `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to it. `sync_encrypted_inner` is now a thin wrapper that runs real encryption and then delegates.
+- The custom-encryption test seam is private and `#[cfg(test)]` only — `sync_encrypted_with_test_encrypt` lives inside the unit-test module and drives the same prepared transport. The previous public `sync_encrypted_with_custom_encrypt` was removed.
+- `add_batch_context` is private; its typed-error preservation tests live in the `src/sync.rs` unit-test module alongside the helper.
+- Requested-shutdown orchestration tests use `std::future::ready(())` (or a held-pending oneshot channel) for the signal future so the helper itself is the only sender on the broadcast shutdown channel.
+- The `no_pre_signal_lifetime_timeout` test constructs the helper with a held-pending oneshot signal and asserts via `tokio::time::timeout` that the orchestration future does not complete within 2× the drain timeout. It then triggers the signal and verifies a clean requested shutdown.
 
 ## Phase 13D — Client Runtime and Dependency Footprint Reduction
 

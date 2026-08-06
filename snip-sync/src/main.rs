@@ -454,9 +454,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
 
     tracing::info!("Server shutdown complete");
 
-    if !outcome.requested || outcome.forced {
-        return Err("One or more services exited unexpectedly".into());
-    }
+    outcome.ensure_clean_requested_shutdown()?;
 
     Ok(())
 }

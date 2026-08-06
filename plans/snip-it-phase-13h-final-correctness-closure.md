@@ -1,6 +1,6 @@
 # Phase 13H — Final Correctness Closure for Empty Sync, Task Drain, and Retained-State Recovery
 
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -9,6 +9,12 @@ Supersedes the incorrect final-closure claims in: `plans/snip-it-phase-13g-corre
 Reviewed baseline: `00bee90300d1984ccfc01a12f1fcd909fd6a3d60`
 
 Date: 2026-08-05
+
+Implementation commit: `75a55b1` Phase 13H: Final correctness closure for sync, orchestration, and tests
+
+This phase is historically complete. Its `serve_inner` implementation did
+not consume the fully classified `ServiceShutdownOutcome`; that wiring was
+closed by Phase 13J against a descendant tree.
 
 ## 1. Purpose
 
@@ -602,30 +608,30 @@ Stop and amend this plan rather than expanding scope if:
 
 The intended result is a small, direct correction and reliable closure—not another hardening phase.
 
-## 17. Completion record template
+## 17. Completion record (corrected)
 
-Fill this section only after implementation and all required verification.
-
-```text
-Status: COMPLETE
+Status: COMPLETE WITH CORRECTIVE FOLLOW-UP
 
 Implementation: single commit (all workstreams A–J)
 
 Implementation commit: `75a55b1` — Phase 13H: Final correctness closure for sync, orchestration, and tests
 
-Verification:
+Verification (recorded against the Phase 13H implementation tree):
 - cargo fmt --all -- --check: PASS
 - cargo clippy --workspace --all-targets -- -D warnings: PASS
-- cargo test --workspace --lib: PASS (1101 tests)
-- cargo test -p snip-sync --lib: PASS (145 tests)
-- cargo test --test sync_multibatch -- --test-threads=1: PASS (3 tests)
-- cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
+- cargo test --workspace --lib: PASS
+- cargo test -p snip-sync --lib: PASS
+- cargo test --test sync_multibatch -- --test-threads=1: PASS
+- cargo test --test snip_sync_lifetime -- --ignored --test-threads=1: PASS
 - short Unix SIGTERM repeated run: 5/5 PASS
 - bash scripts/check.sh: PASS
-- bash scripts/release-check.sh verify: PASS (all 4 phases)
+- bash scripts/release-check.sh verify: PASS
 - cargo doc -p snip-it --no-deps: PASS
 
-Residual deviations: none
+Residual deviations (closed by Phase 13J):
+- `serve_inner` continued to check only `requested` and `forced`. A requested
+  shutdown in which gRPC or HTTP returned an error or panicked during drain
+  could still return `Ok(())` after cleanup. Closed by Phase 13J wiring
+  `ensure_clean_requested_shutdown()`.
 
-Release disposition: CLEARED
-```
+Release disposition: BLOCKED until Phase 13J closes
