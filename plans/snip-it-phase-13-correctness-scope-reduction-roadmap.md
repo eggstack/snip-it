@@ -1,6 +1,6 @@
 # Phase 13 Roadmap — Correctness Repair, Verification Reduction, and Lightweight Scope Recovery
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
 Original baseline: `b62d0f50078f7656eca3c9abf58e2ad290562029`
 
@@ -12,7 +12,7 @@ Phase 13J plan commit: `4f789cd4cd69d3c5ca8a63e9394180a9e65010b8`
 
 Phase 13J implementation commit: `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
-Phase 13J record commit: <filled after Pass 7 commit exists>
+Phase 13J record commit: `f6df933` phase-13j: record implementation commit SHA in plans
 
 Date opened: 2026-08-04
 
@@ -60,8 +60,8 @@ Until Phase 13J passes, do not publish a release or mark Phase 13 complete.
 | 13F | `plans/snip-it-phase-13f-api-cli-server-surface-consolidation.md` | implemented | Narrow supported surfaces and clean documentation |
 | 13G | `plans/snip-it-phase-13g-corrective-closure.md` | complete with corrective follow-up | Correct initial multi-batch and shutdown defects |
 | 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | complete with corrective follow-up | Add zero-batch sync, shared orchestration, retained-state/process corrections, and record repair |
-| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | implemented with corrective follow-up required | Add drain result accounting, deterministic retained-state failure, and missing regressions |
-| 13J | `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md` | IMPLEMENTED; VERIFICATION PENDING; release-blocking | Wire production outcome, consolidate test seams, tighten proof, and close records |
+| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | complete with corrective follow-up | Add drain result accounting, deterministic retained-state failure, and missing regressions |
+| 13J | `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md` | COMPLETE; release-blocking cleared | Wire production outcome, consolidate test seams, tighten proof, and close records |
 
 Required sequence:
 
@@ -266,10 +266,10 @@ Only after these statements are true may this roadmap return to `Status: COMPLET
 
 ## 13. Current disposition
 
-Status: CORRECTIVE CLOSURE REQUIRED
+Status: COMPLETE
 
-Release-blocking phase: Phase 13J (implementation committed; final record pending)
+Release-blocking phase: None
 
-Current release disposition: BLOCKED
+Current release disposition: CLEARED
 
-Next plan: `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md`
+Next plan: none — Phase 13 is closed.

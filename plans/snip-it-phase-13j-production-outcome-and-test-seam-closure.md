@@ -1,6 +1,6 @@
 # Phase 13J — Production Outcome Wiring and Test-Seam Closure
 
-Status: IMPLEMENTED; VERIFICATION PENDING
+Status: COMPLETE
 
 Parent roadmap: `plans/snip-it-phase-13-correctness-scope-reduction-roadmap.md`
 
@@ -11,8 +11,9 @@ Date: 2026-08-06
 Implementation commit:
 - `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
-Closure record commit:
-- <filled after Pass 7 commit exists>
+Record commit:
+- `f6df933` phase-13j: record implementation commit SHA in plans
+- <this commit> phase-13: record verified phase 13j closure
 
 Execution target: smaller coding models operating sequentially with narrow context.
 
@@ -799,41 +800,45 @@ Stop and amend this plan rather than broadening scope if:
 - release verification cannot be run but records are about to be marked complete;
 - unrelated Phase 13 work begins changing.
 
-## 15. Completion record template
+## 15. Completion record
 
-Fill only after implementation and verification.
-
-```text
-Status: COMPLETE | COMPLETE WITH DOCUMENTED DEVIATIONS | PARTIAL
+Status: COMPLETE
 
 Implementation commit:
-- <sha> <summary>
+- `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
 Record commit:
-- <sha> <summary>
+- `f6df933` phase-13j: record implementation commit SHA in plans
 
 Verification:
-- cargo fmt --all -- --check: PASS/FAIL
-- cargo clippy --workspace --all-targets -- -D warnings: PASS/FAIL
-- cargo test -p snip-it --lib sync -- --test-threads=1: PASS/FAIL
-- cargo test -p snip-sync --lib orchestration -- --test-threads=1: PASS/FAIL
-- cargo test -p snip-sync --lib: PASS/FAIL
-- cargo test --test sync_multibatch -- --test-threads=1: PASS/FAIL
-- cargo test --test platform_smoke: PASS/FAIL
-- bash scripts/check.sh: PASS/FAIL
-- bash -n scripts/release-check.sh: PASS/FAIL
-- cargo doc -p snip-it --no-deps: PASS/FAIL
-- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS/FAIL
-- short Unix SIGTERM repeated run: <N>/5 PASS
-- bash scripts/release-check.sh verify from clean implementation commit: PASS/FAIL
+- cargo fmt --all -- --check: PASS
+- cargo clippy --workspace --all-targets -- -D warnings: PASS
+- cargo test -p snip-it --lib sync -- --test-threads=1: PASS (252 tests)
+- cargo test -p snip-sync --lib orchestration -- --test-threads=1: PASS (12 tests)
+- cargo test -p snip-sync --lib: PASS (148 tests)
+- cargo test --test sync_multibatch -- --test-threads=1: PASS (6 tests)
+- cargo test --test platform_smoke: PASS (16 tests)
+- bash scripts/check.sh: PASS
+- bash -n scripts/release-check.sh: PASS
+- cargo doc -p snip-it --no-deps: PASS
+- cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1: PASS (2 tests)
+- short Unix SIGTERM repeated run: 5/5 PASS
+- bash scripts/release-check.sh verify from clean implementation commit: PASS
 
 Evidence notes:
-- high-level pull direction: direct | indirect through real zero-batch client integration
-- failed-sync cursor: direct test <name> | preserved by inspected caller control flow
+- high-level pull direction: indirect through real zero-batch client integration (empty-local/empty-remote and seeded-pull tests)
+- failed-sync cursor: preserved by inspected caller control flow (sync_encrypted returns error before cursor advance; caller advances only on Ok)
 
 Residual deviations:
-- none | <explicit bounded deviation>
+- none
 
 Release disposition:
-- BLOCKED | CLEARED
-```
+- CLEARED
+
+CI note:
+- GitHub Actions Linux correctness runner availability is currently degraded.
+  Both macOS and Windows platform smoke jobs passed. The Linux correctness job
+  failed with "job was not acquired by Runner of type hosted even after multiple
+  attempts" — this is a transient infrastructure issue, not a code defect.
+  Local Linux verification (`bash scripts/check.sh`, `cargo clippy`,
+  `bash scripts/release-check.sh verify`) all pass.
