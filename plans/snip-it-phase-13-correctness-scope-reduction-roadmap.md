@@ -6,11 +6,13 @@ Original baseline: `b62d0f50078f7656eca3c9abf58e2ad290562029`
 
 Phase 13G reviewed baseline: `00bee90300d1984ccfc01a12f1fcd909fd6a3d60`
 
-Phase 13I corrective baseline: `f8b9aa8445a8d9a4385e505df94a275df2dde4a9`
+Phase 13I reviewed head: `39f8ef5ae9a0d32330d394738c3d862dc5c7560f`
+
+Phase 13J plan commit: `4f789cd4cd69d3c5ca8a63e9394180a9e65010b8`
 
 Date opened: 2026-08-04
 
-Last review: 2026-08-05
+Last review: 2026-08-06
 
 ## 1. Purpose
 
@@ -22,25 +24,25 @@ The governing product model remains:
 - optional sync must not endanger successful local mutation;
 - the sync server targets loopback, trusted LAN, or reverse-proxied self-hosting;
 - this project does not require production-SaaS architecture or generalized orchestration;
-- simplification must preserve user-visible behavior unless a separately approved change says otherwise.
+- simplification must preserve user-visible behavior;
+- verification should prove reproduced defects without becoming a second product.
 
-Phases 13A through 13F delivered correctness, verification, footprint, auto-sync, persistence, API, CLI, and documentation improvements. Phase 13G corrected the first residual sync and shutdown defects. Phase 13H then added explicit zero-batch sync, shared sync logic, typed batch-error preservation, shared production shutdown orchestration, bounded process waits, same-port restart testing, and retained SQLite state.
+Phases 13A through 13F delivered correctness, footprint, auto-sync, persistence, API, CLI, and documentation improvements. Phases 13G through 13I corrected sync batching, zero-batch pull, retained-state convergence, server drain behavior, bounded process waits, and direct regressions.
 
-A post-13H review of `f8b9aa8` found that final closure remains premature. Phase 13I is the sole remaining corrective phase. It must correct two-handle drain result accounting, replace timing-raced partial-failure coverage with deterministic retained-state proof, add the missing direct zero-batch/error-context regressions, remove duplicated orchestration tests, and restore truthful closure records.
+A review of `39f8ef5` found that final closure remains premature. Phase 13J is the sole remaining corrective phase. It must wire the already-classified shutdown result into the production process result, remove a duplicated public test-only sync implementation, return local helpers to private visibility, strengthen narrow orchestration proof, and restore truthful records.
 
 ## 2. Current release blockers
 
-The following items remain open at the Phase 13I baseline:
+The following blockers remain at the Phase 13J baseline:
 
-1. during requested drain, one service handle can complete and be consumed before the sibling times out, while outer state still treats both handles as pending;
-2. the forced-abort path can therefore abort or await an already-consumed handle;
-3. service errors or panics returned during drain are discarded, allowing requested shutdown to report success after unclean service completion;
-4. the retained-state partial-failure test uses a 200 ms race and does not prove partial mutation or first-attempt failure;
-5. empty/pull-only pagination, all-encryption-failed accounting, and typed batch-context behavior lack the direct regressions required by Phase 13H;
-6. older standalone orchestration tests remain alongside production-helper tests and duplicate behavior outside the production path;
-7. Phase 13H and this roadmap claim complete closure despite these gaps.
+1. `serve_inner` checks only `requested` and `forced`, so requested shutdown can return success when gRPC or HTTP returned an error or panicked during drain;
+2. `sync_encrypted_with_custom_encrypt` duplicates the complete zero/one/many sync algorithm and is publicly callable despite being test-only;
+3. `add_batch_context` is public solely for integration-test access;
+4. requested-shutdown tests can wake services through a test-side broadcast rather than proving the orchestration helper sends shutdown;
+5. the no-pre-signal-timeout test waits before invoking the helper and does not test the claimed interval;
+6. Phase 13H, Phase 13I, and roadmap records contain contradictory statuses, incomplete commit attribution, and overstated evidence.
 
-Until Phase 13I passes, do not publish a release or mark Phase 13 complete.
+Until Phase 13J passes, do not publish a release or mark Phase 13 complete.
 
 ## 3. Phase map
 
@@ -54,7 +56,8 @@ Until Phase 13I passes, do not publish a release or mark Phase 13 complete.
 | 13F | `plans/snip-it-phase-13f-api-cli-server-surface-consolidation.md` | implemented | Narrow supported surfaces and clean documentation |
 | 13G | `plans/snip-it-phase-13g-corrective-closure.md` | complete with corrective follow-up | Correct initial multi-batch and shutdown defects |
 | 13H | `plans/snip-it-phase-13h-final-correctness-closure.md` | complete with corrective follow-up | Add zero-batch sync, shared orchestration, retained-state/process corrections, and record repair |
-| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | complete | Correct drain result accounting, deterministic retained-state failure, missing regressions, and final records |
+| 13I | `plans/snip-it-phase-13i-drain-and-regression-closure.md` | implemented with corrective follow-up required | Add drain result accounting, deterministic retained-state failure, and missing regressions |
+| 13J | `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md` | READY FOR IMPLEMENTATION; release-blocking | Wire production outcome, consolidate test seams, tighten proof, and close records |
 
 Required sequence:
 
@@ -66,86 +69,98 @@ Required sequence:
     -> 13F
     -> 13G
     -> 13H
-    -> 13I drain and regression closure
+    -> 13I
+    -> 13J production-outcome and test-seam closure
     -> verified closure
 ```
 
-## 4. Implemented work to retain
+## 4. Correctly implemented work to retain
 
-Do not revert the correctly landed Phase 13 changes while implementing 13I.
+Do not revert:
 
-Retain:
-
-- strict typed server environment parsing and rejection of unusable zero-valued limits;
+- strict typed server environment parsing and nonzero limit validation;
 - removal of the arbitrary normal-operation server lifetime timeout;
 - Unix SIGTERM registration and shutdown-aware Axum/Tonic serving;
-- deterministic byte-bounded upload preflight and singleton overflow revalidation;
-- upload-before-authoritative-response ordering for multi-batch sync;
-- explicit zero-, one-, and many-batch dispatch;
-- one shared `sync_encrypted_inner` implementation;
-- typed `SyncFailureKind` preservation for multi-batch errors;
-- shared `run_services_until_shutdown` production entry point;
-- explicit task abort calls after drain timeout;
-- bounded process waits, isolated state directory, and same-port restart helper;
+- deterministic byte-bounded upload preflight and singleton overflow validation;
+- explicit zero-, one-, and many-batch sync behavior;
+- upload-before-authoritative-response ordering;
+- typed sync failure preservation with batch context;
+- deterministic retained-state failure and exact-once retry convergence;
+- per-service completion tracking during drain;
+- explicit abort and await of pending tasks after timeout;
+- bounded process waits, state isolation, and same-port restart;
 - reduced routine CI and manual release structure;
-- dependency, runtime, auto-sync, transaction, API, CLI, and documentation simplifications from earlier Phase 13 work.
+- earlier dependency, runtime, transaction, API, CLI, and documentation simplifications.
 
-Phase 13I must correct the remaining behavior without reopening these workstreams.
+Phase 13J must correct only the final wiring, test-seam, proof, and record gaps.
 
-## 5. Required Phase 13I outcome
+## 5. Required Phase 13J outcome
 
-Phase 13I must leave the repository with:
+Phase 13J must leave the repository with:
 
-- every service handle output consumed exactly once;
-- completion state updated immediately when a task finishes during drain;
-- only still-pending tasks aborted after timeout;
-- every initial and drain-time service result classified and propagated;
-- requested shutdown succeeding only when both services finish cleanly without forced abort;
-- persistence shutdown beginning only after both serving tasks are proven terminal;
-- deterministic failure of a known later `PushSnippets` call after an earlier batch commits;
-- proof that the first sync fails with a partial retained database state;
-- retry against the same account, library identity, API key, and SQLite state;
-- complete exact-once convergence after retry;
-- direct empty/pull-only pagination and all-encryption-failed accounting regressions;
-- direct typed batch-context tests for `ClockSkew` and `Timeout`;
-- only production-helper orchestration tests, with parallel fake logic removed;
-- compact routine verification and successful manual release verification;
-- truthful Phase 13H, Phase 13I, and roadmap records.
+- production success based on the fully classified `ServiceShutdownOutcome`;
+- requested shutdown returning success only for two clean service results with no forced abort;
+- persistence cleanup completed before any service failure is returned;
+- final diagnostics retaining both service classifications and original details;
+- exactly one zero/one/many encrypted sync transport implementation;
+- private, unit-test-only encryption failure injection;
+- no public custom-encryption sync method;
+- private `add_batch_context` with colocated unit tests;
+- requested-shutdown tests proving the helper owns the shutdown broadcast;
+- a real no-pre-signal-timeout regression;
+- truthful direct-versus-indirect evidence records;
+- one consistent roadmap status and release disposition;
+- successful focused, routine, process, and clean-tree release verification.
 
 ## 6. Explicit non-goals
 
 Do not add:
 
-- new sync RPCs, streaming RPCs, protocol revisions, protobuf fields, or database migrations;
-- upload journals, rollback RPCs, distributed transactions, queues, daemons, supervisors, task registries, or service managers;
-- generalized batching, transport, cancellation, or orchestration frameworks;
+- new RPCs, streaming RPCs, protocol revisions, protobuf fields, or database migrations;
+- upload journals, rollback RPCs, queues, durable checkpoints, or distributed transactions;
+- generalized supervisors, task registries, service managers, or daemon frameworks;
 - production failure-injection configuration or environment variables;
-- new async-runtime, signal, test, mocking, or orchestration dependencies;
+- new async-runtime, signal, mock, test, or orchestration dependencies;
 - new CI jobs, matrices, schedules, coverage systems, benchmarks, artifacts, or release automation;
 - broad auto-sync, transaction, TUI, theme, updater, CLI, API, packaging, or deployment work;
-- arbitrary validation bounds unrelated to the reproduced defects;
-- timing sleeps as the primary trigger for deterministic partial-failure tests.
+- a new high-level pull/filesystem/server harness solely to strengthen record wording;
+- source-text tests as correctness evidence.
 
 ## 7. Security and durability boundary
 
-Phase 13I must retain:
+Phase 13J must retain:
 
 - client-side encryption and authenticated ownership;
 - API-key secrecy and keychain behavior;
 - request/message limits and complete upload preflight;
-- deterministic snippet identity and existing idempotent upserts;
+- deterministic snippet identity and idempotent upserts;
 - local-first mutation ordering;
-- pending auto-sync intent and successful-cursor protection after failures;
-- atomic local writes and current destructive-operation protections;
-- safe updater extraction/checksum behavior;
-- existing path and symlink protections;
-- persistence/database lifetime through final server cleanup.
+- pending auto-sync intent and caller-controlled successful-sync timestamp updates;
+- atomic local writes and destructive-operation protections;
+- updater extraction/checksum and path protections;
+- database/persistence lifetime through final server cleanup.
 
-## 8. Verification philosophy
+## 8. Execution authority
 
-Phase 13 intentionally uses a small verification surface.
+The implementation authority is:
 
-Routine verification remains centered on:
+`plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md`
+
+It is written for sequential small-model execution and contains:
+
+- exact file boundaries for each pass;
+- preferred code shapes;
+- tests to move or retain;
+- focused commands after each pass;
+- explicit stop conditions;
+- commit and clean-tree verification ordering;
+- final acceptance criteria and completion record template.
+
+Do not substitute the older Phase 13I checklist for Phase 13J execution.
+
+## 9. Verification philosophy
+
+Routine verification remains compact:
 
 ```text
 cargo fmt --all -- --check
@@ -156,61 +171,48 @@ cargo test --test sync_multibatch -- --test-threads=1
 bash scripts/check.sh
 ```
 
-Phase 13I may add focused tests within existing targets, but must not add a new workflow or broad verification layer.
-
-Manual release verification must include:
+Focused Phase 13J verification must include:
 
 ```text
-cargo test --release --test sync_multibatch -- --test-threads=1
+cargo test -p snip-it --lib sync -- --test-threads=1
+cargo test -p snip-sync --lib orchestration -- --test-threads=1
+```
+
+Manual process/release verification must include:
+
+```text
 cargo test --release --test snip_sync_lifetime -- --ignored --test-threads=1
 bash scripts/release-check.sh verify
 ```
 
-The 35-second lifetime regression remains release-only. The short Unix SIGTERM regression must pass five consecutive runs before closure.
+The short Unix SIGTERM case must pass five consecutive runs. The 35-second lifetime case remains release-only.
 
-No plan may claim closure when a required command was skipped, excluded, timing-raced, or run against a different implementation/profile.
+No plan may claim closure for skipped, excluded, timing-raced, dirty-tree, or differently profiled commands.
 
-## 9. Phase 13I closure gate
+## 10. Commit strategy
 
-Phase 13I closes only when every acceptance criterion in `plans/snip-it-phase-13i-drain-and-regression-closure.md` is satisfied.
+Use at most two commits after the planning commits:
 
-At minimum:
+1. implementation, focused tests, and truthful verification-pending records;
+2. final records after clean-tree release verification.
 
-- the signal-first, one-clean/one-refusing regression proves no completed handle is consumed twice;
-- drain-time service errors and panics produce process failure after sibling cleanup;
-- every forced abort targets only pending handles and every aborted handle is awaited;
-- the orchestration helper returns only after both service tasks are terminal;
-- persistence starts shutdown only after that outcome is established;
-- a known later push fails deterministically after an earlier batch commits;
-- the first sync returns `Err` and the retained database row count is between zero and the expected total;
-- retry uses the same credentials/identity/database and converges exactly once;
-- empty local pull, multi-page zero-batch pagination, and all-encryption-failed accounting regressions pass;
-- typed batch context preserves `ClockSkew` and `Timeout` classifications and original detail;
-- obsolete parallel orchestration tests are deleted;
-- short SIGTERM passes 5/5 and long lifetime verification passes;
-- `bash scripts/release-check.sh verify` passes from a clean tree;
-- Phase 13H and roadmap records are corrected.
+Preferred messages:
 
-## 10. Commit and handoff strategy
+```text
+phase-13j: wire shutdown outcomes and consolidate sync test seams
+phase-13: record verified phase 13j closure
+```
 
-Use at most:
+Do not create one commit per helper or test.
 
-1. one coherent implementation/test commit for orchestration and deterministic sync regressions;
-2. one closure/documentation commit.
+The final record must distinguish:
 
-A separate implementation commit for orchestration and sync tests is acceptable only when it materially improves reviewability. Do not create one commit per test.
-
-The closure commit must record:
-
-- all implementation SHAs;
-- exact verification commands and results;
-- short Unix SIGTERM repeated-run count;
-- any bounded residual deviation;
-- explicit release disposition.
+- the implementation commit against which clean-tree release verification ran;
+- the later record-only commit that records that result.
 
 ## 11. Historical implementation record
 
-Implemented before Phase 13I:
+Implemented before Phase 13J:
 
 - `7e0d064` Phase 13A server lifetime/config parsing
 - `84f5b7f` Phase 13B upload batching/clock diagnostics
@@ -220,41 +222,50 @@ Implemented before Phase 13I:
 - `01a860b` + `429952e` Phase 13F API/CLI/docs consolidation
 - `5d37fa7` + `898a62b` + `00bee90` Phase 13G corrections
 - `75a55b1` Phase 13H implementation
-- `7619b69` release-script command correction
+- `7619b69` release-script correction
 - `f8b9aa8` Phase 13G/13H record correction
+- `c08cac1` Phase 13I primary implementation
+- `5f10c68` Phase 13I drain-time error test and initial completion record
+- `18e7ddb` Phase 13I release-check record update
+- `39f8ef5` Phase 13I closure-SHA record update
+- `4f789cd` Phase 13J implementation plan
 
-These commits do not constitute final release clearance until Phase 13I closes.
+These commits do not constitute final Phase 13 release clearance until Phase 13J closes.
 
 ## 12. Final closure criteria
 
 Phase 13 is complete only when all statements are true:
 
-- [ ] Phase 13I is marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and closure SHAs.
-- [ ] Every serving-task result is consumed once and classified.
-- [ ] Drain completion state is updated immediately for each service.
-- [ ] Only pending tasks are aborted after timeout, and each abort is awaited.
-- [ ] Requested shutdown fails on service error, panic, or forced abort.
-- [ ] Persistence shutdown follows proven serving-task termination.
-- [ ] Deterministic later-batch failure proves retained partial state.
-- [ ] Retry converges against the same identity and database with no duplicates.
-- [ ] Failed sync does not advance successful-sync cursor state.
-- [ ] Empty/pull-only and multi-page zero-batch behavior have direct regressions.
-- [ ] All-encryption-failed accounting has a direct regression.
-- [ ] Batch context preserves typed failure classifications and original diagnostics.
-- [ ] Production and tests use one orchestration helper without parallel duplicate logic.
-- [ ] Process tests remain bounded and same-port restart remains valid.
-- [ ] Short SIGTERM passes 5/5 and long lifetime release regression passes.
-- [ ] Routine verification remains compact.
-- [ ] Manual release verification passes from a clean tree.
-- [ ] No new dependency, protocol, schema, daemon, supervisor, generalized framework, or CI topology is added.
-- [ ] Phase 13H and affected records truthfully describe corrective follow-up and final SHAs/results.
-- [ ] The roadmap completion record includes Phase 13I.
+- [ ] Phase 13J is marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and record SHAs.
+- [ ] Production consumes the same clean-shutdown decision tested by unit tests.
+- [ ] Requested shutdown fails after cleanup on service error, panic, or forced abort.
+- [ ] Unexpected clean service exit remains failure.
+- [ ] Service failure diagnostics retain both service results and original detail.
+- [ ] Requested-shutdown tests rely on the helper's shutdown broadcast.
+- [ ] No-pre-signal-timeout is directly tested while orchestration is running.
+- [ ] Exactly one method contains zero/one/many sync transport logic.
+- [ ] Custom encryption failure injection is private and unit-test-only.
+- [ ] `sync_encrypted_with_custom_encrypt` is removed.
+- [ ] `add_batch_context` is private with colocated unit tests.
+- [ ] Real zero-batch, pagination, retained-state, and exact-once integration tests remain passing.
+- [ ] No dependency, feature, protocol, schema, supervisor, journal, or CI topology is added.
+- [ ] Direct and indirect evidence are labeled truthfully.
+- [ ] Phase 13H and Phase 13I records contain correct statuses and commit attribution.
+- [ ] The roadmap has no contradictory status or disposition.
+- [ ] Focused and routine checks pass.
+- [ ] Long lifetime verification passes.
+- [ ] Short Unix SIGTERM passes 5/5.
+- [ ] Clean-tree `bash scripts/release-check.sh verify` passes against the Phase 13J implementation commit.
 - [ ] No release blocker remains deferred.
 
 Only after these statements are true may this roadmap return to `Status: COMPLETE` and `Release disposition: CLEARED`.
 
 ## 13. Current disposition
 
-Status: COMPLETE
+Status: CORRECTIVE CLOSURE REQUIRED
 
-Release disposition: CLEARED
+Release-blocking phase: Phase 13J
+
+Current release disposition: BLOCKED
+
+Next plan: `plans/snip-it-phase-13j-production-outcome-and-test-seam-closure.md`
