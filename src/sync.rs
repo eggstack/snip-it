@@ -2074,13 +2074,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_encryption_failed_accounting() {
-        // Required for plaintext loopback tests.
-        // SAFETY: this only runs inside a unit test; no concurrent
-        // threads observe the env var during the test window.
-        unsafe {
-            std::env::set_var("SNIP_ALLOW_PLAINTEXT_API_KEY", "true");
-        }
-
         let service = snip_sync::test_helpers::build_test_service().await;
         let (addr, server_task, _captured) =
             snip_sync::test_helpers::start_test_server(service).await;

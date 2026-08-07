@@ -12,7 +12,9 @@ Phase 13J plan commit: `4f789cd4cd69d3c5ca8a63e9394180a9e65010b8`
 
 Phase 13J implementation commit: `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
-Phase 13J record commit: `f6df933` phase-13j: record implementation commit SHA in plans
+Phase 13J intermediate record commit: `f6df933` phase-13j: record implementation commit SHA in plans
+
+Phase 13J final closure record commit: `d3f16be` phase-13: record verified phase 13j closure
 
 Date opened: 2026-08-04
 
@@ -240,27 +242,27 @@ These commits do not constitute final Phase 13 release clearance until Phase 13J
 
 Phase 13 is complete only when all statements are true:
 
-- [ ] Phase 13J is marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and record SHAs.
-- [ ] Production consumes the same clean-shutdown decision tested by unit tests.
-- [ ] Requested shutdown fails after cleanup on service error, panic, or forced abort.
-- [ ] Unexpected clean service exit remains failure.
-- [ ] Service failure diagnostics retain both service results and original detail.
-- [ ] Requested-shutdown tests rely on the helper's shutdown broadcast.
-- [ ] No-pre-signal-timeout is directly tested while orchestration is running.
-- [ ] Exactly one method contains zero/one/many sync transport logic.
-- [ ] Custom encryption failure injection is private and unit-test-only.
-- [ ] `sync_encrypted_with_custom_encrypt` is removed.
-- [ ] `add_batch_context` is private with colocated unit tests.
-- [ ] Real zero-batch, pagination, retained-state, and exact-once integration tests remain passing.
-- [ ] No dependency, feature, protocol, schema, supervisor, journal, or CI topology is added.
-- [ ] Direct and indirect evidence are labeled truthfully.
-- [ ] Phase 13H and Phase 13I records contain correct statuses and commit attribution.
-- [ ] The roadmap has no contradictory status or disposition.
-- [ ] Focused and routine checks pass.
-- [ ] Long lifetime verification passes.
-- [ ] Short Unix SIGTERM passes 5/5.
-- [ ] Clean-tree `bash scripts/release-check.sh verify` passes against the Phase 13J implementation commit.
-- [ ] No release blocker remains deferred.
+- [x] Phase 13J is marked `COMPLETE` or `COMPLETE WITH DOCUMENTED DEVIATIONS` with implementation and record SHAs.
+- [x] Production consumes the same clean-shutdown decision tested by unit tests.
+- [x] Requested shutdown fails after cleanup on service error, panic, or forced abort.
+- [x] Unexpected clean service exit remains failure.
+- [x] Service failure diagnostics retain both service results and original detail.
+- [x] Requested-shutdown tests rely on the helper's shutdown broadcast.
+- [x] No-pre-signal-timeout is directly tested while orchestration is running.
+- [x] Exactly one method contains zero/one/many sync transport logic.
+- [x] Custom encryption failure injection is private and unit-test-only.
+- [x] `sync_encrypted_with_custom_encrypt` is removed.
+- [x] `add_batch_context` is private with colocated unit tests.
+- [x] Real zero-batch, pagination, retained-state, and exact-once integration tests remain passing.
+- [x] No dependency, feature, protocol, schema, supervisor, journal, or CI topology is added.
+- [x] Direct and indirect evidence are labeled truthfully.
+- [x] Phase 13H and Phase 13I records contain correct statuses and commit attribution.
+- [x] The roadmap has no contradictory status or disposition.
+- [x] Focused and routine checks pass.
+- [x] Long lifetime verification passes.
+- [x] Short Unix SIGTERM passes 5/5.
+- [x] Clean-tree `bash scripts/release-check.sh verify` passes against the Phase 13J implementation commit.
+- [x] No release blocker remains deferred.
 
 Only after these statements are true may this roadmap return to `Status: COMPLETE` and `Release disposition: CLEARED`.
 
@@ -273,3 +275,12 @@ Release-blocking phase: None
 Current release disposition: CLEARED
 
 Next plan: none — Phase 13 is closed.
+
+Post-closure housekeeping (not a release-blocking phase):
+- `plans/snip-it-phase-13-post-closure-cleanup.md` is a test-isolation and
+  record-normalization pass that runs after the final Phase 13 closure commit
+  (`d3f16be`). It removes an unnecessary process-global
+  `SNIP_ALLOW_PLAINTEXT_API_KEY` mutation from
+  `test_all_encryption_failed_accounting` and normalizes the Phase 13J and
+  roadmap acceptance checklists to match the recorded completion evidence.
+  `d3f16be` remains the historical final Phase 13 closure record commit.

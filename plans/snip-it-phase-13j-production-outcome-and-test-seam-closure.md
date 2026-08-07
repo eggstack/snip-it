@@ -11,9 +11,11 @@ Date: 2026-08-06
 Implementation commit:
 - `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
-Record commit:
+Intermediate record commit:
 - `f6df933` phase-13j: record implementation commit SHA in plans
-- <this commit> phase-13: record verified phase 13j closure
+
+Final closure record commit:
+- `d3f16be` phase-13: record verified phase 13j closure
 
 Execution target: smaller coding models operating sequentially with narrow context.
 
@@ -691,63 +693,63 @@ After this commit, do not claim that `release-check.sh verify` ran against the f
 
 ### 12.1 Production shutdown result
 
-- [ ] Production calls the same clean-shutdown decision method tested by unit tests.
-- [ ] Requested shutdown with two clean services returns success.
-- [ ] Requested shutdown with a service error returns failure after persistence cleanup.
-- [ ] Requested shutdown with a service panic returns failure after persistence cleanup.
-- [ ] Forced abort returns failure after persistence cleanup.
-- [ ] Unexpected clean service exit returns failure after sibling cleanup.
-- [ ] Final failure text identifies gRPC and HTTP results.
-- [ ] Original service error or panic detail remains visible.
+- [x] Production calls the same clean-shutdown decision method tested by unit tests.
+- [x] Requested shutdown with two clean services returns success.
+- [x] Requested shutdown with a service error returns failure after persistence cleanup.
+- [x] Requested shutdown with a service panic returns failure after persistence cleanup.
+- [x] Forced abort returns failure after persistence cleanup.
+- [x] Unexpected clean service exit returns failure after sibling cleanup.
+- [x] Final failure text identifies gRPC and HTTP results.
+- [x] Original service error or panic detail remains visible.
 
 ### 12.2 Orchestration proof quality
 
-- [ ] Requested-shutdown tests rely on the helper's broadcast, not a test-side broadcast send.
-- [ ] No-pre-signal test runs the helper while the signal remains pending.
-- [ ] The helper remains pending longer than the drain timeout before the first terminal event.
-- [ ] Existing per-handle consumed-state and abort behavior remain passing.
-- [ ] No second orchestration implementation is added.
+- [x] Requested-shutdown tests rely on the helper's broadcast, not a test-side broadcast send.
+- [x] No-pre-signal test runs the helper while the signal remains pending.
+- [x] The helper remains pending longer than the drain timeout before the first terminal event.
+- [x] Existing per-handle consumed-state and abort behavior remain passing.
+- [x] No second orchestration implementation is added.
 
 ### 12.3 Single sync implementation
 
-- [ ] Exactly one method contains the zero/one/many batch transport logic.
-- [ ] `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to it.
-- [ ] Injected encryption failures reach the same prepared transport method.
-- [ ] `sync_encrypted_with_custom_encrypt` is removed.
-- [ ] The injected-encryption caller is private and `#[cfg(test)]` only.
-- [ ] All-encryption-failed behavior still contacts the real in-process server.
-- [ ] Skipped IDs/counts and remote response assertions remain passing.
-- [ ] Real zero-batch and retained-state integration tests remain passing.
+- [x] Exactly one method contains the zero/one/many batch transport logic.
+- [x] `sync_encrypted` and `sync_encrypted_with_ceiling` delegate to it.
+- [x] Injected encryption failures reach the same prepared transport method.
+- [x] `sync_encrypted_with_custom_encrypt` is removed.
+- [x] The injected-encryption caller is private and `#[cfg(test)]` only.
+- [x] All-encryption-failed behavior still contacts the real in-process server.
+- [x] Skipped IDs/counts and remote response assertions remain passing.
+- [x] Real zero-batch and retained-state integration tests remain passing.
 
 ### 12.4 Helper visibility
 
-- [ ] `add_batch_context` is private.
-- [ ] Its tests are colocated in `src/sync.rs`.
-- [ ] No new supported public sync API is introduced.
-- [ ] `cargo doc -p snip-it --no-deps` passes.
+- [x] `add_batch_context` is private.
+- [x] Its tests are colocated in `src/sync.rs`.
+- [x] No new supported public sync API is introduced.
+- [x] `cargo doc -p snip-it --no-deps` passes.
 
 ### 12.5 Scope control
 
-- [ ] No Cargo dependency or feature change is made.
-- [ ] No protocol, schema, migration, or persistence change is made.
-- [ ] No supervisor, queue, journal, or generalized framework is added.
-- [ ] No CI topology or release automation change is made.
-- [ ] No new high-level pull harness is added solely for evidence ceremony.
-- [ ] Routine checks remain compact.
+- [x] No Cargo dependency or feature change is made.
+- [x] No protocol, schema, migration, or persistence change is made.
+- [x] No supervisor, queue, journal, or generalized framework is added.
+- [x] No CI topology or release automation change is made.
+- [x] No new high-level pull harness is added solely for evidence ceremony.
+- [x] Routine checks remain compact.
 
 ### 12.6 Records and verification
 
-- [ ] Phase 13H is truthfully qualified.
-- [ ] Phase 13I is truthfully qualified and lists `c08cac1`, `5f10c68`, `18e7ddb`, and `39f8ef5` correctly.
-- [ ] Phase 13J records exact implementation and record SHAs.
-- [ ] Direct and indirect evidence are labeled accurately.
-- [ ] No contradictory roadmap status remains.
-- [ ] Focused tests pass.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] Long lifetime test passes.
-- [ ] Short SIGTERM passes 5/5.
-- [ ] Clean-tree `bash scripts/release-check.sh verify` passes against the implementation commit.
-- [ ] Roadmap returns to `COMPLETE` and `CLEARED` only after all blockers are resolved.
+- [x] Phase 13H is truthfully qualified.
+- [x] Phase 13I is truthfully qualified and lists `c08cac1`, `5f10c68`, `18e7ddb`, and `39f8ef5` correctly.
+- [x] Phase 13J records exact implementation and record SHAs.
+- [x] Direct and indirect evidence are labeled accurately.
+- [x] No contradictory roadmap status remains.
+- [x] Focused tests pass.
+- [x] `bash scripts/check.sh` passes.
+- [x] Long lifetime test passes.
+- [x] Short SIGTERM passes 5/5.
+- [x] Clean-tree `bash scripts/release-check.sh verify` passes against the implementation commit.
+- [x] Roadmap returns to `COMPLETE` and `CLEARED` only after all blockers are resolved.
 
 ## 13. Expected final diff boundary
 
@@ -807,8 +809,11 @@ Status: COMPLETE
 Implementation commit:
 - `6092d5b` phase-13j: wire shutdown outcomes and consolidate sync test seams
 
-Record commit:
+Intermediate record commit:
 - `f6df933` phase-13j: record implementation commit SHA in plans
+
+Final closure record commit:
+- `d3f16be` phase-13: record verified phase 13j closure
 
 Verification:
 - cargo fmt --all -- --check: PASS
@@ -842,3 +847,11 @@ CI note:
   attempts" — this is a transient infrastructure issue, not a code defect.
   Local Linux verification (`bash scripts/check.sh`, `cargo clippy`,
   `bash scripts/release-check.sh verify`) all pass.
+
+Post-closure cleanup (housekeeping, not a release-blocking phase):
+- A follow-up cleanup pass (`plans/snip-it-phase-13-post-closure-cleanup.md`)
+  removed an unnecessary process-global `SNIP_ALLOW_PLAINTEXT_API_KEY` mutation
+  from `test_all_encryption_failed_accounting` and normalized the Phase 13J and
+  roadmap acceptance checklists to match the recorded completion evidence.
+  `d3f16be` remains the historical final Phase 13 closure record commit;
+  the cleanup commit is bookkeeping only and does not reopen Phase 13.
