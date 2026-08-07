@@ -225,10 +225,12 @@ in-process latency. The effective policy is resolved once per command invocation
 
 ```rust
 pub struct AutoSyncPolicy {
+    pub sync_configured: bool,
     pub enabled: bool,
     pub debounce: Duration,
     pub failure_mode: AutoSyncFailureMode,
     pub sync_timeout: Duration,
+    pub max_lifetime: Duration,
 }
 ```
 
@@ -361,9 +363,10 @@ Each variant carries a `RetryDisposition` via `retry_disposition()`:
 
 ```rust
 pub enum RetryDisposition {
-    NoRetry,    // Do not schedule another worker cycle
-    Retryable,  // Schedule retry with exponential backoff
-    Immediate,  // Retry immediately (bounded max attempts)
+    RetryAfter(Duration),
+    WaitForConfigurationChange,
+    RequiresAttention,
+    NoAutomaticRetry,
 }
 ```
 
@@ -371,10 +374,10 @@ Retry dispositions by class:
 
 | FailureClass | RetryDisposition | Rationale |
 |--------------|------------------|-----------|
-| Transient | Retryable | Network, timeout, and partial failures are ephemeral |
-| Configuration | NoRetry | Auth, config, or credential failures require user correction |
-| LocalFailure | NoRetry | Persistence, conflict, and corruption issues persist |
-| Internal | Retryable | Bounded retry (3 attempts), then RequiresAttention |
+| Transient | RetryAfter(exponential backoff) | Network, timeout, and partial failures are ephemeral |
+| Configuration | WaitForConfigurationChange | Auth, config, or credential failures require user correction |
+| LocalFailure | RequiresAttention | Persistence, conflict, and corruption issues persist |
+| Internal | RetryAfter(Duration), then RequiresAttention | Bounded retry (3 attempts), then RequiresAttention |
 
 Classified from `SnipError` via `FailureClass::from_error()` in `policy.rs`,
 which applies typed variant matching with a fallback heuristic for legacy runtime

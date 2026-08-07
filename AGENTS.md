@@ -153,7 +153,7 @@ cargo test -p snip-sync --features test-helpers
 snip-it/          Main crate — binary "snp" (src/main.rs)
 snip-proto/       Protobuf definitions, tonic-generated gRPC code
 snip-sync/        Sync server (gRPC + HTTP/axum)
-tests/            Integration tests (~45 files, see below)
+tests/            Integration tests (~46 files, see below)
 scripts/          check.sh, release-check.sh, ci/ helpers
 themes/           50 Halloy TOML theme files
 ```
@@ -162,8 +162,8 @@ themes/           50 Halloy TOML theme files
 
 - `main.rs` — CLI entry point, clap dispatch
 - `lib.rs` — Library crate (exports for integration tests)
-- `commands/` — 23 command modules + shared helpers in `mod.rs`
-- `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, spawn, status, test_events, worker)
+- `commands/` — 24 files (23 command modules + shared helpers in `mod.rs`)
+- `auto_sync/` — Auto-sync subsystem (execution_lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
 - `library.rs` — Snippet/library data structures and TOML persistence
@@ -269,10 +269,12 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 - `~/.config/snp/sync.toml` — sync settings
 - `~/.config/snp/libraries.toml` — library metadata
 - `~/.config/snp/libraries/*.toml` — individual library files
+- `~/.config/snp/premade/*.toml` — downloaded premade libraries
 - `~/.config/snp/themes/*.toml` — Halloy-compatible theme files
 - `~/.config/snp/themes.toml` — active theme selection
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
 - `~/.config/snp/auto-sync-status.toml` — durable sync status (not synced, private)
+- `~/.config/snp/auto-sync-pending.toml` — pending mutation marker
 - `~/.config/snp/transaction-journals/` — transaction journals
 - `~/.config/snp/backups/` — backup snapshots
 

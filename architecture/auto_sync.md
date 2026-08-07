@@ -64,13 +64,11 @@ Legacy status codes are read compatibly via `from_code()`.
   retry disposition, direction resolution, and `MutationKind`/`MutationOrigin`.
 - `pending.rs` / `pending_lock.rs` — durable generation marker and its short
   transaction lock.
-- `execution_lock.rs` — shared kernel-backed sync lock (includes worker lock
-  types for backward compatibility).
-- `lock.rs` — re-exports from `execution_lock` for backward compatibility.
+- `execution_lock.rs` — shared kernel-backed sync lock, worker lock types,
+  `spawn_worker()` helper, and platform detachment. The former `lock.rs` and
+  `spawn.rs` modules are merged here.
 - `schedule.rs` / `notification.rs` — pending recording and detached spawn.
   Scheduler does not probe the execution lock; worker handles contention.
-- `spawn.rs` — current-executable lookup, platform detachment, and stream
-  routing for the single helper.
 - `worker.rs` — debounce, preflight, direct canonical sync, exact-generation
   clear, status, and bounded follow-up loop.
 - `status.rs` — durable result, backoff, and operator-attention state.

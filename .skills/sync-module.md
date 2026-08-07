@@ -145,6 +145,7 @@ cover encryption and retry/timestamp behavior.
 | `PremadePartialFailure` | Transient | sync_commands.rs |
 | `EncryptionFailed` | Internal | sync.rs |
 | `DecryptionFailed` | Internal | sync.rs |
+| `LibraryNotFound` | Configuration | sync_commands.rs |
 | `Timeout` | Transient | sync.rs |
 | `RequestTooLarge` | Configuration | sync.rs |
 | `ClockSkew` | Configuration | sync.rs |

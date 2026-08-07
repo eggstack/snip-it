@@ -158,8 +158,8 @@ These are **historical design annotations** that explain *why* the architecture 
 ### Three lock types exist:
 | Lock | File | Purpose | Used by |
 |------|------|---------|---------|
-| `WorkerLock` | `lock.rs` | Prevents concurrent workers | Worker subprocess, parent inspect |
-| `ExecutionLock` | `execution_lock.rs` | Prevents concurrent sync operations | Worker, executor, manual sync, cron |
+| `WorkerLock` | `execution_lock.rs` | Prevents concurrent workers | Worker subprocess, parent inspect |
+| `SyncExecutionLock` | `execution_lock.rs` | Prevents concurrent sync operations | Worker, executor, manual sync, cron |
 | `PendingTxnGuard` | `pending_lock.rs` | Serializes pending marker read-modify-write | `pending.rs` internal |
 
 **Status: CLEAN.** All three locks serve distinct purposes:
@@ -180,6 +180,6 @@ No dead lock types.
 | 3 | Remove `max_retries` from `AutoSyncPolicy` (dead field) | High | Low | **Done** |
 | 4 | Remove `STALE_LOCK_THRESHOLD_SECS` from `lock.rs` (unused constant) | Medium | Trivial | **Done** |
 | 5 | Tidy Release 5 labels in architecture docs (move to History sections) | Low | Medium | Open |
-| 6 | Feature-gate `sync`, `tui`, `auto-sync`, `clipboard`, `self-update`, `bundled-themes` | Future | High | Open |
+| 6 | Feature-gate `sync`, `tui`, `auto-sync`, `clipboard`, `self-update`, `bundled-themes` | N/A | N/A | **Removed** — empty feature labels removed in Phase 10; binary is monolithic |
 
 Items 1-4 are completed. Item 5 is cosmetic. Item 6 is the feature boundary work from Workstream I.

@@ -15,7 +15,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### CLI (`src/main.rs`, `src/commands/`)
 - Clap derive CLI with `Option<Commands>` — no subcommand defaults to `run` (TUI selector)
-- 23 command modules, each with a public `run()` entry function
+- 24 command modules, each with a public `run()` entry function
 - `RUNTIME: LazyLock<Runtime>` — lazy Tokio async runtime, only initialized by async commands
 - `dispatch_command()` — top-level match on `Option<Commands>`
 - Shared helpers in `src/commands/mod.rs`:
@@ -126,7 +126,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Edge case: bare `<` without matching `>` is treated as literal (preserved in output)
 
 ### Config (`src/config.rs`)
-- `SyncSettings` struct — `enabled`, `server_url`, `api_key` (zeroized on drop), `device_id`, `sync_interval_minutes`, `auto_sync`, `sync_direction`, `clipboard_auto_clear_seconds`, `sync_limit`
+- `SyncSettings` struct — `enabled`, `server_url`, `api_key` (zeroized on drop), `device_id`, `sync_interval_minutes`, `auto_sync`, `auto_sync_debounce_seconds`, `auto_sync_failure`, `auto_sync_max_delay_seconds`, `auto_sync_timeout_seconds`, `sync_direction`, `clipboard_auto_clear_seconds`, `sync_limit`, `credential_revision`
 - API key serialization: `@keychain` marker triggers OS keychain storage via `keyring` crate
 - `Debug` impl redacts API key
 - `SyncDirection` enum (default, push-only, pull-only)
@@ -147,12 +147,12 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 Optional post-mutation background synchronization (Phase 12C). Disabled by default; opt-in via `snp sync config --auto-sync on`. One detached helper owns the execution lock, debounces pending work, and runs canonical sync directly.
 
-- **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `enabled`, `debounce`, `failure_mode`, `sync_timeout`.
+- **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `sync_configured`, `enabled`, `debounce`, `failure_mode`, `sync_timeout`, `max_lifetime`.
 - **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity` over all behavior-driving fields. v1 markers migrate transparently. `ConditionalClearResult` enum (Cleared/Missing/GenerationChanged) returned by conditional clear.
 - **`PendingTxnGuard`** (`pending_lock.rs`) — short-lived transaction lock serializing concurrent CLI processes on the pending marker. Atomic acquire via `create_new(true)`; ownership-checked drop; bounded retry with jitter; dead-owner reclaim via `kill -0`; unique temp files per transaction; atomic rename + directory fsync.
-- **`WorkerLock`** (`lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` only (live PID means owned, regardless of age). Ownership-checked drop — only removes if PID and nonce match. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.
+- **`WorkerLock`** (`execution_lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` only (live PID means owned, regardless of age). Ownership-checked drop — only removes if PID and nonce match. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.
 - **`SyncExecutionLock`** (`execution_lock.rs`) — shared execution lock for all sync operations. `try_acquire` (non-blocking, for workers) and `wait_acquire` (bounded timeout, for foreground callers). Ownership-checked drop, stale detection via `kill -0`.
-- **`spawn_worker`** (`spawn.rs`) — re-execs `std::env::current_exe()` as `snp auto-sync-worker` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
+- **`spawn_worker`** (`execution_lock.rs`) — re-execs `std::env::current_exe()` as `snp auto-sync-worker` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
 - **`WorkerOutcome`** (`worker.rs`) — `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0; outcome is logged, not propagated.
 - **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite`, `AccountConfig` (never triggers).
 - **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
@@ -295,9 +295,18 @@ Key invariants:
 
 ## Exit Codes
 
-- `0` — success (snippet executed/copied, or command completed)
-- `1` — any error (all `SnipError` variants map to exit(1))
-- `4` — user cancelled TUI interaction (`q`/`Esc`/Ctrl-C in `snp select` only; `run`/`clip`/`search` treat cancellation as exit 0)
+| Code | Name | Meaning |
+|------|------|---------|
+| 0 | Success | Snippet executed/copied, or command completed |
+| 1 | General | Any `SnipError` variant, persistence failure |
+| 2 | Usage | CLI argument error (clap) |
+| 3 | NotFound | Snippet not found |
+| 4 | Cancelled | User cancelled TUI interaction (`snp select` only) |
+| 5 | Ambiguous | Multiple snippets match filter |
+| 6 | Validation | Data validation failure |
+| 7 | SyncFailed | Sync operation failure |
+| 8 | ExecutionFailed | Output-file execution failure (timeout/spawn) |
+| 9 | ConflictOrRefused | Lock conflict, kernel refusal |
 
 ## Configuration Files
 
@@ -311,6 +320,9 @@ Key invariants:
 | `~/.config/snp/themes/<name>.toml` | Custom themes (Halloy format) |
 | `~/.config/snp/themes.toml` | Active theme preference |
 | `~/.config/snp/usage.toml` | Local usage metadata (use count, last used timestamps) |
+| `~/.config/snp/auto-sync-pending.toml` | Durable pending mutation marker (schema v2, CRC32 integrity) |
+| `~/.config/snp/auto-sync-status.toml` | Durable sync status (failure class, backoff, config fingerprint) |
 | `~/.config/snp/logs/` | Rolling log files (daily rotation) |
 | `~/.config/snp/audit.log` | Audit log for snippet operations |
 | `~/.config/snp/backups/` | Timestamped library backups (max 10/library) |
+| `~/.config/snp/transaction-journals/` | Transaction journals for crash recovery |

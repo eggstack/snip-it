@@ -82,7 +82,7 @@ library — it is a standalone binary.  The public surface exists because:
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (19 variants) |
+| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (21 variants) |
 | `pub enum SnipError` | **stable-public** | `#[non_exhaustive]` error enum with 6 variants |
 | `pub type SnipResult<T>` | **stable-public** | `Result<T, SnipError>` alias |
 | `SnipError::io_error()` | **stable-public** | Constructor |
@@ -191,7 +191,7 @@ to external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod clip_cmd` through `pub mod sync_cmd` (23 submodules) | **application-internal** | All CLI command modules |
+| `pub mod clip_cmd` through `pub mod sync_cmd` (23 command modules) | **application-internal** | All CLI command modules |
 | `pub enum ExpandedCommand` | **application-internal** | Command expansion result |
 | `pub fn get_config_path()` | **application-internal** | Config path resolution |
 | `pub fn get_library_path()` | **application-internal** | Library path resolution |
@@ -286,14 +286,12 @@ detached auto-sync helper management.*
 
 | Submodule | Key public items |
 |-----------|-----------------|
-| `execution_lock` | `SyncExecutionLock`, `ExecutionLockContents`, `try_acquire`, `wait_acquire`, `process_alive` |
-| `lock` | `WorkerLock`, `WorkerLockContents`, `try_acquire`, `inspect`, `is_stale`, `process_alive` |
+| `execution_lock` | `SyncExecutionLock`, `ExecutionLockContents`, `WorkerLock`, `WorkerLockContents`, `try_acquire`, `wait_acquire`, `process_alive`, `spawn_worker`, `WORKER_SUBCOMMAND` |
 | `notification` | `MutationContext`, `AutoSyncNotificationResult`, `SubcommandTag`, `notify_mutation`, `should_attempt_auto_sync_recovery`, `startup_recover_pending` |
 | `pending` | `PendingSnapshot`, `PendingState`, `ConditionalClearResult`, `record_pending_mutation`, `read_state`, `read_state_from_dir` |
 | `pending_lock` | `PendingTxnGuard`, `PendingTxnLockError`, `acquire_pending_txn` |
 | `policy` | `AutoSyncPolicy`, `FailureClass` (4 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |
 | `schedule` | `ScheduleDecision`, `Caller`, `schedule_sync`, `schedule_sync_from_config`, `schedule_and_spawn` |
-| `spawn` | `SpawnError`, `spawn_worker`, `WORKER_SUBCOMMAND` |
 | `status` | `AutoSyncStatus`, `StatusRead`, `read_status`, `write_status`, `record_success`, `record_failure`, `compute_config_fingerprint` |
 | `test_events` | `enabled`, `sink_path`, `emit` |
 | `worker` | `WorkerOutcome`, `SpawnResult`, `Clock`, `SystemClock`, `DebounceResult`, `run`, `debounce`, `preflight_check`, `startup_recover` |
@@ -403,7 +401,7 @@ detached auto-sync helper management.*
 ### High priority (should narrow)
 
 1. **`pub mod commands`** → `pub(crate)` — No external consumer needs CLI
-   command implementations.  The 23 submodules and their helpers are purely
+   command implementations.  The 23 command modules and their helpers are purely
    binary-internal.
 
 2. **`pub mod auto_sync`** → `pub(crate)` — The entire auto-sync subsystem

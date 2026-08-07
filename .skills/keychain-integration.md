@@ -14,11 +14,11 @@ keyring = "3"
 ### Storage (on save)
 ```rust
 const KEYCHAIN_SERVICE: &str = "snp-sync";
-const KEYCHAIN_USER: &str = "api-key";
+const KEYCHAIN_DEFAULT_USER: &str = "api-key";
 const KEYCHAIN_MARKER: &str = "@keychain";
 
-fn keychain_store(api_key: &str) -> SnipResult<()> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+fn keychain_store(api_key: &str, user: &str) -> SnipResult<()> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, user)
         .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry.set_password(api_key)
         .map_err(|e| SnipError::runtime_error("keychain store", Some(&e.to_string())))?;
@@ -28,8 +28,8 @@ fn keychain_store(api_key: &str) -> SnipResult<()> {
 
 ### Retrieval (on load)
 ```rust
-fn keychain_retrieve() -> SnipResult<String> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+fn keychain_retrieve(user: &str) -> SnipResult<String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, user)
         .map_err(|e| SnipError::runtime_error("keychain entry", Some(&e.to_string())))?;
     entry.get_password()
         .map_err(|e| SnipError::runtime_error("keychain retrieve", Some(&e.to_string())))

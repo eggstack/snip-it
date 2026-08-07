@@ -165,14 +165,14 @@ transmission (AES-256-GCM).
 - Deletions win over live content (no-resurrection)
 - Local-only fields (`output`, `folders`, `favorite`) preserved
 
-**Failure classification**: `SyncFailureKind` (20 variants) maps to
+**Failure classification**: `SyncFailureKind` (21 variants) maps to
 `FailureClass` (4 variants: Transient, Configuration, LocalFailure, Internal).
 
 ---
 
 ## Auto-Sync Subsystem
 
-**Source**: `src/auto_sync/` (11 modules)
+**Source**: `src/auto_sync/` (10 modules)
 **Deep dive**: [auto_sync.md](auto_sync.md)
 
 Single detached-helper model. A background worker (`snp auto-sync-worker`)
@@ -180,7 +180,7 @@ runs the canonical sync operation after local mutations.
 
 | Module | Purpose |
 |--------|---------|
-| `execution_lock.rs` | `SyncExecutionLock` — kernel-backed exclusive ownership |
+| `execution_lock.rs` | `SyncExecutionLock`, `WorkerLock` — kernel-backed exclusive ownership (includes merged worker lock and `spawn_worker`) |
 | `worker.rs` | Detached worker entry point, holds lock for entire cycle |
 | `notification.rs` | Mutation notification, pending marker creation, startup recovery |
 | `pending.rs` | `PendingState` — on-disk pending mutation marker |
@@ -188,7 +188,6 @@ runs the canonical sync operation after local mutations.
 | `policy.rs` | `AutoSyncPolicy`, `FailureClass`, `MutationKind`, retry disposition |
 | `schedule.rs` | Debounce scheduling, `schedule_sync()` — sole scheduling authority |
 | `status.rs` | `StatusSnapshot`, `TopLevelSyncState` (8 variants), diagnostic codes |
-| `lock.rs` | Worker lock (merged into execution_lock) |
 | `test_events.rs` | Test-only lifecycle event emission (JSON-lines) |
 
 **Key invariants**:
@@ -293,8 +292,9 @@ Full utility inventory: [utils.md](utils.md).
 **Deep dive**: [persistence.md](persistence.md)
 
 - **Atomic writes**: `utils/atomic.rs` with `TempFileGuard` for cleanup.
-  Durability classes: `Unsafe` (fsync only), `Safe` (fsync + rename),
-  `Paranoid` (fsync parent dir).
+  Durability classes: `DurableUserData` (fsync file+dir),
+  `SensitiveConfig` (0o600, symlink reject), `RecoverableMetadata` (no
+  fsync), `EphemeralCoordination` (no fsync, no dir sync).
 - **Transaction journaling**: `transaction.rs` — `Prepared → Committing →
   CleaningUp` state machine for multi-file mutations. Journals persist to
   disk so interrupted operations can be recovered on startup.
@@ -388,7 +388,7 @@ snp run [--filter FOO] [--sync]
   `Command`, `Runtime`, `SyncFailure`
 - Constructor helpers: `io_error()`, `toml_error()`, `clipboard_error()`,
   `command_error()`, `runtime_error()`, `sync_failure()`
-- `SyncFailureKind` (20 variants) for typed sync failure classification
+- `SyncFailureKind` (21 variants) for typed sync failure classification
 
 ### Async (Tokio)
 - Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands
