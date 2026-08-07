@@ -1,57 +1,101 @@
 # Architecture Overview
 
-This document provides a bird's-eye view of the snip-it codebase. Each section links to a detailed deep-dive document in this directory.
-
-For the target logical layer architecture (Domain/Core → Sync-Client → Application), see [docs/LOGICAL_LAYERS.md](../docs/LOGICAL_LAYERS.md).
+Bird's-eye view of the snip-it codebase. Each section summarizes a discrete
+module or component and links to a dedicated deep-dive document for full
+detail.
 
 ## Table of Contents
 
-- [Project Structure](#project-structure)
-- [CLI & Commands](#cli--commands)
+- [Project Layout](#project-layout)
+- [Workspace Crates](#workspace-crates)
+- [CLI & Command Dispatch](#cli--command-dispatch)
+- [Command Modules](#command-modules)
 - [Core Data Layer](#core-data-layer)
-- [Sync Infrastructure](#sync-infrastructure)
-- [TUI & User Interface](#tui--user-interface)
-- [Utilities](#utilities)
+- [Sync Client](#sync-client)
+- [Auto-Sync Subsystem](#auto-sync-subsystem)
 - [Server (snip-sync)](#server-snip-sync)
+- [Protocol (snip-proto)](#protocol-snip-proto)
+- [TUI & User Interface](#tui--user-interface)
+- [Utilities & Cross-Cutting Concerns](#utilities--cross-cutting-concerns)
+- [Persistence & Durability](#persistence--durability)
+- [Testing Infrastructure](#testing-infrastructure)
+- [Configuration Files](#configuration-files)
+- [Data Flow: Running a Snippet](#data-flow-running-a-snippet)
 - [Key Patterns](#key-patterns)
-- [Deep Dives](#deep-dives)
+- [Deep-Dive Index](#deep-dive-index)
 
 ---
 
-## Project Structure
+## Project Layout
 
 ```
-snip-it/              Main crate — binary "snp" (src/main.rs)
+snip-it/              Main crate — binary "snp"
+  src/                Application source (CLI, commands, TUI, sync, core)
+  tests/              Integration tests (~49 files)
+  architecture/       This directory — module deep-dive docs
+  docs/               Public API docs, threat model, security audit
+  .skills/            Specialized agent reference docs
 snip-proto/           Protobuf definitions, tonic-generated gRPC code
-snip-sync/            Sync server binary + library (gRPC + HTTP/axum)
-tests/                Integration tests (~50 files)
-scripts/              build_themes.py, check.sh, release-check.sh, ci/
+snip-sync/            Sync server (gRPC + HTTP/axum) + library crate
+scripts/              Build helpers, CI scripts, theme bundler
 themes/               50 Halloy TOML theme files
-architecture/         This directory — module deep-dive docs
-docs/                 Public API, threat model, security audit
 premade-libraries/    Premade snippet library files
 ```
 
-Three workspace crates: `snip-it` (main binary), `snip-proto` (protobuf), `snip-sync` (server).
+---
+
+## Workspace Crates
+
+| Crate | Type | Purpose |
+|-------|------|---------|
+| `snip-it` | Binary (`snp`) + library | Main application: CLI, TUI, sync client, core data model |
+| `snip-proto` | Library | Protobuf definitions and tonic-generated gRPC stubs |
+| `snip-sync` | Binary + library | Self-hosted sync server (gRPC + HTTP, SQLite, TLS) |
+
+The library surface of `snip-it` exposes a stable public API (`Snippet`,
+`Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library`,
+atomic write utilities, `SnipError`, `SnippetSort`, `SyncSettings`, etc.).
+Everything else (`commands`, `ui`, `auto_sync`, `sync`, `encryption`,
+`logging`, `process_file_lock`, `proto`, `selector`, `usage`) is
+`#[doc(hidden)]` — public for binary/integration-test access but not part
+of the supported external API.
 
 ---
 
-## CLI & Commands
+## CLI & Command Dispatch
 
-The CLI is the primary interface for users. The entry point is `src/main.rs` which uses `clap` to define 30+ subcommands.
+**Source**: `src/main.rs`
+**Deep dive**: [cli.md](cli.md)
 
-**Entry Point**: [cli.md](cli.md) — CLI dispatch, argument parsing, startup recovery, logging initialization.
+Entry point using `clap` with 30+ subcommands. A global `LazyLock<Runtime>`
+provides Tokio only when an async command is invoked (`run`, `clip`, `search`,
+`sync`, `register`, `premade`). Signal handlers are registered on Unix
+(SIGINT + SIGTERM).
 
-**Commands** (`src/commands/`):
+Command dispatch flows through `dispatch_command()` which maps each CLI
+variant to its command module. `classify_command()` determines startup
+recovery policy: read-only commands suppress recovery, mutation commands
+allow it, sync commands manage their own behavior.
+
+**Exit codes** (stable): 0 success, 1 general error, 2 usage error,
+3 not found, 4 cancelled, 5 ambiguous, 6 validation, 7 sync failure,
+8 execution failure, 9 conflict/refused.
+
+---
+
+## Command Modules
+
+**Source**: `src/commands/` (24 modules)
+**Deep dives**: [commands/mod.md](commands/mod.md) and per-command files
 
 | Command | Module | Purpose |
 |---------|--------|---------|
-| `new` | [new_cmd.md](commands/new_cmd.md) | Snippet creation (arg/stdin/file/editor/multiline) |
-| `list` | [list_cmd.md](commands/list_cmd.md) | Text-based snippet listing (JSON/CSV/default) |
+| `new` | [new_cmd.md](commands/new_cmd.md) | Create snippets (arg/stdin/file/editor/multiline) |
+| `list` | [list_cmd.md](commands/list_cmd.md) | Text listing (JSON/CSV/default) |
 | `run` | [run_cmd.md](commands/run_cmd.md) | TUI selection + shell execution |
 | `clip` | [clip_cmd.md](commands/clip_cmd.md) | Copy snippet to clipboard |
 | `search` | [search_cmd.md](commands/search_cmd.md) | Fuzzy search with detail display |
-| `edit` | [edit_cmd.md](commands/edit_cmd.md) | Open snippet in `$EDITOR`, manage output field |
+| `edit` | [edit_cmd.md](commands/edit_cmd.md) | Open in `$EDITOR`, manage output field |
 | `select` | [select_cmd.md](commands/select_cmd.md) | Non-executing selection for shell integration |
 | `get` | [get_cmd.md](commands/get_cmd.md) | Deterministic non-TUI snippet retrieval |
 | `validate` | [validate_cmd.md](commands/validate_cmd.md) | Read-only data validation |
@@ -65,101 +109,102 @@ The CLI is the primary interface for users. The entry point is `src/main.rs` whi
 | `library` | [library_cmd.md](commands/library_cmd.md) | Library management subcommands |
 | `premade` | [premade_cmd.md](commands/premade_cmd.md) | Browse/download premade libraries |
 | `import` | [import_cmd.md](commands/import_cmd.md) | Pet snippet file import |
-| `doctor` | [doctor_cmd.md](commands/doctor_cmd.md) | Compatibility diagnostics, pet analysis |
+| `doctor` | [doctor_cmd.md](commands/doctor_cmd.md) | Diagnostics, pet analysis, environment audit |
 | `shell` | [shell_cmd.md](commands/shell_cmd.md) | Shell integration code generation (bash/zsh/fish) |
 | `keybindings` | [keybindings_cmd.md](commands/keybindings_cmd.md) | TUI keybindings reference |
+| `completions` | — | Shell completion generation (clap_complete) |
+| `update` | — | Self-update via current installation method |
+| `data` | — | Advanced data maintenance subgroup (validate/backup/restore/repair/status) |
 
-**Shared Helpers**: [commands/mod.md](commands/mod.md) — path resolution, library loading, snippet expansion.
+**Shared helpers**: [commands/mod.md](commands/mod.md) — path resolution,
+library loading, snippet expansion, output writing.
 
-**Pet Analysis**: [pet_analysis.md](commands/pet_analysis.md) — pet file reading, field detection, import analysis.
-
-**Command Patterns**:
-- Async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`) initialize the global Tokio runtime on first use
-- All commands use `SnipResult<T>` error handling
-- Snippet variables (`<name>` or `<name=default>`) are expanded before execution
+**Pet analysis**: [commands/pet_analysis.md](commands/pet_analysis.md) —
+pet file reading, field detection, import analysis.
 
 ---
 
 ## Core Data Layer
 
-**Core Types**: [core.md](core.md) — error handling, key abstractions, `SnipError` enum.
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `library` | [library.md](library.md) | `Snippet`, `Snippets`, `LibraryManager` — data structures and TOML persistence |
-| `encryption` | [encryption.md](encryption.md) | AES-256-GCM + Argon2id end-to-end encryption |
-| `config` | [config.md](config.md) | `SyncSettings`, API key keychain storage, CRC32 integrity |
-| `selector` | [selector.md](selector.md) | `SnippetSelector` — deterministic non-TUI snippet resolution |
-| `outcome` | [outcome.md](outcome.md) | `CliOutcome` — exit codes, machine output |
-| `sort` | [sort.md](sort.md) | `SnippetSort` — 6 sort modes, 5-level tie-break chain |
-| `usage` | [usage.md](usage.md) | `UsageIndex` — persistent per-snippet usage metadata |
-| `output` | [output.md](output.md) | `OutputPresentation` — safe output field rendering |
-| `transaction` | [persistence.md](persistence.md) | Transaction boundary with journal, lock, begin/commit/rollback |
-| `migration` | [persistence.md](persistence.md) | Schema versioning (`SchemaVersion`), migration operations |
-| `local_data` | [persistence.md](persistence.md) | Short-lived exclusive lock serializing TOML mutations |
+| Module | Source | Deep Dive | Purpose |
+|--------|--------|-----------|---------|
+| `library` | `src/library.rs` | [library.md](library.md) | `Snippet`, `Snippets`, `LibraryManager` — data structures and TOML persistence |
+| `error` | `src/error.rs` | [core.md](core.md) | `SnipError` enum, `SnipResult<T>`, `SyncFailureKind` |
+| `config` | `src/config.rs` | [config.md](config.md) | `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode`, keychain API key |
+| `encryption` | `src/encryption.rs` | [encryption.md](encryption.md) | AES-256-GCM + Argon2id end-to-end encryption |
+| `selector` | `src/selector.rs` | [selector.md](selector.md) | `SnippetSelector` — deterministic non-TUI snippet resolution |
+| `outcome` | `src/outcome.rs` | [outcome.md](outcome.md) | `CliOutcome` — exit codes, machine output |
+| `sort` | `src/sort.rs` | [sort.md](sort.md) | `SnippetSort` — 6 sort modes, 5-level tie-break chain |
+| `usage` | `src/usage.rs` | [usage.md](usage.md) | `UsageIndex` — persistent per-snippet usage metadata |
+| `output` | `src/output.rs` | [output.md](output.md) | `OutputPresentation` — safe output field rendering |
+| `migration` | `src/migration.rs` | [persistence.md](persistence.md) | Schema versioning (`SchemaVersion`), migration operations |
+| `transaction` | `src/transaction.rs` | [persistence.md](persistence.md) | Transaction journal, lock, begin/commit/rollback state machine |
+| `local_data` | `src/local_data.rs` | [persistence.md](persistence.md) | Short-lived exclusive lock serializing TOML mutations |
+| `diagnostics` | `src/diagnostics.rs` | — | Internal diagnostics |
+| `test_failpoints` | `src/test_failpoints.rs` | — | Test-only failpoint hooks (compiled with `test-support`) |
 
 ---
 
-## Sync Infrastructure
+## Sync Client
 
-| Module | File | Purpose |
-|--------|------|---------|
-| `sync` | [sync.md](sync.md) | `SyncClient` (tonic gRPC), `retry_grpc!` macro, exponential backoff |
-| `sync_commands` | [sync.md](sync.md) | Bidirectional sync orchestration, merge logic, conflict resolution |
-| `auto_sync` | [auto_sync.md](auto_sync.md) | Single detached-helper model, debounce, scheduling, execution lock |
-| `status_snapshot` | [status.md](status.md) | `StatusSnapshot`, `TopLevelSyncState` (8 variants), diagnostic codes |
-| `proto` | [proto.md](proto.md) | Protobuf definitions, gRPC service spec (`SnippetSync` — 11 RPCs) |
+**Source**: `src/sync.rs`, `src/sync_commands.rs`
+**Deep dive**: [sync.md](sync.md)
 
-**Auto-Sync Model** (see [auto_sync.md](auto_sync.md)):
-- Detached worker (`snp auto-sync-worker`) holds `SyncExecutionLock` for the entire cycle
+The sync client communicates with the snip-sync server over gRPC (tonic)
+with TLS. Snippets are encrypted with the user's API key before
+transmission (AES-256-GCM).
+
+**Key components**:
+- `SyncClient` — tonic gRPC client with exponential backoff retries
+- `retry_grpc!` macro — configurable retry with jitter
+- `sync_encrypted()` — byte-bounded upload batches (3.5 MiB ceiling)
+- `sync_commands::run_sync()` — full bidirectional sync orchestration
+
+**Merge strategy**:
+- Live conflicts: `(updated_at, device_id, SHA-256(synced fields))`
+- Deletions win over live content (no-resurrection)
+- Local-only fields (`output`, `folders`, `favorite`) preserved
+
+**Failure classification**: `SyncFailureKind` (20 variants) maps to
+`FailureClass` (4 variants: Transient, Configuration, LocalFailure, Internal).
+
+---
+
+## Auto-Sync Subsystem
+
+**Source**: `src/auto_sync/` (11 modules)
+**Deep dive**: [auto_sync.md](auto_sync.md)
+
+Single detached-helper model. A background worker (`snp auto-sync-worker`)
+runs the canonical sync operation after local mutations.
+
+| Module | Purpose |
+|--------|---------|
+| `execution_lock.rs` | `SyncExecutionLock` — kernel-backed exclusive ownership |
+| `worker.rs` | Detached worker entry point, holds lock for entire cycle |
+| `notification.rs` | Mutation notification, pending marker creation, startup recovery |
+| `pending.rs` | `PendingState` — on-disk pending mutation marker |
+| `pending_lock.rs` | Transaction-scoped pending marker lock |
+| `policy.rs` | `AutoSyncPolicy`, `FailureClass`, `MutationKind`, retry disposition |
+| `schedule.rs` | Debounce scheduling, `schedule_sync()` — sole scheduling authority |
+| `status.rs` | `StatusSnapshot`, `TopLevelSyncState` (8 variants), diagnostic codes |
+| `lock.rs` | Worker lock (merged into execution_lock) |
+| `test_events.rs` | Test-only lifecycle event emission (JSON-lines) |
+
+**Key invariants**:
 - Parent never holds the worker lock
 - `schedule_sync()` is the sole scheduling authority
 - Pending generations are monotonic; lower generation = corrupt state
-
-**Merge Strategy** (see [sync.md](sync.md)):
-- Live conflicts use `(updated_at, device_id, SHA-256(synced fields))` for deterministic resolution
-- Explicit deletions win over live content, including when the live copy has a later timestamp (no-resurrection)
-- Local-only fields (`output`, `folders`, `favorite`) preserved when server wins
-
----
-
-## TUI & User Interface
-
-Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
-
-| Module | File | Purpose |
-|--------|------|---------|
-| Main loop | [tui.md](tui.md) | Event loop, fuzzy search (`SkimMatcherV2`), keyboard navigation |
-| Components | [ui.md](ui.md) | UI components, rendering, theme system |
-| State | [tui.md](tui.md) | `SelectState`, `FilterState`, `SortMode` (TUI-internal) |
-| Theme | [ui.md](ui.md) | `Theme` struct (10-color palette), 50 bundled Halloy themes |
-| Highlight | [tui.md](tui.md) | Syntax highlighting (variables, shell keywords, strings, flags) |
-| Variables | [tui.md](tui.md) | TUI for `<name>` / `<name=default>` variable prompts |
-| Sort | [sort.md](sort.md) | `SnippetSort` — Relevance, Recent, LastUsed, MostUsed, Description, Command |
-| Usage | [usage.md](usage.md) | `UsageIndex` — persistent per-snippet use count + last-used timestamps |
-
----
-
-## Utilities
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `config` | [utils/config.md](utils/config.md) | Path resolution: `get_config_dir()`, XDG, macOS migration |
-| `variables` | [utils/variables.md](utils/variables.md) | `parse_variables()`, `expand_command()`, `strip_escape_sequences()` |
-| `toml_helpers` | [utils/toml_helpers.md](utils/toml_helpers.md) | TOML backslash escape handling (`\<`/`\>` in double-quoted strings) |
-| `shell_keywords` | [utils/shell_keywords.md](utils/shell_keywords.md) | ~190 shell command names for syntax highlighting |
-| `tempfile_guard` | [utils/tempfile_guard.md](utils/tempfile_guard.md) | RAII guard for temporary file cleanup |
-| `atomic` | [utils/atomic.md](utils/atomic.md) | `write_private_atomic()`, `atomic_replace()` — durability-aware atomic writes |
-
-**Cross-cutting utilities** (see [utils.md](utils.md) for full inventory):
-- [clipboard.md](clipboard.md) — cross-platform clipboard access (arboard/clipboard-win)
-- [logging.md](logging.md) — structured logging (`tracing`), audit trail, panic handler
+- Local mutations always commit before remote work
 
 ---
 
 ## Server (snip-sync)
 
-Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
+**Source**: `snip-sync/src/` (18 modules)
+**Deep dive**: [server.md](server.md)
+
+Self-hosted Rust gRPC server using tonic + axum (HTTP).
 
 | Module | Purpose |
 |--------|---------|
@@ -171,34 +216,124 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | `premade.rs` | Premade library file scanning |
 | `server_lock.rs` | Kernel-backed server singleton lock |
 | `cert.rs` | TLS certificate generation |
-
-**Protocol**: [proto.md](proto.md) — single `SnippetSync` service with 11 RPCs (GetSnippets, PushSnippets, Sync, Health, Register, library CRUD, premade access).
+| `orchestration.rs` | Service lifetime, graceful shutdown |
+| `bootstrap.rs` | Server initialization |
+| `paths.rs` | Path resolution for server state |
+| `process.rs` | Process management |
+| `editor.rs` | Server-side config editing |
+| `update.rs` | Server self-update |
+| `test_helpers.rs` | Test-only helpers (gated on `test-helpers` feature) |
+| `test_observer.rs` | Test-only event capture |
 
 ---
 
-## Key Patterns
+## Protocol (snip-proto)
 
-### Error Handling
-- `SnipError` enum in `src/error.rs` with domain-specific variants
-- `SnipResult<T> = Result<T, SnipError>`
-- Constructor helpers: `io_error()`, `toml_error()`, `clipboard_error()`, `command_error()`, `runtime_error()`
+**Source**: `snip-proto/proto/sync.proto`, `snip-proto/src/`
+**Deep dive**: [proto.md](proto.md)
 
-### Async (Tokio)
-- Global `RUNTIME: LazyLock<tokio::runtime::Runtime>` initialized lazily
-- Only async commands trigger initialization
-- `runtime.block_on()` for blocking calls to async gRPC methods
+Single `SnippetSync` gRPC service with 11 RPCs:
 
-### TOML Handling
-- Problem: `\<` and `\>` in double-quoted TOML strings cause parse failures
-- Solution in `src/utils/toml_helpers.rs`: convert to single-quoted (raw literals) before parsing, reverse on save
-- Triple-quoted strings not handled (acceptable since snippet commands are single-line)
+| RPC | Purpose |
+|-----|---------|
+| `GetSnippets` | Fetch non-deleted snippets updated after a timestamp |
+| `PushSnippets` | Upload local snippets (idempotent upsert) |
+| `Sync` | Bidirectional merge: upload local, download remote changes |
+| `Health` | Server health check |
+| `Register` | Device/account registration |
+| `CreateLibrary` | Create a new library on the server |
+| `ListLibraries` | List account libraries |
+| `DeleteLibrary` | Delete a library |
+| `ListPremadeLibraries` | List available premade libraries |
+| `GetPremadeLibrary` | Download a premade library |
+| `SearchPremadeLibraries` | Search premade libraries by query |
 
-### Persistence
-- Atomic writes via `utils/atomic.rs` with `TempFileGuard` for cleanup
-- Transaction journaling for multi-file mutations
-- Backup/restore with SHA-256 integrity verification
+---
 
-### Configuration Files
+## TUI & User Interface
+
+**Source**: `src/ui/` (6 files)
+**Deep dives**: [tui.md](tui.md), [ui.md](ui.md)
+
+Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
+
+| Module | File | Purpose |
+|--------|------|---------|
+| Main loop | `mod.rs` | Event loop, fuzzy search (`SkimMatcherV2`), keyboard navigation |
+| State | `state.rs` | `SelectState`, `FilterState`, sort mode (TUI-internal) |
+| Theme | `theme.rs` | `Theme` struct (10-color palette), 50 bundled Halloy themes |
+| Highlight | `highlight.rs` | Syntax highlighting (variables, shell keywords, strings, flags) |
+| Variables | `variables.rs` | TUI for `<name>` / `<name=default>` variable prompts |
+| Bundled themes | `_generated_bundled_themes.rs` | Generated at build time by `scripts/build_themes.py` |
+
+---
+
+## Utilities & Cross-Cutting Concerns
+
+| Module | Source | Deep Dive | Purpose |
+|--------|--------|-----------|---------|
+| `utils/config` | `src/utils/config.rs` | [utils/config.md](utils/config.md) | Path resolution: `get_config_dir()`, XDG, macOS migration |
+| `utils/variables` | `src/utils/variables.rs` | [utils/variables.md](utils/variables.md) | `parse_variables()`, `expand_command()`, `strip_escape_sequences()` |
+| `utils/toml_helpers` | `src/utils/toml_helpers.rs` | [utils/toml_helpers.md](utils/toml_helpers.md) | TOML backslash escape handling (`\<`/`\>` in double-quoted strings) |
+| `utils/shell_keywords` | `src/utils/shell_keywords.rs` | [utils/shell_keywords.md](utils/shell_keywords.md) | ~190 shell command names for syntax highlighting |
+| `utils/tempfile_guard` | `src/utils/tempfile_guard.rs` | [utils/tempfile_guard.md](utils/tempfile_guard.md) | RAII guard for temporary file cleanup |
+| `utils/atomic` | `src/utils/atomic.rs` | [utils/atomic.md](utils/atomic.md) | `write_private_atomic()`, `atomic_replace()` — durability-aware atomic writes |
+| `clipboard` | `src/clipboard.rs` | [clipboard.md](clipboard.md) | Cross-platform clipboard (arboard/clipboard-win) |
+| `logging` | `src/logging.rs` | [logging.md](logging.md) | Structured logging (`tracing`), audit trail, panic handler |
+| `process_file_lock` | `src/process_file_lock.rs` | — | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
+| `status_snapshot` | `src/status_snapshot.rs` | [status.md](status.md) | Status snapshot and diagnostic codes |
+| `update` | `src/update.rs` | — | Self-update checking and installation |
+
+Full utility inventory: [utils.md](utils.md).
+
+---
+
+## Persistence & Durability
+
+**Deep dive**: [persistence.md](persistence.md)
+
+- **Atomic writes**: `utils/atomic.rs` with `TempFileGuard` for cleanup.
+  Durability classes: `Unsafe` (fsync only), `Safe` (fsync + rename),
+  `Paranoid` (fsync parent dir).
+- **Transaction journaling**: `transaction.rs` — `Prepared → Committing →
+  CleaningUp` state machine for multi-file mutations. Journals persist to
+  disk so interrupted operations can be recovered on startup.
+- **Local data lock**: `local_data.rs` — exclusive lock serializing TOML
+  mutations against backup snapshot capture.
+- **Schema migration**: `migration.rs` — `SchemaVersion` ordinal type with
+  forward-only migration operations.
+- **Backup/restore**: SHA-256 integrity verification, secret-free snapshots,
+  merge/replace restore modes.
+- **Mutation gate**: `gate_mutation_on_interrupted_transactions()` must be
+  called before any local mutating operation. Single journal = auto-rollback;
+  multiple/incomplete = refuse and direct to `snp repair`.
+
+---
+
+## Testing Infrastructure
+
+**Deep dive**: [test-infrastructure.md](test-infrastructure.md)
+
+~49 integration test files in `tests/`. Reusable components in
+`tests/support/`: `TestEnvironment` (isolated TempDir), `RecordingServer`,
+`EventSink`.
+
+| Class | Execution | Targets |
+|-------|-----------|---------|
+| Unit/pure | parallel | `cargo test --workspace --lib` |
+| CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` |
+| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
+| Sync integration | serial | `sync_integration.rs` — in-process server, random port |
+| PTY | serial | `pty_integration.rs` — real terminal pairs |
+| Cross-process lock | serial | `process_lock_concurrency.rs` — kernel flock |
+| Barrier-coordinated | serial | `local_data_lock_barriers.rs`, `repair_transactions.rs` |
+| Deep recovery | manual | `transaction_crash_recovery.rs`, failpoint tests |
+| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
+
+---
+
+## Configuration Files
 
 | Path | Purpose |
 |------|---------|
@@ -210,29 +345,78 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | `~/.config/snp/themes/*.toml` | Halloy-compatible theme files |
 | `~/.config/snp/themes.toml` | Active theme selection |
 | `~/.config/snp/usage.toml` | Local usage metadata (not synced) |
-| `~/.config/snp/auto-sync-status.toml` | Durable sync status |
+| `~/.config/snp/auto-sync-status.toml` | Durable sync status (not synced) |
 | `~/.config/snp/auto-sync-pending.toml` | Pending mutation marker |
-| `~/.config/snp/logs/` | Rolling log files |
-| `~/.config/snp/audit.log` | Audit trail |
 | `~/.config/snp/transaction-journals/` | Transaction journals |
 | `~/.config/snp/backups/` | Backup snapshots |
+| `~/.config/snp/logs/` | Rolling log files |
+| `~/.config/snp/audit.log` | Audit trail |
 
-**Note:** External library paths are not supported. All snippet libraries reside under `~/.config/snp/libraries/`.
-
-### Data Flow: Running a Snippet
-
-1. `snp run` → `main.rs::dispatch_command()` → `commands::run_cmd::run()`
-2. `run()` calls `run_snippet_selection()` with `process_snippet` closure
-3. `run_snippet_selection()` loads library, calls `ui::select_snippet()` for TUI
-4. TUI shows fuzzy-filtered list; user selects snippet
-5. `process_snippet()` calls `expand_snippet_command()` → `ui::prompt_variables()` if needed
-6. Expanded command executed via `Command::new(shell).arg("-c")`
-7. `audit_log()` records the execution
-8. On exit (if `--sync`), `sync_commands::run_default_sync()` syncs with server
+External library paths are not supported. All snippet libraries reside
+under `~/.config/snp/libraries/`.
 
 ---
 
-## Deep Dives
+## Data Flow: Running a Snippet
+
+```
+snp run [--filter FOO] [--sync]
+  │
+  ├─ main.rs::dispatch_command()
+  │    └─ commands::run_cmd::run()
+  │         ├─ load library via LibraryManager
+  │         ├─ ui::select_snippet()  ← TUI (ratatui + crossterm)
+  │         │    ├─ fuzzy filter (SkimMatcherV2)
+  │         │    ├─ keyboard navigation
+  │         │    └─ variable prompting if needed
+  │         ├─ expand_snippet_command()  → shell expansion
+  │         ├─ Command::new(shell).arg("-c").arg(cmd)  → execute
+  │         ├─ audit_log()  → structured log
+  │         └─ if --sync: sync_commands::run_default_sync()
+  │              └─ sync::sync_encrypted()  → gRPC bidirectional merge
+  │
+  └─ on local mutation: auto_sync::notify_mutation()
+       └─ spawn_worker()  → detached background sync
+```
+
+---
+
+## Key Patterns
+
+### Error Handling
+- `SnipError` enum with domain-specific variants: `Io`, `Toml`, `Clipboard`,
+  `Command`, `Runtime`, `SyncFailure`
+- Constructor helpers: `io_error()`, `toml_error()`, `clipboard_error()`,
+  `command_error()`, `runtime_error()`, `sync_failure()`
+- `SyncFailureKind` (20 variants) for typed sync failure classification
+
+### Async (Tokio)
+- Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands
+- `runtime.block_on()` for blocking calls to async gRPC methods
+- Detached auto-sync worker creates its own multi-thread runtime
+
+### TOML Handling
+- `\<` and `\>` in double-quoted TOML strings cause parse failures
+- Solution: convert to single-quoted (raw literals) before parsing, reverse
+  on save — implemented in `utils/toml_helpers.rs`
+
+### Encryption
+- AES-256-GCM for snippet payload encryption
+- Argon2id for key derivation from API key
+- Key cache for repeated operations
+- See [encryption.md](encryption.md) and [architecture/encryption.md](encryption.md)
+
+### Process Locks
+- Kernel-backed (`flock` Unix / `LockFileEx` Windows) for:
+  - Server singleton (`server_lock.rs`)
+  - Auto-sync execution lock (`execution_lock.rs`)
+  - Transaction lock (`transaction.rs`)
+  - Local data lock (`local_data.rs`)
+- `Drop` releases the lock; persistent files may contain stale metadata
+
+---
+
+## Deep-Dive Index
 
 ### CLI & Commands
 
@@ -240,7 +424,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 |------|---------|
 | [cli.md](cli.md) | CLI entry point, argument parsing, dispatch, startup recovery |
 | [commands/mod.md](commands/mod.md) | Shared command helpers and path resolution |
-| [commands/new_cmd.md](commands/new_cmd.md) | Snippet creation (arg/stdin/file/editor/multiline) |
+| [commands/new_cmd.md](commands/new_cmd.md) | Snippet creation |
 | [commands/list_cmd.md](commands/list_cmd.md) | Text-based snippet listing |
 | [commands/run_cmd.md](commands/run_cmd.md) | TUI selection + shell execution |
 | [commands/clip_cmd.md](commands/clip_cmd.md) | Copy snippet to clipboard |
@@ -260,7 +444,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | [commands/premade_cmd.md](commands/premade_cmd.md) | Premade library access |
 | [commands/import_cmd.md](commands/import_cmd.md) | Pet snippet file import |
 | [commands/doctor_cmd.md](commands/doctor_cmd.md) | Diagnostics, pet analysis, environment audit |
-| [commands/shell_cmd.md](commands/shell_cmd.md) | Shell integration code generation (bash/zsh/fish) |
+| [commands/shell_cmd.md](commands/shell_cmd.md) | Shell integration code generation |
 | [commands/keybindings_cmd.md](commands/keybindings_cmd.md) | TUI keybindings reference |
 | [commands/pet_analysis.md](commands/pet_analysis.md) | Pet file reading, field detection, import analysis |
 
@@ -274,6 +458,9 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | [encryption.md](encryption.md) | AES-256-GCM end-to-end encryption |
 | [selector.md](selector.md) | Deterministic non-TUI snippet resolution |
 | [outcome.md](outcome.md) | `CliOutcome` — exit codes, machine output |
+| [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
+| [usage.md](usage.md) | Local usage metadata, update policy, storage |
+| [output.md](output.md) | Snippet output field rendering |
 
 ### Sync
 
@@ -302,7 +489,7 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | File | Subject |
 |------|---------|
 | [utils.md](utils.md) | Utility module inventory |
-| [utils/config.md](utils/config.md) | Config directory resolution, path helpers, macOS migration |
+| [utils/config.md](utils/config.md) | Config directory resolution, path helpers |
 | [utils/variables.md](utils/variables.md) | Variable parsing and expansion |
 | [utils/toml_helpers.md](utils/toml_helpers.md) | TOML escape sequence handling |
 | [utils/shell_keywords.md](utils/shell_keywords.md) | Shell command names for syntax highlighting |
@@ -310,9 +497,6 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 | [utils/atomic.md](utils/atomic.md) | Atomic file writes with durability guarantees |
 | [persistence.md](persistence.md) | Atomic writes, transactions, validation, backup/restore/repair |
 | [clipboard.md](clipboard.md) | Cross-platform clipboard access |
-| [sort.md](sort.md) | Sort modes, ranking, tie-break chain |
-| [usage.md](usage.md) | Local usage metadata, update policy, storage |
-| [output.md](output.md) | Snippet output field rendering |
 | [logging.md](logging.md) | Structured logging, audit trail, panic handler |
 
 ### Testing
@@ -321,4 +505,10 @@ Rust gRPC server using `tonic` + `axum` (HTTP). See [server.md](server.md).
 |------|---------|
 | [test-infrastructure.md](test-infrastructure.md) | Deterministic E2E test infrastructure |
 
-> **Note**: See `docs/ARCHITECTURE_INVENTORY.md` for a comprehensive module inventory.
+### Reference
+
+| File | Subject |
+|------|---------|
+| [review_plan.md](review_plan.md) | Architecture review process (historical) |
+| `../docs/LOGICAL_LAYERS.md` | Target logical layer architecture |
+| `../docs/ARCHITECTURE_INVENTORY.md` | Comprehensive module inventory |
