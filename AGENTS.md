@@ -114,8 +114,9 @@ bash scripts/ci/test-production-seams.sh
 cargo build --workspace
 cargo build --release
 
-# Lint (warnings are errors)
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+# Lint (warnings are errors) — use --all-targets, NOT --all-features;
+# test-support and test-helpers are enabled only for specific test targets
+cargo clippy --workspace --all-targets -- -D warnings
 
 # Format check / auto-format
 cargo fmt --all -- --check
