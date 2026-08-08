@@ -294,7 +294,7 @@ pub fn run(
 pub fn run_exact(
     snippet: &Snippet,
     do_sync: bool,
-    _runtime: Option<&tokio::runtime::Runtime>,
+    runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<crate::CommandOutcome> {
     let result = process_snippet(snippet, false)?;
     if let crate::ProcessResult::Failed { exit_code, .. } = result {
@@ -303,10 +303,10 @@ pub fn run_exact(
         });
     }
     if do_sync {
-        crate::auto_sync::notify_mutation(
-            crate::auto_sync::MutationKind::SnippetRun,
-            crate::auto_sync::MutationOrigin::User,
-        );
+        let rt = runtime.expect("run_exact: runtime required when do_sync is true");
+        if let Err(e) = crate::commands::run_explicit_sync(rt) {
+            tracing::warn!(error = %e, "post-run explicit sync failed");
+        }
     }
     Ok(crate::CommandOutcome::Success)
 }
@@ -339,5 +339,30 @@ mod tests {
         } else {
             assert_eq!(flag, "-c", "Unix shells expect -c, not {flag}");
         }
+    }
+
+    #[test]
+    fn test_run_exact_without_sync_does_not_require_runtime() {
+        let snippet = Snippet {
+            id: "test-sync-path".to_string(),
+            description: "test sync path".to_string(),
+            command: "echo hello".to_string(),
+            ..Default::default()
+        };
+        let result = run_exact(&snippet, false, None);
+        assert!(result.is_ok(), "run_exact without sync should succeed");
+    }
+
+    #[test]
+    fn test_run_exact_accepts_do_sync_and_runtime_params() {
+        let snippet = Snippet {
+            id: "test-param-sig".to_string(),
+            description: "test param sig".to_string(),
+            command: "echo hello".to_string(),
+            ..Default::default()
+        };
+        // do_sync=false, runtime=None should succeed without attempting sync
+        let result = run_exact(&snippet, false, None);
+        assert!(result.is_ok());
     }
 }

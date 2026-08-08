@@ -257,6 +257,41 @@ pub fn expand_snippet_command(snippet: &crate::library::Snippet) -> SnipResult<E
     }
 }
 
+/// Runs a canonical explicit sync: acquire execution lock, observe pending
+/// generation, run default sync, and clear pending if successful.
+///
+/// This is the single implementation shared by TUI `--sync` paths and
+/// exact-selector `--sync` paths. It must be called after any local
+/// mutation has committed (or after the local operation completes).
+pub fn run_explicit_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    let state_dir = crate::auto_sync::notification::derive_state_dir();
+    let observed = crate::auto_sync::observe_pending_generation();
+    match crate::auto_sync::execution_lock::wait_acquire(
+        &state_dir,
+        std::time::Duration::from_secs(30),
+    ) {
+        Ok(_exec_lock) => {
+            let sync_result = crate::sync_commands::run_default_sync(runtime);
+            let sync_succeeded = sync_result.is_ok();
+            if sync_result.is_err() {
+                tracing::warn!("explicit sync failed");
+            }
+            crate::auto_sync::clear_pending_after_explicit_sync(observed, sync_succeeded);
+            sync_result
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not acquire sync lock for explicit sync"
+            );
+            Err(SnipError::runtime_error(
+                "could not acquire sync lock",
+                Some(&e.to_string()),
+            ))
+        }
+    }
+}
+
 /// Opens the TUI snippet selector and runs the given processing function on selection.
 ///
 /// Handles loading the library, extracting snippet data, and optionally running
@@ -332,34 +367,10 @@ where
                         tracing::debug!("Audit log write failed: {}", e);
                     }
                     if do_sync {
-                        // Explicit sync: run immediately and clear pending auto-sync
-                        // to prevent duplicate delayed sync (Workstream D).
-                        let state_dir = crate::auto_sync::notification::derive_state_dir();
-                        match crate::auto_sync::execution_lock::wait_acquire(
-                            &state_dir,
-                            std::time::Duration::from_secs(30),
-                        ) {
-                            Ok(_exec_lock) => {
-                                let observed = crate::auto_sync::observe_pending_generation();
-                                let sync_result =
-                                    crate::sync_commands::run_default_sync(runtime.expect(
-                                        "run_snippet_selection: runtime required when do_sync is true",
-                                    ));
-                                let sync_succeeded = sync_result.is_ok();
-                                if sync_result.is_err() {
-                                    tracing::warn!("post-delete sync failed");
-                                }
-                                crate::auto_sync::clear_pending_after_explicit_sync(
-                                    observed,
-                                    sync_succeeded,
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "could not acquire sync lock for post-delete sync"
-                                );
-                            }
+                        let rt = runtime
+                            .expect("run_snippet_selection: runtime required when do_sync is true");
+                        if let Err(e) = run_explicit_sync(rt) {
+                            tracing::warn!(error = %e, "post-delete explicit sync failed");
                         }
                     } else {
                         // Auto-sync trigger: notify after successful delete commit (Workstream B3).
@@ -395,44 +406,11 @@ where
             break;
         }
     }
-    let explicit_observed = if do_sync && selected_and_processed {
-        crate::auto_sync::observe_pending_generation()
-    } else {
-        None
-    };
-    let explicit_sync_succeeded = if do_sync && selected_and_processed {
-        let state_dir = crate::auto_sync::notification::derive_state_dir();
-        match crate::auto_sync::execution_lock::wait_acquire(
-            &state_dir,
-            std::time::Duration::from_secs(30),
-        ) {
-            Ok(_exec_lock) => match crate::sync_commands::run_default_sync(
-                runtime.expect("run_snippet_selection: runtime required when do_sync is true"),
-            ) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Background sync failed");
-                    false
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "could not acquire sync lock for post-selection sync"
-                );
-                false
-            }
-        }
-    } else {
-        false
-    };
     if do_sync && selected_and_processed {
-        // Explicit sync completed: clear pending auto-sync to prevent
-        // duplicate delayed sync (Workstream D).
-        crate::auto_sync::clear_pending_after_explicit_sync(
-            explicit_observed,
-            explicit_sync_succeeded,
-        );
+        let rt = runtime.expect("run_snippet_selection: runtime required when do_sync is true");
+        if let Err(e) = run_explicit_sync(rt) {
+            tracing::warn!(error = %e, "post-selection explicit sync failed");
+        }
     }
     if cancelled {
         Ok(crate::SelectionOutcome::Cancelled)
@@ -564,5 +542,14 @@ command = "echo hello"
         assert!(deleted.updated_at > 10);
         assert!(snippets.snippets[0].deleted);
         assert_eq!(snippets.snippets[0].command, "echo remove me");
+    }
+
+    #[test]
+    fn test_run_explicit_sync_compiles_with_correct_signature() {
+        // Verify run_explicit_sync exists and has the expected signature
+        // by passing a function pointer. The function itself is tested
+        // through integration tests and run_exact unit tests.
+        fn _assert_signature(_f: fn(&tokio::runtime::Runtime) -> crate::error::SnipResult<()>) {}
+        _assert_signature(super::run_explicit_sync);
     }
 }

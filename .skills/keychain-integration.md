@@ -8,7 +8,7 @@ This skill covers the pattern used in snp for keychain integration.
 
 ### Dependencies
 ```toml
-keyring = "3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 ```
 
 ### Storage (on save)

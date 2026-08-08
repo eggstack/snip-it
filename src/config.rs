@@ -670,6 +670,10 @@ mod tests {
 
     #[test]
     fn test_sync_settings_serialization() {
+        // Ensure keychain is bypassed in CI environments without a keychain
+        unsafe {
+            std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
@@ -846,6 +850,10 @@ sync_direction = "Bidirectional"
 
     #[test]
     fn test_full_config_roundtrip() {
+        // Ensure keychain is bypassed in CI environments without a keychain
+        unsafe {
+            std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
@@ -877,6 +885,10 @@ sync_direction = "Bidirectional"
 
     #[test]
     fn test_unrelated_settings_preserved() {
+        // Ensure keychain is bypassed in CI environments without a keychain
+        unsafe {
+            std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
+        }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
