@@ -107,6 +107,17 @@
 - No new dependencies added; `sha2` was already present. `uuid` crate retained for non-snippet-ID uses (temp files, locks, journal filenames).
 - Snippet IDs are opaque strings throughout the codebase — no production path requires UUID syntax. Server validates only length (`max_id_length: 128`), not format.
 
+## Phase 14C — Command and Control-Flow Consolidation
+
+- Exact selector construction is canonicalized via `resolve_exact_target()` in `selector.rs`. Run, clip, and edit exact paths all delegate to this single helper.
+- Clipboard copy side effects (audit log, usage index update) are canonicalized via `copy_to_clipboard()` in `clip_cmd.rs`. Both TUI callback and exact command path use it.
+- Run post-execution bookkeeping (audit/usage/tracing) is consolidated into `record_execution_result()` in `run_cmd.rs`, called by both the output-file and normal-execution branches.
+- Legacy and canonical data command dispatch share one repair exit-mapping helper (`exit_on_repair_status()` in `main.rs`).
+- Startup recovery and logging/audit classification come from one match via `command_behavior()` in `main.rs`, which returns a `CommandBehavior` struct containing both `StartupRecoveryPolicy` and `StartupServices`.
+- `StartupRecoveryPolicy` has five variants: `Allow`, `SuppressReadOnly`, `SuppressExplicitSync`, `SuppressInternal`, `SuppressConfiguration`.
+- The obsolete `SubcommandTag` enum and tag-based `should_attempt_auto_sync_recovery()` have been removed; only the policy-based `should_attempt_auto_sync_recovery_for_policy()` remains.
+- Explicit-sync orchestration uses a single `run_explicit_sync()` in `commands/mod.rs` for all paths (TUI delete, post-selection, exact run, exact clip).
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

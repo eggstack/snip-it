@@ -346,6 +346,34 @@ fn sort_matches(matches: &mut [SnippetMatch]) {
     });
 }
 
+/// Construct and resolve an exact-target selector from CLI arguments.
+///
+/// This is the single canonical path for exact `Run`, `Clip`, and `Edit`
+/// targeting. It builds a `SnippetSelector` with `ResolutionPolicy::Unique`,
+/// applies the provided filters, and calls [`resolve_selector`].
+pub fn resolve_exact_target(
+    library: Option<String>,
+    id: Option<String>,
+    description_exact: Option<String>,
+    command_exact: Option<String>,
+) -> SnipResult<SelectionResult> {
+    let lib_scope = match library {
+        Some(name) => LibraryScope::Named(name),
+        None => LibraryScope::Primary,
+    };
+    let mut selector = SnippetSelector::new(ResolutionPolicy::Unique).with_library(lib_scope);
+    if let Some(id) = id {
+        selector = selector.with_id(id);
+    }
+    if let Some(desc) = description_exact {
+        selector = selector.with_description_exact(desc);
+    }
+    if let Some(cmd) = command_exact {
+        selector = selector.with_command_exact(cmd);
+    }
+    resolve_selector(&selector)
+}
+
 /// Resolve a selector across potentially multiple libraries.
 ///
 /// This is the top-level entry point for non-TUI snippet resolution.

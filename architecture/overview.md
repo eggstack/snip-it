@@ -73,9 +73,10 @@ provides Tokio only when an async command is invoked (`run`, `clip`, `search`,
 (SIGINT + SIGTERM).
 
 Command dispatch flows through `dispatch_command()` which maps each CLI
-variant to its command module. `classify_command()` determines startup
-recovery policy: read-only commands suppress recovery, mutation commands
-allow it, sync commands manage their own behavior.
+variant to its command module. `command_behavior()` determines both startup
+recovery policy and logging/audit service level in a single match:
+read-only commands suppress recovery, mutation commands allow it, sync
+commands manage their own behavior.
 
 **Exit codes** (stable): 0 success, 1 general error, 2 usage error,
 3 not found, 4 cancelled, 5 ambiguous, 6 validation, 7 sync failure,

@@ -707,6 +707,22 @@ enum ShellIntegration {
     Fish,
 }
 
+/// Map a `RepairExitStatus` to the appropriate process exit code.
+/// Clean/DryRun/Repaired → 0 (implicit), UnsafeOnly → 2, PartialFailure → 1.
+fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
+    match status {
+        commands::repair_cmd::RepairExitStatus::Clean
+        | commands::repair_cmd::RepairExitStatus::Repaired
+        | commands::repair_cmd::RepairExitStatus::DryRun => {}
+        commands::repair_cmd::RepairExitStatus::PartialFailure => {
+            std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
+        }
+        commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
+            std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
+        }
+    }
+}
+
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
@@ -784,25 +800,12 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             command_exact,
         }) => {
             if id.is_some() || description_exact.is_some() || command_exact.is_some() {
-                // Exact targeting: bypass TUI
-                let lib_scope = match &library {
-                    Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
-                    None => snip_it::selector::LibraryScope::Primary,
-                };
-                let mut selector = snip_it::selector::SnippetSelector::new(
-                    snip_it::selector::ResolutionPolicy::Unique,
-                )
-                .with_library(lib_scope);
-                if let Some(id) = id {
-                    selector = selector.with_id(id);
-                }
-                if let Some(desc) = description_exact {
-                    selector = selector.with_description_exact(desc);
-                }
-                if let Some(cmd) = command_exact {
-                    selector = selector.with_command_exact(cmd);
-                }
-                let result = snip_it::selector::resolve_selector(&selector)?;
+                let result = snip_it::selector::resolve_exact_target(
+                    library,
+                    id,
+                    description_exact,
+                    command_exact,
+                )?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
                         let outcome = commands::run_cmd::run_exact(
@@ -872,24 +875,12 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             command_exact,
         }) => {
             if id.is_some() || description_exact.is_some() || command_exact.is_some() {
-                let lib_scope = match &library {
-                    Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
-                    None => snip_it::selector::LibraryScope::Primary,
-                };
-                let mut selector = snip_it::selector::SnippetSelector::new(
-                    snip_it::selector::ResolutionPolicy::Unique,
-                )
-                .with_library(lib_scope);
-                if let Some(id) = id {
-                    selector = selector.with_id(id);
-                }
-                if let Some(desc) = description_exact {
-                    selector = selector.with_description_exact(desc);
-                }
-                if let Some(cmd) = command_exact {
-                    selector = selector.with_command_exact(cmd);
-                }
-                let result = snip_it::selector::resolve_selector(&selector)?;
+                let result = snip_it::selector::resolve_exact_target(
+                    library,
+                    id,
+                    description_exact,
+                    command_exact,
+                )?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
                         commands::clip_cmd::run_exact(&m.snippet, sync, sync.then_some(&RUNTIME))?;
@@ -1003,28 +994,17 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     output
                 };
                 if has_exact {
-                    let lib_scope = match &library {
-                        Some(name) => snip_it::selector::LibraryScope::Named(name.clone()),
-                        None => snip_it::selector::LibraryScope::Primary,
-                    };
-                    let mut selector = snip_it::selector::SnippetSelector::new(
-                        snip_it::selector::ResolutionPolicy::Unique,
-                    )
-                    .with_library(lib_scope);
-                    if let Some(id) = id {
-                        selector = selector.with_id(id);
-                    }
-                    if let Some(desc) = description_exact {
-                        selector = selector.with_description_exact(desc);
-                    }
-                    if let Some(cmd) = command_exact {
-                        selector = selector.with_command_exact(cmd);
-                    }
-                    let result = snip_it::selector::resolve_selector(&selector)?;
+                    let lib_for_edit = library.clone();
+                    let result = snip_it::selector::resolve_exact_target(
+                        library,
+                        id,
+                        description_exact,
+                        command_exact,
+                    )?;
                     let outcome = match result {
                         snip_it::selector::SelectionResult::One(m) => {
                             commands::edit_cmd::run_edit_output_by_id(
-                                library,
+                                lib_for_edit,
                                 &m.snippet.id,
                                 output_value,
                             )?;
@@ -1214,19 +1194,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             json,
         }) => {
             let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
-            // Map RepairExitStatus to process exit codes per the plan:
-            // Clean/DryRun/Repaired → 0, UnsafeOnly → 2, PartialFailure → 1
-            match status {
-                commands::repair_cmd::RepairExitStatus::Clean
-                | commands::repair_cmd::RepairExitStatus::Repaired
-                | commands::repair_cmd::RepairExitStatus::DryRun => {}
-                commands::repair_cmd::RepairExitStatus::PartialFailure => {
-                    std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
-                }
-                commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
-                    std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
-                }
-            }
+            exit_on_repair_status(status);
         }
         Some(Commands::Validate {
             library,
@@ -1277,17 +1245,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 json,
             } => {
                 let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
-                match status {
-                    commands::repair_cmd::RepairExitStatus::Clean
-                    | commands::repair_cmd::RepairExitStatus::Repaired
-                    | commands::repair_cmd::RepairExitStatus::DryRun => {}
-                    commands::repair_cmd::RepairExitStatus::PartialFailure => {
-                        std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
-                    }
-                    commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
-                        std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
-                    }
-                }
+                exit_on_repair_status(status);
             }
             DataCommands::Status { json, sync_only } => {
                 commands::status_cmd::run(json, sync_only)?;
@@ -1342,86 +1300,6 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     Ok(CommandOutcome::Success)
 }
 
-/// Map a CLI `Commands` variant to a `StartupRecoveryPolicy` for startup
-/// recovery classification. Read-only and configuration commands suppress
-/// recovery; mutation commands allow it.
-fn classify_command(cmd: &Commands) -> StartupRecoveryPolicy {
-    match cmd {
-        // Read-only commands: no recovery, no worker spawn, no network
-        Commands::Version
-        | Commands::List { .. }
-        | Commands::Search { .. }
-        | Commands::Select { .. }
-        | Commands::Status { .. }
-        | Commands::Get { .. }
-        | Commands::Validate { .. } => StartupRecoveryPolicy::SuppressReadOnly,
-
-        // Backup and restore dry-run: read-only (backup is snapshot, not mutation)
-        Commands::Backup { .. } => StartupRecoveryPolicy::SuppressReadOnly,
-
-        // Library read-only subcommands
-        Commands::Library {
-            command: LibraryCommands::List | LibraryCommands::Show { .. },
-        } => StartupRecoveryPolicy::SuppressReadOnly,
-
-        // Explicit sync commands: manage their own sync behavior
-        Commands::Sync { .. } | Commands::Cron { .. } | Commands::Register { .. } => {
-            StartupRecoveryPolicy::SuppressExplicitSync
-        }
-
-        // Internal worker subprocess
-        Commands::AutoSyncWorker { .. } => StartupRecoveryPolicy::SuppressInternal,
-
-        // Configuration and setup commands
-        Commands::Update { .. }
-        | Commands::Doctor { .. }
-        | Commands::Completions { .. }
-        | Commands::Shell { .. }
-        | Commands::Keybindings => StartupRecoveryPolicy::SuppressConfiguration,
-
-        // Dry-run / read-only modes of otherwise-mutating commands
-        Commands::Restore {
-            mode: commands::restore_cmd::RestoreMode::DryRun,
-            ..
-        }
-        | Commands::Import {
-            command: ImportSubcommands::Pet { dry_run: true, .. },
-        }
-        | Commands::Repair { dry_run: true, .. } => StartupRecoveryPolicy::SuppressReadOnly,
-
-        // Data subcommand group: classify by subcommand
-        Commands::Data { command } => match command {
-            DataCommands::Validate { .. }
-            | DataCommands::Status { .. }
-            | DataCommands::Backup { .. } => StartupRecoveryPolicy::SuppressReadOnly,
-            DataCommands::Restore {
-                mode: commands::restore_cmd::RestoreMode::DryRun,
-                ..
-            } => StartupRecoveryPolicy::SuppressReadOnly,
-            DataCommands::Repair { dry_run: true, .. } => StartupRecoveryPolicy::SuppressReadOnly,
-            DataCommands::Repair { .. } | DataCommands::Restore { .. } => {
-                StartupRecoveryPolicy::Allow
-            }
-        },
-
-        // Mutation commands: allow recovery
-        Commands::New { .. }
-        | Commands::Run { .. }
-        | Commands::Clip { .. }
-        | Commands::Edit { .. }
-        | Commands::Import { .. }
-        | Commands::Repair { .. }
-        | Commands::Restore { .. }
-        | Commands::Premade { .. }
-        | Commands::Library {
-            command:
-                LibraryCommands::Create { .. }
-                | LibraryCommands::Delete { .. }
-                | LibraryCommands::SetPrimary { .. },
-        } => StartupRecoveryPolicy::Allow,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupServices {
     Minimal,
@@ -1429,8 +1307,75 @@ enum StartupServices {
     LoggingAndAudit,
 }
 
-fn startup_services(cmd: Option<&Commands>) -> StartupServices {
-    match cmd {
+/// Combined command behavior classification. One match over the CLI enum
+/// assigns both the startup recovery policy and the logging/audit service
+/// level, preventing drift between the two.
+struct CommandBehavior {
+    recovery: StartupRecoveryPolicy,
+    services: StartupServices,
+}
+
+fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
+    let (recovery, services) = match cmd {
+        // ── Read-only commands ──────────────────────────────────────
+        Some(
+            Commands::Version
+            | Commands::List { .. }
+            | Commands::Search { .. }
+            | Commands::Select { .. }
+            | Commands::Status { .. }
+            | Commands::Get { .. }
+            | Commands::Validate { .. }
+            | Commands::Backup { .. }
+            | Commands::Library {
+                command: LibraryCommands::List | LibraryCommands::Show { .. },
+            },
+        ) => (
+            StartupRecoveryPolicy::SuppressReadOnly,
+            StartupServices::Minimal,
+        ),
+
+        // ── Dry-run / read-only modes of otherwise-mutating commands ─
+        Some(
+            Commands::Restore {
+                mode: commands::restore_cmd::RestoreMode::DryRun,
+                ..
+            }
+            | Commands::Import {
+                command: ImportSubcommands::Pet { dry_run: true, .. },
+            }
+            | Commands::Repair { dry_run: true, .. },
+        ) => (
+            StartupRecoveryPolicy::SuppressReadOnly,
+            StartupServices::Minimal,
+        ),
+
+        // ── Data subcommand group ───────────────────────────────────
+        Some(Commands::Data { command }) => match command {
+            DataCommands::Validate { .. }
+            | DataCommands::Status { .. }
+            | DataCommands::Backup { .. } => (
+                StartupRecoveryPolicy::SuppressReadOnly,
+                StartupServices::Minimal,
+            ),
+            DataCommands::Restore {
+                mode: commands::restore_cmd::RestoreMode::DryRun,
+                ..
+            } => (
+                StartupRecoveryPolicy::SuppressReadOnly,
+                StartupServices::Minimal,
+            ),
+            DataCommands::Repair { dry_run: true, .. } => (
+                StartupRecoveryPolicy::SuppressReadOnly,
+                StartupServices::Minimal,
+            ),
+            DataCommands::Repair { .. } | DataCommands::Restore { .. } => (
+                StartupRecoveryPolicy::Allow,
+                StartupServices::LoggingAndAudit,
+            ),
+        },
+
+        // ── Mutation commands: allow recovery, full logging+audit ───
         Some(
             Commands::New { .. }
             | Commands::Run { .. }
@@ -1440,44 +1385,45 @@ fn startup_services(cmd: Option<&Commands>) -> StartupServices {
             | Commands::Repair { .. }
             | Commands::Restore { .. }
             | Commands::Premade { .. }
-            | Commands::Data {
-                command: DataCommands::Repair { .. } | DataCommands::Restore { .. },
-            }
             | Commands::Library {
                 command:
                     LibraryCommands::Create { .. }
                     | LibraryCommands::Delete { .. }
                     | LibraryCommands::SetPrimary { .. },
             },
-        ) => StartupServices::LoggingAndAudit,
-        Some(Commands::Version)
-        | Some(Commands::Completions { .. })
-        | Some(Commands::Shell { .. })
-        | Some(Commands::Keybindings)
-        | Some(Commands::List { .. })
-        | Some(Commands::Search { .. })
-        | Some(Commands::Select { .. })
-        | Some(Commands::Status { .. })
-        | Some(Commands::Get { .. })
-        | Some(Commands::Validate { .. })
-        | Some(Commands::Backup { .. })
-        | Some(Commands::Data {
-            command:
-                DataCommands::Validate { .. }
-                | DataCommands::Backup { .. }
-                | DataCommands::Status { .. },
-        })
-        | Some(Commands::Library {
-            command: LibraryCommands::List | LibraryCommands::Show { .. },
-        }) => StartupServices::Minimal,
-        Some(Commands::Update { .. })
-        | Some(Commands::Doctor { .. })
-        | Some(Commands::Sync { .. })
-        | Some(Commands::Cron { .. })
-        | Some(Commands::Register { .. })
-        | Some(Commands::AutoSyncWorker { .. })
-        | None => StartupServices::Logging,
-    }
+        ) => (
+            StartupRecoveryPolicy::Allow,
+            StartupServices::LoggingAndAudit,
+        ),
+
+        // ── Explicit sync commands: suppress recovery, logging only ──
+        Some(Commands::Sync { .. } | Commands::Cron { .. } | Commands::Register { .. }) => (
+            StartupRecoveryPolicy::SuppressExplicitSync,
+            StartupServices::Logging,
+        ),
+
+        // ── Internal worker subprocess ──────────────────────────────
+        Some(Commands::AutoSyncWorker { .. }) => (
+            StartupRecoveryPolicy::SuppressInternal,
+            StartupServices::Logging,
+        ),
+
+        // ── Config/setup commands ───────────────────────────────────
+        Some(
+            Commands::Update { .. }
+            | Commands::Doctor { .. }
+            | Commands::Completions { .. }
+            | Commands::Shell { .. }
+            | Commands::Keybindings,
+        ) => (
+            StartupRecoveryPolicy::SuppressConfiguration,
+            StartupServices::Logging,
+        ),
+
+        // ── No subcommand (default TUI) ─────────────────────────────
+        None => (StartupRecoveryPolicy::Allow, StartupServices::Logging),
+    };
+    CommandBehavior { recovery, services }
 }
 
 fn main() {
@@ -1485,32 +1431,30 @@ fn main() {
     setup_signal_handler();
 
     let cli = Cli::parse();
-    let services = startup_services(cli.command.as_ref());
-    match services {
+    let behavior = command_behavior(cli.command.as_ref());
+    match behavior.services {
         StartupServices::Minimal => {}
         StartupServices::Logging => init_default_file_logging(),
         StartupServices::LoggingAndAudit => init_default_logging(),
     }
-    if services != StartupServices::Minimal {
+    if behavior.services != StartupServices::Minimal {
         log_startup_info();
     }
 
-    if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(
-        cli.command.as_ref().map(classify_command),
-    ) {
+    if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(Some(behavior.recovery)) {
         snip_it::auto_sync::startup_recover_pending();
     }
 
     match dispatch_command(cli.command) {
         Ok(CommandOutcome::Success) => {}
         Ok(CommandOutcome::Cancelled) => {
-            if services != StartupServices::Minimal {
+            if behavior.services != StartupServices::Minimal {
                 log_shutdown_info();
             }
             std::process::exit(4);
         }
         Ok(CommandOutcome::ExecutionFailed { child_code }) => {
-            if services != StartupServices::Minimal {
+            if behavior.services != StartupServices::Minimal {
                 log_shutdown_info();
             }
             std::process::exit(child_code.unwrap_or(8));
@@ -1518,14 +1462,14 @@ fn main() {
         Ok(_) => {}
         Err(e) => {
             eprintln!("error: {e}");
-            if services != StartupServices::Minimal {
+            if behavior.services != StartupServices::Minimal {
                 log_shutdown_info();
             }
             std::process::exit(1);
         }
     }
 
-    if services != StartupServices::Minimal {
+    if behavior.services != StartupServices::Minimal {
         log_shutdown_info();
     }
 }

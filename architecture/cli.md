@@ -73,9 +73,11 @@ detached helper protocol. See
 
 ## Startup Recovery Classification
 
-`classify_command()` in `src/main.rs` maps every `Commands` variant to a
-`StartupRecoveryPolicy` that gates whether auto-sync recovery runs before
-dispatch. This prevents read-only commands from triggering network work.
+`command_behavior()` in `src/main.rs` maps every `Commands` variant to a
+`CommandBehavior` containing both a `StartupRecoveryPolicy` (gating whether
+auto-sync recovery runs before dispatch) and a `StartupServices` level
+(gating logging and audit initialization). This prevents read-only commands
+from triggering network work.
 
 ```rust
 pub enum StartupRecoveryPolicy {

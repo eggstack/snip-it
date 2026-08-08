@@ -2,8 +2,26 @@ use crate::commands::expand_snippet_command;
 use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use crate::library::Snippet;
-use crate::logging::audit_log;
 use std::path::PathBuf;
+
+/// Copy the expanded command of a snippet to the clipboard, record the
+/// audit log entry, and update the usage index.
+///
+/// This is the single implementation for all clipboard copy operations
+/// (TUI callback and exact command path). Variable expansion is *not*
+/// performed here — the caller expands first and passes the result in.
+fn copy_to_clipboard(snippet: &Snippet, final_command: &str) -> SnipResult<()> {
+    crate::clipboard::copy_to_clipboard_auto(final_command)?;
+    if let Err(e) = crate::logging::audit_log("copy", snippet, None) {
+        tracing::debug!("Audit log write failed: {}", e);
+    }
+    let mut usage_idx = crate::usage::UsageIndex::load();
+    usage_idx.record_use(&snippet.id);
+    if let Err(e) = usage_idx.save() {
+        tracing::debug!("Usage save failed: {}", e);
+    }
+    Ok(())
+}
 
 fn process_snippet(
     snippet: &Snippet,
@@ -15,16 +33,7 @@ fn process_snippet(
         crate::commands::ExpandedCommand::Expanded(cmd) => cmd,
     };
 
-    crate::clipboard::copy_to_clipboard_auto(&final_command)?;
-    if let Err(e) = audit_log("copy", snippet, None) {
-        tracing::debug!("Audit log write failed: {}", e);
-    }
-    // Record usage for sorting
-    let mut usage_idx = crate::usage::UsageIndex::load();
-    usage_idx.record_use(&snippet.id);
-    if let Err(e) = usage_idx.save() {
-        tracing::debug!("Usage save failed: {}", e);
-    }
+    copy_to_clipboard(snippet, &final_command)?;
     Ok(crate::ProcessResult::Done(
         "Copied to clipboard".to_string(),
     ))
@@ -36,19 +45,12 @@ pub fn run_exact(
     do_sync: bool,
     runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
-    use crate::commands::expand_snippet_command;
     let final_command = match expand_snippet_command(snippet)? {
         crate::commands::ExpandedCommand::Cancel => return Ok(()),
         crate::commands::ExpandedCommand::Skip => return Ok(()),
         crate::commands::ExpandedCommand::Expanded(cmd) => cmd,
     };
-    crate::clipboard::copy_to_clipboard_auto(&final_command)?;
-    if let Err(e) = crate::logging::audit_log("copy", snippet, None) {
-        tracing::debug!("Audit log write failed: {}", e);
-    }
-    let mut usage_idx = crate::usage::UsageIndex::load();
-    usage_idx.record_use(&snippet.id);
-    let _ = usage_idx.save();
+    copy_to_clipboard(snippet, &final_command)?;
     if do_sync {
         let rt = runtime.expect("run_exact: runtime required when do_sync is true");
         if let Err(e) = crate::commands::run_explicit_sync(rt) {
@@ -91,7 +93,6 @@ mod tests {
             command: "echo hello".to_string(),
             ..Default::default()
         };
-        // do_sync=false, runtime=None should succeed without attempting sync
         let result = super::run_exact(&snippet, false, None);
         assert!(result.is_ok());
     }

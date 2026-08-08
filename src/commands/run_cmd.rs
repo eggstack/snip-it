@@ -126,6 +126,34 @@ fn spawn_and_wait_execution(
     }
 }
 
+/// Record audit log, usage, and command-execution tracing after a snippet
+/// execution completes. This is the single bookkeeping path shared by the
+/// output-file and normal-execution branches.
+fn record_execution_result(
+    snippet: &Snippet,
+    final_command: &str,
+    result: &crate::ProcessResult,
+    working_dir: Option<&std::path::Path>,
+) {
+    if result.is_done() {
+        if let Err(e) = audit_log("execute", snippet, None) {
+            tracing::debug!("Audit log write failed: {}", e);
+        }
+        let mut usage_idx = crate::usage::UsageIndex::load();
+        usage_idx.record_use(&snippet.id);
+        if let Err(e) = usage_idx.save() {
+            tracing::debug!("Usage save failed: {}", e);
+        }
+    }
+
+    let result_str: Result<(), String> = if result.is_done() {
+        Ok(())
+    } else {
+        Err(format!("{result:?}"))
+    };
+    log_command_execution(final_command, &[], &result_str, working_dir);
+}
+
 fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessResult> {
     let final_command = match expand_snippet_command(snippet)? {
         crate::commands::ExpandedCommand::Cancel => return Ok(crate::ProcessResult::Cancel),
@@ -207,29 +235,9 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             DEFAULT_TIMEOUT_SECONDS,
         )));
 
-        // Use unified spawn_and_wait_execution so spawn failures map to
-        // ProcessResult::Failed { exit_code: None } (exit code 8), not
-        // generic SnipError (exit code 1).
         let result = spawn_and_wait_execution(&shell, &final_command, timeout, Some(output_file));
 
-        // Record audit/usage on success
-        if result.is_done() {
-            if let Err(e) = audit_log("execute", snippet, None) {
-                tracing::debug!("Audit log write failed: {}", e);
-            }
-            let mut usage_idx = crate::usage::UsageIndex::load();
-            usage_idx.record_use(&snippet.id);
-            if let Err(e) = usage_idx.save() {
-                tracing::debug!("Usage save failed: {}", e);
-            }
-        }
-
-        let result_str: Result<(), String> = if result.is_done() {
-            Ok(())
-        } else {
-            Err(format!("{:?}", result))
-        };
-        log_command_execution(&final_command, &[], &result_str, Some(&cwd));
+        record_execution_result(snippet, &final_command, &result, Some(&cwd));
 
         Ok(result)
     } else {
@@ -239,24 +247,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
         // Use unified spawn_and_wait_execution for consistent outcome mapping.
         let result = spawn_and_wait_execution(&shell, &final_command, timeout, None);
 
-        // Record audit/usage on success
-        if result.is_done() {
-            if let Err(e) = audit_log("execute", snippet, None) {
-                tracing::debug!("Audit log write failed: {}", e);
-            }
-            let mut usage_idx = crate::usage::UsageIndex::load();
-            usage_idx.record_use(&snippet.id);
-            if let Err(e) = usage_idx.save() {
-                tracing::debug!("Usage save failed: {}", e);
-            }
-        }
-
-        let result_str: Result<(), String> = if result.is_done() {
-            Ok(())
-        } else {
-            Err(format!("{:?}", result))
-        };
-        log_command_execution(&final_command, &[], &result_str, None);
+        record_execution_result(snippet, &final_command, &result, None);
 
         Ok(result)
     }
