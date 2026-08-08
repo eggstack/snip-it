@@ -1,6 +1,6 @@
 # Phase 14A — Credential Backend and Explicit-Sync Correctness
 
-Status: READY FOR IMPLEMENTATION
+Status: IMPLEMENTED
 
 Parent roadmap: `plans/snip-it-phase-14-correctness-simplification-roadmap.md`
 
@@ -290,16 +290,16 @@ Stop and amend the plan instead of broadening scope if:
 
 ## 11. Final acceptance criteria
 
-- [ ] Native credential-store features are enabled intentionally.
-- [ ] Existing explicit plaintext fallback remains opt-in only.
-- [ ] TUI and exact run use one explicit-sync implementation.
-- [ ] TUI and exact clip use one explicit-sync implementation.
-- [ ] Exact `run --sync` no longer substitutes auto-sync notification for explicit sync.
-- [ ] Exact `clip --sync` no longer drops the flag.
-- [ ] Pending generation is only cleared after successful canonical sync and only if unchanged.
-- [ ] No new daemon, queue, credential subsystem, or sync implementation is introduced.
-- [ ] Focused tests pass.
-- [ ] `bash scripts/check.sh` passes.
+- [x] Native credential-store features are enabled intentionally.
+- [x] Existing explicit plaintext fallback remains opt-in only.
+- [x] TUI and exact run use one explicit-sync implementation.
+- [x] TUI and exact clip use one explicit-sync implementation.
+- [x] Exact `run --sync` no longer substitutes auto-sync notification for explicit sync.
+- [x] Exact `clip --sync` no longer drops the flag.
+- [x] Pending generation is only cleared after successful canonical sync and only if unchanged.
+- [x] No new daemon, queue, credential subsystem, or sync implementation is introduced.
+- [x] Focused tests pass.
+- [x] `bash scripts/check.sh` passes.
 
 ## 12. Suggested implementation commit
 
@@ -308,3 +308,5 @@ phase-14a: fix native credentials and exact sync parity
 ```
 
 After implementation, record the implementation SHA in this plan and change status only when the listed acceptance criteria are actually satisfied.
+
+Implementation SHA: `841cfcb0dd11d1e993431050f95409f8c5c85bc`
