@@ -88,6 +88,15 @@
 - `FailureClass` in `architecture/sync.md` corrected to 4-variant enum (Phase 13E collapse).
 - Architecture docs: LZMA → gzip for bundled themes, merge strategy corrected to no-resurrection behavior.
 
+## Phase 14A — Credential Backend and Explicit-Sync Correctness
+
+- `Cargo.toml` enables native keyring store features: `apple-native` (macOS), `windows-native` (Windows), `sync-secret-service` (Linux desktop). Without a supported store feature, keyring uses its mock store as default — not acceptable as production credential persistence.
+- `run_explicit_sync(runtime)` in `commands/mod.rs` is the single canonical explicit-sync implementation shared by TUI `--sync` paths and exact-selector `--sync` paths. It acquires the execution lock, observes pending generation, runs `run_default_sync`, and clears pending on success.
+- Exact `run --id/--description-exact/--command-exact --sync` now calls `run_explicit_sync` instead of `notify_mutation(SnippetRun)`. Running a snippet changes local usage metadata, not synced content; `--sync` means perform sync now.
+- Exact `clip --id/--description-exact/--command-exact --sync` now accepts `do_sync` and `runtime` parameters and calls `run_explicit_sync`. The flag is no longer discarded by exact dispatch.
+- `clip_cmd::run_exact` signature changed from `fn run_exact(snippet)` to `fn run_exact(snippet, do_sync, runtime)`. All call sites updated.
+- TUI delete path in `run_snippet_selection` also uses `run_explicit_sync` instead of inline lock/sync/clear logic.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

@@ -614,9 +614,10 @@ user command
 
 When `--sync` flag is used (on `run`, `clip`, `search`, or TUI delete):
 
-1. Explicit sync runs immediately via `run_default_sync()`
-2. Pending auto-sync state is cleared via `clear_pending_after_explicit_sync()`
-3. No duplicate delayed sync for the same mutation generation
+1. `run_explicit_sync(runtime)` in `commands/mod.rs` acquires the execution lock, observes pending generation, runs `run_default_sync(runtime)`, and clears pending on success.
+2. TUI and exact-selector paths share one implementation — no divergence.
+3. Pending auto-sync state is cleared via `clear_pending_after_explicit_sync()`.
+4. No duplicate delayed sync for the same mutation generation.
 
 ### Transaction Boundaries
 
