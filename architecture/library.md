@@ -10,7 +10,7 @@ The library module is the core data layer of snip-it. It defines the `Snippet` a
 
 ```rust
 pub struct Snippet {
-    pub id: String,              // UUID v4, generated on first sync
+    pub id: String,              // Opaque ID; UUID for new, deterministic for legacy
     pub description: String,     // Human-readable name
     pub command: String,         // Shell command (may contain <variables>)
     pub output: String,          // Output file path

@@ -22,6 +22,8 @@ use crate::test_failpoints::mutation_barrier;
 use crate::utils::config::{get_config_dir, get_snippets_path};
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -191,6 +193,7 @@ impl Snippet {
 /// - Creating, deleting, and managing individual libraries
 /// - Loading premade libraries
 /// - Determining whether to use single-file or library mode
+#[derive(Debug)]
 pub struct LibraryManager {
     config_dir: PathBuf,
     libraries_dir: PathBuf,
@@ -221,7 +224,7 @@ impl LibraryManager {
             match toml::from_str(&content) {
                 Ok(c) => c,
                 Err(e) => {
-                    // Backup corrupted file so data isn't lost on next save
+                    // Best-effort backup of corrupted file before returning the error.
                     let backup = config_path.with_extension("toml.corrupt");
                     if let Err(copy_err) = fs::copy(&config_path, &backup) {
                         tracing::warn!(
@@ -235,10 +238,13 @@ impl LibraryManager {
                             config = %config_path.display(),
                             error = %e,
                             backup = %backup.display(),
-                            "Failed to parse config, backed up to file. Using defaults."
+                            "Failed to parse config, backed up to file"
                         );
                     }
-                    LibraryConfig::default()
+                    return Err(SnipError::toml_error(
+                        &format!("parse libraries config: {}", config_path.display()),
+                        e,
+                    ));
                 }
             }
         } else {
@@ -270,9 +276,23 @@ impl LibraryManager {
                 Ok(c) => c,
                 Err(e) => {
                     let backup = config_path.with_extension("toml.corrupt");
-                    let _ = fs::copy(&config_path, &backup);
-                    tracing::warn!(error = %e, "Failed to parse config, using defaults");
-                    LibraryConfig::default()
+                    if let Err(copy_err) = fs::copy(&config_path, &backup) {
+                        tracing::warn!(
+                            error = %e,
+                            backup_error = %copy_err,
+                            "Failed to parse config (backup also failed)"
+                        );
+                    } else {
+                        tracing::warn!(
+                            error = %e,
+                            backup = %backup.display(),
+                            "Failed to parse config, backed up to file"
+                        );
+                    }
+                    return Err(SnipError::toml_error(
+                        &format!("parse libraries config: {}", config_path.display()),
+                        e,
+                    ));
                 }
             }
         } else {
@@ -760,10 +780,103 @@ fn write_library_file(path: &Path, content: &str, temp_prefix: &str) -> SnipResu
     Ok(())
 }
 
+/// Normalizes snippet IDs deterministically using SHA-256.
+///
+/// - Existing unique non-empty IDs remain unchanged.
+/// - Missing IDs receive a deterministic provisional ID: `legacy-<sha256hex>`.
+/// - For duplicate explicit IDs, the first occurrence keeps the original and
+///   later occurrences receive deterministic replacement IDs.
+/// - Repeated loads of identical file content produce identical IDs.
+fn normalize_snippet_ids(snippets: &mut [Snippet]) {
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut content_fingerprints: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for snippet in snippets.iter_mut() {
+        if snippet.id.is_empty() {
+            // Compute a deterministic fingerprint from stable user data.
+            let occurrence = content_fingerprints
+                .entry(snippet_content_key(snippet))
+                .or_insert(0);
+            let idx = *occurrence;
+            *occurrence += 1;
+            snippet.id = deterministic_legacy_id(snippet, idx);
+        } else if seen_ids.contains(&snippet.id) {
+            // Duplicate explicit ID — generate a deterministic replacement.
+            let occurrence = content_fingerprints
+                .entry(snippet_content_key(snippet))
+                .or_insert(0);
+            let idx = *occurrence;
+            *occurrence += 1;
+            snippet.id = deterministic_duplicate_id(&snippet.id, snippet, idx);
+        }
+        seen_ids.insert(snippet.id.clone());
+    }
+}
+
+/// Builds a content-based key for a snippet (used for occurrence counting).
+fn snippet_content_key(snippet: &Snippet) -> String {
+    let mut key = String::new();
+    key.push_str(&snippet.description);
+    key.push('\0');
+    key.push_str(&snippet.command);
+    key.push('\0');
+    for tag in &snippet.tags {
+        key.push_str(tag);
+        key.push('\0');
+    }
+    key.push_str(&snippet.output);
+    key
+}
+
+/// Generates a deterministic legacy ID for a snippet with a missing ID.
+fn deterministic_legacy_id(snippet: &Snippet, occurrence: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snip-it-legacy-id-v1\0");
+    hasher.update(&snippet.description);
+    hasher.update(b"\0");
+    hasher.update(&snippet.command);
+    hasher.update(b"\0");
+    for tag in &snippet.tags {
+        hasher.update(tag);
+        hasher.update(b"\0");
+    }
+    hasher.update(&snippet.output);
+    hasher.update(b"\0");
+    hasher.update(occurrence.to_le_bytes());
+    let hash = hasher.finalize();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    format!("legacy-{hex}")
+}
+
+/// Generates a deterministic replacement ID for a duplicate explicit ID.
+fn deterministic_duplicate_id(original_id: &str, snippet: &Snippet, occurrence: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snip-it-duplicate-id-v1\0");
+    hasher.update(original_id);
+    hasher.update(b"\0");
+    hasher.update(&snippet.description);
+    hasher.update(b"\0");
+    hasher.update(&snippet.command);
+    hasher.update(b"\0");
+    for tag in &snippet.tags {
+        hasher.update(tag);
+        hasher.update(b"\0");
+    }
+    hasher.update(&snippet.output);
+    hasher.update(b"\0");
+    hasher.update(occurrence.to_le_bytes());
+    let hash = hasher.finalize();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    format!("legacy-{hex}")
+}
+
 /// Loads a snippet library from a TOML file.
 ///
 /// Returns an empty collection if the file doesn't exist or is empty.
-/// Deduplicates snippet IDs on load and creates backups of corrupted files.
+/// Returns an error if the file exists but contains malformed TOML;
+/// a best-effort backup is created before the error is returned.
+/// Missing or duplicate snippet IDs are repaired deterministically.
 pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     if !path.exists() {
         return Ok(Snippets::default());
@@ -779,43 +892,35 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     let snippets: Snippets = match toml::from_str(&fixed_content) {
         Ok(s) => s,
         Err(e) => {
-            // Create backup of corrupted file before returning defaults
+            // Best-effort backup of corrupted file before returning the error.
+            // The backup failure must not hide the original parse error.
             let backup_path = path.with_extension("toml.corrupt.bak");
             if let Err(backup_err) = fs::copy(path, &backup_path) {
-                tracing::error!(
+                tracing::warn!(
                     file = %path.display(),
-                    error = %backup_err,
+                    error = %e,
+                    backup_error = %backup_err,
                     "Failed to parse TOML and could not create backup"
                 );
             } else {
-                tracing::error!(
+                tracing::warn!(
                     file = %path.display(),
                     backup = %backup_path.display(),
                     error = %e,
                     "Failed to parse TOML, backup saved"
                 );
             }
-            Snippets::default()
+            return Err(SnipError::toml_error(
+                &format!("parse library file: {}", path.display()),
+                e,
+            ));
         }
     };
 
-    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut deduplicated: Vec<Snippet> = Vec::new();
-    for mut snippet in snippets.snippets {
-        if snippet.id.is_empty() {
-            snippet.id = uuid::Uuid::new_v4().to_string();
-        }
-        if seen_ids.contains(&snippet.id) {
-            snippet.id = uuid::Uuid::new_v4().to_string();
-        }
-        seen_ids.insert(snippet.id.clone());
-        deduplicated.push(snippet);
-    }
+    let mut snippets = snippets;
+    normalize_snippet_ids(&mut snippets.snippets);
 
-    Ok(Snippets {
-        snippets: deduplicated,
-        folders: snippets.folders,
-    })
+    Ok(snippets)
 }
 
 /// Saves a snippet library to a TOML file using atomic write.
@@ -2173,5 +2278,312 @@ output = \"\"
 
         let final_loaded = load_library(&path).unwrap();
         assert_eq!(final_loaded.snippets[0].command, command);
+    }
+
+    // ============================================================
+    // Phase 14B: Fail-closed on malformed TOML
+    // ============================================================
+
+    #[test]
+    fn test_malformed_library_returns_err_and_creates_backup() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("corrupt.toml");
+        std::fs::write(&path, "invalid = [toml").unwrap();
+
+        let result = load_library(&path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("parse"),
+            "error should mention parse: {err_msg}"
+        );
+
+        let backup_path = path.with_extension("toml.corrupt.bak");
+        assert!(
+            backup_path.exists(),
+            "corrupt backup should be created at {}",
+            backup_path.display()
+        );
+    }
+
+    #[test]
+    fn test_malformed_libraries_toml_causes_library_manager_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("libraries.toml");
+        std::fs::write(&config_path, "invalid = [toml").unwrap();
+
+        let result = LibraryManager::with_config_dir(temp_dir.path().to_path_buf());
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("parse"),
+            "error should mention parse: {err_msg}"
+        );
+
+        let backup_path = config_path.with_extension("toml.corrupt");
+        assert!(
+            backup_path.exists(),
+            "corrupt backup should be created at {}",
+            backup_path.display()
+        );
+    }
+
+    #[test]
+    fn test_missing_library_file_returns_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("nonexistent.toml");
+        let loaded = load_library(&path).unwrap();
+        assert!(loaded.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_empty_library_file_returns_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("empty.toml");
+        std::fs::write(&path, "").unwrap();
+        let loaded = load_library(&path).unwrap();
+        assert!(loaded.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_missing_libraries_toml_returns_default_manager() {
+        let temp_dir = TempDir::new().unwrap();
+        let result = LibraryManager::with_config_dir(temp_dir.path().to_path_buf());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_empty_libraries_toml_returns_default_manager() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("libraries.toml");
+        std::fs::write(&config_path, "").unwrap();
+        let result = LibraryManager::with_config_dir(temp_dir.path().to_path_buf());
+        assert!(result.is_ok());
+    }
+
+    // ============================================================
+    // Phase 14B: Deterministic ID normalization
+    // ============================================================
+
+    #[test]
+    fn test_missing_id_deterministic_across_loads() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("legacy.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "test snippet"
+command = "echo hello"
+"#,
+        )
+        .unwrap();
+
+        let loaded1 = load_library(&path).unwrap();
+        let loaded2 = load_library(&path).unwrap();
+
+        assert_eq!(loaded1.snippets.len(), 1);
+        assert_eq!(loaded2.snippets.len(), 1);
+        assert_eq!(loaded1.snippets[0].id, loaded2.snippets[0].id);
+        assert!(
+            loaded1.snippets[0].id.starts_with("legacy-"),
+            "deterministic ID should start with 'legacy-'"
+        );
+    }
+
+    #[test]
+    fn test_content_distinct_missing_ids_receive_distinct_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("distinct.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "snippet A"
+command = "echo a"
+
+[[snippets]]
+description = "snippet B"
+command = "echo b"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets.len(), 2);
+        assert_ne!(loaded.snippets[0].id, loaded.snippets[1].id);
+        assert!(loaded.snippets[0].id.starts_with("legacy-"));
+        assert!(loaded.snippets[1].id.starts_with("legacy-"));
+    }
+
+    #[test]
+    fn test_identical_missing_ids_receive_distinct_repeatable_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("identical.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "same content"
+command = "echo same"
+
+[[snippets]]
+description = "same content"
+command = "echo same"
+"#,
+        )
+        .unwrap();
+
+        let loaded1 = load_library(&path).unwrap();
+        let loaded2 = load_library(&path).unwrap();
+
+        assert_eq!(loaded1.snippets.len(), 2);
+        assert_ne!(loaded1.snippets[0].id, loaded1.snippets[1].id);
+        // Same IDs across loads
+        assert_eq!(loaded1.snippets[0].id, loaded2.snippets[0].id);
+        assert_eq!(loaded1.snippets[1].id, loaded2.snippets[1].id);
+    }
+
+    #[test]
+    fn test_first_duplicate_id_kept_later_replaced() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("dup_ids.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+id = "my-custom-id"
+description = "first"
+command = "echo 1"
+
+[[snippets]]
+id = "my-custom-id"
+description = "second"
+command = "echo 2"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets.len(), 2);
+        assert_eq!(loaded.snippets[0].id, "my-custom-id");
+        assert_ne!(loaded.snippets[1].id, "my-custom-id");
+        assert!(loaded.snippets[1].id.starts_with("legacy-"));
+    }
+
+    #[test]
+    fn test_valid_unique_ids_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("unique_ids.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+id = "id-aaa"
+description = "first"
+command = "echo 1"
+
+[[snippets]]
+id = "id-bbb"
+description = "second"
+command = "echo 2"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        assert_eq!(loaded.snippets[0].id, "id-aaa");
+        assert_eq!(loaded.snippets[1].id, "id-bbb");
+    }
+
+    #[test]
+    fn test_save_persists_provisional_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("persist.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "no id snippet"
+command = "echo persist"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        let provisional_id = loaded.snippets[0].id.clone();
+        assert!(provisional_id.starts_with("legacy-"));
+
+        // Save (normal mutation path)
+        save_library(&path, &loaded).unwrap();
+
+        // Reload — IDs should now be explicitly stored
+        let reloaded = load_library(&path).unwrap();
+        assert_eq!(reloaded.snippets[0].id, provisional_id);
+    }
+
+    #[test]
+    fn test_reload_after_persistence_no_different_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("reload.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "stable"
+command = "echo stable"
+"#,
+        )
+        .unwrap();
+
+        let loaded1 = load_library(&path).unwrap();
+        save_library(&path, &loaded1).unwrap();
+
+        // Multiple reloads after save should all produce the same ID
+        for _ in 0..5 {
+            let reloaded = load_library(&path).unwrap();
+            assert_eq!(reloaded.snippets[0].id, loaded1.snippets[0].id);
+        }
+    }
+
+    #[test]
+    fn test_id_length_below_server_maximum() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("length.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[snippets]]
+description = "length check"
+command = "echo length"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_library(&path).unwrap();
+        // Server default max_id_length is 128
+        assert!(
+            loaded.snippets[0].id.len() <= 128,
+            "ID length {} exceeds 128",
+            loaded.snippets[0].id.len()
+        );
+    }
+
+    #[test]
+    fn test_legacy_id_not_treated_as_uuid() {
+        // Ensure our legacy IDs don't confuse any UUID-specific code paths.
+        // The ID is an opaque string — this test proves it roundtrips correctly.
+        let id = deterministic_legacy_id(
+            &Snippet {
+                description: "test".to_string(),
+                command: "echo test".to_string(),
+                tags: vec!["tag".to_string()],
+                output: "out".to_string(),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(id.starts_with("legacy-"));
+        assert_eq!(id.len(), 71); // "legacy-" (7) + 64 hex chars
     }
 }

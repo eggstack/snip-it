@@ -97,6 +97,16 @@
 - `clip_cmd::run_exact` signature changed from `fn run_exact(snippet)` to `fn run_exact(snippet, do_sync, runtime)`. All call sites updated.
 - TUI delete path in `run_snippet_selection` also uses `run_explicit_sync` instead of inline lock/sync/clear logic.
 
+## Phase 14B — Persistence Fail-Closed Behavior and Stable Snippet Identity
+
+- Malformed library TOML (`load_library()`) now fails closed: best-effort backup + `SnipError` return, never synthesized empty writable library.
+- Malformed `libraries.toml` (`LibraryManager::new()`) now fails closed: best-effort backup + `SnipError` return, never default config.
+- `commands::load_snippets()` already failed closed; all three persistence entry points now have a consistent rule: missing/empty → valid default; malformed → backup + error.
+- Legacy snippet ID repair uses deterministic SHA-256 normalization instead of `uuid::Uuid::new_v4()`. Missing IDs get `legacy-<sha256hex>` from domain-separated content fingerprint. Duplicate IDs get deterministic replacements.
+- Deterministic IDs are stable across repeated read-only loads. The next `save_library()` persists them naturally through the existing save path.
+- No new dependencies added; `sha2` was already present. `uuid` crate retained for non-snippet-ID uses (temp files, locks, journal filenames).
+- Snippet IDs are opaque strings throughout the codebase — no production path requires UUID syntax. Server validates only length (`max_id_length: 128`), not format.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

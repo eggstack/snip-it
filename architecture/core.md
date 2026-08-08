@@ -12,7 +12,7 @@ Individual snippet with metadata:
 
 ```rust
 pub struct Snippet {
-    pub id: String,           // UUID v4, generated on first sync
+    pub id: String,           // Opaque ID; UUID for new, deterministic for legacy
     pub description: String,  // Human-readable name
     pub command: String,      // Shell command (may contain <variables>)
     pub output: String,       // Output file path (relative, validated)
