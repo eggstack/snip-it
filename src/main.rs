@@ -892,7 +892,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 let result = snip_it::selector::resolve_selector(&selector)?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
-                        commands::clip_cmd::run_exact(&m.snippet)?;
+                        commands::clip_cmd::run_exact(&m.snippet, sync, sync.then_some(&RUNTIME))?;
                         snip_it::outcome::CliOutcome::Success
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {

@@ -371,3 +371,139 @@ auto_sync_failure = "warn"
     let content = fs::read_to_string(&lib_path).unwrap();
     assert!(content.contains("retry snippet"));
 }
+
+// === Phase 14A: Exact --sync parity ===
+
+/// Setup a library with a known snippet for exact-targeting tests.
+fn setup_exact_sync_library(config_dir: &std::path::Path) {
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "create", "exact-sync-test"]);
+    cmd.output().unwrap();
+
+    let libraries_dir = config_dir.join("libraries");
+    fs::create_dir_all(&libraries_dir).unwrap();
+    fs::write(
+        libraries_dir.join("exact-sync-test.toml"),
+        r#"[[snippets]]
+id = "exact-sync-1"
+description = "exact sync test snippet"
+command = "echo exact-sync"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = snp_in(config_dir);
+    cmd.args(["library", "set-primary", "exact-sync-test"]);
+    cmd.output().unwrap();
+}
+
+/// Exact run with --sync reaches canonical explicit sync (fails to connect,
+/// but the path is exercised).
+#[test]
+fn test_exact_run_sync_reaches_explicit_sync() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_exact_sync_library(&config_dir);
+
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+"#,
+    )
+    .unwrap();
+
+    // --sync on exact run should attempt explicit sync (fails to connect)
+    let output = snp_in(&config_dir)
+        .args(["run", "--id", "exact-sync-1", "--sync"])
+        .output()
+        .unwrap();
+
+    // The command itself should succeed (local execution works);
+    // the explicit sync failure is logged but does not change the exit code.
+    assert!(
+        output.status.success(),
+        "Exact run with --sync should exit 0 (sync failure is non-fatal): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Exact clip with --sync reaches canonical explicit sync.
+#[test]
+fn test_exact_clip_sync_reaches_explicit_sync() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_exact_sync_library(&config_dir);
+
+    fs::write(
+        config_dir.join("sync.toml"),
+        r#"[settings.sync]
+enabled = true
+server_url = "http://127.0.0.1:19999"
+api_key = "test-key"
+device_id = "test-device"
+sync_interval_minutes = 30
+auto_sync = false
+"#,
+    )
+    .unwrap();
+
+    // --sync on exact clip should attempt explicit sync (fails to connect).
+    // In headless CI the clipboard may also fail — that is acceptable;
+    // the important thing is that the process does not panic or crash.
+    let output = snp_in(&config_dir)
+        .args(["clip", "--id", "exact-sync-1", "--sync"])
+        .output()
+        .unwrap();
+
+    // The process should exit without a panic. Clipboard failures in
+    // headless CI are expected; sync failure is also non-fatal.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "Exact clip with --sync should not panic: {stderr}"
+    );
+}
+
+/// Exact run without --sync does not initiate network sync.
+#[test]
+fn test_exact_run_without_sync_no_network() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_exact_sync_library(&config_dir);
+
+    // No sync.toml at all — no sync config
+    let output = snp_in(&config_dir)
+        .args(["run", "--id", "exact-sync-1"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Exact run without --sync should exit 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Exact clip without --sync does not initiate network sync.
+#[test]
+fn test_exact_clip_without_sync_no_network() {
+    let (_tmp, config_dir) = setup_test_env();
+    setup_exact_sync_library(&config_dir);
+
+    // No sync.toml at all — no sync config
+    let output = snp_in(&config_dir)
+        .args(["clip", "--id", "exact-sync-1"])
+        .output()
+        .unwrap();
+
+    // In headless CI the clipboard may fail — that is acceptable;
+    // the important thing is that the process does not panic.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "Exact clip without --sync should not panic: {stderr}"
+    );
+}

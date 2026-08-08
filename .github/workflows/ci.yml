@@ -32,6 +32,9 @@ jobs:
         run: bash scripts/ci/install-protoc.sh
         env:
           PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
+      - name: Install Linux DBus dev libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Linux checks
         run: bash scripts/check.sh
