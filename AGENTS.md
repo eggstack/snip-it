@@ -118,6 +118,16 @@
 - The obsolete `SubcommandTag` enum and tag-based `should_attempt_auto_sync_recovery()` have been removed; only the policy-based `should_attempt_auto_sync_recovery_for_policy()` remains.
 - Explicit-sync orchestration uses a single `run_explicit_sync()` in `commands/mod.rs` for all paths (TUI delete, post-selection, exact run, exact clip).
 
+## Phase 14D — Dependency and Binary Footprint Reduction
+
+- `arboard` uses `default-features = false` to drop `image-data`; snip-it only uses text clipboard operations (`set_text`).
+- Root `tonic` uses `default-features = false, features = ["codegen", "channel", "tls-ring"]`; `snip-proto` uses `default-features = false, features = ["codegen", "channel"]`. The client no longer pulls `router` (axum), `transport` (server), `h2`, or `socket2`. Server features remain intact via `snip-sync`.
+- `tracing-subscriber` uses `default-features = false, features = ["fmt", "registry", "env-filter"]`; the `ansi` feature (nu-ansi-term) is dropped since file logs use `with_ansi(false)`.
+- The client retains `tokio`'s `rt-multi-thread` feature because the production detached auto-sync worker creates its own multi-thread runtime.
+- `tar` and `flate2` remain direct dependencies; `flate2` is also needed for bundled theme gzip decompression.
+- Self-update archive removal (raw asset) was evaluated and deferred — release pipeline not visible in repository; not a net simplification.
+- Total binary delta: -33,584 bytes (3,922,224 → 3,888,640) on macOS aarch64 release build.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

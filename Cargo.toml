@@ -83,7 +83,7 @@ clipboard-win = "5.4"
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_System_IO", "Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(not(windows))'.dependencies]
-arboard = "3"
+arboard = { version = "3", default-features = false }
 signal-hook = "0.4"
 libc = "0.2"
 
@@ -99,13 +99,13 @@ ratatui = "0.30"
 crossterm = "0.29"
 fuzzy-matcher = "0.3"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "env-filter"] }
 tracing-appender = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
-tonic = { version = "0.14", features = ["tls-ring"] }
+tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "tls-ring"] }
 prost = "0.14"
 tonic-prost = "0.14"
 aes-gcm = "0.10"

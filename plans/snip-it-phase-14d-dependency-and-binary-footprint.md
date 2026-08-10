@@ -320,13 +320,22 @@ Record a compact table in this plan when implemented:
 
 | Change | Before bytes | After bytes | Delta | Kept? |
 |---|---:|---:|---:|---|
-| arboard image features | | | | |
-| tonic client features | | | | |
-| raw updater asset | | | | |
-| tracing-subscriber features | | | | |
-| current-thread runtime | | | | |
+| arboard image features | 3,922,224 | 3,922,208 | -16 | Yes |
+| tonic client features | 3,922,208 | 3,922,160 | -48 | Yes |
+| raw updater asset | — | — | — | NO CHANGE — release pipeline not visible |
+| tracing-subscriber features | 3,922,160 | 3,888,640 | -33,520 | Yes |
+| current-thread runtime | — | — | — | NO CHANGE — AGENTS.md retains multi-thread |
 
-Use the same platform/architecture for each comparison.
+Platform: macOS aarch64, rustc 1.94.1, commit 6005fcb baseline.
+
+### Accepted changes
+
+1. **arboard `default-features = false`**: Removed `image-data` default feature; `image`, `tiff`, and transitive deps dropped from production graph. Text clipboard unchanged.
+2. **tonic `default-features = false, features = ["codegen", "channel", "tls-ring"]`**: Removed `router` (axum), `transport` (server), `h2`, `socket2` from client dependency tree. Server (`snip-sync`) unaffected.
+3. **snip-proto tonic `default-features = false, features = ["codegen", "channel"]`**: Prevents default tonic features from pulling router/server into client build.
+4. **tracing-subscriber `default-features = false, features = ["fmt", "registry", "env-filter"]`**: Removed `ansi` feature (nu-ansi-term) — file logs use `with_ansi(false)`. Largest single savings.
+5. **Current-thread runtime**: NO CHANGE per AGENTS.md constraint (auto-sync worker needs multi-thread).
+6. **Raw updater asset**: NO CHANGE — release pipeline not visible; `flate2` retained for theme decompression regardless.
 
 ## 12. Final acceptance criteria
 
