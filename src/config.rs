@@ -655,20 +655,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_direction_variants() {
-        assert_eq!(SyncDirection::Push, SyncDirection::Push);
-        assert_eq!(SyncDirection::Pull, SyncDirection::Pull);
-        assert_eq!(SyncDirection::Bidirectional, SyncDirection::Bidirectional);
-    }
-
-    #[test]
-    fn test_save_and_load_sync_settings() {
-        // Verify default settings work
-        let settings = SyncSettings::default();
-        assert!(!settings.enabled);
-    }
-
-    #[test]
     fn test_sync_settings_serialization() {
         // Ensure keychain is bypassed in CI environments without a keychain
         unsafe {

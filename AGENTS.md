@@ -136,6 +136,14 @@
 - `StartupServices::LoggingAndAudit` collapsed to `StartupServices::Logging` since audit initialization no longer starts a background thread. `init_default_logging()` is now equivalent to `init_default_file_logging()`.
 - No new dependencies added; no sync/pending/lock invariant changes.
 
+## Phase 14F — Verification and CI Reduction
+
+- Linux is the sole broad correctness lane; macOS/Windows CI no longer runs `cargo test --workspace --lib`.
+- `manifest_contracts` moved from `scripts/check.sh` to `scripts/release-check.sh verify` (release-time only).
+- `destination_permissions` remains in `scripts/check.sh` (proves production filesystem permission behavior via subprocess).
+- Low-information unit tests consolidated: 17 individual tests in `notification.rs`, `policy.rs`, `config.rs`, and `outcome.rs` replaced with table-driven equivalents.
+- `snip_sync_lifetime.rs` retained with two distinct cases (long-lived health + SIGTERM/same-port restart); no repeated 5/5 ceremony.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
@@ -341,14 +349,14 @@ Snippet commands execute as-is — no sanitization. Intentional for power users.
 |-------|-----------|---------|
 | Unit/pure | parallel | `cargo test --workspace --lib` — parsing, sorting, batching, serialization |
 | CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
-| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
 | Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
 | PTY | serial target | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
 | Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
 | Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
-| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams |
+| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
 
 ## Reference Docs

@@ -217,12 +217,12 @@ pending-generation and scheduling sequence. Sync server effects are covered by
 |-------|-----------|---------|
 | Unit/pure | parallel | `cargo test --workspace --lib` — parsing, sorting, batching, serialization |
 | CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
-| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
 | Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
 | PTY | serial target | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
 | Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
 | Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
-| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams |
+| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |

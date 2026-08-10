@@ -64,7 +64,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace --all-targets
-      - name: Library tests
-        run: cargo test --workspace --lib
       - name: CLI/platform smoke
         run: cargo test --test platform_smoke

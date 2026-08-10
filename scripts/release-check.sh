@@ -59,6 +59,9 @@ run_verify() {
     # Production seam proof
     bash "$SCRIPT_DIR/ci/test-production-seams.sh"
 
+    # Manifest/restore contracts (packaging shape)
+    cargo test --test manifest_contracts --features test-support
+
     echo ""
     echo "=== Phase 4: Package validation ==="
     cargo package -p snip-proto --locked

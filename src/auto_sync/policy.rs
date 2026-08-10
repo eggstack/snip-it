@@ -412,22 +412,30 @@ mod tests {
 
     #[test]
     fn test_mutation_kind_syncable() {
-        assert!(MutationKind::SnippetCreate.is_syncable_mutation());
-        assert!(MutationKind::SnippetUpdate.is_syncable_mutation());
-        assert!(MutationKind::SnippetDelete.is_syncable_mutation());
-        assert!(MutationKind::Import.is_syncable_mutation());
-        assert!(MutationKind::LibraryChange.is_syncable_mutation());
-        assert!(MutationKind::PremadeInstall.is_syncable_mutation());
-        assert!(MutationKind::SyncConflictWrite.is_syncable_mutation());
-        assert!(!MutationKind::AccountConfig.is_syncable_mutation());
+        for (kind, expected) in [
+            (MutationKind::SnippetCreate, true),
+            (MutationKind::SnippetUpdate, true),
+            (MutationKind::SnippetDelete, true),
+            (MutationKind::Import, true),
+            (MutationKind::LibraryChange, true),
+            (MutationKind::PremadeInstall, true),
+            (MutationKind::SyncConflictWrite, true),
+            (MutationKind::AccountConfig, false),
+        ] {
+            assert_eq!(kind.is_syncable_mutation(), expected);
+        }
     }
 
     #[test]
     fn test_origin_suppression() {
-        assert!(MutationOrigin::SyncMerge.should_suppress());
-        assert!(!MutationOrigin::User.should_suppress());
-        assert!(!MutationOrigin::Import.should_suppress());
-        assert!(!MutationOrigin::Recovery.should_suppress());
+        for (origin, expected) in [
+            (MutationOrigin::SyncMerge, true),
+            (MutationOrigin::User, false),
+            (MutationOrigin::Import, false),
+            (MutationOrigin::Recovery, false),
+        ] {
+            assert_eq!(origin.should_suppress(), expected);
+        }
     }
 
     #[test]
@@ -451,24 +459,26 @@ mod tests {
 
     #[test]
     fn test_failure_class_allows_automatic_retry() {
-        assert!(FailureClass::Transient.allows_automatic_retry());
-        assert!(FailureClass::Transient.allows_automatic_retry());
-        assert!(FailureClass::Internal.allows_automatic_retry());
-        assert!(!FailureClass::Configuration.allows_automatic_retry());
-        assert!(!FailureClass::LocalFailure.allows_automatic_retry());
-        assert!(!FailureClass::LocalFailure.allows_automatic_retry());
-        assert!(!FailureClass::Configuration.allows_automatic_retry());
+        for (class, expected) in [
+            (FailureClass::Transient, true),
+            (FailureClass::Internal, true),
+            (FailureClass::Configuration, false),
+            (FailureClass::LocalFailure, false),
+        ] {
+            assert_eq!(class.allows_automatic_retry(), expected);
+        }
     }
 
     #[test]
     fn test_failure_class_is_deferred() {
-        assert!(FailureClass::Configuration.is_deferred());
-        assert!(FailureClass::Configuration.is_deferred());
-        assert!(FailureClass::Configuration.is_deferred());
-        assert!(FailureClass::Configuration.is_deferred());
-        assert!(FailureClass::Configuration.is_deferred());
-        assert!(!FailureClass::Transient.is_deferred());
-        assert!(!FailureClass::LocalFailure.is_deferred());
+        for (class, expected) in [
+            (FailureClass::Configuration, true),
+            (FailureClass::Transient, false),
+            (FailureClass::LocalFailure, false),
+            (FailureClass::Internal, false),
+        ] {
+            assert_eq!(class.is_deferred(), expected);
+        }
     }
 
     // ── Table-driven classification tests (SyncFailure variants) ────

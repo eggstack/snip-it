@@ -323,13 +323,14 @@ Full utility inventory: [utils.md](utils.md).
 |-------|-----------|---------|
 | Unit/pure | parallel | `cargo test --workspace --lib` |
 | CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` |
-| Restore contracts | parallel | `manifest_contracts.rs`, `destination_permissions.rs`, `backup_contracts.rs` |
+| Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
 | Sync integration | serial | `sync_integration.rs` — in-process server, random port |
 | PTY | serial | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial | `process_lock_concurrency.rs` — kernel flock |
 | Barrier-coordinated | serial | `local_data_lock_barriers.rs`, `repair_transactions.rs` |
 | Deep recovery | manual | `transaction_crash_recovery.rs`, failpoint tests |
+| Release smoke | manual | `release-check.sh` Phase 3 — `manifest_contracts.rs`, crash, production seams |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
 
 ---

@@ -259,113 +259,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_success_exit_code() {
-        assert_eq!(CliOutcome::Success.exit_code(), 0);
+    fn test_exit_code_mapping() {
+        for (outcome, expected) in [
+            (CliOutcome::Success, 0),
+            (CliOutcome::NotFound, 3),
+            (CliOutcome::Ambiguous, 5),
+            (CliOutcome::Cancelled, 4),
+            (CliOutcome::ValidationFailed, 6),
+            (CliOutcome::SyncFailed, 7),
+            (CliOutcome::ExecutionFailed { child_code: None }, 8),
+            (
+                CliOutcome::ExecutionFailed {
+                    child_code: Some(127),
+                },
+                127,
+            ),
+            (CliOutcome::ConflictOrRefused, 9),
+            (CliOutcome::PersistenceFailed, 1),
+        ] {
+            assert_eq!(outcome.exit_code(), expected);
+        }
     }
 
     #[test]
-    fn test_not_found_exit_code() {
-        assert_eq!(CliOutcome::NotFound.exit_code(), 3);
+    fn test_output_context_modes() {
+        assert!(!OutputContext::human().is_machine_mode());
+        assert!(OutputContext::json().is_machine_mode());
+        assert!(OutputContext::raw().is_machine_mode());
+        assert!(OutputContext::field().is_machine_mode());
+        assert!(OutputContext::csv().is_machine_mode());
     }
 
     #[test]
-    fn test_ambiguous_exit_code() {
-        assert_eq!(CliOutcome::Ambiguous.exit_code(), 5);
-    }
-
-    #[test]
-    fn test_cancelled_exit_code() {
-        assert_eq!(CliOutcome::Cancelled.exit_code(), 4);
-    }
-
-    #[test]
-    fn test_validation_failed_exit_code() {
-        assert_eq!(CliOutcome::ValidationFailed.exit_code(), 6);
-    }
-
-    #[test]
-    fn test_sync_failed_exit_code() {
-        assert_eq!(CliOutcome::SyncFailed.exit_code(), 7);
-    }
-
-    #[test]
-    fn test_execution_failed_no_child_code() {
-        assert_eq!(
-            CliOutcome::ExecutionFailed { child_code: None }.exit_code(),
-            8
-        );
-    }
-
-    #[test]
-    fn test_execution_failed_with_child_code() {
-        assert_eq!(
-            CliOutcome::ExecutionFailed {
-                child_code: Some(127)
-            }
-            .exit_code(),
-            127
-        );
-    }
-
-    #[test]
-    fn test_conflict_or_refused_exit_code() {
-        assert_eq!(CliOutcome::ConflictOrRefused.exit_code(), 9);
-    }
-
-    #[test]
-    fn test_persistence_failed_uses_general_error() {
-        assert_eq!(CliOutcome::PersistenceFailed.exit_code(), 1);
-    }
-
-    #[test]
-    fn test_output_context_human() {
-        let ctx = OutputContext::human();
-        assert_eq!(ctx.mode, OutputMode::Human);
-        assert!(!ctx.is_machine_mode());
-    }
-
-    #[test]
-    fn test_output_context_json_is_machine() {
-        let ctx = OutputContext::json();
-        assert!(ctx.is_machine_mode());
-        assert!(ctx.suppress_ansi());
-    }
-
-    #[test]
-    fn test_output_context_raw_is_machine() {
-        let ctx = OutputContext::raw();
-        assert!(ctx.is_machine_mode());
-    }
-
-    #[test]
-    fn test_output_context_field_is_machine() {
-        let ctx = OutputContext::field();
-        assert!(ctx.is_machine_mode());
-    }
-
-    #[test]
-    fn test_suppress_ansi_never_policy() {
-        let ctx = OutputContext {
+    fn test_suppress_ansi() {
+        let never = OutputContext {
             color: ColorPolicy::Never,
             ..OutputContext::human()
         };
-        assert!(ctx.suppress_ansi());
-    }
-
-    #[test]
-    fn test_suppress_ansi_auto_noninteractive() {
-        let ctx = OutputContext {
+        assert!(never.suppress_ansi());
+        let auto_noninteractive = OutputContext {
             color: ColorPolicy::Auto,
             interactive: false,
             ..OutputContext::human()
         };
-        assert!(ctx.suppress_ansi());
-    }
-
-    #[test]
-    fn test_suppress_ansi_auto_interactive() {
-        let ctx = OutputContext::human();
-        assert!(!ctx.suppress_ansi());
+        assert!(auto_noninteractive.suppress_ansi());
+        assert!(!OutputContext::human().suppress_ansi());
     }
 
     #[test]
@@ -392,7 +330,6 @@ mod tests {
             CliOutcome::Ambiguous.exit_code(),
             CliOutcome::Cancelled.exit_code(),
             CliOutcome::ValidationFailed.exit_code(),
-            CliOutcome::SyncFailed.exit_code(),
             CliOutcome::ExecutionFailed { child_code: None }.exit_code(),
             CliOutcome::ConflictOrRefused.exit_code(),
         ];

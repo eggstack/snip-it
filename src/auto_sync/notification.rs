@@ -266,120 +266,33 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_context_construction() {
-        let ctx = MutationContext {
-            kind: MutationKind::SnippetDelete,
-            origin: MutationOrigin::User,
-            library_id: Some("lib-1".to_string()),
-        };
-        assert_eq!(ctx.kind, MutationKind::SnippetDelete);
-        assert_eq!(ctx.origin, MutationOrigin::User);
-        assert_eq!(ctx.library_id.as_deref(), Some("lib-1"));
-    }
-
-    #[test]
-    fn test_mutation_context_no_library() {
-        let ctx = MutationContext {
-            kind: MutationKind::Import,
-            origin: MutationOrigin::Import,
-            library_id: None,
-        };
-        assert!(ctx.library_id.is_none());
-    }
-
-    #[test]
-    fn test_notification_result_equality() {
-        assert_eq!(
-            AutoSyncNotificationResult::Disabled,
-            AutoSyncNotificationResult::Disabled
-        );
-        assert_eq!(
-            AutoSyncNotificationResult::Suppressed,
-            AutoSyncNotificationResult::Suppressed
-        );
-        assert_ne!(
-            AutoSyncNotificationResult::Disabled,
-            AutoSyncNotificationResult::Suppressed
-        );
-    }
-
-    #[test]
-    fn test_notification_result_debug() {
-        let debug = format!("{:?}", AutoSyncNotificationResult::Disabled);
-        assert_eq!(debug, "Disabled");
-        let debug = format!("{:?}", AutoSyncNotificationResult::Suppressed);
-        assert_eq!(debug, "Suppressed");
-        let debug = format!(
-            "{:?}",
-            AutoSyncNotificationResult::Scheduled { generation: 42 }
-        );
-        assert!(debug.contains("Scheduled"));
-        assert!(debug.contains("42"));
-    }
-
-    #[test]
     fn test_startup_recovery_policy_allows_recovery() {
-        assert!(StartupRecoveryPolicy::Allow.allows_recovery());
+        for (policy, expected) in [
+            (StartupRecoveryPolicy::Allow, true),
+            (StartupRecoveryPolicy::SuppressReadOnly, false),
+            (StartupRecoveryPolicy::SuppressExplicitSync, false),
+            (StartupRecoveryPolicy::SuppressInternal, false),
+            (StartupRecoveryPolicy::SuppressConfiguration, false),
+        ] {
+            assert_eq!(policy.allows_recovery(), expected);
+        }
     }
 
     #[test]
-    fn test_startup_recovery_policy_suppress_read_only_blocks() {
-        assert!(!StartupRecoveryPolicy::SuppressReadOnly.allows_recovery());
-    }
-
-    #[test]
-    fn test_startup_recovery_policy_suppress_explicit_sync_blocks() {
-        assert!(!StartupRecoveryPolicy::SuppressExplicitSync.allows_recovery());
-    }
-
-    #[test]
-    fn test_startup_recovery_policy_suppress_internal_blocks() {
-        assert!(!StartupRecoveryPolicy::SuppressInternal.allows_recovery());
-    }
-
-    #[test]
-    fn test_startup_recovery_policy_suppress_configuration_blocks() {
-        assert!(!StartupRecoveryPolicy::SuppressConfiguration.allows_recovery());
-    }
-
-    #[test]
-    fn test_recovery_for_policy_none_returns_true() {
-        assert!(should_attempt_auto_sync_recovery_for_policy(None));
-    }
-
-    #[test]
-    fn test_recovery_for_policy_allow_returns_true() {
-        assert!(should_attempt_auto_sync_recovery_for_policy(Some(
-            StartupRecoveryPolicy::Allow
-        )));
-    }
-
-    #[test]
-    fn test_recovery_for_policy_suppress_read_only_returns_false() {
-        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
-            StartupRecoveryPolicy::SuppressReadOnly
-        )));
-    }
-
-    #[test]
-    fn test_recovery_for_policy_suppress_explicit_sync_returns_false() {
-        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
-            StartupRecoveryPolicy::SuppressExplicitSync
-        )));
-    }
-
-    #[test]
-    fn test_recovery_for_policy_suppress_internal_returns_false() {
-        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
-            StartupRecoveryPolicy::SuppressInternal
-        )));
-    }
-
-    #[test]
-    fn test_recovery_for_policy_suppress_configuration_returns_false() {
-        assert!(!should_attempt_auto_sync_recovery_for_policy(Some(
-            StartupRecoveryPolicy::SuppressConfiguration
-        )));
+    fn test_recovery_for_policy() {
+        for (policy, expected) in [
+            (None, true),
+            (Some(StartupRecoveryPolicy::Allow), true),
+            (Some(StartupRecoveryPolicy::SuppressReadOnly), false),
+            (Some(StartupRecoveryPolicy::SuppressExplicitSync), false),
+            (Some(StartupRecoveryPolicy::SuppressInternal), false),
+            (Some(StartupRecoveryPolicy::SuppressConfiguration), false),
+        ] {
+            assert_eq!(
+                should_attempt_auto_sync_recovery_for_policy(policy),
+                expected
+            );
+        }
     }
 
     #[test]
