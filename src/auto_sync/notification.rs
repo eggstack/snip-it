@@ -97,7 +97,7 @@ fn notify_local_mutation_with_dir(
                     generation: marked.generation,
                 };
             }
-            match schedule_after_record(state_dir, &marked) {
+            match schedule_after_record(state_dir, policy, &marked) {
                 SpawnResult::Spawned => AutoSyncNotificationResult::Scheduled {
                     generation: marked.generation,
                 },
@@ -115,19 +115,21 @@ fn notify_local_mutation_with_dir(
     }
 }
 
-fn schedule_after_record(state_dir: &std::path::Path, _marked: &PendingState) -> SpawnResult {
-    let settings = crate::config::get_sync_settings();
-    let policy = AutoSyncPolicy::resolve(&settings);
+fn schedule_after_record(
+    state_dir: &std::path::Path,
+    policy: &AutoSyncPolicy,
+    _marked: &PendingState,
+) -> SpawnResult {
     match crate::auto_sync::schedule::schedule_and_spawn(
         state_dir,
-        &policy,
+        policy,
         crate::auto_sync::schedule::Caller::Mutation,
     ) {
         Ok(crate::auto_sync::schedule::ScheduleDecision::SpawnNow) => SpawnResult::Spawned,
         Ok(_) => SpawnResult::Suppressed,
         Err(error) => {
             tracing::warn!(%error, "auto-sync scheduling failed; pending work preserved");
-            apply_scheduling_failure_policy(&policy);
+            apply_scheduling_failure_policy(policy);
             SpawnResult::SpawnFailed
         }
     }

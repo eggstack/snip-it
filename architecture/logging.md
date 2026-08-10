@@ -10,9 +10,9 @@ Structured logging using the `tracing` crate with file rotation and panic handli
 
 Initialization is command-sensitive. Minimal read-only/configuration-output
 commands avoid logging filesystem setup entirely. Commands that need diagnostic
-logs initialize the rolling file appender; mutation commands additionally start
-the asynchronous audit writer. Audit calls retain a synchronous fallback, so a
-required audit record is not silently lost if initialization was bypassed.
+logs initialize the rolling file appender. Audit records are appended
+synchronously at human command rate, so no background thread or channel is
+required.
 
 ## Log Configuration
 

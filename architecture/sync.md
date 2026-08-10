@@ -455,8 +455,7 @@ Key properties:
 - Bounded retry with 1-5ms random jitter (500ms default timeout).
 - Dead-owner reclaim via `kill -0` on Unix; live owners never stolen.
 - Ownership-checked `Drop`: removes the lock only if PID and nonce match.
-- Unique temp files per transaction via `pending_lock::unique_temp_path()`.
-- Atomic rename + directory fsync for durable writes.
+- Atomic rename + directory fsync for durable writes via `utils::atomic::atomic_write_bytes()`.
 - 0o600 permissions on Unix. No secrets, commands, or snippet content.
 
 ### Process Detachment

@@ -9,7 +9,6 @@
 //! and may influence scheduling but is not the source of truth for
 //! whether pending work exists.
 
-use crate::auto_sync::pending_lock;
 use crate::auto_sync::policy::FailureClass;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -161,11 +160,12 @@ pub fn write_status(state_dir: &Path, status: &AutoSyncStatus) -> Result<(), Str
         return Err(format!("status file too large: {} bytes", content.len()));
     }
 
-    pending_lock::atomic_write_unique(&path, content.as_bytes())
-        .map_err(|e| format!("write: {e}"))?;
-
-    // Best-effort fsync
-    pending_lock::fsync_parent_dir(&path);
+    crate::utils::atomic::atomic_write_bytes(
+        &path,
+        content.as_bytes(),
+        crate::utils::atomic::Durability::DurableUserData,
+    )
+    .map_err(|e| format!("write: {e}"))?;
 
     #[cfg(unix)]
     {

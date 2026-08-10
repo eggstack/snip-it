@@ -375,10 +375,13 @@ fn write_pending_state_with_txn(
         source_transaction_id,
     );
     let serialized = toml::to_string_pretty(&on_disk).map_err(PendingError::Serialize)?;
-    let _tmp =
-        pending_lock::atomic_write_unique(path, serialized.as_bytes()).map_err(PendingError::Io)?;
+    crate::utils::atomic::atomic_write_bytes(
+        path,
+        serialized.as_bytes(),
+        crate::utils::atomic::Durability::DurableUserData,
+    )
+    .map_err(|e| PendingError::Io(std::io::Error::other(e)))?;
     restrict_permissions(path);
-    pending_lock::fsync_parent_dir(path);
 
     Ok(PendingState {
         generation,

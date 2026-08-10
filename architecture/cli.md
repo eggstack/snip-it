@@ -16,11 +16,9 @@ The binary `snp` is built with `clap` for argument parsing. On startup:
 
 `version`, `completions`, `shell`, `keybindings`, and read-only commands use a
 minimal startup path: they do not create the config/log directory, `.self_check`,
-`snp.log`, or `audit.log`, and they do not start the audit writer thread.
-Mutation commands initialize file logging and the audit writer before dispatch;
-diagnostic/configuration commands initialize file logging without the audit
-writer. The panic hook remains installed before parsing so TUI terminal cleanup
-is still protected.
+`snp.log`, or `audit.log`. Mutation and sync commands initialize file logging
+before dispatch; audit records are appended synchronously when needed. The panic
+hook remains installed before parsing so TUI terminal cleanup is still protected.
 
 ### Global State
 

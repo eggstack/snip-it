@@ -20,7 +20,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -28,7 +27,6 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 const AUDIT_LOG_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — rotate audit log when exceeded
 const AUDIT_LOG_RETENTION_DAYS: u64 = 30; // Keep 30 days of rotated audit logs
-const AUDIT_LOG_CHANNEL_SIZE: usize = 1024; // Bounded channel for async audit writes
 const SECS_PER_DAY: u64 = 86400;
 
 struct AuditLogEntry {
@@ -39,9 +37,6 @@ struct AuditLogEntry {
     library_id: String,
     device_id: String,
 }
-
-static AUDIT_TX: LazyLock<std::sync::Mutex<Option<mpsc::SyncSender<AuditLogEntry>>>> =
-    LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Holds the non-blocking log writer guard alive for the process lifetime.
 /// Dropping this would stop log file writes.
@@ -136,7 +131,6 @@ pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>
 
 pub fn init_default_logging() {
     init_default_file_logging();
-    init_async_audit_log();
 }
 
 /// Initialize file logging without starting the audit writer.
@@ -201,82 +195,7 @@ fn self_check() {
     }
 }
 
-fn init_async_audit_log() {
-    let (tx, rx) = mpsc::sync_channel(AUDIT_LOG_CHANNEL_SIZE);
-
-    std::thread::spawn(move || {
-        let mut writer = AuditLogWriter { rx };
-        writer.run();
-    });
-
-    *AUDIT_TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
-}
-
-struct AuditLogWriter {
-    rx: mpsc::Receiver<AuditLogEntry>,
-}
-
-impl AuditLogWriter {
-    fn run(&mut self) {
-        while let Ok(entry) = self.rx.recv() {
-            if let Err(e) = self.write_entry(&entry) {
-                tracing::error!(error = %e, "Failed to write audit log entry");
-            }
-        }
-    }
-
-    fn write_entry(&self, entry: &AuditLogEntry) -> std::io::Result<()> {
-        let log_path = match get_audit_log_path() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to get audit log path");
-                return Err(e);
-            }
-        };
-
-        let _ = rotate_audit_log_if_needed(
-            &log_path,
-            AUDIT_LOG_MAX_SIZE_BYTES,
-            AUDIT_LOG_RETENTION_DAYS,
-        );
-
-        let log_entry = format!(
-            "{}|{}|{}|{}|{}|{}\n",
-            entry.timestamp,
-            entry.action,
-            escape_pipe(&entry.snippet_id),
-            escape_pipe(&entry.description),
-            entry.library_id,
-            escape_pipe(&entry.device_id),
-        );
-
-        use std::io::Write;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = fs::set_permissions(&log_path, perms) {
-                tracing::warn!(
-                    path = %log_path.display(),
-                    error = %e,
-                    "Failed to set restrictive permissions on log file"
-                );
-            }
-        }
-
-        file.write_all(log_entry.as_bytes())
-    }
-}
-
 pub fn shutdown_logging() {
-    if let Some(tx) = AUDIT_TX.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        drop(tx);
-    }
     if let Some(guard) = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take() {
         tracing::info!("Logging shutdown complete");
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -325,8 +244,7 @@ pub fn setup_panic_handler() {
 
         log_panic_info(panic_info);
 
-        // Flush the audit log before the process exits. The 100ms sleep in
-        // shutdown_logging gives the writer thread time to process the panic event.
+        // Flush file logs before the process exits.
         shutdown_logging();
 
         let (location, message) = extract_panic_info(panic_info);
@@ -443,22 +361,7 @@ pub fn audit_log(
         device_id: snippet.device_id.clone(),
     };
 
-    let tx = AUDIT_TX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .cloned();
-
-    match tx {
-        Some(tx) => tx.try_send(entry).map_err(|e| {
-            tracing::warn!("Audit log channel full, dropping entry: {}", e);
-            std::io::Error::new(std::io::ErrorKind::WouldBlock, e.to_string())
-        }),
-        None => {
-            tracing::warn!("Audit log channel not initialized, writing synchronously");
-            write_audit_log_entry_sync(&entry)
-        }
-    }
+    write_audit_log_entry_sync(&entry)
 }
 
 fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {

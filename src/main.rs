@@ -15,8 +15,7 @@ use snip_it::commands;
 use snip_it::config;
 use snip_it::error::SnipResult;
 use snip_it::logging::{
-    init_default_file_logging, init_default_logging, log_shutdown_info, log_startup_info,
-    setup_panic_handler,
+    init_default_file_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
 };
 
 mod update;
@@ -1304,7 +1303,6 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
 enum StartupServices {
     Minimal,
     Logging,
-    LoggingAndAudit,
 }
 
 /// Combined command behavior classification. One match over the CLI enum
@@ -1369,10 +1367,9 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
                 StartupRecoveryPolicy::SuppressReadOnly,
                 StartupServices::Minimal,
             ),
-            DataCommands::Repair { .. } | DataCommands::Restore { .. } => (
-                StartupRecoveryPolicy::Allow,
-                StartupServices::LoggingAndAudit,
-            ),
+            DataCommands::Repair { .. } | DataCommands::Restore { .. } => {
+                (StartupRecoveryPolicy::Allow, StartupServices::Logging)
+            }
         },
 
         // ── Mutation commands: allow recovery, full logging+audit ───
@@ -1391,10 +1388,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
                     | LibraryCommands::Delete { .. }
                     | LibraryCommands::SetPrimary { .. },
             },
-        ) => (
-            StartupRecoveryPolicy::Allow,
-            StartupServices::LoggingAndAudit,
-        ),
+        ) => (StartupRecoveryPolicy::Allow, StartupServices::Logging),
 
         // ── Explicit sync commands: suppress recovery, logging only ──
         Some(Commands::Sync { .. } | Commands::Cron { .. } | Commands::Register { .. }) => (
@@ -1435,7 +1429,6 @@ fn main() {
     match behavior.services {
         StartupServices::Minimal => {}
         StartupServices::Logging => init_default_file_logging(),
-        StartupServices::LoggingAndAudit => init_default_logging(),
     }
     if behavior.services != StartupServices::Minimal {
         log_startup_info();
@@ -1730,7 +1723,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1743,7 +1736,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     // ── Mutation commands ───────────────────────────────────────────
@@ -1762,7 +1755,7 @@ mod tests {
             library: None,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1778,7 +1771,7 @@ mod tests {
             command_exact: None,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1794,7 +1787,7 @@ mod tests {
             command_exact: None,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1810,7 +1803,7 @@ mod tests {
             command_exact: None,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1828,7 +1821,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1840,7 +1833,7 @@ mod tests {
             json: false,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1851,7 +1844,7 @@ mod tests {
             json: false,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1860,7 +1853,7 @@ mod tests {
             command: PremadeCommands::List,
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1871,7 +1864,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1883,7 +1876,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -1894,7 +1887,7 @@ mod tests {
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
-        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     // ── Explicit sync commands ──────────────────────────────────────

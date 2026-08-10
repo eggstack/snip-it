@@ -128,6 +128,14 @@
 - Self-update archive removal (raw asset) was evaluated and deferred — release pipeline not visible in repository; not a net simplification.
 - Total binary delta: -33,584 bytes (3,922,224 → 3,888,640) on macOS aarch64 release build.
 
+## Phase 14E — Runtime and Internal Simplification
+
+- `notify_mutation()` resolves `AutoSyncPolicy` once and passes the snapshot into `schedule_after_record()` instead of reloading config a second time.
+- Pending-marker and status-file writes use the canonical `atomic_write_bytes()` from `utils/atomic.rs` (`DurableUserData` durability) instead of a duplicate platform-specific `atomic_write_unique()` in `pending_lock.rs`. The duplicate `unique_temp_path()`, `atomic_write_unique()`, `replace_existing()`, and `fsync_parent_dir()` functions have been removed from `pending_lock.rs`.
+- Audit logging is synchronous: `audit_log()` calls `write_audit_log_entry_sync()` directly. The async channel (`AUDIT_TX`), bounded `sync_channel`, dedicated `AuditLogWriter` thread, and `init_async_audit_log()` have been removed.
+- `StartupServices::LoggingAndAudit` collapsed to `StartupServices::Logging` since audit initialization no longer starts a background thread. `init_default_logging()` is now equivalent to `init_default_file_logging()`.
+- No new dependencies added; no sync/pending/lock invariant changes.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

@@ -342,6 +342,17 @@ pub fn atomic_replace(
     })
 }
 
+/// Atomically write a byte slice to `target` via a same-directory temp file
+/// and durable rename. Creates the parent directory if missing.
+///
+/// This is a thin convenience over [`atomic_replace`] for callers that
+/// already have the content as bytes and do not need the full report.
+pub fn atomic_write_bytes(target: &Path, bytes: &[u8], durability: Durability) -> SnipResult<()> {
+    let options = AtomicWriteOptions::for_durability(durability);
+    atomic_replace(target, bytes, &options)?;
+    Ok(())
+}
+
 /// Read a file and compute its SHA-256 hex digest.
 ///
 /// Used to verify installed destinations from the live file, not from

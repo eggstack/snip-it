@@ -287,7 +287,7 @@ detached auto-sync helper management.*
 | Submodule | Key public items |
 |-----------|-----------------|
 | `execution_lock` | `SyncExecutionLock`, `ExecutionLockContents`, `WorkerLock`, `WorkerLockContents`, `try_acquire`, `wait_acquire`, `process_alive`, `spawn_worker`, `WORKER_SUBCOMMAND` |
-| `notification` | `MutationContext`, `AutoSyncNotificationResult`, `SubcommandTag`, `notify_mutation`, `should_attempt_auto_sync_recovery`, `startup_recover_pending` |
+| `notification` | `MutationContext`, `AutoSyncNotificationResult`, `StartupRecoveryPolicy`, `notify_mutation`, `notify_local_mutation`, `should_attempt_auto_sync_recovery_for_policy`, `startup_recover_pending`, `clear_pending_after_explicit_sync`, `observe_pending_generation` |
 | `pending` | `PendingSnapshot`, `PendingState`, `ConditionalClearResult`, `record_pending_mutation`, `read_state`, `read_state_from_dir` |
 | `pending_lock` | `PendingTxnGuard`, `PendingTxnLockError`, `acquire_pending_txn` |
 | `policy` | `AutoSyncPolicy`, `FailureClass` (4 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |

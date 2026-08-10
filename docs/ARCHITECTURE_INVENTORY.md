@@ -158,7 +158,7 @@ Optional post-mutation background synchronization (Phase 12C). Disabled by defau
 - **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
 - **`MutationContext`** — carries `kind`, `origin`, `library_id` without snippet content.
 - **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Scheduled { generation }`, `SchedulingFailed { generation }`.
-- **`SubcommandTag`** / **`should_attempt_auto_sync_recovery()`** — classifies commands at startup; recovery suppressed for sync/cron/register/internal subprocesses.
+- **`StartupRecoveryPolicy`** / **`should_attempt_auto_sync_recovery_for_policy()`** — classifies commands at startup; recovery suppressed for sync/cron/register/internal subprocesses.
 - **Central API**: `notify_mutation(kind, origin)` — convenience function for commands. `notify_local_mutation(policy, context)` — full control.
 - **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
 - **`startup_recover_pending()`** — runs at startup for non-worker subcommands; preserves pending markers and re-schedules a worker if recent pending state is found.
