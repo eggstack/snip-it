@@ -677,4 +677,108 @@ mod tests {
             _ => panic!("Expected Many matches"),
         }
     }
+
+    // ── resolve_exact_target construction tests (§4.4 acceptance) ────
+
+    #[test]
+    fn test_resolve_exact_target_builds_unique_policy_selector() {
+        let selector =
+            SnippetSelector::new(ResolutionPolicy::Unique).with_library(LibraryScope::Primary);
+        assert_eq!(selector.resolution, ResolutionPolicy::Unique);
+        assert_eq!(selector.library, LibraryScope::Primary);
+        assert!(selector.id.is_none());
+        assert!(selector.description_exact.is_none());
+        assert!(selector.command_exact.is_none());
+    }
+
+    #[test]
+    fn test_resolve_exact_target_id_field() {
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_id("test-id".to_string())
+            .with_library(LibraryScope::Primary);
+        assert_eq!(selector.id.as_deref(), Some("test-id"));
+        assert!(selector.description_exact.is_none());
+        assert!(selector.command_exact.is_none());
+    }
+
+    #[test]
+    fn test_resolve_exact_target_description_field() {
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_description_exact("my desc".to_string())
+            .with_library(LibraryScope::Primary);
+        assert!(selector.id.is_none());
+        assert_eq!(selector.description_exact.as_deref(), Some("my desc"));
+        assert!(selector.command_exact.is_none());
+    }
+
+    #[test]
+    fn test_resolve_exact_target_command_field() {
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_command_exact("echo hello".to_string())
+            .with_library(LibraryScope::Primary);
+        assert!(selector.id.is_none());
+        assert!(selector.description_exact.is_none());
+        assert_eq!(selector.command_exact.as_deref(), Some("echo hello"));
+    }
+
+    #[test]
+    fn test_resolve_exact_target_named_library_scope() {
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_library(LibraryScope::Named("work".to_string()));
+        assert_eq!(selector.library, LibraryScope::Named("work".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_exact_target_all_libraries_scope() {
+        let selector =
+            SnippetSelector::new(ResolutionPolicy::Unique).with_library(LibraryScope::AllLibraries);
+        assert_eq!(selector.library, LibraryScope::AllLibraries);
+    }
+
+    #[test]
+    fn test_resolve_exact_target_all_fields() {
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_id("id-1".to_string())
+            .with_description_exact("desc-1".to_string())
+            .with_command_exact("cmd-1".to_string())
+            .with_library(LibraryScope::Named("lib".to_string()));
+        assert_eq!(selector.id.as_deref(), Some("id-1"));
+        assert_eq!(selector.description_exact.as_deref(), Some("desc-1"));
+        assert_eq!(selector.command_exact.as_deref(), Some("cmd-1"));
+        assert_eq!(selector.library, LibraryScope::Named("lib".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_exact_target_id_overrides_description_and_command() {
+        let snippets = make_snippets();
+        let path = PathBuf::from("/tmp/test.toml");
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_id("aaa-111".to_string())
+            .with_description_exact("git push".to_string())
+            .with_command_exact("ls -la".to_string());
+        let result = selector.resolve(&snippets, &path, "test", "").unwrap();
+        match result {
+            SelectionResult::One(m) => {
+                assert_eq!(m.snippet.id, "aaa-111");
+                assert_eq!(m.snippet.description, "git commit");
+            }
+            _ => panic!("Expected One match by ID, ignoring description/command"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_exact_target_description_overrides_command() {
+        let snippets = make_snippets();
+        let path = PathBuf::from("/tmp/test.toml");
+        let selector = SnippetSelector::new(ResolutionPolicy::Unique)
+            .with_description_exact("git commit".to_string())
+            .with_command_exact("ls -la".to_string());
+        let result = selector.resolve(&snippets, &path, "test", "").unwrap();
+        match result {
+            SelectionResult::One(m) => {
+                assert_eq!(m.snippet.description, "git commit");
+            }
+            _ => panic!("Expected One match by description, ignoring command"),
+        }
+    }
 }

@@ -1473,3 +1473,677 @@ fn main() {
         log_shutdown_info();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn behavior(cmd: Option<&Commands>) -> CommandBehavior {
+        command_behavior(cmd)
+    }
+
+    // ── Read-only commands ──────────────────────────────────────────
+
+    #[test]
+    fn version_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Version));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn list_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::List {
+            filter: None,
+            config: None,
+            library: None,
+            json: false,
+            csv: false,
+            search_output: false,
+            sort: snip_it::sort::SnippetSort::Relevance,
+            favorites_first: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn search_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Search {
+            filter: None,
+            sync: false,
+            library: None,
+            sort: snip_it::sort::SnippetSort::Relevance,
+            favorites_first: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn select_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Select {
+            filter: None,
+            query: None,
+            library: None,
+            raw: false,
+            expanded: false,
+            output_file: None,
+            sort: snip_it::sort::SnippetSort::Relevance,
+            favorites_first: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn status_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Status {
+            json: false,
+            sync_only: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn get_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Get {
+            id: None,
+            description_exact: None,
+            command_exact: None,
+            query: None,
+            library: None,
+            field: None,
+            raw: false,
+            expanded: false,
+            json: false,
+            resolution: snip_it::selector::ResolutionPolicy::Unique,
+            vars: None,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn validate_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Validate {
+            library: None,
+            strict: false,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn backup_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Backup {
+            output: None,
+            include_usage: false,
+            include_sync_state: false,
+            format: commands::backup_cmd::BackupFormat::Directory,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn library_list_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Library {
+            command: LibraryCommands::List,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn library_show_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Library {
+            command: LibraryCommands::Show { name: None },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    // ── Dry-run / read-only modes ───────────────────────────────────
+
+    #[test]
+    fn restore_dryrun_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Restore {
+            backup: PathBuf::from("/tmp/backup"),
+            mode: commands::restore_cmd::RestoreMode::DryRun,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn import_pet_dryrun_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Import {
+            command: ImportSubcommands::Pet {
+                path: PathBuf::from("/tmp/pet.toml"),
+                library: None,
+                merge: false,
+                replace: false,
+                dry_run: true,
+                strict: false,
+                report: commands::import_cmd::ReportFormat::Human,
+                report_file: None,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn repair_dryrun_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Repair {
+            dry_run: true,
+            apply: false,
+            library: None,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    // ── Data subcommand group ───────────────────────────────────────
+
+    #[test]
+    fn data_validate_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Validate {
+                library: None,
+                strict: false,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn data_status_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Status {
+                json: false,
+                sync_only: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn data_backup_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Backup {
+                output: None,
+                include_usage: false,
+                include_sync_state: false,
+                format: commands::backup_cmd::BackupFormat::Directory,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn data_restore_dryrun_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Restore {
+                backup: PathBuf::from("/tmp/b"),
+                mode: commands::restore_cmd::RestoreMode::DryRun,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn data_repair_dryrun_is_minimal_readonly() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Repair {
+                dry_run: true,
+                apply: false,
+                library: None,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
+        assert_eq!(b.services, StartupServices::Minimal);
+    }
+
+    #[test]
+    fn data_repair_mutation_is_allowed() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Repair {
+                dry_run: false,
+                apply: true,
+                library: None,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn data_restore_mutation_is_allowed() {
+        let b = behavior(Some(&Commands::Data {
+            command: DataCommands::Restore {
+                backup: PathBuf::from("/tmp/b"),
+                mode: commands::restore_cmd::RestoreMode::Merge,
+                json: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    // ── Mutation commands ───────────────────────────────────────────
+
+    #[test]
+    fn new_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::New {
+            command: None,
+            tags: None,
+            multiline: false,
+            command_stdin: false,
+            from_file: None,
+            editor: false,
+            description: None,
+            config: None,
+            library: None,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn run_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Run {
+            filter: None,
+            sync: false,
+            library: None,
+            sort: snip_it::sort::SnippetSort::Relevance,
+            favorites_first: false,
+            id: None,
+            description_exact: None,
+            command_exact: None,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn clip_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Clip {
+            filter: None,
+            sync: false,
+            library: None,
+            sort: snip_it::sort::SnippetSort::Relevance,
+            favorites_first: false,
+            id: None,
+            description_exact: None,
+            command_exact: None,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn edit_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Edit {
+            library: None,
+            output: None,
+            output_stdin: false,
+            clear_output: false,
+            filter: None,
+            id: None,
+            description_exact: None,
+            command_exact: None,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn import_mutation_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Import {
+            command: ImportSubcommands::Pet {
+                path: PathBuf::from("/tmp/pet.toml"),
+                library: None,
+                merge: false,
+                replace: false,
+                dry_run: false,
+                strict: false,
+                report: commands::import_cmd::ReportFormat::Human,
+                report_file: None,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn repair_mutation_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Repair {
+            dry_run: false,
+            apply: true,
+            library: None,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn restore_mutation_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Restore {
+            backup: PathBuf::from("/tmp/b"),
+            mode: commands::restore_cmd::RestoreMode::Merge,
+            json: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn premade_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Premade {
+            command: PremadeCommands::List,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn library_create_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Library {
+            command: LibraryCommands::Create {
+                name: "test".to_string(),
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn library_delete_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Library {
+            command: LibraryCommands::Delete {
+                name: "test".to_string(),
+                force: false,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    #[test]
+    fn library_set_primary_is_allowed_logging_and_audit() {
+        let b = behavior(Some(&Commands::Library {
+            command: LibraryCommands::SetPrimary {
+                name: "test".to_string(),
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::LoggingAndAudit);
+    }
+
+    // ── Explicit sync commands ──────────────────────────────────────
+
+    #[test]
+    fn sync_is_suppressed_explicit_logging() {
+        let b = behavior(Some(&Commands::Sync { command: None }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn sync_run_is_suppressed_explicit_logging() {
+        let b = behavior(Some(&Commands::Sync {
+            command: Some(SyncCommands::Run {
+                library: None,
+                servers: false,
+                push_only: false,
+                pull_only: false,
+                dry_run: false,
+            }),
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn cron_is_suppressed_explicit_logging() {
+        let b = behavior(Some(&Commands::Cron { interval: 15 }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn register_is_suppressed_explicit_logging() {
+        let b = behavior(Some(&Commands::Register {
+            server: "https://example.com".to_string(),
+            force: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    // ── Internal worker ─────────────────────────────────────────────
+
+    #[test]
+    fn auto_sync_worker_is_suppressed_internal_logging() {
+        let b = behavior(Some(&Commands::AutoSyncWorker {
+            state_dir: PathBuf::from("/tmp/state"),
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressInternal);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    // ── Config/setup commands ───────────────────────────────────────
+
+    #[test]
+    fn update_is_suppressed_configuration_logging() {
+        let b = behavior(Some(&Commands::Update {
+            dry_run: false,
+            locked: false,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn doctor_is_suppressed_configuration_logging() {
+        let b = behavior(Some(&Commands::Doctor {
+            pet_file: None,
+            compatibility: false,
+            sync: false,
+            check_shell: None,
+            library: None,
+            strict: false,
+            report: commands::doctor_cmd::DiagnosticReportFormat::Human,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn completions_is_suppressed_configuration_logging() {
+        let b = behavior(Some(&Commands::Completions {
+            shell: clap_complete::Shell::Bash,
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn shell_is_suppressed_configuration_logging() {
+        let b = behavior(Some(&Commands::Shell {
+            command: ShellCommands::Init {
+                shell: ShellIntegration::Bash,
+            },
+        }));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    #[test]
+    fn keybindings_is_suppressed_configuration_logging() {
+        let b = behavior(Some(&Commands::Keybindings));
+        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    // ── Default / no subcommand ─────────────────────────────────────
+
+    #[test]
+    fn default_no_subcommand_is_allowed_logging() {
+        let b = behavior(None);
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::Logging);
+    }
+
+    // ── Read-only commands avoid recovery/network side effects ──────
+
+    #[test]
+    fn read_only_commands_have_suppressed_recovery() {
+        let read_only_cases: Vec<Option<Commands>> = vec![
+            Some(Commands::Version),
+            Some(Commands::List {
+                filter: None,
+                config: None,
+                library: None,
+                json: false,
+                csv: false,
+                search_output: false,
+                sort: snip_it::sort::SnippetSort::Relevance,
+                favorites_first: false,
+            }),
+            Some(Commands::Search {
+                filter: None,
+                sync: false,
+                library: None,
+                sort: snip_it::sort::SnippetSort::Relevance,
+                favorites_first: false,
+            }),
+            Some(Commands::Status {
+                json: false,
+                sync_only: false,
+            }),
+            Some(Commands::Get {
+                id: None,
+                description_exact: None,
+                command_exact: None,
+                query: None,
+                library: None,
+                field: None,
+                raw: false,
+                expanded: false,
+                json: false,
+                resolution: snip_it::selector::ResolutionPolicy::Unique,
+                vars: None,
+            }),
+            Some(Commands::Validate {
+                library: None,
+                strict: false,
+                json: false,
+            }),
+        ];
+        for case in &read_only_cases {
+            let b = behavior(case.as_ref());
+            assert_ne!(
+                b.recovery,
+                StartupRecoveryPolicy::Allow,
+                "read-only command should not allow recovery: {case:?}"
+            );
+        }
+    }
+
+    // ── Mutations allow pending recovery ────────────────────────────
+
+    #[test]
+    fn mutation_commands_allow_recovery() {
+        let mutation_cases: Vec<Option<Commands>> = vec![
+            Some(Commands::New {
+                command: None,
+                tags: None,
+                multiline: false,
+                command_stdin: false,
+                from_file: None,
+                editor: false,
+                description: None,
+                config: None,
+                library: None,
+            }),
+            Some(Commands::Run {
+                filter: None,
+                sync: false,
+                library: None,
+                sort: snip_it::sort::SnippetSort::Relevance,
+                favorites_first: false,
+                id: None,
+                description_exact: None,
+                command_exact: None,
+            }),
+            Some(Commands::Clip {
+                filter: None,
+                sync: false,
+                library: None,
+                sort: snip_it::sort::SnippetSort::Relevance,
+                favorites_first: false,
+                id: None,
+                description_exact: None,
+                command_exact: None,
+            }),
+            Some(Commands::Edit {
+                library: None,
+                output: None,
+                output_stdin: false,
+                clear_output: false,
+                filter: None,
+                id: None,
+                description_exact: None,
+                command_exact: None,
+            }),
+        ];
+        for case in &mutation_cases {
+            let b = behavior(case.as_ref());
+            assert_eq!(
+                b.recovery,
+                StartupRecoveryPolicy::Allow,
+                "mutation command should allow recovery: {case:?}"
+            );
+        }
+    }
+
+    // ── Explicit sync commands suppress startup auto-sync recovery ──
+
+    #[test]
+    fn explicit_sync_commands_suppress_recovery() {
+        let sync_cases: Vec<Option<Commands>> = vec![
+            Some(Commands::Sync { command: None }),
+            Some(Commands::Cron { interval: 15 }),
+            Some(Commands::Register {
+                server: "https://example.com".to_string(),
+                force: false,
+            }),
+        ];
+        for case in &sync_cases {
+            let b = behavior(case.as_ref());
+            assert_eq!(
+                b.recovery,
+                StartupRecoveryPolicy::SuppressExplicitSync,
+                "sync command should suppress recovery: {case:?}"
+            );
+        }
+    }
+}
