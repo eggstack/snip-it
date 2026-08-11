@@ -393,3 +393,32 @@ Conditional simplification implementation:
 ```text
 phase-14g: simplify multi-file recovery to fail-closed repair
 ```
+
+## 16. Decision: RETAIN
+
+Phase 14G attempted SIMPLIFY in commit `29fda50`. The corrective review found:
+
+- The marker-based replacement (`InterruptedOperation`) did not preserve enough per-destination state for unambiguous rollback. It could not distinguish newly-created files from missing backups, leading to opposite required recovery behavior.
+- Recovery could clear evidence while state remained partially restored, violating the minimum guarantee that a crash must not silently leave damaged state looking resolved.
+- Reproducing the missing safety/locking/path-validation semantics would rebuild much of the retained transaction engine.
+- Old journal support was still required for backward compatibility, so the attempt increased rather than reduced the number of recovery models.
+- The Phase 14G decision rule therefore resolves to RETAIN.
+
+The corrective pass reverted the marker implementation (`git revert --no-edit 29fda50`) and restored the proven journal-based transaction path from the Phase 14F baseline.
+
+### What was reverted
+
+- `InterruptedOperation` struct, `write_interrupted_operation`, `read_interrupted_operation`, `remove_interrupted_operation`, `rollback_interrupted_operation`, `recover_interrupted_operation` removed from production code.
+- `RepairAction::RecoverInterruptedOperation` removed from `repair_cmd.rs`.
+- `restore_cmd.rs` restored to use `begin_transaction` / `advance_to_backups_durable` / `advance_to_committing` / `advance_to_committed_local` / `commit_transaction` / `rollback_transaction`.
+- `gate_mutation_on_interrupted_transactions` no longer checks for marker files.
+- Transaction crash failpoints (`RESTORE_AFTER_PREPARED`, `RESTORE_AFTER_BACKUPS_DURABLE`, `RESTORE_AFTER_FIRST_INSTALL`, `RESTORE_AFTER_INDEX_INSTALL`, `RESTORE_AFTER_COMMITTED_LOCAL_BEFORE_PENDING`, `RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE`, `RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP`) restored.
+- `tests/destination_permissions.rs` restored to verify journal file permissions (0o600).
+
+### What was NOT reverted
+
+All Phase 14A through 14F production behavior remains intact.
+
+### Closure
+
+After this corrective pass, transaction simplification is closed for Phase 14. No Phase 14H will be created to revisit it.

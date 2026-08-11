@@ -1,6 +1,6 @@
 # Phase 14 Roadmap — Correctness, Consolidation, and Lightweight Scope Recovery
 
-Status: READY FOR IMPLEMENTATION
+Status: COMPLETE
 
 Reviewed baseline: `c7a326f19afc77c9dd37e54448f9837fa494de04`
 
@@ -186,3 +186,21 @@ At Phase 14 closure, snip-it should remain the same product from the user's pers
 - an explicit and proportionate durability contract for multi-file operations.
 
 The preferred direction after Phase 14 is maintenance and deletion/consolidation, not another infrastructure expansion phase.
+
+## 10. Phase 14G corrective closure
+
+Phase 14G initially chose SIMPLIFY (commit `29fda50`), replacing the journal-based transaction engine with a minimal `InterruptedOperation` marker model. The corrective review found the marker model had correctness gaps (ambiguous rollback semantics for new vs. existing files, missing containment validation, loss of lock-scoped recovery) that would require rebuilding much of the retained transaction engine to fix. Since old journal backward compatibility was still needed, the result was two recovery models rather than one — increasing maintenance burden rather than reducing it.
+
+The corrective pass reverted the marker implementation and restored the proven journal-based transaction path from the Phase 14F baseline. The final decision is RETAIN. Transaction simplification is closed for Phase 14; no Phase 14H will be created.
+
+### Completed subplans
+
+| Phase | Plan | Status |
+|-------|------|--------|
+| 14A | Credential and explicit-sync correctness | IMPLEMENTED |
+| 14B | Persistence and identity correctness | IMPLEMENTED |
+| 14C | Command and control-flow consolidation | IMPLEMENTED |
+| 14D | Dependency and binary footprint reduction | IMPLEMENTED |
+| 14E | Runtime and internal simplification | IMPLEMENTED |
+| 14F | Verification and CI reduction | IMPLEMENTED |
+| 14G | Transaction boundary decision | IMPLEMENTED (RETAIN) |

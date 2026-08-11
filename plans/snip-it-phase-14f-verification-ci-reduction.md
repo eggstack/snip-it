@@ -1,6 +1,6 @@
 # Phase 14F — Verification and CI Reduction
 
-Status: READY FOR IMPLEMENTATION
+Status: IMPLEMENTED
 
 Parent roadmap: `plans/snip-it-phase-14-correctness-simplification-roadmap.md`
 

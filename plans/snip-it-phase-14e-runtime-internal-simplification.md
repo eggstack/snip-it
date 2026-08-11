@@ -1,6 +1,6 @@
 # Phase 14E — Runtime and Internal Simplification
 
-Status: READY FOR IMPLEMENTATION
+Status: IMPLEMENTED
 
 Parent roadmap: `plans/snip-it-phase-14-correctness-simplification-roadmap.md`
 

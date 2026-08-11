@@ -144,6 +144,15 @@
 - Low-information unit tests consolidated: 17 individual tests in `notification.rs`, `policy.rs`, `config.rs`, and `outcome.rs` replaced with table-driven equivalents.
 - `snip_sync_lifetime.rs` retained with two distinct cases (long-lived health + SIGTERM/same-port restart); no repeated 5/5 ceremony.
 
+## Phase 14G — Transaction Boundary Decision (Corrective Closure)
+
+- Phase 14G attempted SIMPLIFY (commit `29fda50`) but the `InterruptedOperation` marker model had correctness gaps (ambiguous create-vs-replace rollback, missing containment validation, loss of lock-scoped recovery).
+- Corrective pass reverted the marker implementation and restored the proven journal-based transaction path from the Phase 14F baseline.
+- Decision: RETAIN. Transaction simplification is closed for Phase 14; no Phase 14H.
+- `restore` uses `begin_transaction` / `advance_to_backups_durable` / `advance_to_committing` / `advance_to_committed_local` / `commit_transaction` / `rollback_transaction`.
+- `gate_mutation_on_interrupted_transactions` checks for journal-based interrupted state only.
+- Transaction crash failpoints for step-level recovery testing are retained.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

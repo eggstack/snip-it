@@ -1,6 +1,6 @@
 # Phase 14B — Persistence Fail-Closed Behavior and Stable Snippet Identity
 
-Status: READY FOR IMPLEMENTATION
+Status: IMPLEMENTED
 
 Parent roadmap: `plans/snip-it-phase-14-correctness-simplification-roadmap.md`
 

@@ -1,6 +1,6 @@
 # Phase 14G Corrective Pass — Restore Proven Transaction Recovery and Close Phase 14
 
-Status: READY FOR IMPLEMENTATION
+Status: IMPLEMENTED
 
 Parent roadmap: `plans/snip-it-phase-14-correctness-simplification-roadmap.md`
 
