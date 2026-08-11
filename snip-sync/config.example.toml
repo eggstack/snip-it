@@ -38,8 +38,6 @@ requests_per_minute = 120
 # If your snip-sync is behind nginx/Caddy, list the exact proxy peer IPs here
 # so X-Forwarded-For is honored correctly.
 # trusted_proxies = ["127.0.0.1"]
-# Persist rate-limit counters in the SQLite database (survives restart).
-# persist = false
 
 [server.metrics]
 # Basic auth for /metrics. Leave both commented out to disable the

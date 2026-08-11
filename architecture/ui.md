@@ -83,7 +83,7 @@ Halloy-compatible TOML themes with a 10-color projection:
 | `BRIGHT_THEME` | Built-in bright fallback (legacy `SNP_THEME=bright`) |
 | `ACTIVE_THEME` | `RwLock<Theme>` — process-global, reloaded on demand |
 
-**Halloy themes**: 50 bundled themes in `themes/`, gzip-compressed at build time into `_generated_bundled_themes.rs`, extracted to `~/.config/snp/themes/` on first launch. Active theme persisted in `~/.config/snp/themes.toml`.
+**Halloy themes**: 50 bundled themes in `themes/`, generated explicitly by `scripts/build_themes.py` into `_generated_bundled_themes.rs`, then extracted to `~/.config/snp/themes/` on first launch. Active theme persisted in `~/.config/snp/themes.toml`.
 
 **Theme picker**: Press `e` in normal mode; `j`/`k` to preview, `i` to filter, `Enter` to save, `e`/`q`/`Esc` to cancel.
 

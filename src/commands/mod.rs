@@ -304,6 +304,7 @@ pub fn run_snippet_selection<F>(
     filter: Option<String>,
     library: Option<String>,
     do_sync: bool,
+    allow_delete: bool,
     sort_opts: Option<SortOptions>,
     runtime: Option<&tokio::runtime::Runtime>,
     mut process_fn: F,
@@ -347,6 +348,7 @@ where
             original_indices: &original_indices,
             sort_opts: sort_opts.as_ref(),
             usage: Some(&usage_data),
+            allow_delete,
         })?;
         if let Some(result) = result {
             match result {
@@ -354,7 +356,7 @@ where
                     cancelled = true;
                     break;
                 }
-                crate::ui::SnippetSelection::Delete(idx) => {
+                crate::ui::SnippetSelection::Delete(idx) if allow_delete => {
                     let original_idx = *original_indices.get(idx).ok_or_else(|| {
                         SnipError::runtime_error(
                             "Snippet not found",
@@ -381,6 +383,7 @@ where
                     }
                     continue;
                 }
+                crate::ui::SnippetSelection::Delete(_) => continue,
                 crate::ui::SnippetSelection::Selected(idx, copy_flag) => {
                     let snippet = &snippets.snippets[original_indices[idx]];
                     match process_fn(snippet, copy_flag)? {

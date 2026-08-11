@@ -17,8 +17,8 @@ that workflow feel immediate.
 
 Lightweight commands such as `snp version` and `snp completions bash` use a
 minimal startup path and do not create logging or audit files. Logging is
-initialized lazily for commands that need diagnostics, and the audit writer is
-started only for mutation and execution commands.
+initialized lazily for commands that need diagnostics. Audit entries are
+appended synchronously when a command records a mutation or execution.
 
 It was inspired by [pet](https://github.com/knqyf263/pet) and keeps the same
 simple, editable TOML approach to command snippets. The optional
@@ -87,35 +87,13 @@ cargo install snip-it
 
 Rust 1.94 or newer is required when building from source.
 
-### Pre-built binaries
+### Updates
 
-Download the binary for your platform from the
-[latest GitHub release](https://github.com/eggstack/snip-it/releases/latest).
-Release assets currently include:
-
-| Platform | Asset |
-| --- | --- |
-| Linux x86_64 | `snip-it-v<VERSION>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux aarch64 | `snip-it-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS Intel | `snip-it-v<VERSION>-x86_64-apple-darwin.tar.gz` |
-| macOS Apple Silicon | `snip-it-v<VERSION>-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `snip-it-v<VERSION>-x86_64-pc-windows-msvc.tar.gz` |
-
-On Linux or macOS, extract the archive and install the binary:
-
-```bash
-tar xzf snp-*.tar.gz
-sudo mv snp /usr/local/bin/snp
-```
-
-On Windows, extract the archive and move `snp.exe` to a directory on your `PATH`.
-
-Each release also includes a `SHA256SUMS` file for verifying download integrity.
-
-After installing the client, `snp update` checks the appropriate source and
-updates in place: crates.io for Cargo installs, Homebrew for Homebrew installs,
-and the matching GitHub release archive for standalone binaries. Use
-`snp update --dry-run` to check without installing.
+`snp update` checks crates.io for Cargo installations and Homebrew for
+Homebrew installations. Source-built or otherwise unmanaged executables report
+that they must be rebuilt or updated through their installation method; the
+repository does not currently publish a supported standalone binary asset
+pipeline. Use `snp update --dry-run` to check without installing.
 
 ### From source
 

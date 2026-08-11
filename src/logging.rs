@@ -133,11 +133,10 @@ pub fn init_default_logging() {
     init_default_file_logging();
 }
 
-/// Initialize file logging without starting the audit writer.
+/// Initialize file logging for commands that need diagnostics.
 ///
-/// Read-only/configuration commands use this path when they need diagnostic
-/// logging but cannot emit audit records. Keeping the audit channel lazy avoids
-/// a background thread and audit filesystem work for those commands.
+/// Audit appends are synchronous, so this setup does not start a background
+/// audit writer or channel.
 pub fn init_default_file_logging() {
     // Ensure the config directory exists (and is permission-tightened on
     // Unix) before we try to create the logs subdirectory or the audit

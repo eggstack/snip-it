@@ -265,6 +265,7 @@ pub fn run(
         filter,
         library,
         do_sync,
+        true,
         sort_opts,
         runtime,
         |snippet, copy_flag| process_snippet(snippet, copy_flag.is_some()),

@@ -141,7 +141,6 @@ pub struct LimitsConfig {
 pub struct RateLimitConfig {
     pub requests_per_minute: Option<u32>,
     pub trusted_proxies: Option<Vec<String>>,
-    pub persist: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -175,7 +174,6 @@ pub struct Config {
     pub grpc_max_message_size: u32,
     pub rate_limit_per_minute: u32,
     pub trusted_proxies: Vec<String>,
-    pub persist_rate_limits: bool,
     pub metrics_username: Option<String>,
     pub metrics_password: Option<String>,
     pub cors_allowed_origins: Vec<String>,
@@ -357,9 +355,6 @@ impl Config {
                 })
                 .or_else(|| server.rate_limit.as_ref()?.trusted_proxies.clone())
                 .unwrap_or_default(),
-            persist_rate_limits: parse_bool_env(env, "PERSIST_RATE_LIMITS")?
-                .or(server.rate_limit.as_ref().and_then(|r| r.persist))
-                .unwrap_or(false),
             metrics_username: env("METRICS_USERNAME")
                 .or_else(|| server.metrics.as_ref().and_then(|m| m.username.clone())),
             metrics_password: env("METRICS_PASSWORD")
@@ -1758,7 +1753,6 @@ mod tests {
             grpc_max_message_size: 4 * 1024 * 1024,
             rate_limit_per_minute,
             trusted_proxies: vec![],
-            persist_rate_limits: false,
             metrics_username: None,
             metrics_password: None,
             cors_allowed_origins: vec![],
@@ -2390,24 +2384,6 @@ mod tests {
         let err = Config::load_from(&path, &env).unwrap_err();
         match err {
             ConfigLoadError::InvalidEnvironment { name, .. } => assert_eq!(name, "GRPC_PORT"),
-            other => panic!("expected InvalidEnvironment, got: {other}"),
-        }
-    }
-
-    #[test]
-    fn config_load_rejects_invalid_bool_env() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, "").unwrap();
-        let env = |name: &str| match name {
-            "PERSIST_RATE_LIMITS" => Some("invalid".to_string()),
-            _ => None,
-        };
-        let err = Config::load_from(&path, &env).unwrap_err();
-        match err {
-            ConfigLoadError::InvalidEnvironment { name, .. } => {
-                assert_eq!(name, "PERSIST_RATE_LIMITS")
-            }
             other => panic!("expected InvalidEnvironment, got: {other}"),
         }
     }

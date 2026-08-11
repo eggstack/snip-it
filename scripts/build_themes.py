@@ -14,8 +14,8 @@ the `themes/` directory has been seeded from the compressed bundle.
 Usage:
     python3 scripts/build_themes.py
 
-This is also invoked automatically by `build.rs` whenever any file in
-`themes/` is newer than the generated output.
+Run it explicitly after changing a theme. Normal Cargo builds consume the
+checked-in generated file and do not invoke this script.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def compress_gzip(data: bytes) -> bytes:
     typically ~40% of the original size for small text files.
     """
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as f:
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6, mtime=0) as f:
         f.write(data)
     return buf.getvalue()
 
@@ -186,7 +186,10 @@ def generate_rust(themes: list[Path]) -> str:
         # matching FILENAME_RE shouldn't contain these, but the script
         # runs in a context where mistakes are easy).
         safe_name = name.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'    BundledTheme {{ name: "{safe_name}", payload_b64: "{encoded}" }},')
+        lines.append("    BundledTheme {")
+        lines.append(f'        name: "{safe_name}",')
+        lines.append(f'        payload_b64: "{encoded}",')
+        lines.append("    },")
     lines.append("];")
     lines.append("")
     lines.append(
@@ -219,9 +222,9 @@ def generate_rust(themes: list[Path]) -> str:
     lines.append("                .read_to_end(&mut toml_bytes)")
     lines.append("                .map_err(|_| {")
     lines.append(
-        '                crate::SnipError::runtime_error("bundled theme: invalid gzip stream", None)'
+        '                    crate::SnipError::runtime_error("bundled theme: invalid gzip stream", None)'
     )
-    lines.append("            })?;")
+    lines.append("                })?;")
     lines.append(
         "            let toml_text = String::from_utf8(toml_bytes).map_err(|_| {"
     )

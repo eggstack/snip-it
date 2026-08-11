@@ -2742,7 +2742,7 @@ fn test_golden_corpus_sync_round_trip_preserves_command() {
         // Push a multiline snippet with trailing newline
         let now = chrono::Utc::now().timestamp();
         let original_command = "if true; then\n  echo yes\nelse\n  echo no\nfi\n";
-        let snippet = snip_it::proto::Snippet {
+        let snippet = snip_proto::Snippet {
             id: "sync-golden-1".to_string(),
             description: "sync golden multiline".to_string(),
             command: original_command.to_string(),

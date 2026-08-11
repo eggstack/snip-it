@@ -1,6 +1,12 @@
 # Phase 15 — Deletion, Consolidation, and Final Scope Recovery
 
-Status: PLANNED
+Status: COMPLETE (2026-08-11)
+
+Implementation notes: all workstreams A–F were completed. Local verification
+included `scripts/check.sh`, workspace clippy with warnings-as-errors, focused
+server lifetime tests, and package validation. The generated theme bundle was
+measured at 32,409 bytes compressed versus 62,816 bytes in a controlled plain
+representation, so gzip/`flate2` was retained with deterministic generation.
 
 Baseline: `e7fefa1807502fe6d86612ac6ff6a75cef07cc0c`
 

@@ -72,7 +72,7 @@ fn test_direction_json_roundtrip() {
 
 #[test]
 fn test_local_output_field_not_in_proto() {
-    let proto_snippet = snip_it::proto::Snippet::default();
+    let proto_snippet = snip_proto::Snippet::default();
     let json_str = format!("{:?}", proto_snippet);
     assert!(
         !json_str.contains("output"),

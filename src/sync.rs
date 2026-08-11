@@ -16,14 +16,14 @@
 use crate::config::SyncSettings;
 use crate::encryption;
 use crate::error::{SnipError, SnipResult, SyncFailureKind};
-use crate::proto::PremadeLibrary;
-use crate::proto::snippet_sync_client::SnippetSyncClient;
-use crate::proto::{
+use prost::Message;
+use snip_proto::PremadeLibrary;
+use snip_proto::snippet_sync_client::SnippetSyncClient;
+use snip_proto::{
     CreateLibraryRequest, GetPremadeLibraryRequest, HealthRequest, Library, ListLibrariesRequest,
     ListPremadeLibrariesRequest, PushSnippetsRequest, RegisterRequest,
     SearchPremadeLibrariesRequest, SyncRequest,
 };
-use prost::Message;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tonic::Code;

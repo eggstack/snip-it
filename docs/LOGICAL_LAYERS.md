@@ -109,7 +109,7 @@ Everything that touches the terminal, spawns processes, or orchestrates user wor
 | `src/commands/*` | 23 command modules (new, list, run, clip, select, search, edit, get, sync, register, library, premade, import, doctor, cron, shell, keybindings, status, validate, backup, restore, repair, pet_analysis) |
 | `src/clipboard.rs` | Cross-platform clipboard access (arboard/clipboard-win) |
 | `src/logging.rs` | Structured logging with file rotation, audit log |
-| `src/update.rs` | Self-update (crates.io, Homebrew, GitHub releases) |
+| `src/update.rs` | Package-manager update (Cargo and Homebrew) |
 | `src/status_snapshot.rs` | Read-only status projection for `snp status` and doctor |
 | `src/outcome.rs` | CliOutcome enum and exit-code mapping |
 | `src/transaction.rs` | Transaction boundary with journal, lock, begin/commit/rollback (cfg-gated) |

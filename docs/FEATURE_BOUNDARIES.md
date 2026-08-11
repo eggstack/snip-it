@@ -3,7 +3,7 @@
 ## Current Feature Definitions
 
 ### snip-it (root crate)
-Empty feature labels (`tui`, `clipboard`, `sync`, `self-update`, `bundled-themes`) were removed in Phase 10
+Empty feature labels (`tui`, `clipboard`, `sync`, `bundled-themes`) were removed in Phase 10
 because they did not gate any dependencies and were misleading. `test-support` is retained for test
 infrastructure. All functionality is unconditionally compiled — the binary is monolithic.
 
@@ -58,10 +58,10 @@ The workspace has **463 lines** of duplicate dependency output. Key duplications
 **Currently used by**: `src/sync.rs`, `src/sync_commands.rs`, `src/encryption.rs`, `src/config.rs` (sync settings)
 **Recommendation**: Gate behind `sync` feature. The entire sync client + encryption stack is unnecessary for local-only use. This is the largest removable dependency surface (~15 crates).
 
-### 4. Self-update (`self-update` feature)
-**Dependencies**: `tempfile` (already used elsewhere), HTTP fetching (via existing tonic or manual)
-**Currently used by**: `src/update.rs`
-**Recommendation**: Gate behind `self-update` feature. Library consumers don't need self-update capability.
+### 4. Updates
+`src/update.rs` supports managed Cargo and Homebrew installations. Unmanaged
+or standalone binaries receive a clear error and must be updated through their
+distribution channel; there is no archive updater feature to gate.
 
 ### 5. Bundled themes (`bundled-themes` feature)
 **Dependencies**: `flate2`, `unicode-width` (already used by TUI)
@@ -119,5 +119,4 @@ libc = "0.2"
 | 2 | `tui` | None (always on) | Moderate — removes 3-4 crates |
 | 3 | `auto-sync` | None (always on) | Moderate — removes process spawning |
 | 4 | `clipboard` | None (always on) | Minor — removes platform clipboard |
-| 5 | `self-update` | None (always on) | Minor — removes HTTP for updates |
-| 6 | `bundled-themes` | None (always on) | Minor — removes flate2 |
+| 5 | `bundled-themes` | None (always on) | Minor — removes flate2 |

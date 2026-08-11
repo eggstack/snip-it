@@ -11,7 +11,7 @@ This crate contains the generated protobuf types and tonic client/server stubs u
 snip-proto = "0.1"
 ```
 
-The generated code is committed to the repository, so `protoc` is not required for normal builds. You only need the protobuf compiler if you regenerate the stubs from `proto/sync.proto`.
+The generated code is committed to the repository, so `protoc` is not required for normal builds. Maintainers need the protobuf toolchain only when explicitly regenerating the stubs from `proto/sync.proto`; review and commit the generated diff afterward.
 
 ## Wire contract
 

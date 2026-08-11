@@ -203,7 +203,6 @@ Important environment variables:
 | `METRICS_USERNAME` / `METRICS_PASSWORD` | Enable authenticated `/metrics` |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins |
 | `CORS_ALLOW_ALL=true` | Allow all CORS origins, development only (boolean: `true`/`1`/`yes`/`on`) |
-| `PERSIST_RATE_LIMITS=true` | Persist rate limits to SQLite between restarts (boolean: `true`/`1`/`yes`/`on`) |
 
 `/health` is unauthenticated and returns HTTP 200 only when the database is
 reachable. `/metrics` is disabled unless both metrics credentials are set.

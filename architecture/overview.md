@@ -56,7 +56,7 @@ The library surface of `snip-it` exposes a stable public API (`Snippet`,
 `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library`,
 atomic write utilities, `SnipError`, `SnippetSort`, `SyncSettings`, etc.).
 Everything else (`commands`, `ui`, `auto_sync`, `sync`, `encryption`,
-`logging`, `process_file_lock`, `proto`, `selector`, `usage`) is
+`logging`, `process_file_lock`, `selector`, `usage`) is
 `#[doc(hidden)]` — public for binary/integration-test access but not part
 of the supported external API.
 
@@ -219,9 +219,9 @@ Self-hosted Rust gRPC server using tonic + axum (HTTP).
 | `orchestration.rs` | Service lifetime, graceful shutdown |
 | `bootstrap.rs` | Server initialization |
 | `paths.rs` | Path resolution for server state |
-| `process.rs` | Process management |
+| `process.rs` | Legacy PID parsing and stop/restart compatibility |
 | `editor.rs` | Server-side config editing |
-| `update.rs` | Server self-update |
+| `update.rs` | Server update command and package-manager integration |
 | `test_helpers.rs` | Test-only helpers (gated on `test-helpers` feature) |
 | `test_observer.rs` | Test-only event capture |
 
@@ -282,7 +282,7 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 | `logging` | `src/logging.rs` | [logging.md](logging.md) | Structured logging (`tracing`), audit trail, panic handler |
 | `process_file_lock` | `src/process_file_lock.rs` | — | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
 | `status_snapshot` | `src/status_snapshot.rs` | [status.md](status.md) | Status snapshot and diagnostic codes |
-| `update` | `src/update.rs` | — | Self-update checking and installation |
+| `update` | `src/update.rs` | — | Cargo/Homebrew update checking and installation |
 
 Full utility inventory: [utils.md](utils.md).
 

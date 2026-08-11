@@ -38,8 +38,7 @@ pub mod commands;
 pub mod logging;
 #[doc(hidden)]
 pub mod process_file_lock;
-#[doc(hidden)]
-pub mod proto;
+pub(crate) use snip_proto as proto;
 #[doc(hidden)]
 pub mod selector;
 #[doc(hidden)]

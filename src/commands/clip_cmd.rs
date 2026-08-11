@@ -73,6 +73,7 @@ pub fn run(
         filter,
         library,
         do_sync,
+        true,
         sort_opts,
         runtime,
         process_snippet,

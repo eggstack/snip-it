@@ -1,14 +1,10 @@
 FROM rust:1.94 AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
 COPY snip-sync/Cargo.toml snip-sync/
 COPY snip-proto/Cargo.toml snip-proto/
-COPY snip-proto/build.rs snip-proto/
 COPY snip-proto/proto snip-proto/proto
 COPY snip-proto/src snip-proto/src
 COPY snip-sync/src snip-sync/src

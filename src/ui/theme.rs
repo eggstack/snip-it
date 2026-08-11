@@ -558,44 +558,13 @@ impl ThemeManager {
     }
 
     fn save_config(&self) -> SnipResult<()> {
-        if let Some(parent) = self.config_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| SnipError::io_error("create config directory", parent, e))?;
-        }
         let toml_str = toml::to_string_pretty(&self.config)
             .map_err(|e| SnipError::toml_error("serialize themes config", e))?;
-        let tmp_path = self.config_path.with_file_name(format!(
-            "{}.{}.tmp",
-            self.config_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("themes"),
-            uuid::Uuid::new_v4()
-        ));
-        let guard = crate::utils::tempfile_guard::TempFileGuard::new(tmp_path.clone());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut opts = fs::OpenOptions::new();
-            opts.write(true).create_new(true).mode(0o600);
-            let mut file = opts.open(&tmp_path).map_err(|e| {
-                SnipError::io_error("create themes config temp", tmp_path.clone(), e)
-            })?;
-            use std::io::Write;
-            file.write_all(toml_str.as_bytes())
-                .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
-        }
-        #[cfg(not(unix))]
-        {
-            fs::write(&tmp_path, toml_str)
-                .map_err(|e| SnipError::io_error("write themes config", tmp_path.clone(), e))?;
-        }
-
-        fs::rename(&tmp_path, &self.config_path).map_err(|e| {
-            SnipError::io_error("rename themes config", self.config_path.clone(), e)
-        })?;
-        guard.persist();
+        crate::utils::atomic::atomic_write_bytes(
+            &self.config_path,
+            toml_str.as_bytes(),
+            crate::utils::atomic::Durability::SensitiveConfig,
+        )?;
         Ok(())
     }
 }

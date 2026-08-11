@@ -8,7 +8,7 @@ src/ui/
 ├── theme.rs                     # Theme system (Halloy TOML + dark/bright fallback)
 ├── highlight.rs                 # Syntax highlighting for snippet commands
 ├── variables.rs                 # Variable prompting UI (prompt_variables_inner)
-└── _generated_bundled_themes.rs # gzip-compressed bundled themes (build-time generated)
+└── _generated_bundled_themes.rs # gzip-compressed bundled themes (explicitly generated)
 ```
 
 ## Key Types
@@ -36,8 +36,8 @@ src/ui/
 
 ### Halloy TOML Themes
 - 50 bundled themes in `themes/` directory (source of truth)
-- gzip-compressed and base64-encoded at build time into `_generated_bundled_themes.rs`
-- `build.rs` re-invokes `scripts/build_themes.py` when themes/ is newer
+- gzip-compressed and base64-encoded by the explicit `scripts/build_themes.py` generator into `_generated_bundled_themes.rs`
+- Normal builds consume the checked-in generated file; there is no root `build.rs` hook
 - Extracted to `~/.config/snp/themes/` on first launch
 - Active theme persisted in `~/.config/snp/themes.toml`
 - Default theme: `Cyber Red` (hardcoded fallback)

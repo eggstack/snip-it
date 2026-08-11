@@ -20,7 +20,8 @@ library — it is a standalone binary.  The public surface exists because:
 ### Phase 13F changes
 
 - Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`,
-  `proto`, `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`.
+  `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`; protocol types
+  are consumed from the separate `snip-proto` crate.
 - Root-level TUI types (`SnippetData`, `ProcessResult`, `CommandOutcome`,
   `SelectionOutcome`) are `#[doc(hidden)]`.
 - The crate root doc comment now lists the supported API explicitly.
@@ -46,7 +47,6 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub mod commands` | **application-internal** | CLI command implementations; no external consumer |
 | `pub mod logging` | **application-internal** | Logging infrastructure; not for external use |
 | `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock |
-| `pub mod proto` | **integration-test-only** | Prost-generated gRPC types; needed by sync integration tests |
 | `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
 | `pub mod sync` | **integration-test-only** | `SyncClient`; used by sync integration tests |
 | `pub mod ui` | **application-internal** | TUI interface; not for external consumers |
@@ -298,22 +298,11 @@ detached auto-sync helper management.*
 
 ---
 
-## `proto` module (`src/proto.rs`)
+## Protocol types (`snip-proto`)
 
-*Prost-generated. All items are `integration-test-only`.*
-
-| Item | Classification | Notes |
-|------|---------------|-------|
-| `GetSnippetsRequest`, `PushSnippetsRequest`, `PushSnippetsResponse` | **integration-test-only** | gRPC request/response types |
-| `SyncRequest`, `SyncResponse` | **integration-test-only** | Core sync protocol types |
-| `Snippet` (proto) | **integration-test-only** | Wire-format snippet |
-| `SnippetList` | **integration-test-only** | Paginated snippet list |
-| `HealthRequest`, `HealthResponse` | **integration-test-only** | Health check types |
-| `RegisterRequest`, `RegisterResponse` | **integration-test-only** | Registration types |
-| `CreateLibraryRequest/Response`, `ListLibrariesRequest/Response`, `DeleteLibraryRequest/Response` | **integration-test-only** | Library management types |
-| `Library` | **integration-test-only** | Server library metadata |
-| `ListPremadeLibrariesRequest/Response`, `GetPremadeLibraryRequest/Response`, `SearchPremadeLibrariesRequest/Response` | **integration-test-only** | Premade library types |
-| `PremadeLibrary` | **integration-test-only** | Premade library metadata |
+Protobuf messages and tonic stubs are owned by the workspace's separate
+`snip-proto` crate. Integration tests import them directly from that crate;
+the root `snip-it` library no longer exposes a generated-proto module.
 | `pub mod snippet_sync_client` | **integration-test-only** | Generated gRPC client |
 | `pub mod snippet_sync_server` | **integration-test-only** | Generated gRPC server trait + impl |
 
@@ -426,10 +415,7 @@ detached auto-sync helper management.*
    Since they're in `tests/`, it must remain `pub` for now.  Mark as
    `integration-test-only` in docs.
 
-8. **`pub mod proto`** — Same situation as `sync`.  Prost-generated types
-   needed by integration tests.  Mark as `integration-test-only`.
-
-9. **`config` module internal items** — `invalidate_toml_cache`,
+8. **`config` module internal items** — `invalidate_toml_cache`,
    `cached_read_toml`, `save_sync_settings`, `load_sync_settings`,
    `get_sync_settings` are `pub` but only used by the binary and
    `pub(crate)` modules.  These should be `pub(crate)`.

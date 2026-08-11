@@ -23,7 +23,7 @@
 
 ## 1. Purpose and Scope
 
-This document defines the security threat model for snip-it, a local-first snippet manager with optional end-to-end encrypted synchronization. It identifies assets, trust boundaries, threat actors, concrete threats, mitigations, and residual risks. The scope covers the full lifecycle of snippet data: creation, local storage, synchronization, backup, restore, and self-update.
+This document defines the security threat model for snip-it, a local-first snippet manager with optional end-to-end encrypted synchronization. It identifies assets, trust boundaries, threat actors, concrete threats, mitigations, and residual risks. The scope covers the full lifecycle of snippet data: creation, local storage, synchronization, backup, restore, and package-managed updates.
 
 ### Design Principles
 
@@ -63,8 +63,8 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Backups | Confidential | `backups/` | No | SHA-256 checksummed snapshots |
 | Logs | Internal | `~/.config/snp/logs/` | No | Structured file-rotated logs |
 | Installed binary | N/A | System or user-local path | No | Integrity depends on install method |
-| Update channel | N/A | crates.io / GitHub Releases | No | SHA-256 verified downloads |
-| Release assets | N/A | GitHub Releases, crates.io | No | Checksummed (SHA-256); not cryptographically signed |
+| Update channel | N/A | crates.io / Homebrew | No | Integrity delegated to package manager and registry |
+| Release assets | N/A | Package-manager artifacts | No | No standalone archive updater is supported |
 
 ---
 
@@ -138,11 +138,11 @@ Each boundary below represents a transition where data crosses from one trust do
 
 ### Boundary 9: Self-Update / Package Manager
 
-**Description:** The binary updates itself or is updated via a package manager.
+**Description:** The installed package is updated through Cargo or Homebrew.
 
-**Properties:** Downloaded binaries may be tampered. Update channels may be compromised.
+**Properties:** Package registries, formula metadata, or the local package manager may be compromised.
 
-**Mitigations:** SHA-256 verification of downloaded binaries, checksum file validation, package manager signature verification (Homebrew, cargo).
+**Mitigations:** Updates are delegated to Cargo or Homebrew; standalone GitHub archive installation is not supported. Use official registries and review package-manager metadata.
 
 ### Boundary 10: CI / Release Publishing
 
@@ -291,16 +291,16 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Tests / evidence** | Size limit tests in `src/commands/import_cmd.rs`, gRPC config in `src/sync.rs`. |
 | **Owner / module** | `src/commands/import_cmd.rs`, `src/sync.rs`, `src/encryption.rs` |
 
-### T11: Compromised Release Asset / Checksum
+### T11: Compromised Package Distribution
 
 | Field | Detail |
 |-------|--------|
-| **Description** | A release binary is replaced with a malicious version, or its checksum is tampered. |
-| **Attack vector** | Compromised GitHub account, CI pipeline, or CDN; MITM on download. |
-| **Mitigations** | SHA-256 checksum verification of downloaded binaries during self-update. Checksum file validation. Package managers (Homebrew, cargo) perform their own signature verification where available. Tar extraction rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories prevent collision. |
-| **Residual risk** | Low. SHA-256 provides strong integrity verification. If both the binary and checksum are compromised in the same release, detection requires manual review of release artifacts. |
-| **User responsibility** | Use official installation channels. Verify package manager signatures where available. |
-| **Tests / evidence** | Self-update verification logic in `src/update.rs`. |
+| **Description** | A package manager installs a malicious or tampered snip-it binary. |
+| **Attack vector** | Compromised registry/formula, CI pipeline, or local package-manager metadata. |
+| **Mitigations** | Updates are delegated to Cargo or Homebrew; the client does not download or extract standalone archives. |
+| **Residual risk** | Low. Registry and package-manager trust remains an external dependency. |
+| **User responsibility** | Use official registries and review package-manager prompts and metadata. |
+| **Tests / evidence** | Managed-install detection and unsupported-install tests in `src/update.rs`. |
 | **Owner / module** | `src/update.rs` |
 
 ### T12: Accidental Execution of Unsafe Snippet
@@ -379,7 +379,7 @@ Users who require protection against local attackers should use full-disk encryp
 | T8: PID Reuse / Stale Locks | `lock.rs`, `execution_lock.rs` | Lock nonce tests | Very Low |
 | T9: Interrupted Writes / Crashes | `atomic.rs`, `transaction.rs` | Atomic write tests, transaction tests | Low |
 | T10: Oversized/Decompression Input | `import_cmd.rs`, `sync.rs`, `encryption.rs` | Size limit tests | Low |
-| T11: Compromised Release Asset | `update.rs` | Self-update verification tests | Low |
+| T11: Compromised Package Distribution | `update.rs` | Managed-install detection tests | Low |
 | T12: Accidental Unsafe Execution | `run_cmd.rs`, `get_cmd.rs`, `clip_cmd.rs` | CLI integration tests | **Medium** |
 | T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo-deny` | Low |
 | T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
@@ -392,7 +392,7 @@ Users who require protection against local attackers should use full-disk encryp
 |-----------|-----------|-------|----------|
 | **Argon2id** | 16 MiB memory, 3 iterations, 4 parallelism, random salt per encryption | Key derivation from passphrase to AES-256 key | `src/encryption.rs` |
 | **AES-256-GCM** | Random 12-byte nonce, 16-byte auth tag | Symmetric encryption of snippet data and metadata | `src/encryption.rs` |
-| **SHA-256** | Standard | Binary checksum verification (self-update), backup manifest checksums | `src/update.rs`, `src/commands/backup_cmd.rs` |
+| **SHA-256** | Standard | Backup manifest checksums and deterministic IDs | `src/commands/backup_cmd.rs`, `src/library.rs` |
 | **CRC32** | Standard | Integrity check on `auto-sync-status.toml` (not cryptographic) | `src/auto_sync/status.rs` |
 | **OS Keychain** | Platform-native | API key and encryption key storage | `src/config.rs`, `src/encryption.rs` |
 

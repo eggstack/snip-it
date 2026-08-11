@@ -69,8 +69,8 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let config = snip_sync::Config::load()?;
 
     // Acquire the kernel-backed server singleton lock. This is the
-    // authoritative mutual-exclusion barrier; the PID file is metadata
-    // that we publish while the lock is held.
+    // authoritative mutual-exclusion barrier; its identity metadata is for
+    // diagnostics and stop/restart ownership checks.
     let state_dir = snip_sync::paths::state_dir();
     let _server_lock = match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
         Ok(guard) => guard,
@@ -91,17 +91,9 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // While the server lock is held, reconcile and atomically publish
-    // the PID record. The lock prevents a second `serve` from racing on
-    // the PID file.
-    snip_sync::process::reconcile_pid_under_lock(&state_dir)?;
-    let _pid_guard =
-        snip_sync::process::write_pid().map_err(|e| format!("Failed to write PID file: {}", e))?;
-
     let rt = tokio::runtime::Runtime::new()?;
-    // Server lock and PID file removal are owned by the guards; the PID
-    // file guard only unlinks the file if the on-disk identity still
-    // matches the one we recorded at startup.
+    // The kernel lock owns the current server identity for the lifetime of
+    // the process. Older PID files are never created by new servers.
     rt.block_on(serve_inner(config))
 }
 
@@ -142,17 +134,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     tracing::info!("gRPC server listening on {}", grpc_addr);
     tracing::info!("HTTP server listening on {}", http_addr);
 
-    let rate_limiter = if config.persist_rate_limits {
-        tracing::info!("Rate limiter persistence enabled (PERSIST_RATE_LIMITS=true)");
-        Arc::new(RateLimiter::new_with_db(db.pool().clone(), true))
-    } else {
-        Arc::new(RateLimiter::new())
-    };
-    rate_limiter.load_state().await;
-    let (persist_shutdown_tx, persist_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let persistence_handle = rate_limiter.start_persistence_task(async {
-        let _ = persist_shutdown_rx.await;
-    });
+    let rate_limiter = Arc::new(RateLimiter::new());
     let cors_allowed_origins = config.cors_allowed_origins.clone();
 
     tracing::info!(
@@ -436,22 +418,6 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     )
     .await;
 
-    // Signal the persistence task only after both servers have stopped, then
-    // wait for its final database snapshot to complete before dropping the
-    // database pool.
-    let _ = persist_shutdown_tx.send(());
-    if let Some(handle) = persistence_handle {
-        match tokio::time::timeout(Duration::from_secs(5), handle).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(error = %error, "Rate limiter persistence task failed during shutdown");
-            }
-            Err(_) => {
-                tracing::warn!("Rate limiter persistence did not finish before shutdown");
-            }
-        }
-    }
-
     tracing::info!("Server shutdown complete");
 
     outcome.ensure_clean_requested_shutdown()?;
@@ -478,6 +444,86 @@ fn cmd_edit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let state_dir = snip_sync::paths::state_dir();
+    match snip_sync::server_lock::ServerLock::try_acquire(&state_dir) {
+        Err(snip_sync::server_lock::ServerLockError::Busy { owner: Some(owner) }) => {
+            stop_owner(owner, force)
+        }
+        Err(snip_sync::server_lock::ServerLockError::Busy { owner: None }) => {
+            Err("The server lock is busy but contains no usable owner metadata.".into())
+        }
+        Err(e) => Err(format!("Failed to inspect server lock: {e}").into()),
+        Ok(guard) => {
+            drop(guard);
+            stop_legacy(force)
+        }
+    }
+}
+
+fn stop_owner(
+    owner: snip_sync::server_lock::ServerLockIdentity,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pid = owner.pid;
+    let identity_matches = snip_sync::process::is_running(pid)
+        && owner
+            .start_token
+            .as_ref()
+            .and_then(|expected| {
+                snip_sync::process::get_process_start_token(pid).map(|actual| actual == *expected)
+            })
+            .unwrap_or(true);
+    if !identity_matches {
+        return Err(
+            format!("Server lock owner PID {pid} is no longer the recorded process.").into(),
+        );
+    }
+    if !force && !snip_sync::process::validate_process_name(pid) {
+        eprintln!("Warning: PID {pid} does not appear to be a snip-sync process.");
+        eprintln!("Use --force to stop it anyway.");
+        return Err("Refusing to stop non-snip-sync process".into());
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, force);
+        return Err("Stop is only supported on Unix systems.".into());
+    }
+
+    #[cfg(unix)]
+    {
+        println!("Sending SIGTERM to process {pid}...");
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let exit_result = snip_sync::process::wait_for_exit(pid, Duration::from_secs(10));
+        if let Err(error) = &exit_result {
+            eprintln!("Warning: {error}");
+            if !force {
+                return Err(error.clone().into());
+            }
+            println!("Sending SIGKILL...");
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            let _ = snip_sync::process::wait_for_exit(pid, Duration::from_secs(5));
+        }
+
+        match snip_sync::server_lock::ServerLock::try_acquire(&snip_sync::paths::state_dir()) {
+            Ok(_guard) => {
+                if exit_result.is_ok() {
+                    println!("Server stopped.");
+                } else {
+                    println!("Server killed.");
+                }
+                Ok(())
+            }
+            Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => {
+                println!("A replacement server has already started.");
+                Ok(())
+            }
+            Err(error) => Err(format!("Failed to acquire server lock: {error}").into()),
+        }
+    }
+}
+
+fn stop_legacy(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     let state_dir = snip_sync::paths::state_dir();
     let expected = snip_sync::process::parse_pid_file(&snip_sync::paths::pid_path());
     let pid = match &expected {
@@ -578,23 +624,33 @@ fn cmd_stop(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    match snip_sync::process::parse_pid_file(&snip_sync::paths::pid_path()) {
-        snip_sync::process::ParsedPidFile::Structured(record)
-            if snip_sync::process::record_still_matches(&record) =>
-        {
-            println!("Stopping existing server (PID {})...", record.pid);
-            cmd_stop(force)?;
-        }
-        snip_sync::process::ParsedPidFile::LegacyPid(pid) => {
-            println!("Stopping existing server (PID {pid})...");
-            cmd_stop(force)?;
-        }
-        snip_sync::process::ParsedPidFile::Malformed(message) => {
-            return Err(format!("PID file is malformed: {message}. Remove or replace it.").into());
-        }
-        snip_sync::process::ParsedPidFile::Empty
-        | snip_sync::process::ParsedPidFile::Structured(_) => {
-            println!("No running server found.");
+    let state_dir = snip_sync::paths::state_dir();
+    if let Err(snip_sync::server_lock::ServerLockError::Busy { owner: Some(owner) }) =
+        snip_sync::server_lock::ServerLock::try_acquire(&state_dir)
+    {
+        println!("Stopping existing server (PID {})...", owner.pid);
+        cmd_stop(force)?;
+    } else {
+        match snip_sync::process::parse_pid_file(&snip_sync::paths::pid_path()) {
+            snip_sync::process::ParsedPidFile::Structured(record)
+                if snip_sync::process::record_still_matches(&record) =>
+            {
+                println!("Stopping existing server (PID {})...", record.pid);
+                cmd_stop(force)?;
+            }
+            snip_sync::process::ParsedPidFile::LegacyPid(pid) => {
+                println!("Stopping existing server (PID {pid})...");
+                cmd_stop(force)?;
+            }
+            snip_sync::process::ParsedPidFile::Malformed(message) => {
+                return Err(
+                    format!("PID file is malformed: {message}. Remove or replace it.").into(),
+                );
+            }
+            snip_sync::process::ParsedPidFile::Empty
+            | snip_sync::process::ParsedPidFile::Structured(_) => {
+                println!("No running server found.");
+            }
         }
     }
     println!("Starting server...");

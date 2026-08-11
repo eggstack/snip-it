@@ -178,7 +178,7 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 | Gap | Severity | Description |
 |---|---|---|
 | Restore path traversal | **Mitigated (Phase 10)** | `restore_cmd.rs` now validates that restored files resolve within the config directory. Path entries like `../../etc/passwd` in a crafted backup are rejected. |
-| Self-update archive extraction | **Mitigated (Phase 10)** | Self-update uses Rust's `tar` crate with validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
+| Self-update archive extraction | Not applicable | The client no longer installs standalone release archives; updates are delegated to Cargo or Homebrew. |
 | Pending lock temp file | Low | The pending lock temp file does not use `O_EXCL` explicitly. Mitigation: UUID-based naming makes collision astronomically unlikely, and the file is written atomically. |
 
 ---
@@ -419,21 +419,9 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 |---|---|---|
 | Cargo | Executable path under `$CARGO_HOME/bin` or `.crates2.json`/`.crates.toml` nearby | `src/update.rs:177-191` |
 | Homebrew | Executable path under `brew --prefix snip-it` | `src/update.rs:193-208` |
-| GitHub Release | Fallback when not Cargo, Homebrew, or source build | `src/update.rs:139-155` |
-| Unsupported | Source build (`target/debug` or `target/release` in path) — rejected | `src/update.rs:157-163` |
+| Unsupported | Unmanaged/source/standalone executable — rejected with a distribution-channel message | `src/update.rs` |
 
-### J.2 Standalone (GitHub Release) Update Security
-
-| Property | Detail | Source |
-|---|---|---|
-| Download URL | HTTPS only (GitHub API + release assets) | `src/update.rs:21-22` |
-| Checksum verification | SHA-256 hash compared against `SHA256SUMS` manifest from same release | `src/update.rs:368-389` |
-| Archive extraction | Rust `tar` crate with entry validation (rejects absolute paths, parent traversal, symlinks, hard links) | `src/update.rs:413-479` |
-| Binary replacement | Atomic `fs::rename` with permission preservation | `src/update.rs:502-518` |
-| Temp directory | UUID-based in executable's parent dir (`UUID`) | `src/update.rs:349-358` |
-| Cleanup | `fs::remove_dir_all(work_dir)` on success | `src/update.rs:516` |
-
-### J.3 Cargo Update Security
+### J.2 Cargo Update Security
 
 | Property | Detail | Source |
 |---|---|---|
@@ -441,20 +429,19 @@ By design, snippet commands execute as-is with no sanitization or guardrails. Th
 | Lockfile | `--locked` flag available to pin `Cargo.lock` | `src/update.rs:263` |
 | Shell | No shell invocation; direct `cargo` binary execution | `src/update.rs:267` |
 
-### J.4 Homebrew Update Security
+### J.3 Homebrew Update Security
 
 | Property | Detail | Source |
 |---|---|---|
 | Mechanism | `brew upgrade snip-it` | `src/update.rs:272-276` |
 | Verification | Homebrew's own checksum and code signing verification | External to snp |
 
-### J.5 Known Gaps
+### J.4 Known Gaps
 
 | Gap | Severity | Description | Mitigation |
 |---|---|---|---|
-| Tar symlink following | **Mitigated (Phase 10)** | `tar -xf` followed symlinks by default in earlier versions. A malicious archive could contain symlinks pointing outside the work directory. | Self-update now uses Rust's `tar` crate with entry validation: rejects absolute paths, parent-directory traversal, symlinks, and hard links. HTTPS-only downloads. UUID-based temp directories. |
 | Concurrent worker/update | Low | If an auto-sync worker is running when self-update replaces the binary, the worker continues running the old binary until it exits. | By design — the detached worker is fire-and-forget and holds no resources that the new binary needs. The worker will exit normally and the next cycle will use the new binary. |
-| Checksum manifest trust | Low | The `SHA256SUMS` file is fetched from the same release as the archive. A compromised release could ship matching checksums. | GitHub repository trust and SHA-256 checksums provide the root of trust. Releases are not cryptographically signed — checksums detect accidental corruption but not a compromised release. This is standard practice for GitHub-distributed binaries. |
+| Managed package trust | Low | Cargo and Homebrew depend on their respective registries and package metadata. | Use official registries and keep lockfiles/package-manager metadata under review. |
 
 ---
 

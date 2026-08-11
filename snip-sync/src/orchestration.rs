@@ -99,18 +99,50 @@ where
 {
     let mut requested = false;
 
-    // Track whether each handle has been consumed (output received).
-    // A consumed handle must never be awaited or aborted again.
-    let mut grpc_consumed = false;
-    let mut http_consumed = false;
     let mut grpc_result: Option<ServiceResult> = None;
     let mut http_result: Option<ServiceResult> = None;
 
-    // We need mutable references to the handles for tokio::select!, but
-    // we also need to move them for await. Use a small wrapper to allow
-    // both.
-    let mut grpc_handle = Some(grpc_handle);
-    let mut http_handle = Some(http_handle);
+    #[derive(Clone, Copy)]
+    enum ServiceKind {
+        Grpc,
+        Http,
+    }
+
+    struct ServiceCompletion {
+        kind: ServiceKind,
+        result: ServiceResult,
+    }
+
+    let mut tasks = tokio::task::JoinSet::<ServiceCompletion>::new();
+    tasks.spawn(async move {
+        ServiceCompletion {
+            kind: ServiceKind::Grpc,
+            result: classify_result(grpc_handle.await),
+        }
+    });
+    tasks.spawn(async move {
+        ServiceCompletion {
+            kind: ServiceKind::Http,
+            result: classify_result(http_handle.await),
+        }
+    });
+
+    let record = |completion: ServiceCompletion,
+                  grpc_result: &mut Option<ServiceResult>,
+                  http_result: &mut Option<ServiceResult>,
+                  phase: &str| {
+        if completion.result != ServiceResult::Clean {
+            let name = match completion.kind {
+                ServiceKind::Grpc => "gRPC",
+                ServiceKind::Http => "HTTP",
+            };
+            tracing::error!("{name} service {phase}: {:?}", completion.result);
+        }
+        match completion.kind {
+            ServiceKind::Grpc => *grpc_result = Some(completion.result),
+            ServiceKind::Http => *http_result = Some(completion.result),
+        }
+    };
 
     // Phase 1: Wait for the first terminal event — a shutdown signal,
     // gRPC completion, or HTTP completion. No pre-signal lifetime
@@ -121,80 +153,33 @@ where
             tracing::info!("Shutdown signal received");
             requested = true;
         }
-        result = grpc_handle.as_mut().unwrap() => {
-            let classified = classify_result(result);
-            if classified != ServiceResult::Clean {
-                tracing::error!("gRPC service: {classified:?}");
+        completion = tasks.join_next() => {
+            if let Some(Ok(completion)) = completion {
+                record(completion, &mut grpc_result, &mut http_result, "completed");
             }
-            grpc_result = Some(classified);
-            grpc_consumed = true;
-        }
-        result = http_handle.as_mut().unwrap() => {
-            let classified = classify_result(result);
-            if classified != ServiceResult::Clean {
-                tracing::error!("HTTP service: {classified:?}");
-            }
-            http_result = Some(classified);
-            http_consumed = true;
         }
     }
 
     // Broadcast shutdown to both services.
     let _ = shutdown_sender.send(());
 
-    // Phase 2: Bounded drain. After the initial select!, at most one
-    // handle has been consumed. For remaining pending handles, select
-    // whichever finishes next. Each completion updates consumed state
-    // immediately so Phase 3 never re-awaits a completed handle.
+    // Phase 2: drain every remaining task under one bounded timeout.
     let drain_result = tokio::time::timeout(drain_timeout, async {
-        if !grpc_consumed && !http_consumed {
-            // Both still pending — select whichever finishes first.
-            tokio::select! {
-                biased;
-                result = grpc_handle.as_mut().unwrap() => {
-                    let classified = classify_result(result);
-                    if classified != ServiceResult::Clean {
-                        tracing::error!("gRPC service during drain: {classified:?}");
-                    }
-                    grpc_result = Some(classified);
-                    grpc_consumed = true;
-                }
-                result = http_handle.as_mut().unwrap() => {
-                    let classified = classify_result(result);
-                    if classified != ServiceResult::Clean {
-                        tracing::error!("HTTP service during drain: {classified:?}");
-                    }
-                    http_result = Some(classified);
-                    http_consumed = true;
-                }
+        while let Some(joined) = tasks.join_next().await {
+            if let Ok(completion) = joined {
+                record(
+                    completion,
+                    &mut grpc_result,
+                    &mut http_result,
+                    "during drain",
+                );
             }
-        }
-
-        // Await whichever remaining handle is still pending.
-        if !grpc_consumed {
-            let result = grpc_handle.as_mut().unwrap().await;
-            let classified = classify_result(result);
-            if classified != ServiceResult::Clean {
-                tracing::error!("gRPC service during drain: {classified:?}");
-            }
-            grpc_result = Some(classified);
-            grpc_consumed = true;
-        }
-        if !http_consumed {
-            let result = http_handle.as_mut().unwrap().await;
-            let classified = classify_result(result);
-            if classified != ServiceResult::Clean {
-                tracing::error!("HTTP service during drain: {classified:?}");
-            }
-            http_result = Some(classified);
-            http_consumed = true;
         }
     })
     .await;
 
-    // Phase 3: Handle timeout — abort still-pending handles and await
-    // each exactly once. Only handles not yet consumed are aborted;
-    // completed handles are never touched again.
+    // Phase 3: abort only tasks still owned by the collection and drain the
+    // resulting join records.
     let forced = drain_result.is_err();
     if forced {
         tracing::warn!(
@@ -202,44 +187,31 @@ where
             drain_timeout.as_secs()
         );
 
-        if !grpc_consumed {
-            if let Some(ref mut h) = grpc_handle {
-                h.abort();
-                let result = h.await;
-                grpc_result = Some(match result {
-                    Err(e) if e.is_panic() => ServiceResult::Panic(format!("aborted: {e}")),
-                    Err(e) => ServiceResult::Cancelled(format!("aborted: {e}")),
-                    Ok(Ok(())) => ServiceResult::Clean,
-                    Ok(Err(e)) => ServiceResult::ServiceError(e.to_string()),
-                });
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            if let Ok(completion) = joined {
+                record(
+                    completion,
+                    &mut grpc_result,
+                    &mut http_result,
+                    "after abort",
+                );
             }
-            grpc_consumed = true;
-        }
-
-        if !http_consumed {
-            if let Some(ref mut h) = http_handle {
-                h.abort();
-                let result = h.await;
-                http_result = Some(match result {
-                    Err(e) if e.is_panic() => ServiceResult::Panic(format!("aborted: {e}")),
-                    Err(e) => ServiceResult::Cancelled(format!("aborted: {e}")),
-                    Ok(Ok(())) => ServiceResult::Clean,
-                    Ok(Err(e)) => ServiceResult::ServiceError(e.to_string()),
-                });
-            }
-            http_consumed = true;
         }
     }
 
-    // Both handles must be consumed before returning.
-    debug_assert!(grpc_consumed, "gRPC handle must be consumed");
-    debug_assert!(http_consumed, "HTTP handle must be consumed");
+    if forced {
+        grpc_result.get_or_insert_with(|| ServiceResult::Cancelled("aborted".to_owned()));
+        http_result.get_or_insert_with(|| ServiceResult::Cancelled("aborted".to_owned()));
+    }
 
     ServiceShutdownOutcome {
         requested,
         forced,
-        grpc_result: grpc_result.expect("gRPC result must be set before returning"),
-        http_result: http_result.expect("HTTP result must be set before returning"),
+        grpc_result: grpc_result
+            .unwrap_or_else(|| ServiceResult::Cancelled("not observed".to_owned())),
+        http_result: http_result
+            .unwrap_or_else(|| ServiceResult::Cancelled("not observed".to_owned())),
     }
 }
 
@@ -637,10 +609,10 @@ mod tests {
         }
     }
 
-    // ── Section 7.2 regression: gRPC result consumed exactly once ──
+    // ── Regression: completed gRPC service is observed once ───────
 
     #[tokio::test]
-    async fn grpc_handle_consumed_exactly_once() {
+    async fn grpc_service_completion_is_observed_once() {
         let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
         let poll_count = Arc::new(AtomicUsize::new(0));
 

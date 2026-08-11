@@ -560,7 +560,6 @@ enum DataCommands {
         json: bool,
     },
     /// Restore from a backup snapshot
-    #[command(alias = "r")]
     Restore {
         /// Path to the backup directory
         #[arg(value_name = "BACKUP_DIR")]
@@ -573,7 +572,6 @@ enum DataCommands {
         json: bool,
     },
     /// Repair configuration and library files
-    #[command(alias = "r")]
     Repair {
         /// Show planned repairs without making changes
         #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -722,6 +720,26 @@ fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
     }
 }
 
+fn report_ambiguous(
+    identities: &[snip_it::selector::SnippetIdentity],
+) -> snip_it::outcome::CliOutcome {
+    for identity in identities {
+        eprintln!(
+            "  {} - {} ({})",
+            identity.id, identity.description, identity.library_name
+        );
+    }
+    snip_it::outcome::CliOutcome::Ambiguous
+}
+
+fn finish_exact_outcome(outcome: snip_it::outcome::CliOutcome) -> SnipResult<CommandOutcome> {
+    match outcome {
+        snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
+        snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
+        other => std::process::exit(other.exit_code()),
+    }
+}
+
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
     match cli {
         None => {
@@ -823,23 +841,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                         }
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                        for identity in &identities {
-                            eprintln!(
-                                "  {} - {} ({})",
-                                identity.id, identity.description, identity.library_name
-                            );
-                        }
-                        snip_it::outcome::CliOutcome::Ambiguous
+                        report_ambiguous(&identities)
                     }
                     _ => snip_it::outcome::CliOutcome::NotFound,
                 };
-                return match outcome {
-                    snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
-                    snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-                    _ => {
-                        std::process::exit(outcome.exit_code());
-                    }
-                };
+                return finish_exact_outcome(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -886,23 +892,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                         snip_it::outcome::CliOutcome::Success
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                        for identity in &identities {
-                            eprintln!(
-                                "  {} - {} ({})",
-                                identity.id, identity.description, identity.library_name
-                            );
-                        }
-                        snip_it::outcome::CliOutcome::Ambiguous
+                        report_ambiguous(&identities)
                     }
                     _ => snip_it::outcome::CliOutcome::NotFound,
                 };
-                return match outcome {
-                    snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
-                    snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-                    _ => {
-                        std::process::exit(outcome.exit_code());
-                    }
-                };
+                return finish_exact_outcome(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -1010,23 +1004,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                             snip_it::outcome::CliOutcome::Success
                         }
                         snip_it::selector::SelectionResult::Ambiguous(identities) => {
-                            for identity in &identities {
-                                eprintln!(
-                                    "  {} - {} ({})",
-                                    identity.id, identity.description, identity.library_name
-                                );
-                            }
-                            snip_it::outcome::CliOutcome::Ambiguous
+                            report_ambiguous(&identities)
                         }
                         _ => snip_it::outcome::CliOutcome::NotFound,
                     };
-                    return match outcome {
-                        snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
-                        snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-                        _ => {
-                            std::process::exit(outcome.exit_code());
-                        }
-                    };
+                    return finish_exact_outcome(outcome);
                 } else {
                     let filter_str = filter.ok_or_else(|| {
                         snip_it::error::SnipError::runtime_error(
@@ -1319,7 +1301,6 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         Some(
             Commands::Version
             | Commands::List { .. }
-            | Commands::Search { .. }
             | Commands::Select { .. }
             | Commands::Status { .. }
             | Commands::Get { .. }
@@ -1377,6 +1358,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             Commands::New { .. }
             | Commands::Run { .. }
             | Commands::Clip { .. }
+            | Commands::Search { .. }
             | Commands::Edit { .. }
             | Commands::Import { .. }
             | Commands::Repair { .. }
@@ -1475,6 +1457,11 @@ mod tests {
         command_behavior(cmd)
     }
 
+    #[test]
+    fn cli_schema_is_valid() {
+        <Cli as clap::CommandFactory>::command().debug_assert();
+    }
+
     // ── Read-only commands ──────────────────────────────────────────
 
     #[test]
@@ -1501,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn search_is_minimal_readonly() {
+    fn search_retains_mutation_capabilities() {
         let b = behavior(Some(&Commands::Search {
             filter: None,
             sync: false,
@@ -1509,8 +1496,8 @@ mod tests {
             sort: snip_it::sort::SnippetSort::Relevance,
             favorites_first: false,
         }));
-        assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
-        assert_eq!(b.services, StartupServices::Minimal);
+        assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
+        assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
@@ -2018,13 +2005,6 @@ mod tests {
                 json: false,
                 csv: false,
                 search_output: false,
-                sort: snip_it::sort::SnippetSort::Relevance,
-                favorites_first: false,
-            }),
-            Some(Commands::Search {
-                filter: None,
-                sync: false,
-                library: None,
                 sort: snip_it::sort::SnippetSort::Relevance,
                 favorites_first: false,
             }),

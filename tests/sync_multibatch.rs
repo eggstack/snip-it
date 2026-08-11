@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use snip_it::config::{SyncDirection, SyncSettings};
-use snip_it::proto::Snippet;
 use snip_it::sync::SyncClient;
+use snip_proto::Snippet;
 use snip_sync::db::Database;
 use snip_sync::test_helpers::start_test_server;
 use snip_sync::{Config, Metrics, PremadeManager, RateLimiter, SnipSyncService};
@@ -56,7 +56,6 @@ async fn build_file_service(db_path: &str) -> SnipSyncService {
         grpc_max_message_size: 4 * 1024 * 1024,
         rate_limit_per_minute: 120,
         trusted_proxies: vec![],
-        persist_rate_limits: false,
         metrics_username: None,
         metrics_password: None,
         cors_allowed_origins: vec![],

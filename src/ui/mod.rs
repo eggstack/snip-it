@@ -519,6 +519,8 @@ pub struct SnippetListParams<'a> {
     pub original_indices: &'a [usize],
     pub sort_opts: Option<&'a crate::sort::SortOptions>,
     pub usage: Option<&'a [crate::usage::UsageData]>,
+    /// Whether the caller intentionally permits destructive deletion.
+    pub allow_delete: bool,
 }
 
 /// Action returned by the snippet selector after the user leaves the TUI.
@@ -549,6 +551,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         original_indices: _original_indices,
         sort_opts,
         usage,
+        allow_delete,
     } = params;
     // Enable mouse capture before initializing terminal
     // Gracefully degrade if mouse capture is not supported (e.g., headless SSH)
@@ -1160,6 +1163,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             let copied_desc = copied_message.as_ref().map(|(desc, _)| desc.clone());
             let mode_str = if insert_mode { "INS" } else { "NOR" };
             let tag_mode_str = if tag_filter_mode { " TAG" } else { "" };
+            let delete_hint = if allow_delete { " | d: delete" } else { "" };
 
             let status_text: String = if picker_mode {
                 if picker_ins {
@@ -1177,7 +1181,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                     )
                 } else {
                     format!(
-                        "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode"
+                        "[{mode_str}]{tag_mode_str} | i: insert | y: copy{delete_hint} | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode"
                     )
                 }
             } else if insert_mode {
@@ -1186,7 +1190,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 )
             } else {
                 format!(
-                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy | d: delete | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode | double-click: run"
+                    "[{mode_str}]{tag_mode_str} | i: insert | y: copy{delete_hint} | ctrl+u/d : page | n/o/a/z: sort | t: tags | q/ctrl+c: quit | x/c: clear | tab: mode | double-click: run"
                 )
             };
             let status_widget = Paragraph::new(status_text)
@@ -1762,7 +1766,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     }
                                 }
                                 KeyCode::Char('d')
-                                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                    if allow_delete
+                                        && !key.modifiers.contains(KeyModifiers::CONTROL)
                                         && sel.selected < filtered.len() =>
                                 {
                                     delete_confirmation = Some(filtered[sel.selected]);

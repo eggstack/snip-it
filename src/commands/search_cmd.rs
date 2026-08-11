@@ -23,6 +23,7 @@ pub fn run(
         filter,
         effective_library,
         do_sync,
+        true,
         sort_opts,
         runtime,
         |snippet, _copy_flag| {

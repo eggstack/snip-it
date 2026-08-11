@@ -2,7 +2,7 @@ use crate::commands::init_library_manager;
 use crate::config::{AutoSyncFailureMode, SyncDirection, load_sync_settings, save_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
-use crate::proto::Library;
+use snip_proto::Library;
 use std::io::{self, IsTerminal, Write};
 
 fn server_library_filename(name: &str) -> String {

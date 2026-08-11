@@ -223,18 +223,6 @@ impl Database {
             .execute(&pool)
             .await?;
 
-        sqlx::query(
-            "
-            CREATE TABLE IF NOT EXISTS rate_limits (
-                peer_ip TEXT PRIMARY KEY,
-                window_start INTEGER NOT NULL,
-                request_count INTEGER NOT NULL
-            )
-            ",
-        )
-        .execute(&pool)
-        .await?;
-
         Ok(Self { pool })
     }
 

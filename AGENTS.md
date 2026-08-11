@@ -10,7 +10,7 @@
 - Unexpected service/task failure notifies the sibling, drains, and returns an error — it is never swallowed into a log-only success.
 - Persistence shutdown occurs only after both request-serving tasks have completed or been aborted.
 - Environment variable overrides are strictly parsed via `parse_env` and `parse_bool_env`; present but invalid values cause startup to fail.
-- Boolean env vars (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; unknown values fail.
+- Boolean env vars (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`) accept case-insensitive `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; unknown values fail.
 - Range validation rejects zero ports, zero connection limits, zero timeouts, and zero values for `MAX_ID_LENGTH`, `MAX_DEVICE_ID_LENGTH`, `MAX_API_KEY_LENGTH`, and `RATE_LIMIT_PER_MINUTE` after env/file/default resolution.
 
 ## Phase 13B — Bounded Sync Uploads and Clock-Skew Diagnostics
@@ -35,7 +35,7 @@
 
 ## Phase 13I — Drain Result Accounting and Deterministic Regression Closure
 
-- Orchestration uses explicit `grpc_consumed`/`http_consumed` booleans to track per-service handle lifecycle; a consumed handle is never awaited or aborted again.
+- Orchestration uses a `JoinSet` to own service task lifetimes; each service completion is recorded exactly once and unfinished tasks are aborted and awaited on timeout.
 - Drain updates completion state immediately when a service finishes during the bounded drain window; Phase 3 only aborts handles still marked pending.
 - A requested shutdown fails if either service returns an error or panics during drain; only a clean dual-service exit without forced abort is success.
 - Push failure injection uses `push_fail_after` (threshold) and `push_fail_counter` (atomic counter) on `SnipSyncService`; counter starts at 0, increments per push, and rejects when count ≥ threshold.
@@ -58,7 +58,7 @@
 ## Phase 13D — Client Runtime and Dependency Footprint Reduction
 
 - Bundled themes use gzip compression (via `flate2`); `lzma-rs` has been removed. Regenerate with `python3 scripts/build_themes.py`.
-- Update archives use `.tar.gz` for all platforms including Windows; the `zip` crate has been removed. `extract_zip` and `validate_zip_entry_path` are gone.
+- The client updater supports Cargo and Homebrew installations. Standalone GitHub archive updates are unsupported because releases do not publish the required executable assets.
 - Local-only commands (`select`, `list`, `get`, `validate`, `backup`, `new`, `edit`, `keybindings`, `completions`, `shell`, `doctor`, `status`, `repair`, `restore`, `import`) do not initialize the Tokio runtime. The `RUNTIME` lazy static is only accessed when `--sync` is requested or for explicit sync/register/premade commands.
 - `run_snippet_selection` accepts `Option<&tokio::runtime::Runtime>` — pass `None` when `do_sync` is false, `Some(&RUNTIME)` when true.
 - The auto-sync detached helper uses `Builder::new_current_thread()` instead of `new_multi_thread()`.
@@ -81,7 +81,7 @@
 
 ## Phase 13F — API, CLI, Server, and Documentation Surface Consolidation
 
-- Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`, `proto`, `selector`, `sync`, `ui`, `usage`) are `#[doc(hidden)]` in `lib.rs`. They remain `pub` for binary and integration-test crate access but are not part of the supported external API.
+- Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`, `selector`, `sync`, `ui`, `usage`) are `#[doc(hidden)]` in `lib.rs`. Protocol types are supplied by the separate `snip-proto` crate. These modules remain public only where needed for binary crate access and are not part of the supported external API.
 - Root-level TUI types (`SnippetData`, `ProcessResult`, `CommandOutcome`, `SelectionOutcome`) are `#[doc(hidden)]`.
 - The supported Rust API is: `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library`, `AtomicWriteOptions`, `AtomicWriteReport`, `Durability`, `atomic_replace`, `write_private_atomic`, `SnipError`, `SnipResult`, `SnippetSort`, `SortOptions`, `rank_snippets`, `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode`, `CliOutcome`, `exit_code::*`, `OutputContext`.
 - The `data` subcommand group (`snp data validate|backup|restore|repair|status`) is the canonical home for advanced data maintenance. Legacy top-level spellings (`snp validate`, `snp backup`, `snp restore`, `snp repair`, `snp status`) remain as compatibility aliases with identical exit codes and output.
@@ -124,8 +124,8 @@
 - Root `tonic` uses `default-features = false, features = ["codegen", "channel", "tls-ring"]`; `snip-proto` uses `default-features = false, features = ["codegen", "channel"]`. The client no longer pulls `router` (axum), `transport` (server), `h2`, or `socket2`. Server features remain intact via `snip-sync`.
 - `tracing-subscriber` uses `default-features = false, features = ["fmt", "registry", "env-filter"]`; the `ansi` feature (nu-ansi-term) is dropped since file logs use `with_ansi(false)`.
 - The client retains `tokio`'s `rt-multi-thread` feature because the production detached auto-sync worker creates its own multi-thread runtime.
-- `tar` and `flate2` remain direct dependencies; `flate2` is also needed for bundled theme gzip decompression.
-- Self-update archive removal (raw asset) was evaluated and deferred — release pipeline not visible in repository; not a net simplification.
+- `flate2` remains a direct dependency solely for bundled theme gzip decompression; the client no longer depends on `tar`.
+- The unsupported standalone GitHub archive updater and its extraction/checksum tests were removed after verifying releases publish no executable assets.
 - Total binary delta: -33,584 bytes (3,922,224 → 3,888,640) on macOS aarch64 release build.
 
 ## Phase 14E — Runtime and Internal Simplification
@@ -152,6 +152,17 @@
 - `restore` uses `begin_transaction` / `advance_to_backups_durable` / `advance_to_committing` / `advance_to_committed_local` / `commit_transaction` / `rollback_transaction`.
 - `gate_mutation_on_interrupted_transactions` checks for journal-based interrupted state only.
 - Transaction crash failpoints for step-level recovery testing are retained.
+
+## Phase 15 — Deletion and Consolidation
+
+- `run_snippet_selection()` owns the delete capability explicitly; read-only `select` cannot delete, while `run`, `clip`, and `search` opt in. CLI schema validation runs in the binary test suite.
+- Selection output, editor resolution, and theme behavior reuse the canonical atomic-write, editor, and UI helpers instead of maintaining command-local copies.
+- The root protobuf build hook and `snip-proto/build.rs` were removed. Generated protocol code is checked in under `snip-proto/src/`; normal builds and CI do not install or invoke `protoc`.
+- The server singleton kernel lock is the sole authority for current ownership. `process.rs` retains only legacy PID parsing and identity checks for compatibility stop/restart commands.
+- Server shutdown orchestration uses `JoinSet`; persisted rate-limit state and `PERSIST_RATE_LIMITS` were removed. Rate limiting is bounded and in-memory for each process lifetime.
+- The client updater retains Cargo and Homebrew support and rejects unmanaged/standalone installs clearly. GitHub archive installation, `tar`, and archive-only tests were deleted because release assets are not published.
+- Bundled theme gzip compression remains because a controlled comparison kept the release binary no larger while the generated bundle stayed substantially smaller than the plain representation; generation is explicit via `scripts/build_themes.py`.
+- Release validation builds default workspace features. Broad CI no longer installs `protoc`; link checking runs on pull requests and weekly schedule.
 
 ## Phase 12B Auto-Sync Correctness Closure
 
@@ -249,15 +260,15 @@ themes/           50 Halloy TOML theme files
 - `diagnostics.rs` — Internal diagnostics
 - `local_data.rs` — Local data lock coordination
 - `output.rs` — Output file handling
-- `proto.rs` — Protobuf type re-exports
+- `snip-proto` — Checked-in generated Protobuf types and tonic stubs
 - `status_snapshot.rs` — Status snapshot and diagnostic codes
-- `update.rs` — Update checking
+- `update.rs` — Cargo/Homebrew update checking
 - `test_failpoints.rs` — Test-only failpoint hooks (compiled with `test-support`)
 
 ## Critical Gotchas
 
 ### Generated code
-`src/ui/_generated_bundled_themes.rs` is generated at build time by `scripts/build_themes.py` (invoked from `build.rs`). Never edit it directly.
+`src/ui/_generated_bundled_themes.rs` is generated explicitly by `python3 scripts/build_themes.py`. Never edit it directly. Protobuf code in `snip-proto/src/snip_proto.rs` is checked in and is regenerated only as an explicit maintainer operation after changing `snip-proto/proto/sync.proto`; normal builds do not require `protoc`.
 
 ### TOML backslash escape handling
 The save path does NOT post-process `toml::to_string_pretty` output. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline. See `src/utils/toml_helpers.rs`.

@@ -25,11 +25,11 @@ snip-sync/
 ├── src/cert.rs         # TLS certificate handling
 ├── src/cli.rs          # CLI argument parsing
 ├── src/editor.rs       # Editor integration
-├── src/process.rs      # Process management
+├── src/process.rs      # Legacy PID parsing for stop/restart compatibility
 ├── src/server_lock.rs  # Kernel-backed server singleton lock (flock/LockFileEx)
 ├── src/test_helpers.rs # In-process test server support
 ├── src/test_observer.rs# Test-only request telemetry (no secrets)
-└── src/update.rs       # Server self-update
+└── src/update.rs       # Cargo update support
 ```
 
 ### Process lifecycle
@@ -44,8 +44,8 @@ Persistent lock-file presence is not an ownership signal.
 
 - Shutdown coordination lives in a shared `run_services_until_shutdown()` helper in `orchestration.rs`.
 - `serve_inner` and deterministic tests call the same helper — production and test paths are identical.
-- Both service task handles are awaited by mutable reference; a completed handle is never polled twice.
-- On timeout (default 30s graceful drain), unfinished handles are explicitly aborted and awaited — they are not silently dropped.
+- Both service tasks are owned by a `JoinSet`; each completion is recorded exactly once.
+- On timeout (default 30s graceful drain), unfinished tasks are explicitly aborted and awaited — they are not silently dropped.
 - `serve_inner` evaluates `ServiceShutdownOutcome::ensure_clean_requested_shutdown()` after persistence cleanup. A requested shutdown returns success only when both services returned cleanly without forced abort; any drain-time service error, panic, or forced abort produces a failure that retains both classifications and the original detail.
 - `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
 
@@ -54,8 +54,7 @@ Persistent lock-file presence is not an ownership signal.
 All environment variable overrides are strictly parsed. Missing variables fall
 back to file/default configuration. Present but invalid values cause startup to
 fail with an error naming the variable and the supplied value. Boolean
-variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`,
-`PERSIST_RATE_LIMITS`) accept case-insensitive `true`, `1`, `yes`, `on` and
+variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`) accept case-insensitive `true`, `1`, `yes`, `on` and
 `false`, `0`, `no`, `off`; unknown values fail instead of silently falling
 back.
 
@@ -74,7 +73,6 @@ back.
 | `METRICS_PASSWORD` | empty | Basic auth for /metrics |
 | `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per API key |
 | `TRUSTED_PROXIES` | empty | Comma-separated trusted proxy IPs |
-| `PERSIST_RATE_LIMITS` | `false` | Boolean: `true`/`1`/`yes`/`on` to persist rate limits to SQLite |
 | `TLS_ENABLED` | `false` | Boolean: `true`/`1`/`yes`/`on` to acknowledge TLS termination |
 | `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP (loopback only) |
 | `RUST_LOG` | `info` | Log level (via tracing) |

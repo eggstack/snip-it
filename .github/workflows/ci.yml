@@ -15,7 +15,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  PROTOC_VERSION: "25.1"
 
 jobs:
   linux-correctness:
@@ -28,10 +27,6 @@ jobs:
         with:
           toolchain: "1.94"
           components: rustfmt, clippy
-      - name: Install protoc
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
       - name: Install Linux DBus dev libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
@@ -52,15 +47,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94"
-      - name: Install protoc (Unix)
-        if: runner.os != 'Windows'
-        run: bash scripts/ci/install-protoc.sh
-        env:
-          PROTOC_VERSION: ${{ env.PROTOC_VERSION }}
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File scripts/ci/install-protoc.ps1 -Version ${{ env.PROTOC_VERSION }}
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace --all-targets

@@ -9,8 +9,8 @@
 //! metadata, breaking all sync auth.
 
 use snip_it::config::{SyncDirection, SyncSettings};
-use snip_it::proto::Snippet;
 use snip_it::sync::{SyncClient, decrypt_snippet};
+use snip_proto::Snippet;
 use snip_sync::test_helpers::{build_test_service, start_test_server};
 use std::sync::{Arc, Mutex};
 

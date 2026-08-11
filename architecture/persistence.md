@@ -658,7 +658,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 | `src/auto_sync/execution_lock.rs` | Auto-sync execution lock and worker lock wrappers |
 | `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
 | `snip-sync/src/server_lock.rs` | snip-sync server singleton kernel lock |
-| `snip-sync/src/process.rs` | PID record parser, atomic publication, identity-checked cleanup |
+| `snip-sync/src/process.rs` | Legacy PID parser and identity checks for compatibility stop/restart |
 | `src/transaction.rs` | Transaction boundary, journaling, lock, rollback |
 | `src/commands/validate_cmd.rs` | Validation framework, diagnostic model, 12+ check categories |
 | `src/commands/backup_cmd.rs` | Backup manifest, secret redaction, SHA-256 integrity |

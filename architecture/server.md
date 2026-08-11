@@ -193,15 +193,16 @@ Environment variables retain precedence over TOML values. Environment variable
 overrides are strictly parsed: present but invalid values (e.g., a non-numeric
 port) cause startup to fail with an error naming the variable and value.
 Boolean environment variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`,
-`CORS_ALLOW_ALL`, `PERSIST_RATE_LIMITS`) accept case-insensitive `true`, `1`,
+`CORS_ALLOW_ALL`) accept case-insensitive `true`, `1`,
 `yes`, `on` and `false`, `0`, `no`, `off`; unknown values fail. Range
 validation rejects operationally nonsensical values (zero ports, zero
 connection limits, zero timeouts).
 
 ## Process lifecycle
 
-`snip-sync serve` holds the server singleton kernel lock for its full runtime
-and publishes an identity-checked PID record in the state directory. The
+`snip-sync serve` holds the server singleton kernel lock for its full runtime;
+the lock's current identity metadata is authoritative. Older numeric PID files
+are parsed only as a compatibility fallback for `stop` and `restart`. The
 server runs indefinitely until a process shutdown signal (Ctrl-C / SIGTERM) or
 an unexpected service failure. Normal operation has no arbitrary lifetime
 timeout; only the graceful drain phase after shutdown is bounded by the
@@ -213,19 +214,18 @@ On Unix, the server registers both `tokio::signal::ctrl_c()` and
 `tokio::signal::unix::SignalKind::terminate()` so that `snip-sync stop`
 (which sends SIGTERM) triggers the same graceful shutdown path as Ctrl-C.
 gRPC uses Tonic's `serve_with_incoming_shutdown` for connection-aware draining;
-HTTP uses `axum::serve().with_graceful_shutdown`. Both service task handles
-remain owned by the orchestrator and are awaited inside the real drain timeout.
+HTTP uses `axum::serve().with_graceful_shutdown`. Both service tasks are owned
+by a `JoinSet` and are awaited inside the real drain timeout.
 Persistence shutdown occurs only after both request-serving tasks have completed
 or been aborted.
 
 The shutdown coordination logic lives in a shared `run_services_until_shutdown()`
 helper (`snip-sync/src/orchestration.rs`) called by both `serve_inner` and
 deterministic orchestration tests. The helper selects on the shutdown signal and
-both service handles, captures the first terminal event, broadcasts shutdown,
-then drains remaining handles inside the configured timeout. Handles are awaited
-by mutable reference — not moved — so a completed handle is never polled twice.
-If the drain timeout expires, every unfinished handle is explicitly aborted and
-awaited. `ServiceShutdownOutcome` carries the result to the caller, and
+the `JoinSet`, captures the first terminal event, broadcasts shutdown, then
+drains remaining tasks inside the configured timeout. Each service completion is
+recorded exactly once. If the drain timeout expires, every unfinished task is
+explicitly aborted and awaited. `ServiceShutdownOutcome` carries the result to the caller, and
 `serve_inner` evaluates `ensure_clean_requested_shutdown()` to decide between
 `Ok(())` and an error after persistence cleanup. A requested shutdown fails if
 either service returned an error or panicked during drain, if any service
