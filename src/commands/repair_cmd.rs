@@ -54,8 +54,6 @@ pub enum RepairAction {
     RepairSnippetIds,
     /// Repair timestamps (missing, invalid).
     RepairTimestamps,
-    /// Recover an interrupted operation via the new marker-based model.
-    RecoverInterruptedOperation,
 }
 
 impl RepairAction {
@@ -73,7 +71,6 @@ impl RepairAction {
             RepairAction::RepairLibraryIndex => "index",
             RepairAction::RepairSnippetIds => "ids",
             RepairAction::RepairTimestamps => "timestamps",
-            RepairAction::RecoverInterruptedOperation => "transaction",
         }
     }
 
@@ -89,7 +86,6 @@ impl RepairAction {
                 | RepairAction::CleanupLegacyRolledBack { .. }
                 | RepairAction::RemoveTerminalJournal { .. }
                 | RepairAction::RemoveOrphanedArtifact
-                | RepairAction::RecoverInterruptedOperation
         )
     }
 
@@ -102,7 +98,6 @@ impl RepairAction {
             | RepairAction::CleanupLegacyCommitted { transaction_id }
             | RepairAction::CleanupLegacyRolledBack { transaction_id }
             | RepairAction::RemoveTerminalJournal { transaction_id } => Some(transaction_id),
-            RepairAction::RecoverInterruptedOperation => None,
             _ => None,
         }
     }
@@ -433,29 +428,6 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
 /// attention, including legacy terminal journals with artifacts.
 fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
     let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-
-    // Check for new-style interrupted operation marker.
-    if let Some(op) = crate::transaction::read_interrupted_operation(&state_dir)? {
-        report.items.push(RepairItem {
-            action: RepairAction::RecoverInterruptedOperation,
-            category: "transaction".to_string(),
-            problem: format!(
-                "Interrupted operation '{}' (at {}): {} affected files",
-                op.operation,
-                chrono::DateTime::from_timestamp_millis(op.created_at_unix_ms)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| "unknown time".to_string()),
-                op.affected_paths.len(),
-            ),
-            fix: "Roll back interrupted operation from backups".to_string(),
-            safe: true,
-            target_path: None,
-        });
-        // Return early — new marker takes precedence over old journals.
-        return Ok(());
-    }
-
-    // Fall back to old-style transaction journal scanning (backward compatibility).
     let inventory = crate::transaction::scan_transaction_journals(&state_dir)?;
 
     // Fail closed on corrupt journals.
@@ -819,15 +791,6 @@ fn apply_repair(item: &RepairItem) -> SnipResult<()> {
                     Some(&format!(
                         "Failed to remove terminal journal '{transaction_id}': {e}"
                     )),
-                )
-            })?;
-        }
-        RepairAction::RecoverInterruptedOperation => {
-            let state_dir = crate::auto_sync::notification::derive_state_dir().join(".transaction");
-            crate::transaction::recover_interrupted_operation(&state_dir).map_err(|e| {
-                SnipError::runtime_error(
-                    "recover interrupted operation",
-                    Some(&format!("Failed to recover interrupted operation: {e}")),
                 )
             })?;
         }

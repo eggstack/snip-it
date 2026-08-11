@@ -71,7 +71,7 @@ Current CI topology is acceptable: authoritative Linux correctness plus macOS/Wi
 | 14D | `plans/snip-it-phase-14d-dependency-and-binary-footprint.md` | Reduce binary/dependency weight without removing features | 14A |
 | 14E | `plans/snip-it-phase-14e-runtime-internal-simplification.md` | Simplify auto-sync plumbing and audit logging without changing behavior | 14C |
 | 14F | `plans/snip-it-phase-14f-verification-ci-reduction.md` | Reduce routine CI/test ceremony while retaining defect-focused coverage | 14A–14E |
-| 14G | `plans/snip-it-phase-14g-transaction-boundary-decision.md` | **Decision: SIMPLIFY** — replaced multi-file transaction state machine with fail-closed `InterruptedOperation` marker; legacy journals retained for backward-compatible recovery | 14B–14F |
+| 14G | `plans/snip-it-phase-14g-transaction-boundary-decision.md` | Decide, with explicit guarantee tradeoffs, whether the transaction journal should be simplified | 14B–14F |
 
 Required ordering:
 
@@ -162,7 +162,7 @@ Phase 14 may be marked complete only when all are true:
 - auto-sync and audit logging are simpler than the baseline without changing pending-generation or execution-lock guarantees;
 - routine CI no longer reruns broad platform-independent suites on every OS;
 - low-information tests are consolidated without removing direct regressions for previously reproduced defects;
-- Phase 14G decided SIMPLIFY: multi-file operations now use fail-closed `InterruptedOperation` marker instead of the full transaction state machine;
+- Phase 14G records an explicit retain/simplify decision for the transaction journal, including the exact durability guarantee chosen;
 - final `bash scripts/check.sh` passes;
 - final clean-tree `bash scripts/release-check.sh verify` passes before release clearance.
 

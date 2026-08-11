@@ -1234,11 +1234,6 @@ fn quarantine_stale_lock(lock_path: &Path) -> SnipResult<PathBuf> {
 ///
 /// Creates a journal file in the `state_dir` with `Prepared` state.
 /// Caller must already hold the transaction lock.
-///
-/// This function is retained for backward-compatible recovery of old journals.
-/// New transactions use the `InterruptedOperation` marker model and do not
-/// call this function.
-#[allow(dead_code)]
 pub fn begin_transaction(
     state_dir: &Path,
     operation: &str,
@@ -1318,9 +1313,9 @@ fn persist_journal(state_dir: &Path, journal: &TransactionJournal) -> SnipResult
 /// Persist the journal after backups are durably written.
 ///
 /// This is a compatibility shim — the `BackupsDurable` state is retained
-/// for backward-compatible recovery of old journals. New transactions use
-/// the `InterruptedOperation` marker model and do not call this function.
-#[allow(dead_code)]
+/// for backward-compatible recovery of old journals. New code may call
+/// this function, but the state machine treats `BackupsDurable` as
+/// equivalent to `Prepared` for recovery classification.
 pub fn advance_to_backups_durable(
     state_dir: &Path,
     journal: &mut TransactionJournal,
@@ -1333,11 +1328,6 @@ pub fn advance_to_backups_durable(
 ///
 /// `next_commit_position` represents completed work: positions `0..N`
 /// have been installed and verified; position `N` is next.
-///
-/// This function is retained for backward-compatible recovery of old journals.
-/// New transactions use the `InterruptedOperation` marker model and do not
-/// call this function.
-#[allow(dead_code)]
 pub fn advance_to_committing(
     state_dir: &Path,
     journal: &mut TransactionJournal,
@@ -1368,9 +1358,9 @@ pub fn advance_to_rolling_back(
 /// Persist the journal in `CommittedLocal` finalization state.
 ///
 /// This state is used only for backward-compatible recovery of journals
-/// from older versions. New transactions use the `InterruptedOperation`
-/// marker model and do not call this function.
-#[allow(dead_code)]
+/// from older versions. New transactions transition directly from
+/// `Committing` to `CleaningUp` (pending sync intent is recorded
+/// separately after the transaction state machine completes).
 pub fn advance_to_committed_local(
     state_dir: &Path,
     journal: &mut TransactionJournal,
@@ -1386,10 +1376,9 @@ pub fn advance_to_committed_local(
 /// artifacts via `finalize_transaction_cleanup`. The caller is responsible for
 /// actually writing the staged files before calling this function.
 ///
-/// This function is retained for backward-compatible recovery of old journals.
-/// New transactions use the `InterruptedOperation` marker model and do not
-/// call this function.
-#[allow(dead_code)]
+/// New transactions never persist a terminal `Committed` state. The journal is
+/// removed during cleanup, making the absence of a journal the true terminal
+/// indicator.
 pub fn commit_transaction(state_dir: &Path, journal: &TransactionJournal) -> SnipResult<()> {
     begin_cleanup(state_dir, journal, CleanupOutcome::Commit)
 }
@@ -2382,29 +2371,6 @@ pub fn gate_mutation_on_interrupted_transactions(
     sync_state_dir: &Path,
     transaction_dir: &Path,
 ) -> SnipResult<()> {
-    // Check for new-style interrupted operation marker first.
-    if let Some(op) = read_interrupted_operation(transaction_dir)? {
-        return Err(SnipError::runtime_error(
-            "interrupted operation detected",
-            Some(&format!(
-                "An operation '{}' was interrupted at {}. \
-                 Affected files: {}. \
-                 Mutations are refused until the interrupted operation is resolved. \
-                 Run `snp repair` to inspect and recover.",
-                op.operation,
-                chrono::DateTime::from_timestamp_millis(op.created_at_unix_ms)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| "unknown time".to_string()),
-                op.affected_paths
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        ));
-    }
-
-    // Check for old-style transaction journals (backward compatibility).
     let inventory = scan_transaction_journals(transaction_dir)?;
 
     // Fail closed on corrupt journals.
@@ -2522,196 +2488,6 @@ pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<Transa
         .into_iter()
         .filter(|j| j.state.is_interruptible())
         .collect())
-}
-
-// =========================================================================
-// InterruptedOperation marker (Phase 14G SIMPLIFY)
-// =========================================================================
-
-/// A minimal marker for an interrupted multi-file operation.
-///
-/// This replaces the full transaction state machine for new operations.
-/// The marker is detection/repair metadata, not a restartable commit
-/// program counter. If the process dies while the marker exists:
-///
-/// - read-only diagnostics may inspect state
-/// - normal new mutations fail closed
-/// - user is directed to `snp repair`
-/// - repair validates affected paths/backups and resolves the marker
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterruptedOperation {
-    /// Schema version for forward compatibility.
-    pub schema_version: u32,
-    /// Human-readable operation name (e.g. "restore").
-    pub operation: String,
-    /// Unix timestamp (ms) when the operation was created.
-    pub created_at_unix_ms: i64,
-    /// Files affected by this operation.
-    pub affected_paths: Vec<PathBuf>,
-    /// Backup files created for this operation (parallel to affected_paths).
-    /// Empty path means no backup was created for this file.
-    pub backup_paths: Vec<PathBuf>,
-    /// Original file metadata captured before live writes (parallel to affected_paths).
-    /// Used to preserve permissions across rollback.
-    pub original_metadata: Vec<OriginalFileMetadata>,
-    /// Artifact directory containing staged files for this operation.
-    pub artifact_dir: PathBuf,
-}
-
-impl InterruptedOperation {
-    /// Schema version for this marker format.
-    pub const SCHEMA_VERSION: u32 = 1;
-}
-
-/// Derive the path to the interrupted operation marker file.
-fn interrupted_operation_path(state_dir: &Path) -> PathBuf {
-    state_dir.join("interrupted-operation.toml")
-}
-
-/// Write an interrupted operation marker to disk.
-pub fn write_interrupted_operation(state_dir: &Path, op: &InterruptedOperation) -> SnipResult<()> {
-    create_private_dir(state_dir)?;
-    let path = interrupted_operation_path(state_dir);
-    let content = toml::to_string_pretty(op)
-        .map_err(|e| SnipError::toml_error("serialize interrupted operation", e))?;
-    crate::utils::atomic::write_private_atomic(&path, &content, "interrupted")?;
-    Ok(())
-}
-
-/// Read the interrupted operation marker from disk, if it exists.
-pub fn read_interrupted_operation(state_dir: &Path) -> SnipResult<Option<InterruptedOperation>> {
-    let path = interrupted_operation_path(state_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    // Reject symlinked marker files.
-    if path.is_symlink() {
-        return Err(SnipError::runtime_error(
-            "symlinked interrupted operation marker",
-            Some(&format!(
-                "Marker file {} is a symlink; refusing to follow",
-                path.display()
-            )),
-        ));
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| SnipError::io_error("read interrupted operation marker", path.clone(), e))?;
-    let op: InterruptedOperation = toml::from_str(&content)
-        .map_err(|e| SnipError::toml_error("parse interrupted operation marker", e))?;
-    if op.schema_version != InterruptedOperation::SCHEMA_VERSION {
-        return Err(SnipError::runtime_error(
-            "unsupported interrupted operation schema",
-            Some(&format!(
-                "Marker has schema version {}, expected {}",
-                op.schema_version,
-                InterruptedOperation::SCHEMA_VERSION
-            )),
-        ));
-    }
-    Ok(Some(op))
-}
-
-/// Remove the interrupted operation marker from disk.
-pub fn remove_interrupted_operation(state_dir: &Path) -> SnipResult<()> {
-    let path = interrupted_operation_path(state_dir);
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| {
-            SnipError::io_error("remove interrupted operation marker", path.clone(), e)
-        })?;
-        fsync_parent_dir(&path)?;
-    }
-    Ok(())
-}
-
-/// Roll back files from backups referenced by an interrupted operation marker.
-///
-/// Restores each file that has a backup, then cleans up the artifact
-/// directory and removes the marker. Metadata (permissions) is restored
-/// from the captured original metadata.
-pub fn rollback_interrupted_operation(
-    state_dir: &Path,
-    op: &InterruptedOperation,
-) -> SnipResult<()> {
-    // Roll back each file that has a backup, in forward order.
-    // (Unlike the old state machine, we don't need rollback-order tracking
-    // because each rollback is atomic and independent.)
-    for (i, (original, backup)) in op
-        .affected_paths
-        .iter()
-        .zip(op.backup_paths.iter())
-        .enumerate()
-    {
-        if backup.exists() {
-            // Restore from backup using atomic persistence.
-            let bytes = fs::read(backup)
-                .map_err(|e| SnipError::io_error("read backup for rollback", backup.clone(), e))?;
-            let opts = crate::utils::atomic::AtomicWriteOptions::for_durability(
-                crate::utils::atomic::Durability::DurableUserData,
-            );
-            crate::utils::atomic::atomic_replace(original, &bytes, &opts)?;
-
-            // Restore metadata (permissions) if available.
-            if let Some(metadata) = op.original_metadata.get(i) {
-                apply_original_metadata(original, metadata)?;
-            }
-
-            // Verify from live destination.
-            if !bytes.is_empty() {
-                let actual = hash_file(original)?;
-                let expected = sha256_hex(&bytes);
-                if actual != expected {
-                    return Err(SnipError::runtime_error(
-                        "Rollback verification failed",
-                        Some(&format!(
-                            "File {} hash mismatch after rollback: expected {}, got {}",
-                            original.display(),
-                            &expected[..16.min(expected.len())],
-                            &actual[..16.min(actual.len())]
-                        )),
-                    ));
-                }
-            }
-        } else if op.affected_paths.get(i).is_some_and(|p| !p.exists()) {
-            // File didn't exist before and has no backup — nothing to do.
-        } else {
-            // File existed before but has no backup — log a warning.
-            tracing::warn!(
-                path = %original.display(),
-                "File exists but has no backup during rollback"
-            );
-        }
-    }
-
-    // Clean up artifacts.
-    if op.artifact_dir.exists() {
-        let _ = fs::remove_dir_all(&op.artifact_dir);
-    }
-
-    // Remove the marker.
-    remove_interrupted_operation(state_dir)?;
-
-    Ok(())
-}
-
-/// Recover an interrupted operation by rolling back from backups.
-///
-/// This is the repair entry point for the new marker-based model.
-/// It reads the marker, rolls back, and removes the marker.
-pub fn recover_interrupted_operation(state_dir: &Path) -> SnipResult<()> {
-    let op = read_interrupted_operation(state_dir)?.ok_or_else(|| {
-        SnipError::runtime_error(
-            "no interrupted operation",
-            Some("No interrupted operation marker found"),
-        )
-    })?;
-
-    tracing::info!(
-        operation = %op.operation,
-        affected = op.affected_paths.len(),
-        "Recovering interrupted operation"
-    );
-
-    rollback_interrupted_operation(state_dir, &op)
 }
 
 /// Derive the journal file path for a given transaction ID.

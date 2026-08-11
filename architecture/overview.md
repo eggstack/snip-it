@@ -139,7 +139,7 @@ pet file reading, field detection, import analysis.
 | `usage` | `src/usage.rs` | [usage.md](usage.md) | `UsageIndex` — persistent per-snippet usage metadata |
 | `output` | `src/output.rs` | [output.md](output.md) | `OutputPresentation` — safe output field rendering |
 | `migration` | `src/migration.rs` | [persistence.md](persistence.md) | Schema versioning (`SchemaVersion`), migration operations |
-| `transaction` | `src/transaction.rs` | [persistence.md](persistence.md) | InterruptedOperation marker, lock, legacy journal recovery |
+| `transaction` | `src/transaction.rs` | [persistence.md](persistence.md) | Transaction journal, lock, begin/commit/rollback state machine |
 | `local_data` | `src/local_data.rs` | [persistence.md](persistence.md) | Short-lived exclusive lock serializing TOML mutations |
 | `diagnostics` | `src/diagnostics.rs` | — | Internal diagnostics |
 | `test_failpoints` | `src/test_failpoints.rs` | — | Test-only failpoint hooks (compiled with `test-support`) |
@@ -296,10 +296,9 @@ Full utility inventory: [utils.md](utils.md).
   Durability classes: `DurableUserData` (fsync file+dir),
   `SensitiveConfig` (0o600, symlink reject), `RecoverableMetadata` (no
   fsync), `EphemeralCoordination` (no fsync, no dir sync).
-- **InterruptedOperation marker**: `transaction.rs` — minimal
-  `interrupted-operation.toml` written before first file mutation in
-  multi-file ops. Marker is removed only after all replacements are durable.
-  Falls back to old-style journals for backward compatibility.
+- **Transaction journaling**: `transaction.rs` — `Prepared → Committing →
+  CleaningUp` state machine for multi-file mutations. Journals persist to
+  disk so interrupted operations can be recovered on startup.
 - **Local data lock**: `local_data.rs` — exclusive lock serializing TOML
   mutations against backup snapshot capture.
 - **Schema migration**: `migration.rs` — `SchemaVersion` ordinal type with
@@ -307,9 +306,8 @@ Full utility inventory: [utils.md](utils.md).
 - **Backup/restore**: SHA-256 integrity verification, secret-free snapshots,
   merge/replace restore modes.
 - **Mutation gate**: `gate_mutation_on_interrupted_transactions()` must be
-  called before any local mutating operation. Checks for
-  `InterruptedOperation` marker first, then old-style journals. Any
-  interrupted state fails closed and directs to `snp repair`.
+  called before any local mutating operation. Single journal = auto-rollback;
+  multiple/incomplete = refuse and direct to `snp repair`.
 
 ---
 

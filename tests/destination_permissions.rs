@@ -273,28 +273,44 @@ fn test_journal_files_get_0o600() {
     let (_tmp, config_dir) = setup_test_env();
     let backup_dir = make_full_backup(_tmp.path());
 
-    // Do a successful restore. With the marker-based model, the marker
-    // and staged files are cleaned up after success, so we verify the
-    // transaction directory gets 0o700 permissions (private).
+    // Use failpoint to interrupt cleanup after artifact root removal
+    // but before journal removal. At this point the journal file still
+    // exists with 0o600 permissions.
     let output = snp_in(&config_dir)
         .args(["restore", backup_dir.to_str().unwrap(), "--mode", "replace"])
         .env("SNP_TEST_CREDENTIAL_FILE", "/nonexistent/cred")
+        .env(
+            "SNP_TEST_FAILPOINT",
+            "cleanup-after-artifact-root-before-journal",
+        )
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "restore should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    // The failpoint causes the restore to fail, but the journal should
+    // have been written before the failpoint fired.
+    assert!(!output.status.success(), "restore should fail at failpoint");
 
     let transaction_dir = config_dir.join(".transaction");
     if transaction_dir.exists() {
-        // The transaction directory should have 0o700 permissions.
-        let mode = file_mode(&transaction_dir);
-        assert_eq!(
-            mode, 0o700,
-            "transaction directory must be 0o700, got {:o}",
-            mode
+        // Find any journal files in the transaction directory.
+        let mut found_journal = false;
+        for entry in fs::read_dir(&transaction_dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            // Journal files are UUID-named TOML files.
+            if name_str.ends_with(".toml") && name_str.len() > 36 {
+                let mode = file_mode(&entry.path());
+                assert_eq!(
+                    mode, 0o600,
+                    "journal file {} must be 0o600, got {:o}",
+                    name_str, mode
+                );
+                found_journal = true;
+            }
+        }
+        assert!(
+            found_journal,
+            "expected at least one journal file in .transaction directory"
         );
     }
 }

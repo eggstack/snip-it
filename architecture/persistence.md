@@ -25,7 +25,7 @@ snip-it uses a layered persistence architecture centered on editable TOML files.
 The persistence stack has four layers:
 
 1. **Atomic write primitive** — crash-safe file replacement with durability classes
-2. **Transaction boundary** — multi-file coordination with interrupted-operation markers
+2. **Transaction boundary** — multi-file coordination with journaling
 3. **Validation, backup, restore, repair** — data integrity workflows
 4. **Migration framework** — schema versioning and evolution
 
@@ -183,56 +183,56 @@ Three thin wrappers in `src/auto_sync/` consume the primitive and preserve the e
 
 ### Purpose
 
-Coordinates multi-file operations (restore, library create/delete, bulk import, repair) with a minimal interrupted-operation marker. Individual file replacement is always atomic via `atomic_replace`. Multi-file operations are fail-closed on interruption and may require `snp repair`; they are not transparently database-style transactional across all files.
+Coordinates multi-file operations (library create/delete, bulk import, restore, repair) with crash-safe journaling. The transaction lock prevents concurrent mutations.
 
 ### Directory Model
 
 The transaction subsystem uses two distinct directories:
 
 - **`sync_state_dir`** (canonical config directory, e.g. `~/.config/snp/`): Where the pending sync marker (`auto-sync-pending.toml`) lives. Pending APIs must receive this directory.
-- **`transaction_dir`** (`<sync_state_dir>/.transaction`): Where the interrupted-operation marker, locks, durable backups, and staged files live. Transaction APIs must receive this directory.
+- **`transaction_dir`** (`<sync_state_dir>/.transaction`): Where journals, locks, durable backups, and staged files live. Transaction APIs must receive this directory.
 
 This separation ensures the pending marker is never written to the `.transaction` subdirectory, which would cause it to be missed by the canonical pending path. The `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` function requires both directories: it inspects the canonical pending marker (in `sync_state_dir`) while cleaning up transaction artifacts (in `transaction_dir`).
 
-### InterruptedOperation Marker Model
+### State Machine
 
-New multi-file operations use a minimal `InterruptedOperation` marker instead of the full transaction state machine. The marker is detection/repair metadata, not a restartable commit program counter. If the process dies while the marker exists:
-
-- Read-only diagnostics may inspect state
-- Normal new mutations fail closed (`gate_mutation_on_interrupted_transactions`)
-- The user is directed to `snp repair`
-- Repair validates affected paths/backups and resolves the marker
-
-Old-style transaction journals from previous versions are still detected for backward compatibility but are no longer created by new operations.
+```
+Prepared → BackupsDurable → Committing{next_commit_position} → CommittedLocal{pending_generation, pending_recorded} → Committed
+Prepared → Failed(error_message)
+```
 
 ### Components
 
-#### InterruptedOperation
+#### TransactionJournal
 
-Persisted as `interrupted-operation.toml` in the `.transaction` subdirectory of the state directory:
+Persisted as `txn-<uuid>.toml` in the `.transaction` subdirectory of the state directory:
 
 ```rust
-pub struct InterruptedOperation {
-    /// Schema version for forward compatibility.
-    pub schema_version: u32,                    // currently 1
-    /// Human-readable operation name (e.g. "restore").
-    pub operation: String,
-    /// Unix timestamp (ms) when the operation was created.
+pub struct TransactionJournal {
+    pub id: String,                    // UUID
+    pub operation: String,             // e.g. "library_delete", "bulk_import"
     pub created_at_unix_ms: i64,
-    /// Files affected by this operation.
-    pub affected_paths: Vec<PathBuf>,
-    /// Backup files created for this operation (parallel to affected_paths).
-    /// Empty path means no backup was created for this file.
-    pub backup_paths: Vec<PathBuf>,
-    /// Original file metadata captured before live writes (parallel to affected_paths).
-    /// Used to preserve permissions across rollback.
-    pub original_metadata: Vec<OriginalFileMetadata>,
-    /// Artifact directory containing staged files for this operation.
-    pub artifact_dir: PathBuf,
+    pub staged_files: Vec<StagedFile>,
+    pub state: TransactionState,
 }
 ```
 
-The marker file is written via `write_private_atomic` and is always read with symlink rejection.
+#### StagedFile
+
+```rust
+pub struct StagedFile {
+    pub destination: PathBuf,
+    pub action: StagedAction,
+    pub existed_before: bool,
+    pub original_hash: Option<String>,
+    pub intended_hash: Option<String>,
+    pub durable_backup_path: Option<PathBuf>,
+    pub durable_staged_path: Option<PathBuf>,
+    pub original_permissions: Option<PortablePermissions>,
+}
+```
+
+`durable_staged_path` is a private durable copy of the intended bytes, never the live destination. `durable_backup_path` is a durable copy of the original bytes for rollback.
 
 #### TransactionLock
 
@@ -242,40 +242,32 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 
 | Function | Description |
 |----------|-------------|
-| `write_interrupted_operation(state_dir, op)` | Write marker via atomic write |
-| `read_interrupted_operation(state_dir)` | Read marker, `Ok(None)` if absent |
-| `remove_interrupted_operation(state_dir)` | Remove marker from disk |
-| `rollback_interrupted_operation(state_dir, op)` | Restore files from backups, clean artifacts, remove marker |
-| `recover_interrupted_operation(state_dir)` | Read marker + rollback (repair entry point) |
-| `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` | Refuse mutations if marker or old journals exist |
-| *Legacy (backward-compatible recovery):* | |
 | `acquire_transaction_lock(state_dir)` | Acquire exclusive lock, error if held |
-| `begin_transaction(state_dir, operation, affected_files)` | Create journal in `Prepared` state (legacy) |
-| `commit_transaction(state_dir, journal)` | Mark `Committed`, remove backups and journal (legacy) |
-| `rollback_transaction(journal)` | Restore files from backups in reverse order (legacy) |
-| `check_interrupted_transactions(state_dir)` | Find journals in interruptible states (legacy) |
+| `begin_transaction(state_dir, operation, affected_files)` | Create journal in `Prepared` state |
+| `commit_transaction(state_dir, journal)` | Mark `Committed`, remove backups and journal |
+| `rollback_transaction(journal)` | Restore files from backups in reverse order |
+| `check_interrupted_transactions(state_dir)` | Find journals in `Prepared` state on startup |
 
 ### Crash Recovery
 
-**New model (InterruptedOperation marker):**
-1. `gate_mutation_on_interrupted_transactions()` checks for a marker via `read_interrupted_operation(transaction_dir)`
-2. If a marker is present, the next mutation fails closed with an error directing the user to `snp repair`
-3. `snp repair` calls `recover_interrupted_operation(state_dir)` which reads the marker, rolls back each affected file from its backup, cleans up the artifact directory, and removes the marker
+`check_interrupted_transactions()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `RollingBack`). These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
 
-**Legacy model (old journals, backward compatibility):**
-1. After checking for new-style markers, `gate_mutation_on_interrupted_transactions()` falls back to scanning for old-style `txn-*.toml` journals
-2. Corrupt journals cause immediate failure
-3. Classifiable journals are handled according to their recovery class (automatic rollback, deferred, or manual)
-4. `snp repair` handles old journals via the existing scanner/classifier
+### Journal Lifecycle
 
-### Marker Lifecycle
+1. `begin_transaction` writes journal via `write_private_atomic` in `Prepared` state
+2. Caller creates durable backups and staged files, then advances to `BackupsDurable`
+3. Caller performs live replacements, advancing through `Committing { next_commit_position }` per file — progress persisted only after each verified atomic write
+4. After all writes complete, advance to `CommittedLocal { pending_generation, pending_recorded }` — records pending sync intent atomically
+5. `commit_transaction` marks `Committed`, cleans up backups and journal
+6. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan in any interruptible state (including `CommittedLocal`, which completes the pending intent recording)
 
-1. Caller creates durable backups for every affected file and captures original metadata
-2. Caller creates the `InterruptedOperation` struct with paths to affected files, backups, metadata, and artifact directory
-3. `write_interrupted_operation(state_dir, &op)` atomically persists the marker
-4. Caller performs live replacements via `atomic_replace` with `Durability::DurableUserData`
-5. On success: cleanup artifact directory and `remove_interrupted_operation(state_dir)`
-6. If interrupted between step 3 and step 5, the marker remains on disk and blocks subsequent mutations until resolved via `snp repair`
+### Commit Progress Semantics
+
+`Committing { next_commit_position }` uses completed-position semantics: `next_commit_position == N` means positions `0..N` have already been installed and verified; position `N` is next. Progress is persisted only after install and verification, never before.
+
+### Rollback Order
+
+`RollingBack { next_rollback_position }` uses rollback-order coordinates: `rollback_order = (0..files.len()).rev()`. `next_rollback_position == N` means positions `0..N` have been rolled back. Each rollback action verifies the pre-transaction bytes or expected absence after completion.
 
 ### Artifact Path Validation
 
@@ -285,15 +277,11 @@ All transaction artifact paths (backup, staged, destination) are validated by `v
 2. **Symlinked prefix rejection** (`reject_symlinked_existing_prefixes`): Walks from root toward child using `symlink_metadata` (not `fs::metadata`, so symlinks are not followed). If any existing intermediate component is a symlink, the path is rejected. This catches `<root>/link/missing.bin` where `link` is a symlink to outside and the final file is absent.
 3. **Canonical containment**: For existing paths, canonicalize both root and path and verify containment as defense in depth.
 
-### Backward Compatibility with Old Journals
+The helper runs for every transaction state (not just on disk existence), and backup references are revalidated immediately before reading in rollback.
 
-Old-style `TransactionJournal` structs (`txn-<uuid>.toml`) from versions prior to Phase 14G are still detected and handled:
+### CommittedLocal State
 
-- `gate_mutation_on_interrupted_transactions()` checks for new markers first, then falls back to old journal scanning
-- `snp repair` handles both marker-based and old journal-based recovery
-- Legacy transaction state machine code is retained in `transaction.rs` for old journal recovery but is no longer called by new production code
-- `advance_to_committed_local` is retained for backward-compatible recovery of old `CommittedLocal` journals
-- `BackupsDurable` transaction state is retained for backward-compatible recovery of old journals
+`CommittedLocal { pending_generation, pending_recorded }` eliminates the crash window between durable restore commit and pending-sync intent recording. After all live writes are committed, the journal transitions to `CommittedLocal` with the pending generation number. The pending sync intent is then recorded. If a crash occurs between `CommittedLocal` and `Committed`, recovery completes the pending intent recording.
 
 ---
 
@@ -404,7 +392,7 @@ pub struct BackupManifestEntry {
 - Lock files, logs, caches, temp files
 - Pending mutation markers, auto-sync status
 - Theme files, premade libraries
-- Transaction journals, interrupted operation markers
+- Transaction journals
 
 ### Secret Redaction
 
@@ -656,9 +644,8 @@ This ensures repeated loads of identical file content produce identical IDs with
 - Lock files use the kernel-backed process file lock for atomic acquisition; ownership is never reused based on PID liveness inspection
 - Auto-sync lock ownership uses start-token + nonce diagnostics only; the kernel state is the sole mutual-exclusion authority
 - Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
-- Transaction artifact paths validated with lexical containment, symlinked prefix rejection, and canonical containment
-- Interrupted operation marker written atomically via `write_private_atomic`, read with symlink rejection
-- Transaction locks use UUID-based filenames and O_EXCL locks
+- Transaction artifact path validation rejects `Component::ParentDir` during lexical normalization and rejects missing children below symlinked intermediate components
+- Transaction journals use UUID-based filenames and O_EXCL locks
 - Backup checksums: SHA-256 per file, verified before restore
 - Backup redaction: API keys stripped from sync.toml copies
 
@@ -672,7 +659,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 | `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
 | `snip-sync/src/server_lock.rs` | snip-sync server singleton kernel lock |
 | `snip-sync/src/process.rs` | PID record parser, atomic publication, identity-checked cleanup |
-| `src/transaction.rs` | Transaction boundary, `InterruptedOperation` marker, lock, rollback (legacy journal recovery retained for old data) |
+| `src/transaction.rs` | Transaction boundary, journaling, lock, rollback |
 | `src/commands/validate_cmd.rs` | Validation framework, diagnostic model, 12+ check categories |
 | `src/commands/backup_cmd.rs` | Backup manifest, secret redaction, SHA-256 integrity |
 | `src/commands/restore_cmd.rs` | Restore modes (DryRun/Merge/Replace), conflict resolution |
