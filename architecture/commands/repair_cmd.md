@@ -22,6 +22,7 @@
 | `RemoveOrphanedArtifact` | transaction | Yes | Remove artifact dir with no matching journal |
 | `RepairLibraryIndex` | index | No | Fix duplicate/missing primary in library index |
 | `RepairSnippetIds` | ids | No | Fix duplicate/missing snippet IDs |
+| `RecoverInterruptedOperation` | transaction | Yes | Recover from an `InterruptedOperation` marker: replace affected files from backups |
 | `RepairTimestamps` | timestamps | No | Fix missing/invalid timestamps |
 
 ## Safety Model

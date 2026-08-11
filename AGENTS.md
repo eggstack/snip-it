@@ -144,6 +144,18 @@
 - Low-information unit tests consolidated: 17 individual tests in `notification.rs`, `policy.rs`, `config.rs`, and `outcome.rs` replaced with table-driven equivalents.
 - `snip_sync_lifetime.rs` retained with two distinct cases (long-lived health + SIGTERM/same-port restart); no repeated 5/5 ceremony.
 
+## Phase 14G — Transaction Boundary Simplification
+
+- Multi-file operations (restore) now use a minimal `InterruptedOperation` marker instead of the full transaction state machine.
+- The marker contains: `schema_version`, operation name, `created_at`, affected paths, backup paths, original metadata, and artifact directory.
+- `gate_mutation_on_interrupted_transactions` checks for the new marker first, then falls back to old-style journals for backward compatibility.
+- Individual file replacement remains atomic via `atomic_replace`.
+- Interrupted multi-file operations are durably detectable via the marker.
+- New mutations fail closed while the marker exists, directing the user to `snp repair`.
+- `snp repair` handles both new markers (via `recover_interrupted_operation`) and old journals (backward compatibility).
+- Legacy transaction state machine code is retained for old journal recovery but is no longer called by production code.
+- The guarantee is: individual file replacement is atomic. Multi-file operations are fail-closed on interruption and may require `snp repair`; they are not transparently database-style transactional across all files.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
@@ -234,7 +246,7 @@ themes/           50 Halloy TOML theme files
 - `usage.rs` — Local usage metadata (`UsageIndex`)
 - `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
 - `logging.rs` — Structured logging and audit trail
-- `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
+- `transaction.rs` — `InterruptedOperation` marker for multi-file mutation gating; legacy journal recovery retained for old data
 - `migration.rs` — Schema versioning (`SchemaVersion` ordinal type)
 - `clipboard.rs` — Cross-platform clipboard integration
 - `diagnostics.rs` — Internal diagnostics
@@ -268,7 +280,7 @@ only `ESRCH` proves absence. The hidden auto-sync worker maps `Failed` to the
 existing general-error exit code while `Success` and `NothingToDo` remain zero.
 
 ### Mutation gate
-`gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. Single journal = auto-rollback; multiple/incomplete = refuse and direct to `snp repair`.
+`gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. An `InterruptedOperation` marker or old-style journal durably blocks mutations until `snp repair` clears them. This is fail-closed: interrupted multi-file operations are not transparently rolled back; they require explicit repair.
 
 ### Deterministic test assertions
 Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. Auto-sync closure cases live in `tests/auto_sync_closure.rs`; sync-boundary cases live in `tests/sync_integration.rs` and `tests/sync_contracts.rs`.

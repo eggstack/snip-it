@@ -393,3 +393,65 @@ Conditional simplification implementation:
 ```text
 phase-14g: simplify multi-file recovery to fail-closed repair
 ```
+
+---
+
+## Decision: SIMPLIFY
+
+### 5.1 Scope inventory
+
+| Command/operation | Files changed | What becomes inconsistent after partial commit? | Existing backup? | Safe repair possible? |
+|---|---|---|---|---|
+| `restore` (restore_cmd.rs) | library files, libraries.toml, usage.toml, sync.toml | Mix of old and new file versions | Yes (per-file backups in artifact dir) | Yes — rollback from backups |
+| `save_snippets` (commands/mod.rs) | single library TOML | N/A — single-file atomic write | N/A | N/A — not a multi-file op |
+| `repair` (repair_cmd.rs) | N/A — recovery only | N/A | N/A | N/A — IS the repair path |
+| `import` (import_cmd.rs) | N/A — no transaction usage | N/A | N/A | N/A |
+| `library` (library_cmd.rs) | N/A — no transaction usage | N/A | N/A | N/A |
+
+**Key finding**: Only `restore` uses the full transaction state machine. All other commands either use single-file atomic writes or only call the mutation gate.
+
+### 5.2 Complexity inventory
+
+```text
+production LOC owned by transaction/journal/recovery machinery: ~4,044 (transaction.rs)
+test LOC dedicated only to state-machine crash points: ~2,614 (transaction_crash_recovery.rs + repair_transactions.rs + local_data_lock_barriers.rs)
+number of persisted TransactionState variants: 9
+  - Active: Prepared, Committing, RollingBack, CleaningUp, Failed (5)
+  - Legacy: BackupsDurable, CommittedLocal, Committed, RolledBack (4)
+number of failpoints used only for transaction step recovery: 16
+number of legacy journal states still accepted: 4 (BackupsDurable, CommittedLocal, Committed, RolledBack)
+```
+
+### 5.3 Historical value
+
+Transaction-related work in recent phases has focused on:
+- Phase 13A: Server lifetime and shutdown correctness (not transaction defects)
+- Phase 13B: Sync upload batching (not transaction defects)
+- Phase 13H: Final correctness closure (transaction orchestration, not state machine defects)
+- Phase 13I: Drain result accounting (not transaction defects)
+- Phase 13J: Production outcome wiring (not transaction defects)
+- Phase 14B: Persistence fail-closed behavior (enhanced validation, not state machine fixes)
+- Phase 14C: Command consolidation (not transaction defects)
+- Phase 14E: Runtime simplification (removed duplicate code, not state machine fixes)
+
+No transaction defects caused by the state machine itself were found. The complexity is inherent in the state machine design, not in bug fixes.
+
+### Decision rationale
+
+All SIMPLIFY criteria are met:
+
+1. ✅ Individual-file atomic writes (`atomic_replace`) and existing locks (`LocalDataLock`, `TransactionLock`) cover the common correctness path.
+2. ✅ Interrupted multi-file operations can be detected with a single TOML marker file containing operation name, affected paths, backup paths, and artifact directory.
+3. ✅ The next mutation can fail closed via `gate_mutation_on_interrupted_transactions` rather than operating on partial state.
+4. ✅ Backups/repair can restore a coherent state — `snp repair` already handles rollback, finalize, cleanup, and legacy journal recovery.
+5. ✅ The replacement removes ~800 lines of state machine code, ~1,500 lines of crash-test machinery, and 16 state-specific failpoints.
+6. ✅ Backward compatibility: `snp repair` recognizes old journals and performs the existing recovery before migrating to the new marker model.
+
+The SIMPLIFY model replaces transparent step-by-step transaction recovery with fail-closed detection + manual repair. This is acceptable because:
+- snip-it has one human user, local CLI/TUI processes
+- Individual writes already have atomic-replacement helpers
+- `snp repair` exists and handles all recovery classes
+- Power loss during multi-file mutation is uncommon
+- Transparent automatic rollback is desirable but not mandatory for this product scope
+
+The marker-based model preserves the minimum acceptable guarantee: "A crash must not silently convert damaged or partial local state into apparently valid empty/default data."

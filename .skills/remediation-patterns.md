@@ -71,10 +71,11 @@
   - `RecoverableMetadata` for caches
   - `EphemeralCoordination` for locks
 
-### 13. Transaction journals for multi-file ops
+### 13. InterruptedOperation marker for multi-file ops
 - Use `transaction.rs` for any operation touching 2+ files
-- Begin → stage → commit removes the journal
-- On startup, check for interrupted journals via `check_interrupted_transactions`
+- Write a minimal `interrupted-operation.toml` marker before the first file mutation
+- Marker is removed only after all files are durably replaced
+- On startup, `gate_mutation_on_interrupted_transactions()` checks for the marker first, then falls back to old-style journals for backward compatibility
 - Never schedule sync before local transaction is consistent
 
 ### 14. Schema versioning for migrations
@@ -122,11 +123,12 @@ The following patterns were introduced in Phase 07A:
 | `RecoverableMetadata` | Caches, status | fsync parent only |
 | `EphemeralCoordination` | Locks, temp state | no fsync |
 
-### Transaction Journal (`src/transaction.rs`)
-- Operations touching 2+ files must use `Transaction::begin()`
-- Journal lives at `<config>/transaction.journal` with operation list + file checksums
-- On crash recovery: `check_interrupted_transactions()` rolls back incomplete transactions
-- Journal is removed only after successful commit
+### InterruptedOperation Marker (`src/transaction.rs`)
+- Operations touching 2+ files write a minimal `interrupted-operation.toml` marker before the first file mutation
+- Marker contains: schema version, operation name, affected paths, backup paths, original metadata, artifact directory
+- On crash recovery: `gate_mutation_on_interrupted_transactions()` checks for the marker first, then falls back to old-style journals for backward compatibility
+- New mutations fail closed while the marker exists, directing the user to `snp repair`
+- Marker is removed only after all file replacements are durable
 
 ### Schema Migrations (`src/migration.rs`)
 - `SchemaVersion` ordinal type tracks schema state
