@@ -164,6 +164,12 @@
 - Bundled theme gzip compression remains because a controlled comparison kept the release binary no larger while the generated bundle stayed substantially smaller than the plain representation; generation is explicit via `scripts/build_themes.py`.
 - Release validation builds default workspace features. Broad CI no longer installs `protoc`; link checking runs on pull requests and weekly schedule.
 
+## Phase 15 Final Corrective Closure
+
+- Forced server drain aborts the original gRPC/HTTP service tasks through their own Tokio abort handles, then drains the classification wrappers until cancellation is observed; forced outcomes are not fabricated from missing wrapper output.
+- `atomic_replace()` replaces an allowed destination symlink entry without dereferencing its target. `SensitiveConfig` continues to reject symlinks, and the canonical Unix regression covers broken-link replacement.
+- The Phase 15 planning record includes fixed-host binary/dependency measurements, the completed acceptance record, and the corrective implementation/verification record in `plans/snip-it-phase-15-final-corrective-closure.md`.
+
 ## Phase 12B Auto-Sync Correctness Closure
 
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.

@@ -224,8 +224,9 @@ helper (`snip-sync/src/orchestration.rs`) called by both `serve_inner` and
 deterministic orchestration tests. The helper selects on the shutdown signal and
 the `JoinSet`, captures the first terminal event, broadcasts shutdown, then
 drains remaining tasks inside the configured timeout. Each service completion is
-recorded exactly once. If the drain timeout expires, every unfinished task is
-explicitly aborted and awaited. `ServiceShutdownOutcome` carries the result to the caller, and
+recorded exactly once. If the drain timeout expires, the original unfinished
+service tasks are explicitly aborted through their own handles, and the
+wrapper joins are drained until those cancellations are observed. `ServiceShutdownOutcome` carries the result to the caller, and
 `serve_inner` evaluates `ensure_clean_requested_shutdown()` to decide between
 `Ok(())` and an error after persistence cleanup. A requested shutdown fails if
 either service returned an error or panicked during drain, if any service
@@ -247,7 +248,7 @@ determined by the operating-system lock, not by whether the file exists.
 - API keys stored as Argon2id hashes (16 MiB, 3 iterations, 4 parallelism)
 - API key lookup: 8-char prefix for indexed lookup, Argon2id verification
 - Plaintext key migration at startup for legacy databases
-- Rate limiting: 120 requests/minute per API key, in-memory with optional SQLite persistence
+- Rate limiting: 120 requests/minute per API key, bounded in-memory for each process lifetime
 - gRPC max message size: 4 MiB configurable
 - Snippet field length limits enforced server-side
 - Server generic error messages — no internal details exposed to clients

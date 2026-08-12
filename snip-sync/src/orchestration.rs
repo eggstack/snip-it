@@ -102,6 +102,12 @@ where
     let mut grpc_result: Option<ServiceResult> = None;
     let mut http_result: Option<ServiceResult> = None;
 
+    // Keep abort handles for the original service tasks. The JoinSet below
+    // owns wrapper tasks that classify those handles; aborting only the
+    // wrappers would detach the actual service tasks on a forced drain.
+    let grpc_abort = grpc_handle.abort_handle();
+    let http_abort = http_handle.abort_handle();
+
     #[derive(Clone, Copy)]
     enum ServiceKind {
         Grpc,
@@ -178,8 +184,8 @@ where
     })
     .await;
 
-    // Phase 3: abort only tasks still owned by the collection and drain the
-    // resulting join records.
+    // Phase 3: abort the original service tasks and drain the wrapper join
+    // records so cancellation is observed through the original handles.
     let forced = drain_result.is_err();
     if forced {
         tracing::warn!(
@@ -187,7 +193,8 @@ where
             drain_timeout.as_secs()
         );
 
-        tasks.abort_all();
+        grpc_abort.abort();
+        http_abort.abort();
         while let Some(joined) = tasks.join_next().await {
             if let Ok(completion) = joined {
                 record(
@@ -198,11 +205,6 @@ where
                 );
             }
         }
-    }
-
-    if forced {
-        grpc_result.get_or_insert_with(|| ServiceResult::Cancelled("aborted".to_owned()));
-        http_result.get_or_insert_with(|| ServiceResult::Cancelled("aborted".to_owned()));
     }
 
     ServiceShutdownOutcome {
@@ -273,6 +275,7 @@ mod tests {
     async fn one_service_completes_sibling_times_out() {
         let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
         let grpc_await_count = Arc::new(AtomicUsize::new(0));
+        let http_drop_count = Arc::new(AtomicUsize::new(0));
 
         let grpc: GrpcHandle = {
             let count = grpc_await_count.clone();
@@ -284,8 +287,20 @@ mod tests {
             })
         };
         // HTTP never completes — it ignores the shutdown signal.
-        let http: HttpHandle =
-            tokio::spawn(async { std::future::pending::<Result<(), std::io::Error>>().await });
+        let http: HttpHandle = {
+            let drop_count = http_drop_count.clone();
+            tokio::spawn(async move {
+                struct DropProbe(Arc<AtomicUsize>);
+                impl Drop for DropProbe {
+                    fn drop(&mut self) {
+                        self.0.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+
+                let _probe = DropProbe(drop_count);
+                std::future::pending::<Result<(), std::io::Error>>().await
+            })
+        };
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -303,10 +318,12 @@ mod tests {
             1,
             "gRPC future should have completed exactly once"
         );
-        assert!(matches!(
-            outcome.http_result,
-            ServiceResult::Cancelled(_) | ServiceResult::Panic(_)
-        ));
+        assert!(matches!(outcome.http_result, ServiceResult::Cancelled(_)));
+        assert_eq!(
+            http_drop_count.load(Ordering::SeqCst),
+            1,
+            "the underlying HTTP future must be dropped before the helper returns"
+        );
         let err = outcome
             .ensure_clean_requested_shutdown()
             .expect_err("forced shutdown must fail production check");

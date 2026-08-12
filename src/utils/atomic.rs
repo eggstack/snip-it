@@ -118,13 +118,14 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
         ));
     }
 
-    // Follow symlinks for the file-type checks below when reject_symlink is
-    // false so we validate the *destination*.
-    let canonical = if meta.file_type().is_symlink() {
-        fs::metadata(path).map_err(|e| SnipError::io_error("stat symlink target", path, e))?
-    } else {
-        meta
-    };
+    // The final rename replaces the destination directory entry itself. An
+    // allowed symlink must therefore be replaced, never followed; this also
+    // permits safely replacing broken links and links to special files.
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+
+    let canonical = meta;
 
     if canonical.is_dir() {
         return Err(SnipError::runtime_error(
@@ -418,6 +419,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_atomic_replace_rejects_symlink() {
         let dir = TempDir::new().unwrap();
@@ -430,16 +432,30 @@ mod tests {
         let mut opts = AtomicWriteOptions::for_durability(Durability::RecoverableMetadata);
         opts.reject_symlink = true;
 
-        #[cfg(unix)]
-        {
-            let result = atomic_replace(&link, b"data", &opts);
-            assert!(result.is_err());
-            let msg = result.unwrap_err().to_string();
-            assert!(
-                msg.contains("symlink"),
-                "Expected symlink error, got: {msg}"
-            );
-        }
+        let result = atomic_replace(&link, b"data", &opts);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("symlink"),
+            "Expected symlink error, got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_replace_replaces_allowed_broken_symlink() {
+        let dir = TempDir::new().unwrap();
+        let former_target = dir.path().join("missing-target.txt");
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&former_target, &link).unwrap();
+
+        let opts = AtomicWriteOptions::for_durability(Durability::RecoverableMetadata);
+        atomic_replace(&link, b"replacement", &opts).unwrap();
+
+        let metadata = fs::symlink_metadata(&link).unwrap();
+        assert!(metadata.file_type().is_file());
+        assert_eq!(fs::read(&link).unwrap(), b"replacement");
+        assert!(!former_target.exists());
     }
 
     #[test]

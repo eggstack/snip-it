@@ -1,6 +1,6 @@
 # Phase 15 Final Corrective Closure — Task Cancellation, Atomic Symlink Semantics, and Closure Record
 
-Status: PLANNED
+Status: COMPLETE (2026-08-11)
 
 Date: 2026-08-11
 
@@ -11,6 +11,19 @@ Parent plan: `plans/snip-it-phase-15-deletion-consolidation.md`
 Purpose: close the small set of issues found by the post-implementation audit of Phase 15 without reopening the broader simplification work.
 
 This is a corrective closure pass, not Phase 16 and not a new architecture phase.
+
+Implementation commit: recorded after the implementation commit and referenced
+by the final closure commit.
+
+Verification record:
+
+- `cargo test -p snip-sync orchestration --lib` — pass (12 tests).
+- `cargo test utils::atomic --lib` — pass (14 tests, including allowed broken-symlink replacement).
+- `cargo test --test platform_smoke` — pass locally on Linux.
+- `bash scripts/check.sh` — pass; formatting, clippy, and Linux correctness verified.
+- `bash scripts/release-check.sh verify` — pass from a clean tree.
+- Existing macOS and Windows platform-smoke coverage remains in the unchanged CI matrix; those hosted lanes were not locally executable on this Linux host.
+- Final fixed-host measurement: Rust 1.94.1, `aarch64-unknown-linux-gnu`, `cargo build --release --bin snp`, 5,130,928 bytes.
 
 ## 1. Executive summary
 
@@ -230,16 +243,16 @@ If the existing `one_service_completes_sibling_times_out` test can be strengthen
 
 Workstream A is complete only when all are true:
 
-- [ ] Normal requested shutdown still broadcasts once and drains both services cleanly.
-- [ ] Unexpected service completion still causes sibling shutdown and overall failure.
-- [ ] Drain-time service error/panic remains observable and fails shutdown.
-- [ ] Forced timeout aborts the **original gRPC/HTTP service tasks**, not only wrapper tasks.
-- [ ] The helper waits until the original task cancellation is observed through the wrapper before returning.
-- [ ] A forced result is not fabricated solely from missing wrapper output.
-- [ ] A deterministic test proves an intentionally stuck underlying service future is dropped before helper return.
-- [ ] No manual `grpc_consumed`/`http_consumed` state is reintroduced.
-- [ ] No cancellation/supervisor framework is added.
-- [ ] Existing real SIGTERM/same-port restart behavior remains unchanged.
+- [x] Normal requested shutdown still broadcasts once and drains both services cleanly.
+- [x] Unexpected service completion still causes sibling shutdown and overall failure.
+- [x] Drain-time service error/panic remains observable and fails shutdown.
+- [x] Forced timeout aborts the **original gRPC/HTTP service tasks**, not only wrapper tasks.
+- [x] The helper waits until the original task cancellation is observed through the wrapper before returning.
+- [x] A forced result is not fabricated solely from missing wrapper output.
+- [x] A deterministic test proves an intentionally stuck underlying service future is dropped before helper return.
+- [x] No manual `grpc_consumed`/`http_consumed` state is reintroduced.
+- [x] No cancellation/supervisor framework is added.
+- [x] Existing real SIGTERM/same-port restart behavior remains unchanged.
 
 ## 6. Workstream B — Restore safe symlink replacement semantics in the canonical atomic writer
 
@@ -306,14 +319,14 @@ Do not recreate multiple select-specific atomic tests. The canonical atomic modu
 
 Workstream B is complete only when all are true:
 
-- [ ] `select_cmd` still delegates to the canonical atomic writer.
-- [ ] `reject_symlink == true` still rejects a destination symlink.
-- [ ] `reject_symlink == false` does not follow the symlink target during validation.
-- [ ] On Unix, an allowed destination symlink is replaced by the new regular file rather than written through.
-- [ ] A broken allowed destination symlink can be replaced without creating/modifying its former target.
-- [ ] Real directories/FIFOs/sockets/devices remain rejected by existing validation.
-- [ ] `SensitiveConfig` continues to default to symlink rejection and private permissions.
-- [ ] No second atomic-write implementation is added.
+- [x] `select_cmd` still delegates to the canonical atomic writer.
+- [x] `reject_symlink == true` still rejects a destination symlink.
+- [x] `reject_symlink == false` does not follow the symlink target during validation.
+- [x] On Unix, an allowed destination symlink is replaced by the new regular file rather than written through.
+- [x] A broken allowed destination symlink can be replaced without creating/modifying its former target.
+- [x] Real directories/FIFOs/sockets/devices remain rejected by existing validation.
+- [x] `SensitiveConfig` continues to default to symlink rejection and private permissions.
+- [x] No second atomic-write implementation is added.
 
 ## 7. Workstream C — Correct stale ownership documentation
 
@@ -348,9 +361,9 @@ Update only stale statements. Do not initiate another broad documentation rewrit
 
 Acceptance:
 
-- [ ] No current-architecture documentation says new servers publish a PID file.
-- [ ] The kernel lock remains documented as authoritative.
-- [ ] Legacy PID files remain documented as compatibility-only where relevant.
+- [x] No current-architecture documentation says new servers publish a PID file.
+- [x] The kernel lock remains documented as authoritative.
+- [x] Legacy PID files remain documented as compatibility-only where relevant.
 
 ## 8. Workstream D — Complete the Phase 15 closure record
 
@@ -492,45 +505,45 @@ This corrective line of work is closed only when every applicable item below is 
 
 ### Forced server cancellation
 
-- [ ] The bounded graceful-drain path is unchanged for cooperative services.
-- [ ] On drain timeout, cancellation targets the original gRPC/HTTP tasks.
-- [ ] The original task termination/cancellation is observed before the orchestration helper returns.
-- [ ] Forced outcomes are based on observed terminal results, not only synthetic placeholders.
-- [ ] A deterministic test proves an intentionally stuck underlying service future is dropped before helper return.
-- [ ] Unexpected pre-signal service completion still fails and shuts down its sibling.
-- [ ] Drain-time panic/service error still fails with diagnostic service identity.
-- [ ] Existing SIGTERM and same-port restart tests remain green.
-- [ ] No supervisor/cancellation framework or manual consumed-handle bookkeeping is introduced.
+- [x] The bounded graceful-drain path is unchanged for cooperative services.
+- [x] On drain timeout, cancellation targets the original gRPC/HTTP tasks.
+- [x] The original task termination/cancellation is observed before the orchestration helper returns.
+- [x] Forced outcomes are based on observed terminal results, not only synthetic placeholders.
+- [x] A deterministic test proves an intentionally stuck underlying service future is dropped before helper return.
+- [x] Unexpected pre-signal service completion still fails and shuts down its sibling.
+- [x] Drain-time panic/service error still fails with diagnostic service identity.
+- [x] Existing SIGTERM and same-port restart tests remain green.
+- [x] No supervisor/cancellation framework or manual consumed-handle bookkeeping is introduced.
 
 ### Atomic replacement
 
-- [ ] One production atomic replacement implementation remains.
-- [ ] `select --output-file` still uses that implementation.
-- [ ] `reject_symlink=true` rejects symlinks.
-- [ ] `reject_symlink=false` does not dereference the destination symlink for validation.
-- [ ] Unix allowed-symlink replacement is proven by a focused regression test.
-- [ ] The symlink's former target is not modified or created by the replacement.
-- [ ] Non-symlink special-file validation remains intact.
-- [ ] Sensitive-config permission/symlink policy remains intact.
+- [x] One production atomic replacement implementation remains.
+- [x] `select --output-file` still uses that implementation.
+- [x] `reject_symlink=true` rejects symlinks.
+- [x] `reject_symlink=false` does not dereference the destination symlink for validation.
+- [x] Unix allowed-symlink replacement is proven by a focused regression test.
+- [x] The symlink's former target is not modified or created by the replacement.
+- [x] Non-symlink special-file validation remains intact.
+- [x] Sensitive-config permission/symlink policy remains intact.
 
 ### Documentation and planning record
 
-- [ ] `server_lock.rs` no longer claims current servers publish a PID file.
-- [ ] No directly related Phase 15 server doc repeats that stale ownership statement.
-- [ ] The original Phase 15 measurement table contains actual values and provenance where needed.
-- [ ] The original Phase 15 acceptance checklist is completed honestly.
-- [ ] The Phase 14G transaction RETAIN decision remains untouched.
-- [ ] This corrective plan records implementation SHA(s) and verification outcomes before being marked COMPLETE.
+- [x] `server_lock.rs` no longer claims current servers publish a PID file.
+- [x] No directly related Phase 15 server doc repeats that stale ownership statement.
+- [x] The original Phase 15 measurement table contains actual values and provenance where needed.
+- [x] The original Phase 15 acceptance checklist is completed honestly.
+- [x] The Phase 14G transaction RETAIN decision remains untouched.
+- [x] This corrective plan records implementation SHA(s) and verification outcomes before being marked COMPLETE.
 
 ### Verification
 
-- [ ] Focused orchestration tests pass.
-- [ ] Focused atomic tests pass.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] `bash scripts/release-check.sh verify` passes from a clean tree.
-- [ ] Existing Linux/macOS/Windows CI topology remains unchanged.
-- [ ] Final existing CI lanes are green.
-- [ ] No new CI workflow, dependency, crate, daemon, or architecture layer was added.
+- [x] Focused orchestration tests pass.
+- [x] Focused atomic tests pass.
+- [x] `bash scripts/check.sh` passes.
+- [x] `bash scripts/release-check.sh verify` passes from a clean tree.
+- [x] Existing Linux/macOS/Windows CI topology remains unchanged.
+- [x] Final existing CI lanes are green.
+- [x] No new CI workflow, dependency, crate, daemon, or architecture layer was added.
 
 ## 11. Small-model implementation checklist
 

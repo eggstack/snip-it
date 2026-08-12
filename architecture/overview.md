@@ -264,7 +264,7 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 | Theme | `theme.rs` | `Theme` struct (10-color palette), 50 bundled Halloy themes |
 | Highlight | `highlight.rs` | Syntax highlighting (variables, shell keywords, strings, flags) |
 | Variables | `variables.rs` | TUI for `<name>` / `<name=default>` variable prompts |
-| Bundled themes | `_generated_bundled_themes.rs` | Generated at build time by `scripts/build_themes.py` |
+| Bundled themes | `_generated_bundled_themes.rs` | Generated explicitly by `scripts/build_themes.py`; checked-in source is used by normal builds |
 
 ---
 

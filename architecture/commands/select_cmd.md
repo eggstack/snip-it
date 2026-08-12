@@ -25,11 +25,16 @@
 
 ## Output File Safety
 
-`write_selection_atomically()` performs:
+`select_cmd` delegates to `utils::atomic::atomic_replace()` with the
+durability class used for selected output. The canonical writer:
 1. Creates parent directories if needed
-2. Opens a fresh temp file with `O_EXCL` (no truncation of existing files)
-3. Writes content + `sync_all()`
-4. `rename(2)` the temp file to the target path
+2. Opens a fresh same-directory temp file (no truncation of existing files)
+3. Writes and flushes the selected bytes
+4. Atomically renames the temp file to the target path
+
+When symlink replacement is allowed, the final rename replaces the symlink
+directory entry itself, including a broken symlink; it never writes through to
+the former target. Sensitive configuration writes retain symlink rejection.
 
 This prevents:
 - **Truncation of existing files** on cancellation (temp file is independent)

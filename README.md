@@ -86,6 +86,9 @@ cargo install snip-it
 ```
 
 Rust 1.94 or newer is required when building from source.
+Normal Cargo builds use the checked-in protocol and theme sources; they do not
+require `protoc` or Python. Maintainers regenerate those sources explicitly
+only when the corresponding `.proto` or theme inputs change.
 
 ### Updates
 

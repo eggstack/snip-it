@@ -41,6 +41,8 @@ Enhanced atomic write with:
 - `Durability`-based fsync behavior
 - Optional permission preservation
 - Symlink rejection for sensitive files
+- Allowed destination symlinks are replaced as directory entries rather than
+  dereferenced; broken links are safe to replace
 - Parent directory fsync probing
 - `AtomicWriteReport` with metadata
 

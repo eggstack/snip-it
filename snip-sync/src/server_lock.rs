@@ -6,9 +6,10 @@
 //! explicit error rather than silently weakening exclusion.
 //!
 //! The server acquires this lock nonblocking at startup. While the lock
-//! is held, the PID file is published and the listeners run. Dropping
-//! the guard releases the kernel lock; the persistent lock file remains
-//! on disk.
+//! is held, current owner metadata is published in the persistent lock file
+//! and the listeners run. Dropping the guard releases the kernel lock; the
+//! persistent lock file remains on disk. Current servers do not create a
+//! separate PID file.
 //!
 //! A new server can start after a crashed owner exits because the kernel
 //! releases the lock when the previous owner closes its file descriptor

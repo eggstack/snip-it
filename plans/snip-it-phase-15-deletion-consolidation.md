@@ -8,6 +8,13 @@ server lifetime tests, and package validation. The generated theme bundle was
 measured at 32,409 bytes compressed versus 62,816 bytes in a controlled plain
 representation, so gzip/`flate2` was retained with deterministic generation.
 
+Phase 15 corrective closure is recorded in
+`plans/snip-it-phase-15-final-corrective-closure.md`. The implementation
+corrects forced server-task cancellation, restores non-dereferencing allowed
+symlink replacement in the canonical atomic writer, and removes the stale
+current-server PID-publication wording. The original Phase 14G journal RETAIN
+decision is unchanged.
+
 Baseline: `e7fefa1807502fe6d86612ac6ff6a75cef07cc0c`
 
 Predecessor: Phase 14 COMPLETE, including the Phase 14G RETAIN decision for the journal-based multi-file transaction path.
@@ -262,11 +269,11 @@ Use the exact API required by the pinned Clap version.
 
 Acceptance:
 
-- [ ] `snp data --help` is unambiguous.
-- [ ] `snp data restore ...` still parses.
-- [ ] `snp data repair ...` still parses.
-- [ ] `snp data r` is rejected as usage rather than selecting an arbitrary command.
-- [ ] the single schema assertion passes and would fail on duplicate command/argument definitions.
+- [x] `snp data --help` is unambiguous.
+- [x] `snp data restore ...` still parses.
+- [x] `snp data repair ...` still parses.
+- [x] `snp data r` is rejected as usage rather than selecting an arbitrary command.
+- [x] the single schema assertion passes and would fail on duplicate command/argument definitions.
 
 ### A2. Separate read-only selector use from destructive selector use
 
@@ -306,12 +313,12 @@ The TUI should not advertise a delete key when deletion is disabled. Do not mere
 
 Acceptance:
 
-- [ ] `snp select` cannot modify a library through the delete key.
-- [ ] `snp select` remains no-network/no-runtime in its ordinary path.
-- [ ] run/clip/default TUI deletion still creates a tombstone, saves it, and notifies/syncs exactly once.
-- [ ] search behavior retained by the implementation is reflected in `command_behavior()`; it is not `Minimal` while performing logging-worthy mutation/sync work.
-- [ ] existing exact run/clip `--sync` parity remains unchanged.
-- [ ] no new selector framework, trait hierarchy, or command DSL is introduced.
+- [x] `snp select` cannot modify a library through the delete key.
+- [x] `snp select` remains no-network/no-runtime in its ordinary path.
+- [x] run/clip/default TUI deletion still creates a tombstone, saves it, and notifies/syncs exactly once.
+- [x] search behavior retained by the implementation is reflected in `command_behavior()`; it is not `Minimal` while performing logging-worthy mutation/sync work.
+- [x] existing exact run/clip `--sync` parity remains unchanged.
+- [x] no new selector framework, trait hierarchy, or command DSL is introduced.
 
 ### A3. Consolidate only obvious exact-dispatch boilerplate
 
@@ -329,9 +336,9 @@ Keep command-specific execution in each command branch.
 
 Acceptance:
 
-- [ ] exact target selection still has one canonical matcher.
-- [ ] ambiguity/not-found output and exit mapping are not copy-pasted three times if one small helper can remove the duplication.
-- [ ] no macro/trait-based dispatcher is added.
+- [x] exact target selection still has one canonical matcher.
+- [x] ambiguity/not-found output and exit mapping are not copy-pasted three times if one small helper can remove the duplication.
+- [x] no macro/trait-based dispatcher is added.
 
 ## 6. Workstream B — Reuse existing client helpers and delete duplicate implementations
 
@@ -360,9 +367,9 @@ Move/retain only the tests that prove `select`-specific semantics. Delete tests 
 
 Acceptance:
 
-- [ ] one production implementation owns atomic replacement semantics.
-- [ ] `select --output-file` preserves exact bytes and atomic replacement behavior.
-- [ ] duplicate temp-name/fsync/rename code is deleted from `select_cmd.rs`.
+- [x] one production implementation owns atomic replacement semantics.
+- [x] `select --output-file` preserves exact bytes and atomic replacement behavior.
+- [x] duplicate temp-name/fsync/rename code is deleted from `select_cmd.rs`.
 
 ### B2. Reuse the existing editor parser/resolver inside the client
 
@@ -394,10 +401,10 @@ Do not move editor logic into a new crate or generic utilities package.
 
 Acceptance:
 
-- [ ] `VISUAL="code --wait" snp edit` and equivalent quoted editor specs parse as program + args without shell evaluation.
-- [ ] normal `EDITOR=vim` behavior remains.
-- [ ] client editor path resolution exists in one production implementation.
-- [ ] editor-related tests are concentrated around that implementation rather than copied across commands.
+- [x] `VISUAL="code --wait" snp edit` and equivalent quoted editor specs parse as program + args without shell evaluation.
+- [x] normal `EDITOR=vim` behavior remains.
+- [x] client editor path resolution exists in one production implementation.
+- [x] editor-related tests are concentrated around that implementation rather than copied across commands.
 
 ### B3. Reuse the canonical atomic writer for theme configuration
 
@@ -416,9 +423,9 @@ Do not expand theme configuration into the transaction engine. `themes.toml` is 
 
 Acceptance:
 
-- [ ] `themes.toml` remains atomically replaced.
-- [ ] private permissions on Unix remain at least as strict as baseline.
-- [ ] duplicate temp-file/rename code is deleted.
+- [x] `themes.toml` remains atomically replaced.
+- [x] private permissions on Unix remain at least as strict as baseline.
+- [x] duplicate temp-file/rename code is deleted.
 
 ### B4. Do not force cross-crate editor deduplication
 
@@ -460,10 +467,10 @@ Do not copy generated code into another location.
 
 Acceptance:
 
-- [ ] exactly one checked-in generated Rust protocol implementation exists.
-- [ ] both client and server compile against `snip-proto`.
-- [ ] protocol behavior and wire tags are unchanged.
-- [ ] no new protocol crate or abstraction is introduced.
+- [x] exactly one checked-in generated Rust protocol implementation exists.
+- [x] both client and server compile against `snip-proto`.
+- [x] protocol behavior and wire tags are unchanged.
+- [x] no new protocol crate or abstraction is introduced.
 
 ### C2. Remove ordinary-build protobuf generation
 
@@ -492,10 +499,10 @@ If maintainers already use a simple external one-shot generation command, docume
 
 Acceptance:
 
-- [ ] `cargo check --workspace --all-targets` has no build-script dependency on protoc.
-- [ ] `cargo package -p snip-proto --locked` succeeds with the committed generated file.
-- [ ] CI contains no protoc installation if no other build requires it.
-- [ ] no `tonic-prost-build` build dependency remains in the production package graph.
+- [x] `cargo check --workspace --all-targets` has no build-script dependency on protoc.
+- [x] `cargo package -p snip-proto --locked` succeeds with the committed generated file.
+- [x] CI contains no protoc installation if no other build requires it.
+- [x] no `tonic-prost-build` build dependency remains in the production package graph.
 
 ### C3. Remove Python execution from normal Cargo builds
 
@@ -519,9 +526,9 @@ Do not add a replacement build script that performs the same check differently.
 
 Acceptance:
 
-- [ ] `cargo build` never invokes Python.
-- [ ] clean crates.io/source builds work without Python.
-- [ ] bundled themes remain identical after an explicit regeneration.
+- [x] `cargo build` never invokes Python.
+- [x] clean crates.io/source builds work without Python.
+- [x] bundled themes remain identical after an explicit regeneration.
 
 ## 8. Workstream D — Simplify `snip-sync` ownership and lifecycle machinery
 
@@ -556,13 +563,13 @@ Do not delete the kernel lock or replace it with PID-file existence checks.
 
 Acceptance:
 
-- [ ] two concurrent `snip-sync serve` processes cannot both start.
-- [ ] a crashed server releases ownership automatically through the kernel.
-- [ ] `snip-sync stop` stops the matching live server and refuses an unrelated/reused PID.
-- [ ] `snip-sync restart` still works.
-- [ ] `croncheck` remains a health/status probe and does not regress into PID-file-existence testing.
-- [ ] current-format startup owns one identity record, not two.
-- [ ] old PID files remain harmless and have a bounded compatibility path.
+- [x] two concurrent `snip-sync serve` processes cannot both start.
+- [x] a crashed server releases ownership automatically through the kernel.
+- [x] `snip-sync stop` stops the matching live server and refuses an unrelated/reused PID.
+- [x] `snip-sync restart` still works.
+- [x] `croncheck` remains a health/status probe and does not regress into PID-file-existence testing.
+- [x] current-format startup owns one identity record, not two.
+- [x] old PID files remain harmless and have a bounded compatibility path.
 
 ### D2. Replace the two-task shutdown state machine with a smaller Tokio-owned task collection
 
@@ -603,11 +610,11 @@ Required high-value cases:
 
 Acceptance:
 
-- [ ] the above behavior remains.
-- [ ] no completed handle can be polled/aborted twice by construction rather than by manual consumed flags.
-- [ ] `grpc_consumed` / `http_consumed` state bookkeeping is deleted.
-- [ ] orchestration production code is materially smaller and easier to read.
-- [ ] no new supervisor abstraction is introduced.
+- [x] the above behavior remains.
+- [x] no completed handle can be polled/aborted twice by construction rather than by manual consumed flags.
+- [x] `grpc_consumed` / `http_consumed` state bookkeeping is deleted.
+- [x] orchestration production code is materially smaller and easier to read.
+- [x] no new supervisor abstraction is introduced.
 
 ### D3. Remove persistent rate-limit state; keep bounded in-memory limiting
 
@@ -648,12 +655,12 @@ Keep:
 
 Acceptance:
 
-- [ ] server restarts reset rate-limit windows by design.
-- [ ] request limiting still functions during a process lifetime.
-- [ ] no rate-limit background persistence task exists.
-- [ ] no rate-limit DB I/O occurs.
-- [ ] existing databases containing the old table continue to open normally.
-- [ ] documentation no longer advertises persistence.
+- [x] server restarts reset rate-limit windows by design.
+- [x] request limiting still functions during a process lifetime.
+- [x] no rate-limit background persistence task exists.
+- [x] no rate-limit DB I/O occurs.
+- [x] existing databases containing the old table continue to open normally.
+- [x] documentation no longer advertises persistence.
 
 ### D4. Explicitly leave unrelated server hardening alone
 
@@ -713,11 +720,11 @@ Do not create a release workflow just to keep this code alive.
 
 Acceptance:
 
-- [ ] Cargo installs still update through Cargo.
-- [ ] Homebrew installs still update through Homebrew.
-- [ ] source/unmanaged builds fail clearly without attempting nonexistent assets.
-- [ ] `tar` is removed if it becomes unused.
-- [ ] documentation matches the actually supported distribution methods.
+- [x] Cargo installs still update through Cargo.
+- [x] Homebrew installs still update through Homebrew.
+- [x] source/unmanaged builds fail clearly without attempting nonexistent assets.
+- [x] `tar` is removed if it becomes unused.
+- [x] documentation matches the actually supported distribution methods.
 
 ### E3. Measure whether gzip-compressed bundled themes still earn `flate2`
 
@@ -741,9 +748,9 @@ Do not optimize for Cargo dependency count while making the actual executable la
 
 Acceptance:
 
-- [ ] the result is based on measured release bytes, not `cargo tree` intuition.
-- [ ] the smaller/simpler measured representation is retained.
-- [ ] all 50 bundled themes plus the default remain available.
+- [x] the result is based on measured release bytes, not `cargo tree` intuition.
+- [x] the smaller/simpler measured representation is retained.
+- [x] all 50 bundled themes plus the default remain available.
 
 ## 10. Workstream F — Align verification with the simplified product
 
@@ -769,9 +776,9 @@ If a workspace package genuinely needs a non-default feature for its production 
 
 Acceptance:
 
-- [ ] the release binary used for normal smoke is production-equivalent.
-- [ ] crash/failpoint tests still opt into test seams explicitly.
-- [ ] `test-support` behavior is not compiled into the generic release artifact used as the production sanity check.
+- [x] the release binary used for normal smoke is production-equivalent.
+- [x] crash/failpoint tests still opt into test seams explicitly.
+- [x] `test-support` behavior is not compiled into the generic release artifact used as the production sanity check.
 
 ### F2. Remove protoc setup from CI after Workstream C
 
@@ -939,17 +946,20 @@ The manual release verification is sufficient. Do not add a new CI lane for Phas
 
 ## 13. Required measurements and implementation record
 
-At implementation completion, append a compact table to this plan:
+At implementation completion, append a compact table to this plan. The
+dependency count is direct non-dev production dependencies declared by each
+package, including target-specific runtime dependencies; the same definition
+is used for baseline and final.
 
 | Item | Baseline | Final | Result |
 |---|---:|---:|---|
-| `snp` release binary bytes | record on one fixed host | record | delta |
-| root direct dependencies | record | record | delta |
-| `snip-sync` direct dependencies | record | record | delta |
-| `snip-proto` build dependencies | 1 (`tonic-prost-build`) | expected 0 | delta |
-| normal CI protoc setup steps | Linux + macOS + Windows | expected 0 | delta |
-| current-format server owner records | 2 | expected 1 | delta |
-| rate-limit persistence background tasks | 1 | expected 0 | delta |
+| `snp` release binary bytes | 5,196,464 (`e7fefa1`, Rust 1.94.1, `aarch64-unknown-linux-gnu`) | 5,130,928 (final, same host/toolchain/target) | -65,536 |
+| root direct dependencies | 39 | 38 | -1 |
+| `snip-sync` direct dependencies | 29 | 29 | 0 |
+| `snip-proto` build dependencies | 1 (`tonic-prost-build`) | 0 | -1 |
+| normal CI protoc setup steps | 3 (Linux, macOS, Windows) | 0 | -3 |
+| current-format server owner records | 2 | 1 | -1 |
+| rate-limit persistence background tasks | 1 | 0 | -1 |
 
 Do not use raw repository LOC as an acceptance gate. Generated code and tests distort it. Record meaningful mechanism/dependency deletion instead.
 
@@ -961,70 +971,70 @@ Phase 15 is complete only when every applicable item below is true.
 
 ### CLI and command behavior
 
-- [ ] Clap schema assertion passes.
-- [ ] duplicate `snp data r` alias is gone.
-- [ ] `snp select` cannot delete snippets or initiate sync.
-- [ ] `snp select` remains a deterministic read-only selection primitive.
-- [ ] search startup classification matches its intentionally retained mutation/sync capability.
-- [ ] run/clip/default TUI deletion and sync behavior remain correct.
-- [ ] stable exit codes remain unchanged.
+- [x] Clap schema assertion passes.
+- [x] duplicate `snp data r` alias is gone.
+- [x] `snp select` cannot delete snippets or initiate sync.
+- [x] `snp select` remains a deterministic read-only selection primitive.
+- [x] search startup classification matches its intentionally retained mutation/sync capability.
+- [x] run/clip/default TUI deletion and sync behavior remain correct.
+- [x] stable exit codes remain unchanged.
 
 ### Client consolidation
 
-- [ ] `select_cmd` does not own a second atomic replace implementation.
-- [ ] theme config persistence uses the canonical atomic helper.
-- [ ] client editor resolution/parsing has one implementation.
-- [ ] editor command arguments work without shell evaluation.
-- [ ] no new utility crate was created for trivial deduplication.
+- [x] `select_cmd` does not own a second atomic replace implementation.
+- [x] theme config persistence uses the canonical atomic helper.
+- [x] client editor resolution/parsing has one implementation.
+- [x] editor command arguments work without shell evaluation.
+- [x] no new utility crate was created for trivial deduplication.
 
 ### Protocol/build
 
-- [ ] one generated Rust protocol implementation remains.
-- [ ] root client and `snip-sync` both use `snip-proto`.
-- [ ] ordinary Cargo builds do not run protobuf generation.
-- [ ] ordinary Cargo builds do not require protoc.
-- [ ] normal Cargo builds do not invoke Python for themes.
-- [ ] committed generated protocol/theme files remain sufficient for crates.io installs.
+- [x] one generated Rust protocol implementation remains.
+- [x] root client and `snip-sync` both use `snip-proto`.
+- [x] ordinary Cargo builds do not run protobuf generation.
+- [x] ordinary Cargo builds do not require protoc.
+- [x] normal Cargo builds do not invoke Python for themes.
+- [x] committed generated protocol/theme files remain sufficient for crates.io installs.
 
 ### Server simplification
 
-- [ ] kernel-backed singleton exclusion remains.
-- [ ] one current-format server owner identity remains.
-- [ ] stop/restart still validate process identity before signaling.
-- [ ] croncheck remains health-driven.
-- [ ] server lifetime has no arbitrary pre-signal timeout.
-- [ ] unexpected service failure still fails and shuts down its sibling.
-- [ ] requested graceful shutdown remains bounded.
-- [ ] manual consumed-handle bookkeeping is removed.
-- [ ] in-memory rate limiting remains.
-- [ ] persistent rate-limit DB/background machinery is removed.
-- [ ] existing databases with legacy `rate_limits` table still open.
+- [x] kernel-backed singleton exclusion remains.
+- [x] one current-format server owner identity remains.
+- [x] stop/restart still validate process identity before signaling.
+- [x] croncheck remains health-driven.
+- [x] server lifetime has no arbitrary pre-signal timeout.
+- [x] unexpected service failure still fails and shuts down its sibling.
+- [x] requested graceful shutdown remains bounded.
+- [x] manual consumed-handle bookkeeping is removed.
+- [x] in-memory rate limiting remains.
+- [x] persistent rate-limit DB/background machinery is removed.
+- [x] existing databases with legacy `rate_limits` table still open.
 
 ### Footprint/updater
 
-- [ ] active Cargo and Homebrew update paths remain.
-- [ ] unsupported standalone archive self-update code is removed if release inspection still shows no working asset pipeline.
-- [ ] `tar` is removed if no production caller remains.
-- [ ] bundled-theme compression decision is measured and recorded if `flate2` becomes theme-only.
-- [ ] no feature is claimed in docs without a working distribution/runtime path.
+- [x] active Cargo and Homebrew update paths remain.
+- [x] unsupported standalone archive self-update code is removed if release inspection still shows no working asset pipeline.
+- [x] `tar` is removed if no production caller remains.
+- [x] bundled-theme compression decision is measured and recorded if `flate2` becomes theme-only.
+- [x] no feature is claimed in docs without a working distribution/runtime path.
 
 ### Verification/CI
 
-- [ ] generic release build/smoke uses production/default features.
-- [ ] test failpoint features are enabled only for tests that require them.
-- [ ] CI no longer installs protoc when codegen is removed.
-- [ ] link checking does not redundantly run again on every main push.
-- [ ] Linux correctness + macOS/Windows smoke topology is retained.
-- [ ] no new CI workflow or matrix was added.
-- [ ] `bash scripts/check.sh` passes.
-- [ ] `bash scripts/release-check.sh verify` passes from a clean tree.
+- [x] generic release build/smoke uses production/default features.
+- [x] test failpoint features are enabled only for tests that require them.
+- [x] CI no longer installs protoc when codegen is removed.
+- [x] link checking does not redundantly run again on every main push.
+- [x] Linux correctness + macOS/Windows smoke topology is retained.
+- [x] no new CI workflow or matrix was added.
+- [x] `bash scripts/check.sh` passes.
+- [x] `bash scripts/release-check.sh verify` passes from a clean tree.
 
 ### Scope
 
-- [ ] Phase 14G journal RETAIN decision is untouched.
-- [ ] no daemon/supervisor/database/framework was added.
-- [ ] production code/mechanism count is lower than the Phase 15 baseline.
-- [ ] documentation describes the final implementation rather than superseded hardening phases.
+- [x] Phase 14G journal RETAIN decision is untouched.
+- [x] no daemon/supervisor/database/framework was added.
+- [x] production code/mechanism count is lower than the Phase 15 baseline.
+- [x] documentation describes the final implementation rather than superseded hardening phases.
 
 ## 15. Small-model execution rules
 
