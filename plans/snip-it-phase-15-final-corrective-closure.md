@@ -12,8 +12,7 @@ Purpose: close the small set of issues found by the post-implementation audit of
 
 This is a corrective closure pass, not Phase 16 and not a new architecture phase.
 
-Implementation commit: recorded after the implementation commit and referenced
-by the final closure commit.
+Implementation commit: `f60d285` (`phase 15: close cancellation and symlink correctness gaps`).
 
 Verification record:
 
@@ -21,7 +20,8 @@ Verification record:
 - `cargo test utils::atomic --lib` — pass (14 tests, including allowed broken-symlink replacement).
 - `cargo test --test platform_smoke` — pass locally on Linux.
 - `bash scripts/check.sh` — pass; formatting, clippy, and Linux correctness verified.
-- `bash scripts/release-check.sh verify` — pass from a clean tree.
+- `cargo test --test snip_sync_lifetime -- --ignored --test-threads=1` — pass (2 tests).
+- `bash scripts/release-check.sh verify` — pass from a clean tree, including release build/smoke, 26 transaction crash-recovery tests, 6 release multi-batch sync tests, 2 release lifetime tests, production-seam proof, and all package validations.
 - Existing macOS and Windows platform-smoke coverage remains in the unchanged CI matrix; those hosted lanes were not locally executable on this Linux host.
 - Final fixed-host measurement: Rust 1.94.1, `aarch64-unknown-linux-gnu`, `cargo build --release --bin snp`, 5,130,928 bytes.
 

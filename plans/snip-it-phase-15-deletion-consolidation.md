@@ -12,8 +12,8 @@ Phase 15 corrective closure is recorded in
 `plans/snip-it-phase-15-final-corrective-closure.md`. The implementation
 corrects forced server-task cancellation, restores non-dereferencing allowed
 symlink replacement in the canonical atomic writer, and removes the stale
-current-server PID-publication wording. The original Phase 14G journal RETAIN
-decision is unchanged.
+current-server PID-publication wording. Implementation commit: `f60d285`.
+The original Phase 14G journal RETAIN decision is unchanged.
 
 Baseline: `e7fefa1807502fe6d86612ac6ff6a75cef07cc0c`
 
