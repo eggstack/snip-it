@@ -285,18 +285,23 @@ fn redact_secrets(msg: &str) -> String {
     let mut result = msg.to_string();
 
     // Redact Bearer tokens: "Bearer <token>"
-    if let Some(start) = result.find("Bearer ") {
+    let mut search_from = 0;
+    while let Some(relative_start) = result[search_from..].find("Bearer ") {
+        let start = search_from + relative_start;
         let token_start = start + 7;
         let token_end = result[token_start..]
             .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
             .map(|i| token_start + i)
             .unwrap_or(result.len());
         result.replace_range(start..token_end, "Bearer [REDACTED]");
+        search_from = start + "Bearer [REDACTED]".len();
     }
 
     // Redact "api_key=..." or "api-key=..." patterns
     for pattern in &["api_key=", "api-key=", "apikey="] {
-        if let Some(start) = result.find(pattern) {
+        let mut search_from = 0;
+        while let Some(relative_start) = result[search_from..].find(pattern) {
+            let start = search_from + relative_start;
             let val_start = start + pattern.len();
             let val_end = result[val_start..]
                 .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
@@ -304,23 +309,35 @@ fn redact_secrets(msg: &str) -> String {
                 .unwrap_or(result.len());
             if val_end > val_start {
                 result.replace_range(start..val_end, &format!("{pattern}[REDACTED]"));
+                search_from = start + pattern.len() + "[REDACTED]".len();
+            } else {
+                break;
             }
         }
     }
 
     // Redact URLs with credentials: "user:pass@host"
-    if let Some(at_pos) = result.find('@') {
+    let mut search_from = 0;
+    while let Some(relative_at_pos) = result[search_from..].find('@') {
+        let at_pos = search_from + relative_at_pos;
         // Look backward for ":" and "//" to detect URL credentials
         let before = &result[..at_pos];
+        if before.ends_with("[REDACTED]") {
+            search_from = at_pos + 1;
+            continue;
+        }
         if let Some(colon_pos) = before.rfind(':') {
             let before_colon = &before[..colon_pos];
             if before_colon.ends_with("//") || before_colon.contains("://") {
                 // This looks like user:pass@host in a URL
-                let scheme_end = before_colon.find("://").map(|i| i + 3).unwrap_or(0);
+                let scheme_end = before_colon.rfind("://").map(|i| i + 3).unwrap_or(0);
                 let cred_start = scheme_end;
                 result.replace_range(cred_start..at_pos + 1, "[REDACTED]@");
+                search_from = 0;
+                continue;
             }
         }
+        search_from = at_pos + 1;
     }
 
     result
@@ -565,6 +582,28 @@ integrity = 0
         let long = "x".repeat(1000);
         let sanitized = sanitize_message(&long);
         assert_eq!(sanitized.len(), MAX_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn test_redacts_all_repeated_secret_patterns() {
+        let message = concat!(
+            "Bearer first-token and Bearer second-token; ",
+            "https://alice:one@example.test and https://bob:two@example.test; ",
+            "api_key=first-key api_key=second-key"
+        );
+        let redacted = redact_secrets(message);
+
+        for secret in [
+            "first-token",
+            "second-token",
+            "alice:one",
+            "bob:two",
+            "first-key",
+            "second-key",
+        ] {
+            assert!(!redacted.contains(secret), "secret leaked: {secret}");
+        }
+        assert_eq!(redacted.matches("[REDACTED]").count(), 6, "{redacted}");
     }
 
     #[test]

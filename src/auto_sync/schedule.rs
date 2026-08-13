@@ -153,12 +153,7 @@ pub fn schedule_existing_pending(
     caller: Caller,
 ) -> Result<ScheduleDecision, ScheduleError> {
     let decision = schedule_sync(state_dir, policy, caller)?;
-    if decision == ScheduleDecision::SpawnNow
-        && let Err(e) = execution_lock::spawn_worker(state_dir)
-    {
-        tracing::warn!(error = %e, "schedule_existing_pending: failed to spawn worker");
-        return Err(ScheduleError::Spawn(e));
-    }
+    spawn_worker_if_needed(state_dir, &decision, false, "schedule_existing_pending")?;
     Ok(decision)
 }
 
@@ -171,14 +166,24 @@ pub fn schedule_and_spawn(
     caller: Caller,
 ) -> Result<ScheduleDecision, ScheduleError> {
     let decision = schedule_sync(state_dir, policy, caller)?;
-    if decision == ScheduleDecision::SpawnNow
-        && !test_worker_spawn_suppressed()
-        && let Err(e) = execution_lock::spawn_worker(state_dir)
-    {
-        tracing::warn!(error = %e, "schedule_and_spawn: failed to spawn worker");
-        return Err(ScheduleError::Spawn(e));
-    }
+    spawn_worker_if_needed(state_dir, &decision, true, "schedule_and_spawn")?;
     Ok(decision)
+}
+
+fn spawn_worker_if_needed(
+    state_dir: &Path,
+    decision: &ScheduleDecision,
+    allow_test_suppression: bool,
+    caller: &str,
+) -> Result<(), ScheduleError> {
+    if *decision == ScheduleDecision::SpawnNow
+        && (!allow_test_suppression || !test_worker_spawn_suppressed())
+        && let Err(error) = execution_lock::spawn_worker(state_dir)
+    {
+        tracing::warn!(error = %error, "{caller}: failed to spawn worker");
+        return Err(ScheduleError::Spawn(error));
+    }
+    Ok(())
 }
 
 /// Test-only worker spawn suppression.
@@ -463,11 +468,12 @@ mod tests {
     }
 
     /// Structural guard: verify `spawn_worker` is only referenced from
-    /// `schedule_and_spawn` in production code (not tests or docs).
+    /// the scheduling helper in production code (not tests or docs).
     #[test]
     fn test_spawn_worker_only_called_from_scheduler() {
         let src = include_str!("schedule.rs");
-        // The only production call to execution_lock::spawn_worker should be in schedule_and_spawn.
+        // The only production call to execution_lock::spawn_worker should be in
+        // spawn_worker_if_needed.
         let lines: Vec<&str> = src.lines().collect();
         let mut production_calls = 0;
         for (i, line) in lines.iter().enumerate() {
@@ -485,9 +491,9 @@ mod tests {
             }
         }
         assert_eq!(
-            production_calls, 2,
-            "spawn_worker should be called in exactly two production locations \
-             (schedule_and_spawn and schedule_existing_pending), found {production_calls}"
+            production_calls, 1,
+            "spawn_worker should be called in exactly one production location \
+             (spawn_worker_if_needed), found {production_calls}"
         );
     }
 }

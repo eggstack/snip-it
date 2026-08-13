@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_process_alive_zero_pid() {
-        assert!(crate::auto_sync::execution_lock::process_alive(0));
+        assert!(!crate::auto_sync::execution_lock::process_alive(0));
     }
 
     #[test]

@@ -135,11 +135,13 @@ pub fn validate_process_name(pid: u32) -> bool {
         .args(["-p", &pid.to_string(), "-o", "comm="])
         .output();
     match output {
-        Ok(output) => String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .contains("snip-sync"),
+        Ok(output) => is_snip_sync_process_name(String::from_utf8_lossy(&output.stdout).trim()),
         Err(_) => false,
     }
+}
+
+fn is_snip_sync_process_name(name: &str) -> bool {
+    name == "snip-sync"
 }
 
 #[cfg(not(unix))]
@@ -293,6 +295,13 @@ pub fn get_process_start_token(_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_name_requires_exact_match() {
+        assert!(is_snip_sync_process_name("snip-sync"));
+        assert!(!is_snip_sync_process_name("snip-sync-dev"));
+        assert!(!is_snip_sync_process_name("not-snip-sync"));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

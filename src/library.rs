@@ -323,7 +323,7 @@ impl LibraryManager {
     }
 
     /// Returns the path to the legacy single-file snippets TOML.
-    pub fn get_legacy_snippets_path(&self) -> PathBuf {
+    pub fn get_legacy_snippets_path() -> PathBuf {
         Self::get_default_snippets_path()
     }
 
@@ -348,7 +348,7 @@ impl LibraryManager {
     /// Migrates the legacy single-file `snippets.toml` into a library subdirectory.
     pub fn migrate_from_single_file(&mut self) -> SnipResult<()> {
         let _lock = self.acquire_local_data_lock()?;
-        let legacy_path = self.get_legacy_snippets_path();
+        let legacy_path = Self::get_legacy_snippets_path();
 
         if !legacy_path.exists() {
             return Ok(());

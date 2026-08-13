@@ -179,7 +179,7 @@ pub fn process_alive(pid: u32) -> bool {
     }
     const SIGNAL_NOOP: i32 = 0;
     if pid == 0 {
-        return true;
+        return false;
     }
     let rc = unsafe { kill(pid as i32, SIGNAL_NOOP) };
     rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
@@ -193,7 +193,7 @@ fn classify_kill_zero_error(errno: Option<i32>) -> bool {
 #[cfg(not(unix))]
 pub fn process_alive(pid: u32) -> bool {
     if pid == 0 {
-        return true;
+        return false;
     }
     unsafe {
         use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_process_alive_zero_pid() {
-        assert!(process_alive(0));
+        assert!(!process_alive(0));
     }
 
     #[test]

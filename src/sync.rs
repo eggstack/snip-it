@@ -575,7 +575,7 @@ impl SyncClient {
             // Take ownership of the accumulated vectors for the final response.
             let snippets = std::mem::take(all_server_snippets);
             let skipped = std::mem::take(all_skipped_ids);
-            return self.build_sync_response(
+            return Self::build_sync_response(
                 snippets,
                 skipped,
                 encrypt_failed_count,
@@ -614,7 +614,7 @@ impl SyncClient {
             if !has_more || snippets_len == 0 {
                 let snippets = std::mem::take(all_server_snippets);
                 let skipped = std::mem::take(all_skipped_ids);
-                return self.build_sync_response(
+                return Self::build_sync_response(
                     snippets,
                     skipped,
                     encrypt_failed_count,
@@ -651,7 +651,6 @@ impl SyncClient {
 
     /// Build the final aggregated SyncResponse from accumulated state.
     fn build_sync_response(
-        &self,
         all_server_snippets: Vec<crate::proto::Snippet>,
         all_skipped_ids: Vec<String>,
         encrypt_failed_count: usize,

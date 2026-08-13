@@ -224,7 +224,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
         .encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {e}")))?;
 
-    drop(std::mem::take(&mut key));
+    key.zeroize();
 
     let payload = EncryptedPayload {
         salt: salt.to_vec(),
