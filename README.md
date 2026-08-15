@@ -6,97 +6,57 @@
 
 ![snip-it in use](demo/snip-it-demo.gif)
 
-`snip-it` (`snp`) is a terminal-first snippet manager for short scripts and
-commands. Save them in libraries, find them with fuzzy search, fill in
-variables when you use them, then run or copy them from a keyboard-first TUI
-with Vim bindings.
+`snip-it` (`snp`) is a fast, terminal-first snippet manager for commands and
+short scripts. Save commands as plain TOML, find them with fuzzy search, fill in
+variables at use time, and run, copy, inspect, or insert them from a
+keyboard-driven TUI.
 
-Built in Rust and heavily optimized for fast start times and quick navigation
-through large snippet libraries, snip-it was created in large part to make
-that workflow feel immediate.
+It is inspired by [pet](https://github.com/knqyf263/pet) and intentionally keeps
+pet's simple editable snippet format. Snip-it adds libraries, richer TUI
+navigation, shell integration, themes, local usage metadata, and optional
+self-hosted encrypted synchronization.
 
-Lightweight commands such as `snp version` and `snp completions bash` use a
-minimal startup path and do not create logging or audit files. Logging is
-initialized lazily for commands that need diagnostics. Audit entries are
-appended synchronously when a command records a mutation or execution.
+Commands selected with `snp run` are executed through your shell exactly as
+stored after variable expansion. Snip-it is a snippet manager, not a sandbox or
+secrets manager; only save and run commands you trust.
 
-It was inspired by [pet](https://github.com/knqyf263/pet) and keeps the same
-simple, editable TOML approach to command snippets. The optional
-[`snip-sync`](snip-sync/README.md) server adds encrypted synchronization for
-environments where you want one snippet collection available on multiple
-machines.
+## Features
 
-## What snip-it provides
-
-- Short command and script snippets stored as editable TOML.
-- Separate libraries for work, home, projects, or environments.
-- Fuzzy search, tags, syntax highlighting, clipboard support, and a TUI.
-- Keyboard-first navigation with Vim bindings for quickly moving through large
-  snippet libraries.
-- Output/notes field for storing descriptive metadata alongside commands
-  (visible in TUI preview, editable via `snp edit --output`, included in
-  JSON/CSV export, opt-in fuzzy search via `--search-output`).
-- Runtime variables such as `<host>` and `<branch=main>`.
-- Pet-compatible multiple-choice variables such as
-  `<color=|_red_||_green_||_blue_||>` for selecting from a predefined list.
-- 50 bundled [Halloy](https://github.com/squidowl/halloy)-compatible themes,
-  plus support for dropping in additional Halloy theme files.
-- Optional sorting modes (`--sort`) for large collections: relevance (default),
-  recent, last-used, most-used, description, and command.
-- `--favorites-first` groups favorited snippets before others in any sort mode.
-- Local-only usage tracking: use count and last-used timestamps recorded on
-  successful run and clip operations, stored separately from snippet data.
-- Optional self-hosted sync using AES-256-GCM encryption and Argon2id key
-  derivation. The server stores encrypted snippet payloads, not their
-  descriptions or commands.
-- Premade libraries served by `snip-sync`.
-
-Commands are executed through your shell exactly as written. `snip-it` is a
-snippet manager, not a sandbox or a secrets manager; only save and run commands
-you trust.
+- Fuzzy-searchable command and script snippets stored as editable TOML.
+- Vim-style TUI navigation with run, copy, search, delete, and theme actions.
+- Runtime variables such as `<host>` and defaults such as `<branch=main>`.
+- Pet-compatible choice variables such as
+  `<color=|_red_||_green_||_blue_||>`.
+- Separate libraries for work, personal, project, or environment-specific
+  snippets.
+- Tags, favorites, output/notes metadata, and sorting by relevance, recency,
+  usage, description, or command.
+- Bash, Zsh, and Fish integration for inserting snippets into the current shell
+  buffer without executing them.
+- Import and diagnostics for existing pet snippet files.
+- Bundled Halloy-compatible themes plus support for custom Halloy theme files.
+- Optional self-hosted synchronization with client-side AES-256-GCM encryption.
+- Backup, restore, validation, repair, and machine-readable output for scripting.
 
 ## Installation
 
-### Homebrew (macOS)
-
-```bash
-brew install eggstack/tap/snip-it
-```
-
-This installs the `snp` client with shell completions for Bash, Zsh, and Fish.
-The optional `snip-sync` server is not included. To upgrade:
-
-```bash
-brew upgrade snip-it
-```
-
-To uninstall:
-
-```bash
-brew uninstall snip-it
-```
-
-User configuration and snippet data are preserved by Homebrew unless manually
-removed.
-
-### From crates.io
+### crates.io
 
 ```bash
 cargo install snip-it
 ```
 
-Rust 1.94 or newer is required when building from source.
-Normal Cargo builds use the checked-in protocol and theme sources; they do not
-require `protoc` or Python. Maintainers regenerate those sources explicitly
-only when the corresponding `.proto` or theme inputs change.
+The installed client binary is `snp`. Building the current release requires
+Rust 1.94 or newer.
 
-### Updates
+Check the installation with:
 
-`snp update` checks crates.io for Cargo installations and Homebrew for
-Homebrew installations. Source-built or otherwise unmanaged executables report
-that they must be rebuilt or updated through their installation method; the
-repository does not currently publish a supported standalone binary asset
-pipeline. Use `snp update --dry-run` to check without installing.
+```bash
+snp version
+```
+
+For Cargo-managed installations, `snp update` can check for and install a newer
+release. Use `snp update --dry-run` to check without changing anything.
 
 ### From source
 
@@ -104,96 +64,98 @@ pipeline. Use `snp update --dry-run` to check without installing.
 git clone https://github.com/eggstack/snip-it.git
 cd snip-it
 cargo build --release
-mkdir -p ~/.local/bin
-install target/release/snp ~/.local/bin/snp
 ```
 
-The Docker image is for the optional sync server, not the interactive client:
+The client binary will be at `target/release/snp` (or `snp.exe` on Windows).
+
+## Quick start
+
+Create a snippet:
 
 ```bash
-docker pull ghcr.io/eggstack/snip-it/snip-sync:latest
+snp new 'git push origin <branch=main>' \
+  --description 'Push a branch' \
+  --tags git,release
 ```
 
-## Quickstart
-
-Create a snippet, search it, and run or copy it:
+Then choose what you want to do with it:
 
 ```bash
-snp new 'git push origin <branch=main>' --tags
-snp list
-snp run
-snp clip
-snp select
-snp search
+snp run       # fuzzy-select and execute
+snp clip      # fuzzy-select and copy to the clipboard
+snp search    # fuzzy-select and inspect
+snp select    # fuzzy-select and print the command; never executes
+snp list      # list snippets without opening the selector
 ```
 
-`snp new` prompts for a description (or accepts `--description`). `--tags`
-retains its prompt behavior when passed without a value, and also accepts
-comma/space-separated values such as `--tags git,release`. Variable values are
-requested when a snippet is run or copied. Multiple-choice variables use
-Pet-compatible syntax — `<color=|_red_||_green_||_blue_||>` presents a
-navigable list where the first choice is the default. In the TUI, press `d` in
-normal mode and confirm with `y` to delete the selected snippet; any other key
-cancels.
-
-For exact command ingestion from a pipe or shell helper, provide metadata
-non-interactively and let `snp` own stdin for the command body:
-
-```bash
-printf '%s' 'git commit -m "release"' | \
-  snp new --command-stdin --description 'Release commit'
-cat deploy.sh | snp new --command-stdin --description 'Deploy script' \
-  --tags deploy,script --library work
-```
-
-`--command-stdin` preserves valid UTF-8 bytes exactly, including supplied
-trailing newlines, and does not execute or print the captured command. It
-rejects invalid UTF-8, NUL bytes, and input larger than 16 MiB. Because stdin is
-reserved for command data, `--description` is required and tag prompts cannot
-be used in this mode. Do not pass secrets through shell history; captured
-history can contain credentials, tokens, or private URLs.
-
-For file-based or editor-based creation:
-
-```bash
-snp new --from-file ./deploy.sh --description 'Deploy service'
-snp new --editor --description 'Complex pipeline'
-```
-
-`--from-file` reads the file as-is (valid UTF-8 required, no execution). Symlinks
-are followed; the resolved target must be a regular file. `--editor`
-opens `$VISUAL` (if set), then `$EDITOR`, then `vim` for authoring the command
-body. The editor command may include arguments (e.g., `code --wait`, `nvim -f`)
-which are parsed with shell-word semantics and passed through directly — no
-shell is invoked. After the editor exits, normal description and tag handling
-continues.
-
-All exact sources (stdin, file, editor) share the same validation: 16 MiB cap,
-valid UTF-8, no NUL bytes, and no empty/whitespace-only input. The command body
-is stored exactly as provided — including supplied trailing newlines — and never
-evaluated or echoed.
-
-### Snippet files
-
-Without libraries, snip-it uses the legacy single-file layout:
+If a command contains variables, snip-it prompts for them before execution or
+copying:
 
 ```text
-$XDG_CONFIG_HOME/snp/snippets.toml
+ssh <user>@<host>
+git checkout <branch=main>
 ```
 
-When `XDG_CONFIG_HOME` is unset, this is `~/.config/snp/snippets.toml`.
+A default is supplied after `=`. Choice variables use pet-compatible syntax:
 
-Creating a library switches the installation to library mode. Existing
-`snippets.toml` content is migrated to `libraries/snippets.toml` when needed.
+```text
+kubectl config use-context <context=|_dev_||_staging_||_prod_||>
+```
+
+For complete command help, run `snp --help` or `snp <command> --help`.
+
+## TUI
+
+The selector is designed around keyboard navigation. Common normal-mode keys
+include:
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` or arrows | Move through snippets |
+| `/` or `i` | Enter search/input mode |
+| `Enter` | Select the highlighted snippet |
+| `y` | Copy the selected snippet and quit |
+| `d` | Delete the selected snippet; confirm with `y` |
+| `e` | Open the theme picker |
+| `q` | Quit |
+| `gg` / `G` | Jump to top / bottom |
+| `Ctrl-d` / `Ctrl-u` | Page down / up |
+
+The exact action performed by `Enter` depends on the command that opened the
+selector (`run`, `clip`, `search`, or `select`). Variable entry has its own
+insert/normal modal controls.
+
+Run this at any time for the complete built-in reference:
+
+```bash
+snp keybindings
+```
+
+## Libraries
+
+Libraries keep independent groups of snippets in separate TOML files:
 
 ```bash
 snp library create work
+snp library create personal
 snp library set-primary work
+snp library list
+
 snp new --library work 'kubectl get pods -n <namespace=default>'
 snp run --library work
+snp clip --library work
 ```
 
-The canonical file format is compatible with pet's snippet format:
+Once library mode is in use, library files live under:
+
+```text
+$XDG_CONFIG_HOME/snp/libraries/
+```
+
+When `XDG_CONFIG_HOME` is unset, the default is
+`~/.config/snp/libraries/`.
+
+The core on-disk format remains human-editable and pet-compatible:
 
 ```toml
 [[snippets]]
@@ -203,312 +165,226 @@ tag = ["git", "version-control"]
 output = ""
 ```
 
-The loader also accepts snip-it's older `[[Snippets]]` spelling and legacy
-capitalized field names. Snip-it-only metadata such as IDs, folders, favorites,
-and sync timestamps is preserved when snip-it writes a library. See
-[USER_GUIDE.md](USER_GUIDE.md) for library layout, import/export, and the full
-configuration reference.
+Snip-it also preserves its own optional metadata, including IDs, folders,
+favorites, timestamps, and sync state.
 
-### Importing from pet
+## Importing from pet
 
-Import existing pet snippet files into snip-it named libraries:
+Inspect a pet file before migrating it:
+
+```bash
+snp doctor --pet-file ~/.config/pet/snippets.toml
+```
+
+Then import it into a snip-it library:
 
 ```bash
 snp import pet ~/.config/pet/snippets.toml
 snp import pet snippets.toml --library my-snippets
-snp import pet snippets.toml --merge        # skip exact duplicates
-snp import pet snippets.toml --dry-run      # preview without writing
-snp import pet snippets.toml --report json  # machine-readable output
+snp import pet snippets.toml --merge
+snp import pet snippets.toml --dry-run
 ```
 
-The source file is never modified. Imported commands preserve exact text
-including variables, shell metacharacters, and whitespace.
+The source file is not modified. Snip-it also accepts older `[[Snippets]]`
+files and legacy capitalized field names.
 
-### Diagnose before you migrate
+See [USER_GUIDE.md](USER_GUIDE.md#pet-compatibility-and-import) for migration,
+replacement, diagnostics, and compatibility details.
+
+## Creating snippets from files, stdin, or an editor
+
+Interactive creation is the simplest path, but `snp new` also supports exact
+command ingestion:
 
 ```bash
-snp doctor --pet-file ~/.config/pet/snippets.toml
-snp doctor --pet-file snippets.toml --report json   # machine-readable
-snp doctor --compatibility                           # audit snp environment
-snp doctor --check-shell zsh                         # validate shell init
-snp doctor --library my-snippets                     # analyze a library file
+printf '%s' 'git commit -m "release"' | \
+  snp new --command-stdin --description 'Release commit'
+
+snp new --from-file ./deploy.sh --description 'Deploy service'
+snp new --editor --description 'Complex pipeline'
 ```
+
+These modes store valid UTF-8 command text without evaluating it. The stdin and
+file paths are useful for multiline scripts or shell integration where shell
+quoting would otherwise be awkward.
+
+## Shell integration
+
+Snip-it can generate shell functions for Bash, Zsh, and Fish. They use the
+current command buffer as the initial search and insert the selected snippet
+without executing it.
+
+Add one of the following to your shell configuration:
+
+```bash
+# Bash: ~/.bashrc
+eval "$(snp shell init bash)"
+
+# Zsh: ~/.zshrc
+eval "$(snp shell init zsh)"
+
+# Fish: ~/.config/fish/config.fish
+snp shell init fish | source
+```
+
+No keybindings are installed automatically. The generated integration exposes:
+
+| Function | Behavior |
+| --- | --- |
+| `snp_select_raw` | Insert a snippet with placeholders unchanged |
+| `snp_select_expanded` | Prompt for variables, then insert the expanded command |
+| `snp_new_current` | Save the current shell buffer as a snippet |
+| `snp_new_previous` | Save the previous accepted shell-history entry |
+
+You can inspect the generated code before sourcing it:
+
+```bash
+snp shell init zsh
+```
+
+See [Shell integration](USER_GUIDE.md#shell-integration) for example keybindings
+and shell-specific details.
 
 ## Themes
 
-Snip-it reads the same color-theme TOML files used by Halloy. A Halloy theme
-file can be copied directly into:
+Press `e` in the TUI's normal mode to open the theme picker. Move through the
+bundled themes for a live preview and press `Enter` to save the selection.
+
+Snip-it uses Halloy-compatible theme TOML files. Custom themes can be placed in:
 
 ```text
 $XDG_CONFIG_HOME/snp/themes/<name>.toml
 ```
 
-When `XDG_CONFIG_HOME` is unset, use `~/.config/snp/themes/<name>.toml`.
+or, when `XDG_CONFIG_HOME` is unset:
 
-Then press `e` in the normal TUI mode to open the theme picker, preview themes,
-and press `Enter` to save the selection. The active theme is recorded in
-the config root's `themes.toml`. The `SNP_THEME` environment variable remains
-available for compatibility with the older `dark`, `bright`, `light`, and
-`auto` values, or a theme filename.
+```text
+~/.config/snp/themes/<name>.toml
+```
 
-Snip-it uses Halloy's color schema and projects it onto the colors needed by
-the TUI. `font_style` and Halloy-specific UI colors that have no snip-it
-equivalent are ignored. Copy the theme file itself, not Halloy's main config
-entry such as `theme = "..."`. See the [Halloy theme guide](https://halloy.chat/guides/custom-themes)
-and [Halloy's theme repository](https://github.com/squidowl/halloy).
+See [Themes](USER_GUIDE.md#themes) for the supported schema and compatibility
+notes.
 
-## Sync across environments
+## Optional encrypted sync
 
-Sync is optional. It uses a self-hosted `snip-sync` server backed by SQLite.
-The client encrypts snippet descriptions, commands, and tags before sending
-them; the server handles authentication, library metadata, and ciphertext
-storage. The server does not terminate TLS, so a remote deployment must put it
-behind a TLS-terminating reverse proxy.
+Sync is optional and self-hosted. The `snp` client encrypts snippet payloads
+before sending them to `snip-sync`; the server stores library metadata and
+ciphertext in SQLite. A remote deployment must place `snip-sync` behind a
+TLS-terminating reverse proxy because the server itself does not terminate TLS.
 
-Sync resolves live equal-timestamp conflicts deterministically using the
-timestamp, device ID, and a SHA-256 fingerprint of synced fields. Explicit
-deletions win and are not silently resurrected. This remains wall-clock-based;
-correct system clocks if one device has severe clock skew. Missing remote
-libraries use a durable, credential-free recovery marker so a crashed relink
-can resume without blindly creating another library.
-
-The complete deployment guide, including Docker, Caddy, systemd, configuration,
-health checks, and troubleshooting, is in
-[snip-sync/README.md](snip-sync/README.md).
-
-### Local test server
+Install the server separately:
 
 ```bash
-cargo install snip-it snip-sync
+cargo install snip-sync
+```
 
-# In one terminal:
+For a loopback-only local test:
+
+```bash
+# Terminal 1
 snip-sync init --skip-cert
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 
-# In another terminal:
+# Terminal 2
 snp register --server http://127.0.0.1:50051
 snp sync --push-only
 ```
 
-Plaintext HTTP is for loopback development only. Do not expose this server
-directly to the internet.
+Do not expose the plaintext development configuration to a network.
 
-### Remote server and multiple environments
-
-For a remote server, use an HTTPS URL terminated by your reverse proxy:
+For a remote deployment, register the client against the HTTPS address exposed
+by your reverse proxy:
 
 ```bash
 snp register --server https://sync.example.com
 ```
 
-The sync server's current credential model is API-key based. `snp register`
-creates a new account and API key, so run it once for the collection you want
-to share. Every environment that should see that collection must be configured
-with the same server URL and API key; registering independently creates a
-separate account and separate libraries. Provision the key through your OS
-keychain or a secret manager, and never commit it to a repository or put it in
-shell history. The [multi-environment section of USER_GUIDE.md](USER_GUIDE.md#syncing-one-account-across-environments)
-shows the settings involved.
+`snp register` creates a new sync account and API key. Devices intended to
+share one collection must use the same account credentials; independently
+registering each device creates separate accounts.
 
-After the first environment has pushed its libraries, use bidirectional sync on
-each environment so local and remote changes are merged:
+Manual sync is available with:
 
 ```bash
-snp sync --push-only       # first environment: seed the server
-snp sync --pull-only       # another environment: fetch the existing libraries
-snp sync                    # after setting sync_direction = "Bidirectional"
+snp sync
+snp sync --push-only
+snp sync --pull-only
 ```
 
-Sync uses last-write-wins timestamps for shared fields. Keep the SQLite
-database on persistent storage and back it up along with the rest of the server
-data.
-
-### Auto-sync policy
-
-Auto-sync is disabled by default. When enabled, mutation commands (`new`, `edit`,
-`import`, `delete`, `library create/delete`) trigger one **detached one-shot
-helper** (`snp auto-sync-worker`) after the local change is committed. The
-helper owns the shared `SyncExecutionLock` and runs the canonical sync operation
-directly. All sync operations — helper, manual `snp sync`, explicit `--sync`,
-and cron — share that lock. The parent returns immediately — the user never
-waits on network round-trips.
-
-Configure it via:
+Automatic sync after local mutations is disabled by default and can be enabled
+with:
 
 ```bash
-snp sync config --show                         # inspect current settings
-snp sync config --auto-sync on                 # enable auto-sync
-snp sync config --debounce 5                   # 5-second debounce (0-300)
-snp sync config --failure warn                 # ignore, warn, or error
+snp sync config --auto-sync on
+snp sync config --show
 ```
 
-`max_delay` (configured directly in `sync.toml` as `auto_sync_max_delay_seconds`)
-forces a sync attempt after bounded time even if changes continue, preventing
-indefinite starvation.
+Auto-sync uses a detached one-shot helper so a local save does not wait for a
+network round trip. Manual and automatic sync operations share the same
+execution lock.
 
-`auto_sync_timeout_seconds` bounds each automatic-sync network and retry
-window. Requests and retry sleeps are capped by the remaining deadline;
-deadline expiry records transient timeout status and preserves pending intent.
-Local filesystem operations are not force-cancelled.
+For deployment, Caddy/reverse-proxy examples, server configuration, health
+checks, cron/systemd usage, and troubleshooting, see
+[snip-sync/README.md](snip-sync/README.md). For multi-device credential setup
+and sync policy details, see [USER_GUIDE.md](USER_GUIDE.md#sync).
 
-Local mutations always succeed before any remote work begins. A failed
-auto-sync never rolls back or corrupts a successful local save. Unreadable
-pending state, execution-lock failures, and worker-spawn failures remain
-visible through existing status/logging paths; they are never treated as
-“no pending work” or as a successfully started worker.
+## Command overview
 
-A durable pending marker (`auto-sync-pending.toml`) records the latest
-mutation generation; the worker only clears state matching its observed
-generation, preventing stale workers from clobbering fresh mutations.
-Worker, execution, and pending locks (`auto-sync-worker.lock`,
-`auto-sync-execution.lock`, `auto-sync-pending.lock`) are backed by the
-kernel's advisory file-lock facility — the kernel alone arbitrates; lock
-files persist on disk and may contain stale metadata.
-`snp sync repair` intentionally leaves these persistent lock files untouched;
-their metadata is diagnostic, and the next lock acquirer refreshes it after
-obtaining the kernel lock.
+| Command | Purpose |
+| --- | --- |
+| `snp new` | Create a snippet |
+| `snp list` | List/filter snippets without executing |
+| `snp run` | Select and execute a snippet |
+| `snp clip` | Select and copy a snippet |
+| `snp search` | Select and inspect a snippet |
+| `snp select` | Select and print a command without executing it |
+| `snp get` | Retrieve a snippet deterministically for scripts |
+| `snp edit` | Edit a library or a snippet's output/notes metadata |
+| `snp library` | Create, list, inspect, select, or delete libraries |
+| `snp premade` | Browse and install premade libraries from a sync server |
+| `snp import pet` | Import a pet snippet file |
+| `snp doctor` | Diagnose files, the local installation, shell integration, or sync |
+| `snp data` | Validate, back up, restore, repair, or inspect local state |
+| `snp register` | Register with a `snip-sync` server |
+| `snp sync` | Run or configure synchronization |
+| `snp cron` | Print a periodic sync schedule |
+| `snp shell init` | Generate interactive shell integration |
+| `snp completions` | Generate shell completion definitions |
+| `snp keybindings` | Print the complete TUI keybinding reference |
+| `snp update` | Check for and install a supported update |
+| `snp version` | Print the installed version |
 
-The hidden helper reports failed sync execution with a nonzero internal exit
-status, so supervisors and diagnostics do not mistake a failed background sync
-for a successful one. The helper is re-executed using the current executable's
-native path representation, preserving valid non-UTF-8 Unix paths.
-
-## CLI overview
-
-```text
-snp new          Create a snippet (--command-stdin, --from-file, --editor, --multiline)
-snp list         List snippets (--sort, --favorites-first, --json, --csv, --search-output)
-snp run          Run a snippet from the TUI (--sort, --favorites-first)
-snp clip         Copy a snippet from the TUI (--sort, --favorites-first)
-snp select       Select a snippet and print its command (no execution)
-snp search       Search and inspect snippets (--sort, --favorites-first)
-snp get          Retrieve a snippet deterministically (--id, --description-exact, --command-exact, --json, --csv, --raw)
-snp edit         Edit a snippet library in $EDITOR (--output, --output-stdin, --clear-output)
-snp library      Create, list, select, or delete libraries
-snp premade      Browse and download premade libraries
-snp import       Import snippets from external formats (e.g., pet)
-snp data         Advanced data maintenance (validate, backup, restore, repair, status)
-snp doctor       Diagnose pet file, library, environment, or shell init syntax
-snp register     Register with a snip-sync server
-snp sync         Push, pull, or bidirectionally sync libraries
-snp sync config  View or update auto-sync policy
-snp sync retry   Retry a failed auto-sync now
-snp sync clear-failure  Clear failure state without discarding pending intent
-snp sync discard-pending  Discard pending sync intent (--force, --generation)
-snp sync repair  Repair sync control artifacts (--dry-run, --apply)
-snp cron         Print a periodic sync schedule
-snp keybindings  Show TUI keybindings
-snp update       Check for and install an update
-snp shell        Generate interactive shell integration
-snp completions  Generate shell completions
-```
-
-The legacy top-level spellings (`snp validate`, `snp backup`, `snp restore`,
-`snp repair`, `snp status`) remain as compatibility aliases and behave
-identically to their `snp data` equivalents.
-
-Run `snp <command> --help` for command-specific options.
-
-## Shell integration
-
-snip-it generates shell functions that search snippets using the current
-command buffer as the initial query and insert the selected snippet without
-executing it. No keybindings are installed by default.
-
-```bash
-# Bash — add to ~/.bashrc
-eval "$(snp shell init bash)"
-
-# Zsh — add to ~/.zshrc
-eval "$(snp shell init zsh)"
-
-# Fish — add to ~/.config/fish/config.fish
-snp shell init fish | source
-```
-
-In addition to the selection functions below, the generated integration
-defines `snp_new_current` for the current buffer and `snp_new_previous` for the
-previous accepted shell command. These capture helpers never execute the
-captured text and do not install keybindings automatically.
-
-This defines `snp_select_raw` (inserts placeholders unchanged) and
-`snp_select_expanded` (prompts for variables before inserting). Bind them
-to your preferred keys:
-
-```bash
-# Bash
-bind -x '"\C-o": snp_select_raw'
-bind -x '"\C-n": snp_new_current'
-bind -x '"\C-p": snp_new_previous'
-
-# Zsh
-bindkey '^O' snp_select_raw
-bindkey '^N' snp_new_current
-bindkey '^P' snp_new_previous
-
-# Fish
-bind \co snp_select_raw
-bind \cn snp_new_current
-bind \cp snp_new_previous
-```
-
-The generated code is safe to inspect before sourcing. It invokes `snp`
-through your `PATH`, passes the current buffer as `--query`, and uses a
-temp-file transport for lossless multiline handling. On cancellation the
-original buffer is preserved exactly.
-
-See [USER_GUIDE.md](USER_GUIDE.md#shell-integration) for the full
-reference including expanded mode, troubleshooting, and removal.
-
-## Configuration and security
+## Configuration and data
 
 The client configuration root is `$XDG_CONFIG_HOME/snp` when
-`XDG_CONFIG_HOME` is set, otherwise `~/.config/snp`. Important files include:
+`XDG_CONFIG_HOME` is set, otherwise `~/.config/snp`.
+
+Important files include:
 
 | Path | Purpose |
 | --- | --- |
-| `snippets.toml` | Legacy single-file library |
+| `snippets.toml` | Legacy single-file snippet collection |
 | `libraries.toml` | Library metadata and sync links |
 | `libraries/*.toml` | User libraries |
 | `premade/*.toml` | Downloaded premade libraries |
-| `sync.toml` | Sync server settings and direction |
-| `themes/*.toml` | Halloy-compatible theme files |
+| `sync.toml` | Sync settings and server metadata |
+| `themes/*.toml` | Custom Halloy-compatible themes |
 | `themes.toml` | Active theme selection |
-| `usage.toml` | Local usage metadata (use count, last used) |
+| `usage.toml` | Local usage counts and last-used timestamps |
 
-API keys are stored in the operating system keychain when available. Set
-`SNP_ALLOW_PLAINTEXT_API_KEY=true` only for a deliberately controlled headless
-environment where keychain storage is unavailable. This stores the key in
-`sync.toml` and should be protected with restrictive file permissions.
+Sync API keys are stored in the operating-system keychain when available. See
+[SECURITY.md](SECURITY.md) before using the plaintext-key fallback in a
+headless environment.
 
-Sync payloads use AES-256-GCM with an Argon2id-derived key. CRC32 integrity
-headers on local sync settings detect accidental partial writes but are not an
-anti-tampering mechanism. See [SECURITY.md](SECURITY.md) for the threat model
-and disclosure policy.
+## More documentation
 
-Common environment variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `XDG_CONFIG_HOME` | Change the client configuration root |
-| `SNP_THEME` | Select a legacy or file-based theme |
-| `SNP_COMMAND_TIMEOUT` | Command execution timeout in seconds; `0` disables it |
-| `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds; default `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | Permit plaintext API-key storage when keychain storage fails |
-| `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout; default `10` seconds |
-| `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout; default `30` seconds |
-| `SNP_LOG` / `RUST_LOG` | Configure tracing output |
-| `EDITOR` | Editor used by `snp edit` |
-
-## Documentation
-
-- [USER_GUIDE.md](USER_GUIDE.md) — libraries, pet compatibility, themes, sync,
-  multi-environment provisioning, variables, premade libraries, and recovery.
-- [snip-sync/README.md](snip-sync/README.md) — self-hosting and deploying the
+- [USER_GUIDE.md](USER_GUIDE.md) — libraries, variables, pet compatibility,
+  shell integration, themes, sync, automation, and recovery.
+- [snip-sync/README.md](snip-sync/README.md) — deploying and operating the
   optional sync server.
-- [SECURITY.md](SECURITY.md) — threat model and vulnerability disclosure.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development and release workflow.
+- [SECURITY.md](SECURITY.md) — security model and vulnerability disclosure.
 - [CHANGELOG.md](CHANGELOG.md) — release history.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow.
 
 ## License
 
