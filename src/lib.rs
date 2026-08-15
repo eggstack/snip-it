@@ -58,6 +58,7 @@ pub(crate) mod migration;
 pub(crate) mod output;
 pub(crate) mod status_snapshot;
 pub(crate) mod sync_commands;
+pub(crate) mod sync_failure;
 pub(crate) mod test_failpoints;
 #[cfg(not(feature = "test-support"))]
 pub(crate) mod transaction;

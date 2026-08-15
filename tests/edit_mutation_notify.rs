@@ -41,6 +41,11 @@ fn run_edit_with_editor(
 ) -> (bool, String, String) {
     let mut cmd = snp_in(config_dir);
     cmd.arg("edit");
+    // `resolve_editor_spec` checks `VISUAL` before `EDITOR`. Clear any
+    // inherited value so the test-specified editor is authoritative and the
+    // tests are deterministic regardless of the developer's environment.
+    cmd.env_remove("VISUAL");
+    cmd.env_remove("EDITOR");
     cmd.env("EDITOR", editor_path);
     cmd.env("SNP_SKIP_WORKER_SPAWN", "true");
     cmd.env("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
@@ -256,6 +261,9 @@ fn test_edit_unchanged_success_noop_no_marker_via_env() {
     let editor = write_editor_script(script_dir.path(), "#!/bin/sh\nexit 0\n");
     let mut cmd = env.snp_cmd();
     cmd.arg("edit");
+    // Clear inherited VISUAL/EDITOR so the test editor is authoritative.
+    cmd.env_remove("VISUAL");
+    cmd.env_remove("EDITOR");
     cmd.env("EDITOR", &editor);
     cmd.env("SNP_SKIP_WORKER_SPAWN", "true");
     let out = cmd.output().unwrap();

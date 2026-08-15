@@ -1432,8 +1432,8 @@ mod tests {
             }
         ));
         assert_eq!(
-            crate::auto_sync::policy::FailureClass::from_error(&error),
-            crate::auto_sync::policy::FailureClass::Transient
+            crate::sync_failure::FailureClass::from_error(&error),
+            crate::sync_failure::FailureClass::Transient
         );
     }
 
@@ -1941,8 +1941,8 @@ mod tests {
             }
         ));
         assert_eq!(
-            crate::auto_sync::policy::FailureClass::from_error(&error),
-            crate::auto_sync::policy::FailureClass::Configuration
+            crate::sync_failure::FailureClass::from_error(&error),
+            crate::sync_failure::FailureClass::Configuration
         );
     }
 
@@ -1960,8 +1960,8 @@ mod tests {
             Some("snippet 'x' too large"),
         );
         assert_eq!(
-            crate::auto_sync::policy::FailureClass::from_error(&err),
-            crate::auto_sync::policy::FailureClass::Configuration
+            crate::sync_failure::FailureClass::from_error(&err),
+            crate::sync_failure::FailureClass::Configuration
         );
     }
 
@@ -1972,8 +1972,8 @@ mod tests {
             Some("updated_at is 742 seconds ahead"),
         );
         assert_eq!(
-            crate::auto_sync::policy::FailureClass::from_error(&err),
-            crate::auto_sync::policy::FailureClass::Configuration
+            crate::sync_failure::FailureClass::from_error(&err),
+            crate::sync_failure::FailureClass::Configuration
         );
     }
 
@@ -2011,8 +2011,8 @@ mod tests {
         }
 
         assert_eq!(
-            crate::auto_sync::policy::FailureClass::from_error(&contextualized),
-            crate::auto_sync::policy::FailureClass::Configuration
+            crate::sync_failure::FailureClass::from_error(&contextualized),
+            crate::sync_failure::FailureClass::Configuration
         );
     }
 

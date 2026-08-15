@@ -21,7 +21,7 @@
 
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
+    aead::{Aead, Generate, KeyInit},
 };
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -208,27 +208,24 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
 }
 
 pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
-    let mut salt = [0u8; SALT_SIZE];
-    OsRng.fill_bytes(&mut salt);
+    let salt = <[u8; SALT_SIZE]>::generate();
 
     let mut key = derive_key(api_key, &salt)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {e}")))?;
 
-    let mut nonce_bytes = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::generate();
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {e}")))?;
 
     key.zeroize();
 
     let payload = EncryptedPayload {
         salt: salt.to_vec(),
-        nonce: nonce_bytes.to_vec(),
+        nonce: nonce.to_vec(),
         ciphertext,
     };
 
@@ -243,10 +240,11 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Key init failed: {e}")))?;
 
-    let nonce = Nonce::from_slice(&payload.nonce);
+    let nonce = Nonce::try_from(payload.nonce.as_slice())
+        .map_err(|_| CryptoError::InvalidData("Invalid nonce length".to_string()))?;
 
     let plaintext = cipher
-        .decrypt(nonce, payload.ciphertext.as_ref())
+        .decrypt(&nonce, payload.ciphertext.as_ref())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {e}")))?;
 
     drop(std::mem::take(&mut key));

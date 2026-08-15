@@ -15,8 +15,19 @@ fn shell_escape_path(path: &str) -> String {
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 
-/// Displays a crontab entry for periodic sync at the given interval (in minutes).
-pub fn run(interval: u32) -> SnipResult<()> {
+/// Resolves the executable path for the running `snp` binary, falling back to
+/// the bare name `snp` if the path cannot be determined.
+fn binary_path() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "snp".to_string())
+}
+
+/// Validates the interval and builds the crontab entry string.
+///
+/// This is the pure portion of [`run`]: it performs no blocking I/O (in
+/// particular, no `stdin` reads) so it can be unit tested directly.
+pub fn make_cron_entry(interval: u32) -> SnipResult<String> {
     if interval == 0 {
         return Err(SnipError::runtime_error(
             "Invalid interval",
@@ -24,15 +35,21 @@ pub fn run(interval: u32) -> SnipResult<()> {
         ));
     }
 
-    let binary_path = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "snp".to_string());
-
-    let cron_entry = format!(
+    Ok(format!(
         "*/{} * * * * {} sync",
         interval,
-        shell_escape_path(&binary_path)
-    );
+        shell_escape_path(&binary_path())
+    ))
+}
+
+/// Displays a crontab entry for periodic sync at the given interval (in minutes).
+pub fn run(interval: u32) -> SnipResult<()> {
+    // The resolved `binary_path` is only surfaced in the Windows instructions
+    // (the crontab entry itself is built by `make_cron_entry`); gate the binding
+    // so it is not flagged as unused on Unix.
+    #[cfg(target_os = "windows")]
+    let binary_path = binary_path();
+    let cron_entry = make_cron_entry(interval)?;
 
     println!("Crontab entry (every {interval} minutes):");
     println!("{cron_entry}");
@@ -76,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_run_interval_zero_invalid() {
-        let result = run(0);
+        let result = make_cron_entry(0);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -87,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_run_interval_valid() {
-        let result = run(30);
+        let result = make_cron_entry(30);
         assert!(result.is_ok());
     }
 
