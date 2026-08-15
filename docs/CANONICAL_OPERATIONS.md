@@ -3,6 +3,9 @@
 > Generated: Phase 06A Workstream D
 > Purpose: Single source of truth for every behavior-critical operation, its canonical
 > implementation, all callers/adapters, and any semantic deviations.
+>
+> **Note:** Line numbers are approximate and may drift as the codebase evolves.
+> Verify against current source when precision is needed.
 
 ---
 

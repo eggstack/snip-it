@@ -4,7 +4,7 @@
 
 ## File
 
-**`src/clipboard.rs`** (162 lines)
+**`src/clipboard.rs`** (255 lines)
 
 Cross-platform clipboard access with auto-clear scheduling.
 

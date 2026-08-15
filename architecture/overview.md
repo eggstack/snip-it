@@ -173,7 +173,7 @@ transmission (AES-256-GCM).
 
 ## Auto-Sync Subsystem
 
-**Source**: `src/auto_sync/` (10 modules)
+**Source**: `src/auto_sync/` (11 modules)
 **Deep dive**: [auto_sync.md](auto_sync.md)
 
 Single detached-helper model. A background worker (`snp auto-sync-worker`)
@@ -182,6 +182,7 @@ runs the canonical sync operation after local mutations.
 | Module | Purpose |
 |--------|---------|
 | `execution_lock.rs` | `SyncExecutionLock`, `WorkerLock` — kernel-backed exclusive ownership (includes merged worker lock and `spawn_worker`) |
+| `lock.rs` | Worker lock re-exports from `execution_lock` for backward compatibility |
 | `worker.rs` | Detached worker entry point, holds lock for entire cycle |
 | `notification.rs` | Mutation notification, pending marker creation, startup recovery |
 | `pending.rs` | `PendingState` — on-disk pending mutation marker |
@@ -201,7 +202,7 @@ runs the canonical sync operation after local mutations.
 
 ## Server (snip-sync)
 
-**Source**: `snip-sync/src/` (18 modules)
+**Source**: `snip-sync/src/` (17 modules)
 **Deep dive**: [server.md](server.md)
 
 Self-hosted Rust gRPC server using tonic + axum (HTTP).
@@ -218,6 +219,7 @@ Self-hosted Rust gRPC server using tonic + axum (HTTP).
 | `cert.rs` | TLS certificate generation |
 | `orchestration.rs` | Service lifetime, graceful shutdown |
 | `bootstrap.rs` | Server initialization |
+| `cli.rs` | CLI argument parsing |
 | `paths.rs` | Path resolution for server state |
 | `process.rs` | Legacy PID parsing and stop/restart compatibility |
 | `editor.rs` | Server-side config editing |

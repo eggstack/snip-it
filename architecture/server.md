@@ -36,7 +36,7 @@ A standalone gRPC + HTTP server that stores encrypted snippets, manages users/li
 
 ## Database
 
-**File**: `snip-sync/src/db.rs` (~1000 lines)
+**File**: `snip-sync/src/db.rs` (~1215 lines)
 
 SQLite via `sqlx` with in-memory support for tests.
 
@@ -113,7 +113,7 @@ Configurable via `CORS_ALLOWED_ORIGINS` env var or config file. Supports multipl
 
 ## Rate Limiter
 
-**File**: `snip-sync/src/rate_limiter.rs` (47 lines)
+**File**: `snip-sync/src/rate_limiter.rs` (151 lines)
 
 In-memory per-key rate limiting:
 - Default: 120 requests/minute per API key
@@ -122,7 +122,7 @@ In-memory per-key rate limiting:
 
 ## Metrics
 
-**File**: `snip-sync/src/metrics.rs` (67 lines)
+**File**: `snip-sync/src/metrics.rs` (128 lines)
 
 Prometheus counters:
 
@@ -138,7 +138,7 @@ Protected by HTTP Basic auth (`METRICS_USERNAME`/`METRICS_PASSWORD`).
 
 ## Premade Manager
 
-**File**: `snip-sync/src/premade.rs` (214 lines)
+**File**: `snip-sync/src/premade.rs` (535 lines)
 
 Scans a directory for `.toml` snippet library files:
 - Reads and parses each file

@@ -4,7 +4,7 @@
 
 ## File
 
-**`src/logging.rs`** (255 lines)
+**`src/logging.rs`** (630 lines)
 
 Structured logging using the `tracing` crate with file rotation and panic handling.
 

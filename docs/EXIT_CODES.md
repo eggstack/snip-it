@@ -91,7 +91,7 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ## Exit-Code Mapping in `main.rs`
 
-The central exit-code mapper in `src/main.rs` (lines 1207-1218) handles two paths:
+The central exit-code mapper in `src/main.rs` (lines 1423-1445) handles two paths:
 
 1. **`CommandOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4, `Err(e)` → exit 1.
 2. **`CliOutcome`** path: Commands that return `CliOutcome` directly call `outcome.exit_code()` and pass it to `std::process::exit()`.

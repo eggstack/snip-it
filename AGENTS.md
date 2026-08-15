@@ -68,7 +68,7 @@ themes/           50 Halloy TOML theme files
 - `main.rs` — CLI entry point, clap dispatch
 - `lib.rs` — Library crate (exports for integration tests)
 - `commands/` — 24 files (23 command modules + shared helpers in `mod.rs`)
-- `auto_sync/` — Auto-sync subsystem (execution_lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
+- `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
 - `library.rs` — Snippet/library data structures and TOML persistence

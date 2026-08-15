@@ -2,6 +2,9 @@
 
 Workstreams E, F, G, H analysis for the snip-it Rust project.
 
+> **Note:** Line numbers are approximate and may drift as the codebase evolves.
+> Verify against current source when precision is needed.
+
 ---
 
 ## Workstream E: Data Model Tightening

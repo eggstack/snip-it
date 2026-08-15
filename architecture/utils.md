@@ -15,7 +15,7 @@
 
 ## Variables
 
-**File**: `src/utils/variables.rs` (277 lines)
+**File**: `src/utils/variables.rs` (1877 lines)
 
 ### Syntax
 

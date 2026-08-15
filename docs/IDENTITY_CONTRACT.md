@@ -1,5 +1,8 @@
 # Stable Identity Contract
 
+> **Note:** Line numbers are approximate and may drift as the codebase evolves.
+> Verify against current source when precision is needed.
+
 ## Snippet Identity
 
 - **ID field**: UUID v4 string, stored in `id` field of `Snippet` struct (`src/library.rs:48`)

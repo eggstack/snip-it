@@ -4,7 +4,7 @@
 
 ## File
 
-**`src/ui/`** (~1400 lines across submodules)
+**`src/ui/`** (~5100 lines across submodules)
 
 The largest single file in the codebase. Implements the terminal user interface using `ratatui` with `crossterm` as the backend.
 

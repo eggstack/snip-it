@@ -7,7 +7,7 @@ exit codes and stdout/stderr stream usage.
 
 ### Exit Codes
 
-All errors are handled in `src/main.rs:812-823`:
+All errors are handled in `src/main.rs:1423-1445`:
 
 ```rust
 if let Err(e) = dispatch_command(cli.command) {
