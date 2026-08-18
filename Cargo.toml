@@ -19,9 +19,11 @@ exclude = [
     ".opencode/",
     "plans/",
     "plan.md",
+    "docs/",
     "AGENTS.md",
     "AGENTS.override.md",
     "USER_GUIDE.md",
+    "RELEASING.md",
     "snippets.example.toml",
     "deny.toml",
     "snip-sync/",
@@ -40,6 +42,7 @@ exclude = [
     "snip-it-demo.gif",
     "snip-it-demo.mp4",
     "snip-it-demo.tape",
+    "src/test_failpoints.rs",
 ]
 
 [[bin]]

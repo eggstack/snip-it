@@ -93,8 +93,8 @@ The dry-run mode requires a clean working tree and runs
 Tags are optional and manual:
 
 ```bash
-git tag -a v1.3.4 -m "snip-it 1.3.4"
-git push origin v1.3.4
+git tag -a v1.3.5 -m "snip-it 1.3.5"
+git push origin v1.3.5
 ```
 
 Do not create a GitHub Release automatically. Do not publish from tags.

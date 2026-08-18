@@ -98,8 +98,8 @@ releases, not on every push.
 snip-it/
 ├── Cargo.toml          # Main binary crate (`snp`, published to crates.io)
 ├── src/                # CLI source
-├── snip-proto/         # Protobuf + tonic stubs (publish = false)
-├── snip-sync/          # Sync server binary (publish = false)
+├── snip-proto/         # Protobuf + tonic stubs (published to crates.io)
+├── snip-sync/          # Sync server binary (published to crates.io)
 ├── tests/              # Integration tests
 ├── assets/             # Demo GIF + vhs tape
 ├── architecture/       # Internal architecture docs (AI-agent oriented)
@@ -169,7 +169,7 @@ automated publish workflow and no crates.io token in GitHub Actions.
    ```
 8. **Verify** from a clean machine:
    ```bash
-   cargo install snp --version X.Y.Z --locked
+   cargo install snip-it --version X.Y.Z --locked
    snp --version
    ```
 

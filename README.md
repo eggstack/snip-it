@@ -345,6 +345,8 @@ and sync policy details, see [USER_GUIDE.md](USER_GUIDE.md#sync).
 | `snp import pet` | Import a pet snippet file |
 | `snp doctor` | Diagnose files, the local installation, shell integration, or sync |
 | `snp data` | Validate, back up, restore, repair, or inspect local state |
+| `snp repair` | Validate and repair configuration and library files |
+| `snp validate` | Read-only validation of snippet data and structure |
 | `snp register` | Register with a `snip-sync` server |
 | `snp sync` | Run or configure synchronization |
 | `snp cron` | Print a periodic sync schedule |
