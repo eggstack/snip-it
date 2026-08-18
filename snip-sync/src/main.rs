@@ -210,6 +210,18 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         snip_sync::parse_bool_env(&|name| std::env::var(name).ok(), "CORS_ALLOW_ALL")?
             .unwrap_or(false);
 
+    let loopback_bind = http_addr.ip().is_loopback();
+    let cors_allow_all = if cors_allow_all && !loopback_bind {
+        tracing::warn!(
+            "CORS_ALLOW_ALL=true ignored: HTTP server bound to {} (non-loopback). \
+             Set CORS_ALLOW_ALL only on loopback-bound servers.",
+            http_addr
+        );
+        false
+    } else {
+        cors_allow_all
+    };
+
     let cors = if cors_allow_all {
         tracing::info!("CORS: allowing all origins (CORS_ALLOW_ALL=true)");
         CorsLayer::new()

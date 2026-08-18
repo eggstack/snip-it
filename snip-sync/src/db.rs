@@ -104,6 +104,17 @@ fn compute_api_key_prefix(api_key: &str) -> String {
     encoded.chars().take(8).collect()
 }
 
+/// Derives a stable prefix from a stored hash for legacy users whose
+/// `api_key_prefix` is NULL. The prefix is independent of the original
+/// API key (which is unrecoverable from the Argon2 hash), so legacy users
+/// cannot authenticate after backfill — but the fallback that turned
+/// NULL-prefix users into an O(N) Argon2id DoS amplifier is removed.
+fn derive_prefix_from_hash(stored_hash: &str) -> String {
+    let hash = Sha256::digest(stored_hash.as_bytes());
+    let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash);
+    encoded.chars().take(8).collect()
+}
+
 fn saturating_i32(v: i64) -> i32 {
     v.min(i32::MAX as i64) as i32
 }
@@ -275,15 +286,15 @@ impl Database {
     pub async fn get_user_by_api_key(&self, api_key: &str) -> DbResult<Option<String>> {
         let prefix = compute_api_key_prefix(api_key);
 
-        // Use prefix to narrow candidate set; prefix may be NULL for legacy rows
-        // that were already hashed before the prefix optimization was added.
-        // The IS NULL fallback ensures these users can still authenticate.
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, api_key FROM users WHERE api_key_prefix = ? OR api_key_prefix IS NULL",
-        )
-        .bind(&prefix)
-        .fetch_all(&self.pool)
-        .await?;
+        // Prefix is always populated for new users (see create_user) and is
+        // backfilled by migrate_plaintext_api_keys. The legacy NULL-prefix
+        // fallback was removed because N NULL-prefix users turned every auth
+        // attempt into O(N) Argon2id verification — a DoS amplifier.
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, api_key FROM users WHERE api_key_prefix = ?")
+                .bind(&prefix)
+                .fetch_all(&self.pool)
+                .await?;
 
         for (user_id, stored_hash) in rows {
             if verify_api_key(api_key, &stored_hash) {
@@ -635,13 +646,16 @@ impl Database {
 
             // Backfill prefix if missing
             if prefix.is_none() {
-                // For plaintext keys, prefix from plaintext; for hashed keys, we can't
-                // compute prefix without the original key, so we skip those — they'll
-                // still work via the `IS NULL` fallback in get_user_by_api_key.
-                if !stored.starts_with("$argon2") {
+                if stored.starts_with("$argon2") {
+                    // Legacy hashed key: derive a stable prefix from the stored hash.
+                    // The original API key is unrecoverable, so this user will no
+                    // longer be able to authenticate — but the NULL-prefix fallback
+                    // that amplified auth into an O(N) Argon2id DoS is removed.
+                    new_prefix = Some(derive_prefix_from_hash(&stored));
+                } else {
                     new_prefix = Some(compute_api_key_prefix(&stored));
-                    needs_update = true;
                 }
+                needs_update = true;
             }
 
             if needs_update {

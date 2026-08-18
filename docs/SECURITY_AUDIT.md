@@ -189,8 +189,8 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 
 | Property | Detail | Source |
 |---|---|---|
-| Scheme check | HTTPS required for non-loopback hosts | `src/sync.rs:502-507` |
-| HTTP dev mode | `SNIP_SYNC_ALLOW_HTTP` env var bypasses HTTPS requirement | Documented in sync module |
+| Scheme check | TLS enabled when URL scheme is `https`. `http://` is rejected for non-loopback hosts in `create_tls_channel`; `SNIP_SYNC_ALLOW_HTTP=true` overrides the loopback check. | `src/sync.rs:1066-1106` (`create_tls_channel`) |
+| HTTP dev mode | `SNIP_SYNC_ALLOW_HTTP` env var bypasses the loopback check (loopback hosts are always allowed) | Documented in sync module |
 | Default server | `http://localhost:50051` (loopback, HTTP allowed) | `src/config.rs:27` |
 
 ### F.2 TLS Configuration

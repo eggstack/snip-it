@@ -1416,6 +1416,14 @@ fn main() {
         log_startup_info();
     }
 
+    #[cfg(not(feature = "test-support"))]
+    if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
+        tracing::warn!(
+            "SNP_ALLOW_PLAINTEXT_API_KEY is set; API keys will be stored in plaintext. \
+             This is a development convenience and should not be used in production."
+        );
+    }
+
     if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(Some(behavior.recovery)) {
         snip_it::auto_sync::startup_recover_pending();
     }

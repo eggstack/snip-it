@@ -937,7 +937,7 @@ impl SyncClient {
                 self,
                 async {
                     let mut req = tonic::Request::new(ListLibrariesRequest {
-                        api_key: api_key.clone(),
+                        api_key: String::new(),
                         limit: PAGE_LIMIT,
                         offset,
                     });
@@ -972,7 +972,7 @@ impl SyncClient {
             self,
             async {
                 let mut req = tonic::Request::new(CreateLibraryRequest {
-                    api_key: api_key.clone(),
+                    api_key: String::new(),
                     name: name_str.clone(),
                 });
                 add_api_key_metadata(&mut req, &api_key);
@@ -1003,7 +1003,7 @@ impl SyncClient {
         let response = retry_grpc!(
             async {
                 let mut req = tonic::Request::new(ListPremadeLibrariesRequest {
-                    api_key: api_key.clone(),
+                    api_key: String::new(),
                 });
                 add_api_key_metadata(&mut req, &api_key);
                 self.client.list_premade_libraries(req).await
@@ -1020,7 +1020,7 @@ impl SyncClient {
         let response = retry_grpc!(
             async {
                 let mut req = tonic::Request::new(GetPremadeLibraryRequest {
-                    api_key: api_key.clone(),
+                    api_key: String::new(),
                     filename: filename_str.clone(),
                 });
                 add_api_key_metadata(&mut req, &api_key);
@@ -1050,7 +1050,7 @@ impl SyncClient {
         let response = retry_grpc!(
             async {
                 let mut req = tonic::Request::new(SearchPremadeLibrariesRequest {
-                    api_key: api_key.clone(),
+                    api_key: String::new(),
                     query: query_str.clone(),
                 });
                 add_api_key_metadata(&mut req, &api_key);
@@ -1062,12 +1062,57 @@ impl SyncClient {
     }
 }
 
+/// Returns `true` if plaintext HTTP should be allowed for the given URI.
+///
+/// Allows `http://` connections only when:
+/// - the host is a loopback address (`localhost`, `127.0.0.1`, `[::1]`,
+///   or any `127.x.x.x`), **or**
+/// - the `SNIP_SYNC_ALLOW_HTTP` env var is set to a truthy value
+///   (`true`/`1`/`yes`/`on`, case-insensitive).
+fn allow_plaintext_http(uri: &Uri) -> bool {
+    let scheme = uri.scheme_str().unwrap_or("https");
+    if scheme != "http" {
+        return true; // HTTPS or other schemes are fine.
+    }
+    if is_loopback(uri.host().unwrap_or("")) {
+        return true;
+    }
+    // SNIP_SYNC_ALLOW_HTTP overrides the loopback check (for testing).
+    matches!(
+        std::env::var("SNIP_SYNC_ALLOW_HTTP").as_deref(),
+        Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on")
+    )
+}
+
+/// Returns `true` if `host` resolves to a loopback address.
+fn is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let stripped = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    stripped
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|addr| addr.is_loopback())
+}
+
 async fn create_tls_channel(
     server_url: &str,
     request_timeout: Option<Duration>,
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let uri: Uri = server_url.parse()?;
     let scheme = uri.scheme_str().unwrap_or("https").to_ascii_lowercase();
+
+    if scheme == "http" && !allow_plaintext_http(&uri) {
+        return Err(
+            "Refusing plaintext gRPC to non-loopback host. Use https:// or set \
+             SNIP_SYNC_ALLOW_HTTP=true for local development."
+                .into(),
+        );
+    }
+
     let host = if scheme == "https" {
         Some(uri.host().ok_or("No host in URI")?.to_string())
     } else {

@@ -255,6 +255,34 @@ pub fn parse_bool_env(
     }
 }
 
+/// Warn if a config file containing credentials is world-readable.
+///
+/// On Unix, a world-readable config file (mode bits `0o004` set) allows
+/// any local user to read plaintext metrics credentials.  This helper
+/// logs a warning so the operator can `chmod 600` the file.
+#[cfg(unix)]
+fn check_config_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o004 != 0 {
+                tracing::warn!(
+                    "Config file {} is world-readable (mode {:#05o}); \
+                     other local users can read metrics credentials. \
+                     Run: chmod 600 {}",
+                    path.display(),
+                    mode,
+                    path.display()
+                );
+            }
+        }
+        Err(e) => {
+            tracing::debug!("Unable to check permissions on {}: {}", path.display(), e);
+        }
+    }
+}
+
 impl Config {
     pub fn load() -> Result<Self, ConfigLoadError> {
         let config_path = paths::config_path();
@@ -266,10 +294,25 @@ impl Config {
         env: &impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigLoadError> {
         let config_file = match std::fs::read_to_string(config_path) {
-            Ok(content) => toml::from_str(&content).map_err(|source| ConfigLoadError::Parse {
-                path: config_path.to_path_buf(),
-                source,
-            })?,
+            Ok(content) => {
+                let parsed: ConfigFile =
+                    toml::from_str(&content).map_err(|source| ConfigLoadError::Parse {
+                        path: config_path.to_path_buf(),
+                        source,
+                    })?;
+
+                #[cfg(unix)]
+                if let Some(server) = &parsed.server
+                    && server
+                        .metrics
+                        .as_ref()
+                        .is_some_and(|m| m.username.is_some() || m.password.is_some())
+                {
+                    check_config_permissions(config_path);
+                }
+
+                parsed
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
             Err(source) => {
                 return Err(ConfigLoadError::Read {

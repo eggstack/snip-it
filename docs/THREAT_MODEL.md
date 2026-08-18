@@ -116,9 +116,9 @@ Each boundary below represents a transition where data crosses from one trust do
 
 **Description:** The local gRPC client communicates with the snip-sync server.
 
-**Properties:** All data in transit is end-to-end encrypted. The server never sees plaintext snippets. Bearer token in gRPC metadata. TLS required for non-loopback connections.
+**Properties:** All data in transit is end-to-end encrypted. The server never sees plaintext snippets. Bearer token in gRPC metadata. TLS via `https://` URLs; plaintext `http://` is rejected for non-loopback hosts in the client.
 
-**Mitigations:** AES-256-GCM encryption with random nonces, TLS enforcement, `SNIP_SYNC_ALLOW_HTTP` gate for loopback-only exceptions, server stores Argon2id hashes of API keys (not plaintext).
+**Mitigations:** AES-256-GCM encryption with random nonces, TLS via `https://`, client-side loopback check rejecting plaintext to non-loopback hosts, `SNIP_SYNC_ALLOW_HTTP` env var overrides the loopback check (loopback hosts are always allowed), server stores Argon2id hashes of API keys (not plaintext).
 
 ### Boundary 7: Local Archive Restore
 
@@ -213,9 +213,9 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | An attacker on the network intercepts sync traffic when TLS is disabled or downgraded. |
 | **Attack vector** | `SNIP_SYNC_ALLOW_HTTP=true` or loopback exception used in a non-loopback context; network co-located attacker. |
-| **Mitigations** | TLS is required for all non-loopback connections. `SNIP_SYNC_ALLOW_HTTP` is gated and only effective for loopback addresses. Sync client rejects plaintext connections outside loopback. |
-| **Residual risk** | Very low. The environment variable gate makes accidental plaintext use unlikely. A user who deliberately disables TLS for a non-loopback server accepts the risk. |
-| **User responsibility** | Do not set `SNIP_SYNC_ALLOW_HTTP=true` for non-loopback servers. Use TLS in all production and staging environments. |
+| **Mitigations** | TLS is enabled when the URL scheme is `https`. The client refuses `http://` connections to non-loopback hosts in `create_tls_channel`; `SNIP_SYNC_ALLOW_HTTP=true` overrides the loopback check for testing. |
+| **Residual risk** | Very low. The client-side loopback check and the server-side env-var gate make accidental plaintext use unlikely. A user who deliberately disables TLS for a non-loopback server accepts the risk. |
+| **User responsibility** | Ensure the sync server URL uses `https://` for non-loopback hosts. Do not set `SNIP_SYNC_ALLOW_HTTP=true` for non-loopback servers. Use TLS in all production and staging environments. |
 | **Tests / evidence** | `src/sync.rs` (TLS enforcement), `tests/sync_integration.rs` (loopback-only HTTP tests). |
 | **Owner / module** | `src/sync.rs`, `src/config.rs` |
 

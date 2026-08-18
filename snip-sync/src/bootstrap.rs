@@ -51,6 +51,20 @@ pub fn ensure_config_file() -> Result<(), String> {
                     e
                 ));
             }
+            // Restrict permissions to owner-only (0o600) so other local
+            // users cannot read credentials stored in the file.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) = fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+                {
+                    tracing::warn!(
+                        "Failed to set permissions on {}: {}",
+                        config_path.display(),
+                        e
+                    );
+                }
+            }
             tracing::info!("Created default config file at {}", config_path.display());
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}

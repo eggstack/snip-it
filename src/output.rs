@@ -95,7 +95,17 @@ impl<'a> OutputPresentation<'a> {
         if self.raw.len() <= budget {
             sanitize_for_terminal(self.raw)
         } else {
-            sanitize_for_terminal(&self.raw[..budget])
+            let safe_budget = if self.raw.is_char_boundary(budget) {
+                budget
+            } else {
+                self.raw
+                    .char_indices()
+                    .take_while(|&(i, _)| i < budget)
+                    .last()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0)
+            };
+            sanitize_for_terminal(&self.raw[..safe_budget])
         }
     }
 }
@@ -282,5 +292,18 @@ mod tests {
         let short = "hello";
         let p = OutputPresentation::new(short);
         assert_eq!(p.for_scoring(), "hello");
+    }
+
+    #[test]
+    fn test_for_scoring_multibyte_utf8_no_panic() {
+        // "中" is 3 bytes in UTF-8. 171 chars = 513 bytes, so byte 512
+        // lands mid-character. This must not panic.
+        let cjk = "中".repeat(171);
+        assert!(cjk.len() > OUTPUT_SEARCH_BUDGET);
+        let p = OutputPresentation::new(&cjk);
+        let scored = p.for_scoring();
+        assert!(scored.len() <= OUTPUT_SEARCH_BUDGET);
+        // Result must be valid UTF-8 (sanitized_for_terminal preserves validity).
+        assert!(!scored.is_empty());
     }
 }
