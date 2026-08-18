@@ -22,28 +22,22 @@
 ## `list --json`
 
 ```json
-{
-  "schema": 1,
-  "items": [
-    {
-      "id": "string",
-      "description": "string",
-      "command": "string",
-      "output": "string | null",
-      "tags": ["string"],
-      "folders": ["string"],
-      "favorite": false,
-      "deleted": false,
-      "created_at": "2026-01-15T10:30:00Z",
-      "updated_at": "2026-01-15T10:30:00Z"
-    }
-  ]
-}
+[
+  {
+    "description": "string",
+    "command": "string",
+    "output": "string",
+    "tags": ["string"],
+    "folders": ["string"],
+    "favorite": false
+  }
+]
 ```
 
-- Items are sorted by `updated_at` descending (matching `save_library` sort order).
+- Items are sorted by fuzzy relevance ranking (default), or by the explicit `--sort` mode.
 - `deleted` snippets are excluded (consistent with TUI display).
-- `output` is always present but may be `null` or empty string.
+- `output` is always present but may be an empty string.
+- No wrapping envelope — the output is a bare JSON array.
 
 ---
 
@@ -55,16 +49,16 @@
   "id": "string",
   "description": "string",
   "command": "string",
-  "expanded": "string",
+  "expanded": "string | null",
   "tags": ["string"],
-  "library": "string | null",
-  "library_id": "string | null"
+  "library": "string",
+  "library_id": "string"
 }
 ```
 
 - `command` is the raw template (with `<var>` placeholders).
-- `expanded` is the fully expanded command (variables replaced with defaults or prompt values).
-- `library` is the library name; `library_id` is the library filename stem.
+- `expanded` is the fully expanded command (variables replaced with defaults or prompt values); `null` when `--expanded` is not used.
+- `library` is the display name; `library_id` is the filename stem (empty string when not in library mode).
 
 ---
 
@@ -73,28 +67,52 @@
 ```json
 {
   "schema": 1,
-  "top_level": "string",
-  "sync_configured": true,
-  "sync_direction": "string | null",
-  "pending_generation": "number | null",
-  "pending_age_secs": "number | null",
-  "last_attempt_result": "string | null",
-  "last_attempt_time": "string | null",
-  "backoff_until": "string | null",
-  "worker_active": false,
-  "executor_active": false,
+  "generated_at_unix_ms": 0,
+  "config_root": "string",
+  "log_dir": "string",
+  "local": {
+    "libraries": 0,
+    "snippets": 0,
+    "primary_library": "string | null"
+  },
+  "sync": {
+    "configuration": "string",
+    "top_level": "string"
+  },
+  "pending": {
+    "state": "string"
+  },
+  "attempt": {
+    "state": "string",
+    "last_attempt_generation": 0,
+    "last_attempt_at_unix_ms": 0,
+    "last_success_at_unix_ms": 0,
+    "last_failure_class": "string",
+    "consecutive_failures": 0,
+    "next_attempt_at_unix_ms": 0,
+    "attention_required": false,
+    "message": "string"
+  },
+  "execution": {
+    "execution_lock": "string",
+    "worker_lock": "string"
+  },
   "diagnostics": [
     {
       "severity": "string",
-      "message": "string"
+      "code": "string",
+      "message": "string",
+      "remediation": "string | null"
     }
   ]
 }
 ```
 
-- `top_level` is one of: `"healthy"`, `"sync_disabled"`, `"pending"`, `"backing_off"`, `"failed"`.
-- `sync_direction` is one of: `"push"`, `"pull"`, `"bidirectional"`, or `null`.
-- Timestamps are ISO 8601; durations are in seconds.
+- `sync.configuration` is one of: `"NotConfigured"`, `"Configured"`, `"ConfiguredAutoSyncDisabled"`, `"LoadFailed"`.
+- `sync.top_level` is one of: `"CorruptOrInaccessible"`, `"LiveExecution"`, `"PendingAttentionRequired"`, `"PendingRetryBackoff"`, `"PendingAwaitingScheduling"`, `"ConfiguredAndCurrent"`, `"ConfiguredAutoSyncDisabled"`, `"NotConfigured"`.
+- `pending.state` is one of: `"None"`, `"Pending"`, `"Corrupt"`, `"Inaccessible"`.
+- `attempt.state` is one of: `"NeverAttempted"`, `"Succeeded"`, `"RetryScheduled"`, `"AttentionRequired"`, `"Deferred"`, `"Corrupt"`.
+- `execution_lock` and `worker_lock` are one of: `"Idle"`, `"Live"`, `"DeadStale"`, `"Malformed"`, `"Inaccessible"`.
 
 ---
 
@@ -131,21 +149,30 @@
 
 ```json
 {
-  "schema": 1,
-  "items": [
+  "schema_version": "1.0.0",
+  "tool_version": "string",
+  "strict_mode": false,
+  "dry_run": true,
+  "total_libraries": 0,
+  "total_snippets": 0,
+  "diagnostics": [
     {
+      "code": "string",
       "severity": "string",
+      "path": "string | null",
+      "library": "string | null",
+      "snippet_id": "string | null",
       "message": "string",
-      "file": "string | null",
-      "snippet_id": "string | null"
+      "repairability": "string"
     }
   ]
 }
 ```
 
-- `severity` is one of: `"error"`, `"warning"`, `"info"`.
-- `file` is the path to the file containing the issue (may be relative).
-- `snippet_id` identifies the specific snippet when applicable.
+- `severity` is one of: `"Info"`, `"Warning"`, `"Error"`.
+- `repairability` is one of: `"Auto"`, `"Manual"`, `"Unrepairable"`.
+- `code` is a machine-readable diagnostic code (e.g., `"E-DUP-ID"`, `"W-DESC-EMPTY"`).
+- `dry_run` is always `true` (validate is read-only).
 
 ---
 
@@ -153,23 +180,17 @@
 
 ```json
 {
-  "schema": 1,
-  "backup_id": "string",
-  "timestamp": "2026-01-15T10:30:00Z",
-  "files": [
-    {
-      "path": "string",
-      "sha256": "string",
-      "size_bytes": 0
-    }
-  ],
-  "total_files": 0,
+  "backup_dir": "string",
+  "schema": 0,
+  "version": "string",
+  "file_count": 0,
   "total_bytes": 0
 }
 ```
 
-- `backup_id` is a UUID.
-- `sha256` is the hex-encoded SHA-256 checksum of the file content.
+- `backup_dir` is the path to the created backup directory.
+- `schema` is the backup manifest schema version number.
+- `version` is the snip-it version that created the backup.
 - Backup files exclude secrets (API keys, passwords are redacted).
 
 ---
@@ -178,25 +199,24 @@
 
 ```json
 {
-  "schema": 1,
-  "restore_id": "string",
-  "timestamp": "2026-01-15T10:30:00Z",
-  "files_restored": 0,
-  "files_skipped": 0,
-  "dry_run": false,
   "mode": "string",
-  "details": [
+  "files_restored": 0,
+  "conflicts": [
     {
-      "path": "string",
-      "action": "string",
-      "reason": "string | null"
+      "library": "string",
+      "kind": "string",
+      "detail": "string"
     }
-  ]
+  ],
+  "skipped": ["string"],
+  "pre_restore_backup": "string | null"
 }
 ```
 
-- `action` is one of: `"restored"`, `"skipped"`, `"conflict"`.
 - `mode` is one of: `"dry-run"`, `"merge"`, `"replace"`.
+- `conflicts` lists libraries where restore encountered conflicts.
+- `skipped` lists library names that were skipped.
+- `pre_restore_backup` is the path to the pre-restore backup, if created.
 
 ---
 
@@ -204,23 +224,28 @@
 
 ```json
 {
-  "schema": 1,
   "items": [
     {
-      "severity": "string",
-      "message": "string",
-      "file": "string | null",
-      "action": "string | null"
+      "action": "string",
+      "category": "string",
+      "transaction_id": "string | null",
+      "problem": "string",
+      "fix": "string",
+      "safe": false
     }
   ],
-  "backups_created": 0,
-  "repairs_applied": 0,
-  "dry_run": true
+  "backups": ["string"],
+  "applied": 0,
+  "skipped": 0,
+  "failed": 0,
+  "exit_status": "string"
 }
 ```
 
-- `action` describes the repair action taken or proposed: `"quarantine"`, `"recreate"`, `"fix"`.
-- `dry_run` indicates whether repairs were actually applied.
+- `action` is the Debug representation of the repair action (e.g., `"Quarantine"`, `"Recreate"`, `"Fix"`).
+- `category` describes the type of repair.
+- `safe` indicates whether the repair is considered safe to apply automatically.
+- `exit_status` is one of: `"clean"`, `"repaired"`, `"partial_failure"`, `"unsafe_only"`, `"dry_run"`.
 
 ---
 
@@ -228,28 +253,54 @@
 
 ```json
 {
-  "schema": 1,
+  "schema_version": "1.0.0",
+  "tool_version": "string",
   "source": "string",
-  "destination": "string",
+  "destination": "string | null",
+  "analysis_mode": "string",
+  "mutation_flag": false,
   "total_entries": 0,
   "imported": 0,
   "skipped": 0,
-  "merged": 0,
-  "errors": [
+  "duplicates": [
     {
-      "index": 0,
+      "source_index": 0,
+      "destination_index": 0,
       "description": "string",
       "reason": "string"
     }
   ],
-  "dry_run": false
+  "diagnostics": [
+    {
+      "code": "string",
+      "severity": "string",
+      "message": "string",
+      "entry_index": 0,
+      "field": "string | null",
+      "suggestion": "string | null",
+      "span": { "start": 0, "end": 0 }
+    }
+  ],
+  "normalizations": [
+    {
+      "entry_index": 0,
+      "field": "string",
+      "original": "string",
+      "normalized": "string"
+    }
+  ],
+  "detected_capabilities": ["string"],
+  "dry_run": false,
+  "strict_mode": false,
+  "had_fatal_error": false
 }
 ```
 
-- `source` and `destination` are file paths.
-- `skipped` counts entries that already exist (exact match).
-- `merged` counts entries that were combined with existing snippets.
-- `errors` lists entries that could not be imported.
+- `analysis_mode` is `"diagnostic"` (dry-run) or `"mutating"`.
+- `duplicates` lists entries skipped during merge due to exact match.
+- `diagnostics` lists compatibility issues found in the source file.
+- `normalizations` records field name case adjustments (e.g., `Description` → `description`).
+- `detected_capabilities` lists features found in the source (e.g., `"toml_format"`, `"variables"`).
 
 ---
 

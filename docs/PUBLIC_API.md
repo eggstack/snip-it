@@ -144,7 +144,7 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub struct EncryptedPayload` | **provisional-public** | `{ salt, nonce, ciphertext }` |
 | `pub fn encrypt()` | **provisional-public** | AES-256-GCM encryption |
 | `pub fn decrypt()` | **provisional-public** | AES-256-GCM decryption |
-| `pub fn ct_eq()` (#[cfg(test)]) | **removed** | Was test-only constant-time comparison; no longer present in source |
+| `pub fn ct_eq()` (#[cfg(test)]) | **test-only** | Constant-time comparison; present only in test builds, not in production binary |
 
 ---
 
@@ -439,7 +439,7 @@ the root `snip-it` library no longer exposes a generated-proto module.
 
 ### Dead/accidental items
 
-15. **`pub fn ct_eq()` in `encryption.rs`** — **REMOVED.** Was test-only constant-time comparison; no longer present in source.
+15. **`pub fn ct_eq()` in `encryption.rs`** — **test-only.** Present under `#[cfg(test)]`; not in the production binary.
 
 16. **`pub fn quote_strings_containing_backslashes()` in `utils/toml_helpers.rs`** —
     Public helper that was used by earlier code but is no longer called in the
@@ -466,7 +466,7 @@ the root `snip-it` library no longer exposes a generated-proto module.
 | **pub(crate)** | ~15 modules (encryption, diagnostics, output, status_snapshot, library, clipboard, utils, sync_commands, local_data, migration, test_failpoints, transaction, process_file_lock, selector, outcome) |
 | **application-internal** | ~200+ items (commands, auto_sync, logging, ui, usage) |
 | **integration-test-only** | ~40 items (sync, proto) |
-| **removed** | 1 item (ct_eq) |
+| **removed** | 0 items |
 
 The majority of the public surface (~250 items) is `application-internal`,
 exposed only because the binary crate and library crate share the same

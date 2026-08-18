@@ -112,6 +112,7 @@ snp list --json | jq '.items[] | select(.description | contains("deploy"))'
 
 | Command | Alias | Status |
 |---------|-------|--------|
+| `version` | `v` | Stable |
 | `new` | `n` | Stable |
 | `list` | `l` | Stable |
 | `run` | `r` | Stable |
@@ -119,23 +120,23 @@ snp list --json | jq '.items[] | select(.description | contains("deploy"))'
 | `search` | `s` | Stable |
 | `select` | `sel` | Stable |
 | `edit` | `e` | Stable |
-| `get` | `g` | Stable |
-| `status` | — | No alias |
-| `validate` | — | No alias |
+| `keybindings` | `k` | Stable |
+| `sync` | `y` | Stable |
+| `cron` | `cr` | Stable |
+| `register` | `reg` | Stable |
+| `library` | `lib` | Stable |
+| `premade` | `p` | Stable |
+| `import` | `i` | Stable |
+| `repair` | `rp` | Stable |
+| `validate` | `val` | Stable |
+| `data` | `d` | Stable |
+| `completions` | `g` | Stable |
+| `get` | — | No alias |
 | `doctor` | — | No alias |
 | `backup` | — | No alias |
 | `restore` | — | No alias |
-| `repair` | — | No alias |
-| `import` | — | No alias |
-| `sync` | `y` | Stable |
-| `register` | `reg` | Stable |
-| `cron` | `cr` | Stable |
-| `library` | `lib` | Stable |
-| `premade` | `p` | Stable |
 | `shell` | — | No alias |
-| `completions` | `g` | Stable |
-| `version` | `v` | Stable |
-| `keybindings` | `k` | Stable |
+| `status` | — | No alias |
 
 Aliases are removed only with a major version bump and explicit deprecation notice.
 

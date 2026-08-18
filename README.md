@@ -40,23 +40,13 @@ secrets manager; only save and run commands you trust.
 
 ## Installation
 
-### crates.io
-
 ```bash
 cargo install snip-it
 ```
 
-The installed client binary is `snp`. Building the current release requires
-Rust 1.94 or newer.
-
-Check the installation with:
-
-```bash
-snp version
-```
-
-For Cargo-managed installations, `snp update` can check for and install a newer
-release. Use `snp update --dry-run` to check without changing anything.
+Building the current release requires Rust 1.94 or newer. Check with
+`snp version`. For Cargo-managed installations, `snp update` checks for and
+installs newer releases.
 
 ### From source
 
@@ -106,8 +96,7 @@ For complete command help, run `snp --help` or `snp <command> --help`.
 
 ## TUI
 
-The selector is designed around keyboard navigation. Common normal-mode keys
-include:
+The selector is designed around keyboard navigation. Common normal-mode keys:
 
 | Key | Action |
 | --- | --- |
@@ -123,13 +112,7 @@ include:
 
 The exact action performed by `Enter` depends on the command that opened the
 selector (`run`, `clip`, `search`, or `select`). Variable entry has its own
-insert/normal modal controls.
-
-Run this at any time for the complete built-in reference:
-
-```bash
-snp keybindings
-```
+insert/normal modal controls. Run `snp keybindings` for the complete reference.
 
 ## Libraries
 
@@ -137,64 +120,29 @@ Libraries keep independent groups of snippets in separate TOML files:
 
 ```bash
 snp library create work
-snp library create personal
 snp library set-primary work
-snp library list
-
 snp new --library work 'kubectl get pods -n <namespace=default>'
 snp run --library work
-snp clip --library work
 ```
 
-Once library mode is in use, library files live under:
-
-```text
-$XDG_CONFIG_HOME/snp/libraries/
-```
-
-When `XDG_CONFIG_HOME` is unset, the default is
-`~/.config/snp/libraries/`.
-
-The core on-disk format remains human-editable and pet-compatible:
-
-```toml
-[[snippets]]
-description = "Git commit with a message"
-command = "git commit -m \"<message>\""
-tag = ["git", "version-control"]
-output = ""
-```
-
-Snip-it also preserves its own optional metadata, including IDs, folders,
-favorites, timestamps, and sync state.
+Library files live under `$XDG_CONFIG_HOME/snp/libraries/` (default:
+`~/.config/snp/libraries/`). The on-disk format is human-editable and
+pet-compatible. See [USER_GUIDE.md](USER_GUIDE.md#libraries) for details.
 
 ## Importing from pet
 
-Inspect a pet file before migrating it:
-
 ```bash
-snp doctor --pet-file ~/.config/pet/snippets.toml
+snp doctor --pet-file ~/.config/pet/snippets.toml   # inspect first
+snp import pet ~/.config/pet/snippets.toml           # import into a library
+snp import pet snippets.toml --merge                 # merge into existing
+snp import pet snippets.toml --dry-run               # preview without writing
 ```
 
-Then import it into a snip-it library:
-
-```bash
-snp import pet ~/.config/pet/snippets.toml
-snp import pet snippets.toml --library my-snippets
-snp import pet snippets.toml --merge
-snp import pet snippets.toml --dry-run
-```
-
-The source file is not modified. Snip-it also accepts older `[[Snippets]]`
-files and legacy capitalized field names.
-
-See [USER_GUIDE.md](USER_GUIDE.md#pet-compatibility-and-import) for migration,
+The source file is never modified. See
+[USER_GUIDE.md](USER_GUIDE.md#pet-compatibility-and-import) for migration,
 replacement, diagnostics, and compatibility details.
 
 ## Creating snippets from files, stdin, or an editor
-
-Interactive creation is the simplest path, but `snp new` also supports exact
-command ingestion:
 
 ```bash
 printf '%s' 'git commit -m "release"' | \
@@ -204,17 +152,14 @@ snp new --from-file ./deploy.sh --description 'Deploy service'
 snp new --editor --description 'Complex pipeline'
 ```
 
-These modes store valid UTF-8 command text without evaluating it. The stdin and
-file paths are useful for multiline scripts or shell integration where shell
-quoting would otherwise be awkward.
+These modes store valid UTF-8 command text without evaluating it. See
+[USER_GUIDE.md](USER_GUIDE.md#shell-integration) for multiline scripts and
+shell integration details.
 
 ## Shell integration
 
-Snip-it can generate shell functions for Bash, Zsh, and Fish. They use the
-current command buffer as the initial search and insert the selected snippet
-without executing it.
-
-Add one of the following to your shell configuration:
+Snip-it generates shell functions for Bash, Zsh, and Fish that insert the
+selected snippet into the current command buffer without executing it.
 
 ```bash
 # Bash: ~/.bashrc
@@ -227,7 +172,7 @@ eval "$(snp shell init zsh)"
 snp shell init fish | source
 ```
 
-No keybindings are installed automatically. The generated integration exposes:
+No keybindings are installed automatically. The generated functions:
 
 | Function | Behavior |
 | --- | --- |
@@ -236,97 +181,43 @@ No keybindings are installed automatically. The generated integration exposes:
 | `snp_new_current` | Save the current shell buffer as a snippet |
 | `snp_new_previous` | Save the previous accepted shell-history entry |
 
-You can inspect the generated code before sourcing it:
-
-```bash
-snp shell init zsh
-```
-
-See [Shell integration](USER_GUIDE.md#shell-integration) for example keybindings
-and shell-specific details.
+See [USER_GUIDE.md](USER_GUIDE.md#shell-integration) for example keybindings,
+saving commands, and shell-specific details.
 
 ## Themes
 
-Press `e` in the TUI's normal mode to open the theme picker. Move through the
-bundled themes for a live preview and press `Enter` to save the selection.
+Press `e` in the TUI's normal mode to open the theme picker with live preview.
+Snip-it ships 50 bundled Halloy-compatible themes. Custom themes go in
+`$XDG_CONFIG_HOME/snp/themes/<name>.toml`. See
+[USER_GUIDE.md](USER_GUIDE.md#themes) for the supported schema.
 
-Snip-it uses Halloy-compatible theme TOML files. Custom themes can be placed in:
+## Sync
 
-```text
-$XDG_CONFIG_HOME/snp/themes/<name>.toml
-```
-
-or, when `XDG_CONFIG_HOME` is unset:
-
-```text
-~/.config/snp/themes/<name>.toml
-```
-
-See [Themes](USER_GUIDE.md#themes) for the supported schema and compatibility
-notes.
-
-## Optional encrypted sync
-
-Sync is optional and self-hosted. The `snp` client encrypts snippet payloads
-before sending them to `snip-sync`; the server stores library metadata and
-ciphertext in SQLite. A remote deployment must place `snip-sync` behind a
-TLS-terminating reverse proxy because the server itself does not terminate TLS.
-
-Install the server separately:
+Sync is optional and self-hosted. The `snp` client encrypts snippets
+client-side before sending them to `snip-sync`; the server stores ciphertext
+in SQLite. The server does not terminate TLS — use a reverse proxy for remote
+deployments.
 
 ```bash
 cargo install snip-sync
-```
 
-For a loopback-only local test:
-
-```bash
-# Terminal 1
+# Local test (loopback only)
 snip-sync init --skip-cert
-SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
+SNIP_SYNC_ALLOW_HTTP=true snip-sync serve &
 
-# Terminal 2
 snp register --server http://127.0.0.1:50051
 snp sync --push-only
-```
 
-Do not expose the plaintext development configuration to a network.
-
-For a remote deployment, register the client against the HTTPS address exposed
-by your reverse proxy:
-
-```bash
+# Remote deployment
 snp register --server https://sync.example.com
-```
-
-`snp register` creates a new sync account and API key. Devices intended to
-share one collection must use the same account credentials; independently
-registering each device creates separate accounts.
-
-Manual sync is available with:
-
-```bash
 snp sync
-snp sync --push-only
-snp sync --pull-only
 ```
 
-Automatic sync after local mutations is disabled by default and can be enabled
-with:
-
-```bash
-snp sync config --auto-sync on
-snp sync config --show
-```
-
-Auto-sync uses a detached one-shot helper so a local save does not wait for a
-network round trip. Manual and automatic sync operations share the same
-execution lock.
-
-For deployment, Caddy/reverse-proxy examples, server configuration, health
-checks, cron/systemd usage, and troubleshooting, see
-[snip-sync/README.md](snip-sync/README.md). For multi-device credential setup
-and sync policy details, see [USER_GUIDE.md](USER_GUIDE.md#sync).
+Auto-sync after local mutations is off by default: `snp sync config --auto-sync on`.
+See [snip-sync/README.md](snip-sync/README.md) for deployment, Caddy/reverse-proxy
+examples, systemd, and troubleshooting. See
+[USER_GUIDE.md](USER_GUIDE.md#sync) for multi-device credential setup and
+sync policy.
 
 ## Command overview
 
@@ -361,8 +252,6 @@ and sync policy details, see [USER_GUIDE.md](USER_GUIDE.md#sync).
 The client configuration root is `$XDG_CONFIG_HOME/snp` when
 `XDG_CONFIG_HOME` is set, otherwise `~/.config/snp`.
 
-Important files include:
-
 | Path | Purpose |
 | --- | --- |
 | `snippets.toml` | Legacy single-file snippet collection |
@@ -380,13 +269,18 @@ headless environment.
 
 ## More documentation
 
-- [USER_GUIDE.md](USER_GUIDE.md) — libraries, variables, pet compatibility,
-  shell integration, themes, sync, automation, and recovery.
-- [snip-sync/README.md](snip-sync/README.md) — deploying and operating the
-  optional sync server.
-- [SECURITY.md](SECURITY.md) — security model and vulnerability disclosure.
-- [CHANGELOG.md](CHANGELOG.md) — release history.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow.
+| Document | Contents |
+| --- | --- |
+| [USER_GUIDE.md](USER_GUIDE.md) | Libraries, variables, pet import, shell integration, themes, sync, auto-sync, automation, and recovery |
+| [snip-sync/README.md](snip-sync/README.md) | Deploying and operating the optional sync server (Docker, systemd, reverse proxy) |
+| [SECURITY.md](SECURITY.md) | Security model, encryption, credential storage, and vulnerability disclosure |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, testing, and release process |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [docs/EXIT_CODES.md](docs/EXIT_CODES.md) | Exit code reference |
+| [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Pet format compatibility details |
+| [docs/JSON_SCHEMAS.md](docs/JSON_SCHEMAS.md) | Machine-readable JSON output schemas |
+| [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) | Security audit findings |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Threat model and trust boundaries |
 
 ## License
 
