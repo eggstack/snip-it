@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-08-18
+
 ### Changed
 - **Auto-sync correctness closure (Phase 01)**
   - Worker `NothingToDo` no longer clears the pending marker — pending is
@@ -243,6 +245,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.3.6]: https://github.com/eggstack/snip-it/releases/tag/v1.3.6
 [1.3.1]: https://github.com/eggstack/snip-it/releases/tag/v1.3.1
 [1.3.0]: https://github.com/eggstack/snip-it/releases/tag/v1.3.0
 [1.2.0]: https://github.com/eggstack/snip-it/releases/tag/v1.2.0
