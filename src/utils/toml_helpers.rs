@@ -114,12 +114,13 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
             let start = i;
             i += 1;
             let mut content = String::new();
-            while i < bytes.len() && bytes[i] != b'"' {
+            let mut closed = false;
+            while i < bytes.len() {
+                if bytes[i] == b'"' {
+                    closed = true;
+                    break;
+                }
                 if bytes[i] == b'\n' {
-                    // Unterminated basic string — pass through unchanged.
-                    out.push_str(&toml_str[start..i]);
-                    i += 1;
-                    content.clear();
                     break;
                 }
                 if bytes[i] == b'\\' && i + 1 < bytes.len() {
@@ -131,11 +132,15 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
                     i += 1;
                 }
             }
-            if i >= bytes.len() {
+            if !closed {
+                // Unterminated basic string (newline or EOF) — pass through
+                // verbatim so the parse error stays attributable to the real
+                // input instead of scanner-mangled output.
                 out.push_str(&toml_str[start..i]);
-                break;
-            }
-            if bytes[i] == b'\n' {
+                if i < bytes.len() {
+                    out.push('\n');
+                    i += 1;
+                }
                 continue;
             }
             i += 1;
@@ -297,6 +302,30 @@ mod tests {
         let result = fix_invalid_toml_escapes(input);
         assert!(result.contains("\\\\\"test\\\\\""));
         assert!(result.contains("\\\\<value\\\\>"));
+    }
+
+    #[test]
+    fn test_unterminated_basic_string_at_newline_not_duplicated() {
+        // Input ending right after the newline must pass through unchanged —
+        // not duplicated by the close-quote epilogue.
+        let input = "key = \"hello\n";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_unterminated_basic_string_with_trailing_content_not_mangled() {
+        // Content after the unterminated string's newline must not be swallowed.
+        let input = "key = \"abc\ndef";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_unterminated_basic_string_at_eof_passthrough() {
+        let input = "key = \"hello";
+        let result = quote_strings_containing_backslashes(input);
+        assert_eq!(result, input);
     }
 
     #[test]

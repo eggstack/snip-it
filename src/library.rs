@@ -461,15 +461,10 @@ snippets = []
     /// Config is saved before file deletion for crash safety.
     pub fn delete_library(&mut self, filename: &str) -> SnipResult<()> {
         let _lock = self.acquire_local_data_lock()?;
-        let was_primary = self
+        let (was_primary, deleted_was_server) = self
             .get_library_by_filename(filename)
-            .map(|l| l.is_primary)
+            .map(|l| (l.is_primary, l.server_id.is_some()))
             .ok_or_else(|| SnipError::runtime_error("Library not found", Some(filename)))?;
-
-        let deleted_was_server = self
-            .get_library_by_filename(filename)
-            .map(|l| l.server_id.is_some())
-            .unwrap_or(false);
 
         let path = self.libraries_dir.join(format!("{filename}.toml"));
 
@@ -787,6 +782,13 @@ fn write_library_file(path: &Path, content: &str, temp_prefix: &str) -> SnipResu
 /// - For duplicate explicit IDs, the first occurrence keeps the original and
 ///   later occurrences receive deterministic replacement IDs.
 /// - Repeated loads of identical file content produce identical IDs.
+///
+/// Note: the missing-ID and duplicate-ID branches intentionally share one
+/// content-fingerprint occurrence counter, so identical-content snippets
+/// consume occurrence indices from the same sequence regardless of which
+/// branch processes them. This keeps IDs deterministic for fixed file order;
+/// inserting or reordering identical-content snippets can shift provisional
+/// IDs of unrelated missing-ID snippets (accepted churn after sync merges).
 fn normalize_snippet_ids(snippets: &mut [Snippet]) {
     let mut seen_ids: HashSet<String> = HashSet::new();
     let mut content_fingerprints: std::collections::HashMap<String, usize> =
@@ -959,6 +961,17 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     Ok(())
 }
 
+/// Borrowed, recency-sorted serialization view of [`Snippets`].
+///
+/// Lets saves sort by `updated_at` without cloning snippet payloads.
+/// Serializes to the exact same TOML shape as `Snippets`.
+#[derive(serde::Serialize)]
+struct SortedSnippetsView<'a> {
+    snippets: Vec<&'a Snippet>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    folders: &'a Vec<String>,
+}
+
 /// Internal library save that skips the mutation gate and lock acquisition.
 ///
 /// This is valid only when the caller already holds the local-data lock
@@ -976,12 +989,16 @@ pub fn save_library_internal(
         tracing::warn!(error = %e, "Failed to create backup before save");
     }
 
-    let mut sorted = snippets.clone();
-    sorted
-        .snippets
-        .sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+    // Serialize from a borrowed, recency-sorted view so the full snippet
+    // payloads are not cloned on every save.
+    let mut order: Vec<usize> = (0..snippets.snippets.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(snippets.snippets[i].updated_at));
+    let sorted_view = SortedSnippetsView {
+        snippets: order.iter().map(|&i| &snippets.snippets[i]).collect(),
+        folders: &snippets.folders,
+    };
 
-    let toml_str = toml::to_string_pretty(&sorted)
+    let toml_str = toml::to_string_pretty(&sorted_view)
         .map_err(|e| SnipError::toml_error("serialize snippets", e))?;
 
     let temp_prefix = path

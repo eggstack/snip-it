@@ -165,6 +165,9 @@ enum TokenKind {
 struct VariableToken {
     name: String,
     kind: TokenKind,
+    /// Raw source content between the angle brackets (trimmed), used by
+    /// `expand_command` to match tokens positionally against the command.
+    content: String,
 }
 
 fn extract_variable_tokens(command: &str) -> Vec<VariableToken> {
@@ -235,6 +238,7 @@ fn extract_variable_tokens(command: &str) -> Vec<VariableToken> {
             }
 
             if !var_content.is_empty() && depth == 0 {
+                let content = var_content.trim().to_string();
                 let token = if let Some(eq_pos) = var_content.find('=') {
                     let name = var_content[..eq_pos].trim().to_string();
                     let default_val = var_content[eq_pos + 1..].trim().to_string();
@@ -244,29 +248,34 @@ fn extract_variable_tokens(command: &str) -> Vec<VariableToken> {
                             VariableToken {
                                 name,
                                 kind: TokenKind::Choices(choices),
+                                content: content.clone(),
                             }
                         } else {
                             // Malformed choice syntax — fall back to default value
                             VariableToken {
                                 name,
                                 kind: TokenKind::DefaultValue(default_val),
+                                content: content.clone(),
                             }
                         }
                     } else if default_val.is_empty() {
                         VariableToken {
                             name,
                             kind: TokenKind::Required,
+                            content: content.clone(),
                         }
                     } else {
                         VariableToken {
                             name,
                             kind: TokenKind::DefaultValue(default_val),
+                            content: content.clone(),
                         }
                     }
                 } else {
                     VariableToken {
                         name: var_content.trim().to_string(),
                         kind: TokenKind::Required,
+                        content: content.clone(),
                     }
                 };
                 // Skip empty variable names (e.g., bare `<>`)
@@ -627,10 +636,7 @@ impl VariableAssignments {
 }
 
 pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
-    let tokens: Vec<String> = extract_variable_tokens(command)
-        .into_iter()
-        .map(|token| token.name)
-        .collect();
+    let tokens: Vec<VariableToken> = extract_variable_tokens(command);
     let mut result = String::with_capacity(command.len());
     let mut chars = command.chars().peekable();
     let mut token_idx = 0;
@@ -703,12 +709,15 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                 }
             }
 
-            if let Some(name) = tokens.get(token_idx).filter(|n| **n == var_content.trim()) {
+            if let Some(token) = tokens
+                .get(token_idx)
+                .filter(|t| t.content == var_content.trim())
+            {
                 token_idx += 1;
-                let count = usage_count.entry(name.clone()).or_insert(0);
+                let count = usage_count.entry(token.name.clone()).or_insert(0);
                 let replacement = values
                     .iter()
-                    .filter(|(n, _)| n.trim() == name.trim())
+                    .filter(|(n, _)| n.trim() == token.name.trim())
                     .nth(*count)
                     .map(|(_, v)| v.trim());
                 *count += 1;
@@ -716,8 +725,17 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                 match replacement {
                     Some(val) => result.push_str(val),
                     None => {
-                        tracing::debug!(variable = %name, "No value provided for variable, using raw name");
-                        result.push_str(name);
+                        tracing::debug!(
+                            variable = %token.name,
+                            "No value provided for variable, using default or raw name"
+                        );
+                        match &token.kind {
+                            TokenKind::DefaultValue(default) => result.push_str(default),
+                            TokenKind::Choices(choices) => {
+                                result.push_str(choices.first().map(String::as_str).unwrap_or(""))
+                            }
+                            TokenKind::Required => result.push_str(&token.name),
+                        }
                     }
                 }
             } else {
@@ -1122,27 +1140,23 @@ mod tests {
 
     #[test]
     fn test_expand_variable_with_default_not_provided() {
-        // expand_command does NOT use the default value from the syntax;
-        // without a matching entry in values, the literal token is preserved.
+        // Without a matching entry in values, the default value is used.
         let result = expand_command("<host=localhost>", &[]);
-        assert_eq!(result, "<host=localhost>");
+        assert_eq!(result, "localhost");
     }
 
     #[test]
     fn test_expand_variable_with_default_provided() {
-        // expand_command does NOT expand <var=default> syntax at all;
-        // the entire token is preserved as a literal.
+        // A provided value overrides the default.
         let result = expand_command(
             "<host=localhost>",
             &[("host".to_string(), "server1".to_string())],
         );
-        assert_eq!(result, "<host=localhost>");
+        assert_eq!(result, "server1");
     }
 
     #[test]
     fn test_expand_multiple_variables() {
-        // expand_command does NOT expand <var=default> syntax;
-        // only plain <var> tokens are expanded. The <port=22> literal is preserved.
         let result = expand_command(
             "ssh <user>@<host> -p <port=22>",
             &[
@@ -1150,7 +1164,30 @@ mod tests {
                 ("host".to_string(), "10.0.0.1".to_string()),
             ],
         );
-        assert_eq!(result, "ssh root@10.0.0.1 -p <port=22>");
+        assert_eq!(result, "ssh root@10.0.0.1 -p 22");
+    }
+
+    #[test]
+    fn test_expand_prompt_composition_with_default() {
+        // Mirrors the interactive pipeline: parse_variables → prompt values
+        // (pre-filled with defaults, as ui::prompt_variables does) → expand_command.
+        let command = "ssh <host=localhost> 'uptime'";
+        let vars = parse_variables(command);
+        assert_eq!(vars.len(), 1);
+
+        // User accepts the pre-filled default.
+        let values: Vec<(String, String)> = vars
+            .iter()
+            .map(|v| (v.name.clone(), v.default.clone().unwrap()))
+            .collect();
+        assert_eq!(expand_command(command, &values), "ssh localhost 'uptime'");
+
+        // User overrides with their own value.
+        let values = vec![("host".to_string(), "prod.example.com".to_string())];
+        assert_eq!(
+            expand_command(command, &values),
+            "ssh prod.example.com 'uptime'"
+        );
     }
 
     #[test]
@@ -1545,24 +1582,23 @@ mod tests {
 
     #[test]
     fn test_expand_choice_variable_provided() {
-        // expand_command does NOT expand <var=|_choices_||> syntax;
-        // the entire token is preserved as a literal (same as <var=default>).
+        // A provided value replaces the whole choice token.
         let result = expand_command(
             "<color=|_red_||_green_||_blue_||>",
             &[("color".to_string(), "green".to_string())],
         );
-        assert_eq!(result, "<color=|_red_||_green_||_blue_||>");
+        assert_eq!(result, "green");
     }
 
     #[test]
     fn test_expand_choice_variable_not_provided() {
+        // Without a value, the first choice is used.
         let result = expand_command("<color=|_red_||_green_||_blue_||>", &[]);
-        assert_eq!(result, "<color=|_red_||_green_||_blue_||>");
+        assert_eq!(result, "red");
     }
 
     #[test]
     fn test_expand_choice_mixed_positional() {
-        // Only plain <var> tokens are expanded; <var=|_choices_||> is preserved.
         let result = expand_command(
             "ssh <user>@<host> -p <port=|_22_||_8022_||>",
             &[
@@ -1570,7 +1606,7 @@ mod tests {
                 ("host".to_string(), "10.0.0.1".to_string()),
             ],
         );
-        assert_eq!(result, "ssh root@10.0.0.1 -p <port=|_22_||_8022_||>");
+        assert_eq!(result, "ssh root@10.0.0.1 -p 22");
     }
 
     #[test]

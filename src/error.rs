@@ -309,10 +309,18 @@ pub type SnipResult<T> = Result<T, SnipError>;
 
 impl From<crate::encryption::CryptoError> for SnipError {
     fn from(e: crate::encryption::CryptoError) -> Self {
-        SnipError::Runtime {
-            message: "Encryption operation failed".to_string(),
-            detail: Some(e.to_string()),
-        }
+        // Key-derivation and invalid-data errors cannot be attributed to the
+        // encrypt or decrypt side from a blanket conversion; both target kinds
+        // classify as `FailureClass::Internal`, so retry policy is preserved.
+        let kind = match e {
+            crate::encryption::CryptoError::EncryptionFailed(_) => {
+                SyncFailureKind::EncryptionFailed
+            }
+            crate::encryption::CryptoError::DecryptionFailed(_)
+            | crate::encryption::CryptoError::KeyDerivationFailed(_)
+            | crate::encryption::CryptoError::InvalidData(_) => SyncFailureKind::DecryptionFailed,
+        };
+        SnipError::sync_failure(kind, Some(&e.to_string()))
     }
 }
 
@@ -405,6 +413,28 @@ mod tests {
     fn test_error_source_runtime() {
         let err = SnipError::runtime_error("msg", None);
         assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_from_crypto_error_preserves_failure_classification() {
+        let encrypt_err: SnipError =
+            crate::encryption::CryptoError::EncryptionFailed("bad key".to_string()).into();
+        match encrypt_err {
+            SnipError::SyncFailure { kind, detail } => {
+                assert!(matches!(kind, SyncFailureKind::EncryptionFailed));
+                assert!(detail.unwrap().contains("bad key"));
+            }
+            other => panic!("expected SyncFailure, got {other:?}"),
+        }
+
+        let decrypt_err: SnipError =
+            crate::encryption::CryptoError::DecryptionFailed("tampered".to_string()).into();
+        match decrypt_err {
+            SnipError::SyncFailure { kind, .. } => {
+                assert!(matches!(kind, SyncFailureKind::DecryptionFailed));
+            }
+            other => panic!("expected SyncFailure, got {other:?}"),
+        }
     }
 
     #[test]

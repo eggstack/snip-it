@@ -1534,15 +1534,24 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                         }
 
                         // Visual mode is a normal-mode command. In INSERT mode, `v` and
-                        // `V` must remain ordinary printable characters.
-                        if !insert_mode && key.code == KeyCode::Char('v') && !visual_mode {
+                        // `V` must remain ordinary printable characters. Both are
+                        // ignored on an empty list to avoid an invalid selection state.
+                        if !insert_mode
+                            && key.code == KeyCode::Char('v')
+                            && !visual_mode
+                            && !filtered.is_empty()
+                        {
                             visual_mode = true;
                             visual_start = sel.selected;
                             visual_end = sel.selected;
                             continue;
                         }
 
-                        if !insert_mode && key.code == KeyCode::Char('V') && !visual_mode {
+                        if !insert_mode
+                            && key.code == KeyCode::Char('V')
+                            && !visual_mode
+                            && !filtered.is_empty()
+                        {
                             visual_mode = true;
                             visual_start = sel.selected;
                             visual_end = filtered.len().saturating_sub(1);

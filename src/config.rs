@@ -108,6 +108,7 @@ pub fn invalidate_toml_cache(path: &std::path::Path) {
     let key = path.to_string_lossy().to_string();
     if let Ok(mut cache) = TOML_CACHE.lock() {
         cache.entries.remove(&key);
+        cache.insertion_order.retain(|k| k != &key);
     }
 }
 
@@ -710,6 +711,24 @@ mod tests {
         // to prevent data loss on upgrade from older versions.
         let content = "[sync]\nenabled = true\n";
         assert!(verify_integrity(content));
+    }
+
+    #[test]
+    fn test_invalidate_toml_cache_does_not_duplicate_insertion_order() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("cache-churn.toml");
+        std::fs::write(&path, "value = 1\n").unwrap();
+
+        let key = path.to_string_lossy().to_string();
+        for _ in 0..10 {
+            invalidate_toml_cache(&path);
+            let _ = cached_read_toml(&path).unwrap();
+        }
+
+        let cache = TOML_CACHE.lock().unwrap();
+        let occurrences = cache.insertion_order.iter().filter(|k| **k == key).count();
+        assert_eq!(occurrences, 1);
+        assert_eq!(cache.entries.get(&key).map(|e| e.len), Some(10));
     }
 
     #[test]
