@@ -125,9 +125,9 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
         return Ok(());
     }
 
-    let canonical = meta;
+    let existing_meta = meta;
 
-    if canonical.is_dir() {
+    if existing_meta.is_dir() {
         return Err(SnipError::runtime_error(
             "target path is a directory",
             Some(&path.display().to_string()),
@@ -137,7 +137,7 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
-        let ft = canonical.file_type();
+        let ft = existing_meta.file_type();
         if ft.is_fifo() {
             return Err(SnipError::runtime_error(
                 "target path is a FIFO",
@@ -165,7 +165,6 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
 ///
 /// Returns `Some(true)` if dirfsync succeeded, `Some(false)` if it failed
 /// (logged but not fatal), and `None` for ephemeral durability.
-#[allow(dead_code)]
 fn parent_dir_sync(
     #[cfg_attr(not(unix), allow(unused_variables))] parent: &Path,
     durability: Durability,
@@ -234,6 +233,10 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
 
     fs::rename(&tmp_path, path).map_err(|e| SnipError::io_error("atomic rename file", path, e))?;
     guard.persist();
+
+    // Flush the rename's directory entry so the new file survives power
+    // loss. This is the persistence path for all primary user data.
+    let _ = parent_dir_sync(parent, Durability::DurableUserData);
 
     Ok(())
 }

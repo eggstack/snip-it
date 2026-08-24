@@ -174,14 +174,11 @@ pub fn is_stale(contents: &LockIdentity) -> bool {
 
 #[cfg(unix)]
 pub fn process_alive(pid: u32) -> bool {
-    unsafe extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
     const SIGNAL_NOOP: i32 = 0;
     if pid == 0 {
         return false;
     }
-    let rc = unsafe { kill(pid as i32, SIGNAL_NOOP) };
+    let rc = unsafe { libc::kill(pid as i32, SIGNAL_NOOP) };
     rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
 }
 
@@ -223,6 +220,7 @@ pub const WORKER_LOCK_PURPOSE: &str = "auto-sync-worker";
 pub enum WorkerLockError {
     Io(std::io::Error),
     AlreadyHeld { pid: u32, nonce: String },
+    Timeout { pid: u32, nonce: String },
 }
 
 impl std::fmt::Display for WorkerLockError {
@@ -232,6 +230,10 @@ impl std::fmt::Display for WorkerLockError {
             Self::AlreadyHeld { pid, nonce } => write!(
                 f,
                 "auto-sync worker lock already held (pid={pid}, nonce={nonce})"
+            ),
+            Self::Timeout { pid, nonce } => write!(
+                f,
+                "timed out waiting for auto-sync worker lock (pid={pid}, nonce={nonce})"
             ),
         }
     }
@@ -250,7 +252,7 @@ impl From<ProcessFileLockError> for WorkerLockError {
             ProcessFileLockError::Timeout { owner } => {
                 let pid = owner.as_ref().map(|o| o.pid).unwrap_or(0);
                 let nonce = owner.as_ref().map(|o| o.nonce.clone()).unwrap_or_default();
-                Self::AlreadyHeld { pid, nonce }
+                Self::Timeout { pid, nonce }
             }
             ProcessFileLockError::Io(e) => Self::Io(e),
             ProcessFileLockError::UnsupportedPlatform => Self::Io(std::io::Error::new(

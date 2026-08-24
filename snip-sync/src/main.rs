@@ -696,7 +696,10 @@ fn check_health(http_host: &str, http_port: u16) -> bool {
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    let request = format!("GET /health HTTP/1.1\r\nHost: {http_host}\r\nConnection: close\r\n\r\n");
+    // Derive the Host header from the validated SocketAddr rather than
+    // interpolating the raw config string, so a hostile `http_host`
+    // cannot inject request lines (CRLF injection).
+    let request = format!("GET /health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }

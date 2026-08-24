@@ -509,10 +509,14 @@ impl Database {
                     deleted,
                     encrypted,
                 )| {
-                    let tags: Vec<String> = serde_json::from_str(&tags_str).inspect_err(|e| {
-                        tracing::warn!(snippet_id = %id, error = %e, "Failed to parse tags JSON, using empty list");
-                    }).unwrap_or_default();
-                    Snippet {
+                    // Surface corruption to repair flows instead of
+                    // silently substituting an empty tag list.
+                    let tags: Vec<String> = serde_json::from_str(&tags_str).map_err(|e| {
+                        DbError::Internal(format!(
+                            "corrupt tags JSON for snippet {id} (row must be repaired): {e}"
+                        ))
+                    })?;
+                    Ok(Snippet {
                         id,
                         description,
                         command,
@@ -522,10 +526,10 @@ impl Database {
                         device_id,
                         deleted: deleted != 0,
                         encrypted: encrypted != 0,
-                    }
+                    })
                 },
             )
-            .collect();
+            .collect::<DbResult<Vec<Snippet>>>()?;
 
         Ok((snippets, saturating_i32(total.0)))
     }

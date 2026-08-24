@@ -1016,10 +1016,14 @@ impl Drop for TransactionLock {
 }
 
 /// Check whether a process with the given PID is alive.
+///
+/// PID 0 is never a valid lock owner: `kill(0, 0)` targets the caller's
+/// process group and would always succeed, so it is treated as dead to
+/// match the liveness probes in `auto_sync::execution_lock`.
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
     if pid == 0 {
-        return true;
+        return false;
     }
     let rc = unsafe { libc::kill(pid as i32, 0) };
     rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())

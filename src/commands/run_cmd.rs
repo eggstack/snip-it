@@ -162,10 +162,7 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
     };
 
     if copy {
-        crate::clipboard::copy_to_clipboard_auto(&final_command)?;
-        if let Err(e) = audit_log("copy", snippet, None) {
-            tracing::debug!("Audit log write failed: {}", e);
-        }
+        crate::commands::clip_cmd::copy_to_clipboard(snippet, &final_command)?;
         let ok_result: std::result::Result<(), String> = Ok(());
         log_command_execution(&final_command, &[], &ok_result, None);
         Ok(crate::ProcessResult::Done(

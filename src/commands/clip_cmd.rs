@@ -8,9 +8,10 @@ use std::path::PathBuf;
 /// audit log entry, and update the usage index.
 ///
 /// This is the single implementation for all clipboard copy operations
-/// (TUI callback and exact command path). Variable expansion is *not*
-/// performed here — the caller expands first and passes the result in.
-fn copy_to_clipboard(snippet: &Snippet, final_command: &str) -> SnipResult<()> {
+/// (TUI callback, exact command path, and `snp run --copy`). Variable
+/// expansion is *not* performed here — the caller expands first and
+/// passes the result in.
+pub(crate) fn copy_to_clipboard(snippet: &Snippet, final_command: &str) -> SnipResult<()> {
     crate::clipboard::copy_to_clipboard_auto(final_command)?;
     if let Err(e) = crate::logging::audit_log("copy", snippet, None) {
         tracing::debug!("Audit log write failed: {}", e);

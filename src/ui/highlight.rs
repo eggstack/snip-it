@@ -42,29 +42,24 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
         }
 
         if c == '<' {
+            // Only consume into a variable token when a closing '>' exists
+            // ahead; an unclosed '<' is emitted literally so the rest of the
+            // line keeps its normal token styling.
+            if !chars.clone().any(|next| next == '>') {
+                spans.push(Span::styled(c.to_string(), color_default));
+                continue;
+            }
             let mut var_content = String::new();
-            let mut closed = false;
             while let Some(&next) = chars.peek() {
                 if next == '>' {
                     chars.next();
-                    closed = true;
                     break;
                 }
                 if let Some(c) = chars.next() {
                     var_content.push(c);
                 }
             }
-            let text = if closed {
-                format!("<{var_content}>")
-            } else {
-                format!("<{var_content}")
-            };
-            let style = if closed {
-                color_variable
-            } else {
-                color_default
-            };
-            spans.push(Span::styled(text, style));
+            spans.push(Span::styled(format!("<{var_content}>"), color_variable));
             continue;
         }
 
@@ -142,6 +137,12 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
         }
     }
 
+    // A trailing lone backslash would otherwise be consumed by the escape
+    // branch and silently dropped from the rendered output.
+    if prev_was_backslash {
+        spans.push(Span::styled("\\", color_escape));
+    }
+
     Line::from(spans)
 }
 
@@ -170,7 +171,28 @@ mod tests {
     #[test]
     fn test_unclosed_variable_is_rendered_literally() {
         let result = highlight_command("echo <unfinished");
-        assert_eq!(result.spans[2].content, "<unfinished");
+        let rendered: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "echo <unfinished");
+    }
+
+    #[test]
+    fn test_unclosed_variable_keeps_styling_rest_of_line() {
+        let result = highlight_command("echo <unfinished --flag");
+        let rendered: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "echo <unfinished --flag");
+        // The flag after the unclosed '<' must remain its own styled token.
+        assert!(
+            result.spans.iter().any(|s| s.content == "--flag"),
+            "expected '--flag' to be tokenized, got spans: {:?}",
+            result.spans
+        );
+    }
+
+    #[test]
+    fn test_trailing_backslash_is_preserved() {
+        let result = highlight_command("echo ok \\");
+        let rendered: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "echo ok \\");
     }
 
     #[test]

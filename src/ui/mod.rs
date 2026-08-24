@@ -568,7 +568,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
     } else {
         FilterState::default()
     };
-    let _favorites_first = sort_opts.is_some_and(|o| o.favorites_first);
+    let favorites_first = sort_opts.is_some_and(|o| o.favorites_first);
     let mut filtered: Vec<usize> = (0..descriptions.len()).collect();
     let mut insert_mode = true;
     let mut tag_filter_mode = false;
@@ -751,7 +751,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 snippets,
                 &all_display_lower,
                 has_filter,
-                _favorites_first,
+                favorites_first,
                 usage,
             );
 
@@ -1038,6 +1038,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             } else {
                 // Snippet list (existing rendering)
                 let visible_filtered = &filtered[list_offset..list_end];
+                let (visual_lo, visual_hi) = (
+                    visual_start.min(visual_end),
+                    visual_start.max(visual_end),
+                );
                 let items: Vec<ListItem> = visible_filtered
                     .iter()
                     .map(|idx| {
@@ -1074,7 +1078,18 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                         spans.extend(line.spans);
                         let final_line = Line::from(spans);
 
-                        ListItem::new(final_line)
+                        let mut item = ListItem::new(final_line);
+                        // Visual-mode feedback: rows inside the selection
+                        // range get the selected background (the cursor row
+                        // additionally carries the highlight symbol).
+                        if visual_mode && *idx >= visual_lo && *idx <= visual_hi {
+                            item = item.style(
+                                ratatui::style::Style::default()
+                                    .fg(theme.text)
+                                    .bg(theme.selected_bg),
+                            );
+                        }
+                        item
                     })
                     .collect();
                 let list = List::new(items)

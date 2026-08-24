@@ -4,6 +4,7 @@
 
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippet, Snippets};
+use crate::outcome::CliOutcome;
 use crate::usage::UsageIndex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -585,27 +586,27 @@ fn emit_diagnostic(d: &ValidationDiagnostic) {
     );
 }
 
-/// Truncate a description for display.
+/// Truncate a description for display (char-boundary safe).
 fn truncate_desc(s: &str) -> String {
-    if s.len() > 40 {
-        format!("{}...", &s[..37])
+    if s.chars().count() > 40 {
+        format!("{}...", s.chars().take(37).collect::<String>())
     } else {
         s.to_string()
     }
 }
 
-/// Truncate a command for display.
+/// Truncate a command for display (char-boundary safe).
 fn truncate_cmd(s: &str) -> String {
     let one_line = s.lines().next().unwrap_or("");
-    if one_line.len() > 50 {
-        format!("{}...", &one_line[..47])
+    if one_line.chars().count() > 50 {
+        format!("{}...", one_line.chars().take(47).collect::<String>())
     } else {
         one_line.to_string()
     }
 }
 
 /// Run validation.
-pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<()> {
+pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<CliOutcome> {
     let mgr = crate::commands::init_library_manager()?;
 
     let mut report = ValidationReport::new(strict);
@@ -673,12 +674,12 @@ pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<()> 
         emit_human(&report);
     }
 
-    // Exit code: 2 if errors, 0 otherwise
+    // Exit outcome: validation failure (exit code 6) if errors, success otherwise
     if report.has_errors() {
-        std::process::exit(2);
+        return Ok(CliOutcome::ValidationFailed);
     }
 
-    Ok(())
+    Ok(CliOutcome::Success)
 }
 
 #[cfg(test)]
@@ -1083,6 +1084,24 @@ mod tests {
         assert_eq!(
             truncate_cmd(&format!("echo {}", "x".repeat(60))),
             format!("echo {}...", "x".repeat(42))
+        );
+    }
+
+    #[test]
+    fn test_truncation_is_char_boundary_safe() {
+        // Multi-byte characters (emoji, CJK) must not panic when the byte
+        // length exceeds the threshold but no char boundary sits at the
+        // slice point.
+        let emoji_desc = "🦀".repeat(50);
+        assert_eq!(
+            truncate_desc(&emoji_desc),
+            format!("{}...", "🦀".repeat(37))
+        );
+
+        let cjk_cmd = format!("echo {}", "命".repeat(60));
+        assert_eq!(
+            truncate_cmd(&cjk_cmd),
+            format!("echo {}...", "命".repeat(42))
         );
     }
 

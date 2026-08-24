@@ -1182,7 +1182,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             strict,
             json,
         }) => {
-            commands::validate_cmd::run(library, strict, json)?;
+            let outcome = commands::validate_cmd::run(library, strict, json)?;
+            finish_exact_outcome(outcome)?;
         }
         Some(Commands::Backup {
             output,
@@ -1205,7 +1206,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 strict,
                 json,
             } => {
-                commands::validate_cmd::run(library, strict, json)?;
+                let outcome = commands::validate_cmd::run(library, strict, json)?;
+                finish_exact_outcome(outcome)?;
             }
             DataCommands::Backup {
                 output,

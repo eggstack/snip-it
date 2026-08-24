@@ -1383,7 +1383,7 @@ fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError 
             }
         }
         _other => {
-            let ctx = format!("batch {batch}/{total}");
+            let ctx = format!("batch {batch}/{total}: {_other}");
             SnipError::sync_failure(SyncFailureKind::SyncRequestFailed, Some(&ctx))
         }
     }
@@ -2101,6 +2101,10 @@ mod tests {
                 assert!(
                     detail.contains("batch 3/4"),
                     "detail should include batch context: {detail}"
+                );
+                assert!(
+                    detail.contains("something broke"),
+                    "detail should preserve the original error message: {detail}"
                 );
             }
             other => panic!("expected SyncFailure(SyncRequestFailed), got {other:?}"),

@@ -44,29 +44,29 @@ const MAX_KEY_CACHE_SIZE: usize = 10_000;
 
 /// Cryptographic hash for API key cache keys.
 ///
-/// Uses SHA-256 to avoid cache-key collisions that could cause one user's
-/// derived key to be served from another user's cache entry.
+/// Uses the full SHA-256 digest to avoid cache-key collisions that could
+/// cause one user's derived key to be served from another user's cache entry.
 fn hash_api_key(api_key: &str) -> String {
     let hash = Sha256::digest(api_key.as_bytes());
-    format!("{:016x}", u64::from_le_bytes(hash[..8].try_into().unwrap()))
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Session-local cache for derived keys to avoid re-running Argon2id
 /// for the same (api_key, salt) pair during a sync operation.
 /// Key: (hashed_api_key, base64(salt)), Value: derived key bytes
-static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), [u8; 32]>>> =
+static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Clear the session key cache. Should be called at the end of a sync operation.
 pub fn clear_key_cache() {
     if let Ok(mut cache) = KEY_CACHE.lock() {
-        for mut key in cache.drain().map(|(_, v)| v) {
-            key.zeroize();
-        }
+        // Every cached value is a `DerivedKey` (ZeroizeOnDrop), so clearing
+        // the map wipes the key material even when this is never called.
+        cache.clear();
     }
 }
 
-#[derive(Zeroize, ZeroizeOnDrop, Default)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop, Default)]
 struct DerivedKey([u8; 32]);
 
 impl DerivedKey {
@@ -151,7 +151,7 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         if let Ok(cache) = KEY_CACHE.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return Ok(DerivedKey::new(cached));
+            return Ok(cached.clone());
         }
     }
 
@@ -191,17 +191,16 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
     if let Ok(mut cache) = KEY_CACHE.lock() {
         // Evict half the entries when cache is full. HashMap iteration order is
         // arbitrary, but this is acceptable for a session-local cache — re-deriving
-        // a key costs less than the initial Argon2id computation.
+        // a key costs less than the initial Argon2id computation. Removed values
+        // are `DerivedKey` (ZeroizeOnDrop), so eviction wipes their bytes.
         if cache.len() >= MAX_KEY_CACHE_SIZE {
             let keys_to_remove: Vec<_> =
                 cache.keys().take(MAX_KEY_CACHE_SIZE / 2).cloned().collect();
             for key in keys_to_remove {
-                if let Some(mut old_key) = cache.remove(&key) {
-                    old_key.zeroize();
-                }
+                cache.remove(&key);
             }
         }
-        cache.insert(cache_key, key_bytes);
+        cache.insert(cache_key, DerivedKey::new(&key_bytes));
     }
 
     let derived = DerivedKey::new(&key_bytes);
