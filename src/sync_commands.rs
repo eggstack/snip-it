@@ -804,12 +804,8 @@ pub(crate) fn run_sync_with_limits(
         };
 
         if direction == SyncDirection::Push || direction == SyncDirection::Bidirectional {
-            let local_snippets: Vec<ProtoSnippet> = snippets
-                .snippets
-                .iter()
-                .filter(|s| s.updated_at >= _last_sync || s.created_at >= _last_sync)
-                .map(ProtoSnippet::from)
-                .collect();
+            let local_snippets: Vec<ProtoSnippet> =
+                snippets.snippets.iter().map(ProtoSnippet::from).collect();
 
             if local_snippets.is_empty() && direction == SyncDirection::Push {
                 tracing::info!(library = %lib_name, "No local changes to push, skipping");

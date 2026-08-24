@@ -43,16 +43,28 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
 
         if c == '<' {
             let mut var_content = String::new();
+            let mut closed = false;
             while let Some(&next) = chars.peek() {
                 if next == '>' {
                     chars.next();
+                    closed = true;
                     break;
                 }
                 if let Some(c) = chars.next() {
                     var_content.push(c);
                 }
             }
-            spans.push(Span::styled(format!("<{var_content}>"), color_variable));
+            let text = if closed {
+                format!("<{var_content}>")
+            } else {
+                format!("<{var_content}")
+            };
+            let style = if closed {
+                color_variable
+            } else {
+                color_default
+            };
+            spans.push(Span::styled(text, style));
             continue;
         }
 
@@ -153,6 +165,12 @@ mod tests {
     fn test_highlight_command_with_variable() {
         let result = highlight_command("ssh <user@host>");
         assert!(!result.spans.is_empty());
+    }
+
+    #[test]
+    fn test_unclosed_variable_is_rendered_literally() {
+        let result = highlight_command("echo <unfinished");
+        assert_eq!(result.spans[2].content, "<unfinished");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -13,11 +13,16 @@ struct WindowEntry {
     count: usize,
 }
 
+struct RateLimiterState {
+    windows: HashMap<String, WindowEntry>,
+    oldest_first: BTreeSet<(u64, String)>,
+}
+
 /// Bounded, process-local request windows. Windows intentionally reset when
 /// the server restarts; rate-limit continuity is not part of the server's
 /// persisted control-plane state.
 pub struct RateLimiter {
-    windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
+    windows: Arc<Mutex<RateLimiterState>>,
 }
 
 fn now_secs() -> u64 {
@@ -30,7 +35,10 @@ fn now_secs() -> u64 {
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            windows: Arc::new(Mutex::new(HashMap::new())),
+            windows: Arc::new(Mutex::new(RateLimiterState {
+                windows: HashMap::new(),
+                oldest_first: BTreeSet::new(),
+            })),
         }
     }
 
@@ -39,35 +47,35 @@ impl RateLimiter {
         let window_secs = window.as_secs();
         let mut windows = self.windows.lock().await;
 
-        // Evict expired entries if the map is getting too large.
-        if windows.len() >= MAX_ENTRIES {
-            windows.retain(|_, entry| now.saturating_sub(entry.window_start) < window_secs);
+        if !windows.windows.contains_key(key)
+            && windows.windows.len() >= MAX_ENTRIES
+            && let Some((_, oldest_key)) = windows.oldest_first.pop_first()
+        {
+            windows.windows.remove(&oldest_key);
         }
-        // If still over the bound, drop the oldest half in O(n) time.
-        if windows.len() >= MAX_ENTRIES {
-            let mut entries: Vec<(String, u64)> = windows
-                .iter()
-                .map(|(key, entry)| (key.clone(), entry.window_start))
-                .collect();
-            let mid = entries.len() / 2;
-            entries.select_nth_unstable_by(mid, |a, b| a.1.cmp(&b.1));
-            for (key, _) in entries.drain(..mid) {
-                windows.remove(&key);
+
+        if let Some(window_start) = windows.windows.get(key).map(|entry| entry.window_start) {
+            if now.saturating_sub(window_start) >= window_secs {
+                windows
+                    .oldest_first
+                    .remove(&(window_start, key.to_string()));
+                let entry = windows.windows.get_mut(key).expect("entry exists");
+                entry.window_start = now;
+                entry.count = 0;
+                windows.oldest_first.insert((now, key.to_string()));
             }
+        } else {
+            windows.windows.insert(
+                key.to_string(),
+                WindowEntry {
+                    window_start: now,
+                    count: 0,
+                },
+            );
+            windows.oldest_first.insert((now, key.to_string()));
         }
 
-        let entry = windows
-            .entry(key.to_string())
-            .or_insert_with(|| WindowEntry {
-                window_start: now,
-                count: 0,
-            });
-
-        if now.saturating_sub(entry.window_start) >= window_secs {
-            entry.window_start = now;
-            entry.count = 0;
-        }
-
+        let entry = windows.windows.get_mut(key).expect("entry inserted above");
         if entry.count >= max_requests {
             return false;
         }

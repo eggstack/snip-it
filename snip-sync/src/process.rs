@@ -45,10 +45,15 @@ pub fn parse_pid_file(path: &Path) -> ParsedPidFile {
         return ParsedPidFile::Empty;
     }
     if let Ok(pid) = trimmed.parse::<u32>() {
-        return ParsedPidFile::LegacyPid(pid);
+        return if pid == 0 {
+            ParsedPidFile::Malformed("PID must be nonzero".to_string())
+        } else {
+            ParsedPidFile::LegacyPid(pid)
+        };
     }
     match toml::from_str::<PidRecord>(trimmed) {
-        Ok(record) => ParsedPidFile::Structured(record),
+        Ok(record) if record.pid != 0 => ParsedPidFile::Structured(record),
+        Ok(_) => ParsedPidFile::Malformed("PID must be nonzero".to_string()),
         Err(error) => ParsedPidFile::Malformed(error.to_string()),
     }
 }
@@ -83,9 +88,12 @@ pub fn read_pid() -> Option<u32> {
 #[cfg(unix)]
 pub fn is_running(pid: u32) -> bool {
     if pid == 0 {
-        return true;
+        return false;
     }
-    let result = unsafe { libc::kill(pid as i32, 0) };
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    let result = unsafe { libc::kill(pid, 0) };
     result == 0
         || !matches!(
             std::io::Error::last_os_error().raw_os_error(),
@@ -96,7 +104,7 @@ pub fn is_running(pid: u32) -> bool {
 #[cfg(windows)]
 pub fn is_running(pid: u32) -> bool {
     if pid == 0 {
-        return true;
+        return false;
     }
     unsafe {
         use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
@@ -250,11 +258,12 @@ fn parse_linux_proc_start_token(stat: &str) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 pub fn get_process_start_token(pid: u32) -> Option<String> {
-    use libc::{PROC_PIDTBSDINFO, c_int, proc_bsdinfo, proc_pidinfo};
+    use libc::{PROC_PIDTBSDINFO, proc_bsdinfo, proc_pidinfo};
+    let pid = i32::try_from(pid).ok()?;
     let mut info: proc_bsdinfo = unsafe { std::mem::zeroed() };
     let result = unsafe {
         proc_pidinfo(
-            pid as c_int,
+            pid,
             PROC_PIDTBSDINFO,
             0,
             &mut info as *mut _ as *mut _,
@@ -317,6 +326,14 @@ mod tests {
         let path = temp.path().join("snip-sync.pid");
         fs::write(&path, "1234\n").unwrap();
         assert_eq!(parse_pid_file(&path), ParsedPidFile::LegacyPid(1234));
+    }
+
+    #[test]
+    fn test_parse_pid_file_rejects_zero() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("snip-sync.pid");
+        fs::write(&path, "0\n").unwrap();
+        assert!(matches!(parse_pid_file(&path), ParsedPidFile::Malformed(_)));
     }
 
     #[test]

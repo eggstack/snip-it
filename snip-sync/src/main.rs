@@ -504,8 +504,9 @@ fn stop_owner(
 
     #[cfg(unix)]
     {
+        let signal_pid = i32::try_from(pid).map_err(|_| format!("PID {pid} is out of range"))?;
         println!("Sending SIGTERM to process {pid}...");
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        unsafe { libc::kill(signal_pid, libc::SIGTERM) };
         let exit_result = snip_sync::process::wait_for_exit(pid, Duration::from_secs(10));
         if let Err(error) = &exit_result {
             eprintln!("Warning: {error}");
@@ -513,7 +514,7 @@ fn stop_owner(
                 return Err(error.clone().into());
             }
             println!("Sending SIGKILL...");
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            unsafe { libc::kill(signal_pid, libc::SIGKILL) };
             let _ = snip_sync::process::wait_for_exit(pid, Duration::from_secs(5));
         }
 
@@ -593,8 +594,10 @@ fn stop_legacy(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 
         #[cfg(unix)]
         {
+            let signal_pid =
+                i32::try_from(pid).map_err(|_| format!("PID {pid} is out of range"))?;
             println!("Sending SIGTERM to process {}...", pid);
-            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            unsafe { libc::kill(signal_pid, libc::SIGTERM) };
 
             let exit_result =
                 snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(10));
@@ -604,7 +607,7 @@ fn stop_legacy(force: bool) -> Result<(), Box<dyn std::error::Error>> {
                     return Err(exit_result.unwrap_err().into());
                 }
                 println!("Sending SIGKILL...");
-                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                unsafe { libc::kill(signal_pid, libc::SIGKILL) };
                 let _ = snip_sync::process::wait_for_exit(pid, std::time::Duration::from_secs(5));
             }
 

@@ -29,6 +29,7 @@ use ratatui::{
     style::Style as TuiStyle,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::clipboard;
 use crate::utils::extract_variables_for_display;
@@ -64,7 +65,6 @@ struct FilterRequest {
     text: String,
     text_lower: String,
     include_tags: bool,
-    incremental: bool,
 }
 
 impl FilterRequest {
@@ -74,7 +74,6 @@ impl FilterRequest {
 
     fn can_narrow_from(&self, previous: &Self) -> bool {
         !previous.text.is_empty()
-            && self.incremental == previous.incremental
             && self.include_tags == previous.include_tags
             && self.text.starts_with(&previous.text)
     }
@@ -82,26 +81,15 @@ impl FilterRequest {
 
 fn current_filter_request(
     filter: &str,
-    incremental_search: &str,
     filter_state: &FilterState,
     tag_filter_mode: bool,
 ) -> FilterRequest {
-    if !incremental_search.is_empty() {
-        return FilterRequest {
-            text: incremental_search.to_string(),
-            text_lower: incremental_search.to_lowercase(),
-            include_tags: false,
-            incremental: true,
-        };
-    }
-
     let has_main_filter = !filter.is_empty() || !filter_state.tag_filter_text.is_empty();
     if !has_main_filter {
         return FilterRequest {
             text: String::new(),
             text_lower: String::new(),
             include_tags: false,
-            incremental: false,
         };
     }
 
@@ -114,36 +102,27 @@ fn current_filter_request(
         text: text.to_string(),
         text_lower: text.to_lowercase(),
         include_tags: tag_filter_mode || !filter_state.tag_filter_text.is_empty(),
-        incremental: false,
     }
 }
 
 fn filter_request_would_narrow(
     filter: &str,
-    incremental_search: &str,
     filter_state: &FilterState,
     tag_filter_mode: bool,
     last_filter_request: Option<&FilterRequest>,
 ) -> bool {
-    let request = current_filter_request(filter, incremental_search, filter_state, tag_filter_mode);
+    let request = current_filter_request(filter, filter_state, tag_filter_mode);
     last_filter_request.is_some_and(|previous| request.can_narrow_from(previous))
 }
 
 fn filter_update_deadline_for_insert(
     filter: &str,
-    incremental_search: &str,
     filter_state: &FilterState,
     tag_filter_mode: bool,
     last_filter_request: Option<&FilterRequest>,
 ) -> Option<Instant> {
     if last_filter_request.is_none()
-        || filter_request_would_narrow(
-            filter,
-            incremental_search,
-            filter_state,
-            tag_filter_mode,
-            last_filter_request,
-        )
+        || filter_request_would_narrow(filter, filter_state, tag_filter_mode, last_filter_request)
     {
         None
     } else {
@@ -571,7 +550,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
 
     let mut sel = SelectState::new();
     let mut filter = initial_filter.map(String::from).unwrap_or_default();
-    let mut incremental_search = String::new();
     // input_text tracks what user types in insert mode - displayed in filter input box, NOT in title bar
     let mut input_text = String::new();
     let mut filter_state = if let Some(opts) = sort_opts {
@@ -740,12 +718,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         };
 
         if should_recompute {
-            let filter_request = current_filter_request(
-                &filter,
-                &incremental_search,
-                &filter_state,
-                tag_filter_mode,
-            );
+            let filter_request = current_filter_request(&filter, &filter_state, tag_filter_mode);
             if last_filter_request.as_ref() != Some(&filter_request) {
                 if last_filter_request
                     .as_ref()
@@ -817,13 +790,11 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         if needs_redraw {
             needs_redraw = false;
 
-            // Filter indicator in title bar - ONLY shows incremental search (/), NOT the main filter.
+            // The main filter is displayed in the filter input box, not the title.
             // Main filter text is displayed in the filter input box below, not in the title.
             // This ensures the input field position remains stable and text appears in the correct location.
             let filter_indicator = if tag_filter_mode {
                 format!("[tag: {}]", filter_state.tag_filter_text)
-            } else if !insert_mode && !incremental_search.is_empty() {
-                format!("/{incremental_search}")
             } else {
                 String::new()
             };
@@ -875,7 +846,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             } else {
                 format!("Snippets [{count}] {filter_indicator}{sort_indicator}")
             };
-            let separator = "─".repeat((size.width as usize).saturating_sub(title_part.len() + 8));
+            let separator = "─".repeat((size.width as usize).saturating_sub(title_part.width() + 8));
             let theme = get_theme();
             let title = Line::from(vec![
                 Span::styled(title_part.clone(), style_fg(theme.secondary)),
@@ -929,7 +900,10 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             } else {
                 &filter
             };
+            let filter_inner_width = chunks[0].width.saturating_sub(2) as usize;
+            let filter_scroll = filter_text.width().saturating_sub(filter_inner_width);
             let filter_widget = Paragraph::new(filter_text)
+                .scroll((0, filter_scroll.min(u16::MAX as usize) as u16))
                 .style(style_fg_bg(theme.text, theme.background));
             f.render_widget(
                 filter_widget,
@@ -950,7 +924,11 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 };
                 let cursor_x = chunks[0].x
                     + 1
-                    + cursor_text.width().min(u16::MAX as usize) as u16;
+                    + cursor_text
+                        .width()
+                        .saturating_sub(filter_scroll)
+                        .min(filter_inner_width)
+                        .min(u16::MAX as usize) as u16;
                 let cursor_y = chunks[0].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }
@@ -1274,8 +1252,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                         // Check for scroll events
                         if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
                             sel.move_down(filtered.len());
+                            last_click_row = None;
+                            last_click_time = None;
                         } else if mouse_event.kind == crossterm::event::MouseEventKind::ScrollUp {
                             sel.move_up();
+                            last_click_row = None;
+                            last_click_time = None;
                         }
                         // Handle click to select in list area
                         else if let crossterm::event::MouseEventKind::Up(
@@ -1662,11 +1644,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                         insert_mode = false;
                                         filter_dirty = true;
                                         last_filter_update = Some(std::time::Instant::now());
-                                    } else if !incremental_search.is_empty() {
-                                        incremental_search.clear();
-                                        insert_mode = false;
-                                        filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else {
                                         // Clear filter when exiting insert mode with empty input
                                         // to avoid stale filter state confusing the user
@@ -1693,10 +1670,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                         filter.pop();
                                         filter_dirty = true;
                                         last_filter_update = Some(std::time::Instant::now());
-                                    } else if !incremental_search.is_empty() {
-                                        incremental_search.pop();
-                                        filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else {
                                         filter.pop();
                                         filter_dirty = true;
@@ -1716,16 +1689,12 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                         input_text.push(c);
                                         filter.push(c);
                                         filter_dirty = true;
-                                    } else if !incremental_search.is_empty() {
-                                        incremental_search.push(c);
-                                        filter_dirty = true;
                                     } else {
                                         filter.push(c);
                                         filter_dirty = true;
                                     }
                                     last_filter_update = filter_update_deadline_for_insert(
                                         &filter,
-                                        &incremental_search,
                                         &filter_state,
                                         tag_filter_mode,
                                         last_filter_request.as_ref(),
@@ -1838,7 +1807,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                 }
                                 KeyCode::Char('x') | KeyCode::Char('c') => {
                                     filter.clear();
-                                    incremental_search.clear();
                                     filter_state.tag_filter_text.clear();
                                     tag_filter_mode = false;
                                     filter_dirty = true;
@@ -1854,7 +1822,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                 }
                                 KeyCode::Char('/') => {
                                     insert_mode = true;
-                                    incremental_search.clear();
                                     input_text.clear();
                                     filter.clear();
                                     filter_dirty = true;
@@ -1915,18 +1882,16 @@ mod tests {
     }
 
     #[test]
-    fn filter_request_detects_incremental_narrowing() {
+    fn filter_request_detects_narrowing() {
         let previous = FilterRequest {
             text: "git".to_string(),
             text_lower: "git".to_string(),
             include_tags: false,
-            incremental: false,
         };
         let current = FilterRequest {
             text: "git st".to_string(),
             text_lower: "git st".to_string(),
             include_tags: false,
-            incremental: false,
         };
         assert!(current.can_narrow_from(&previous));
 
@@ -1934,7 +1899,6 @@ mod tests {
             text: "git st".to_string(),
             text_lower: "git st".to_string(),
             include_tags: true,
-            incremental: false,
         };
         assert!(!changed_mode.can_narrow_from(&previous));
     }
@@ -1962,7 +1926,6 @@ mod tests {
                 text: "systemd".to_string(),
                 text_lower: "systemd".to_string(),
                 include_tags: true,
-                incremental: false,
             },
             &all_display,
             &all_display_lower,
@@ -1973,32 +1936,30 @@ mod tests {
     }
 
     #[test]
-    fn current_filter_request_prefers_incremental_search() {
+    fn current_filter_request_uses_active_filter() {
         let mut filter_state = FilterState {
             sort_mode: SortMode::None,
             tag_filter_text: "tag".to_string(),
         };
 
-        let request = current_filter_request("main", "inc", &filter_state, true);
+        let request = current_filter_request("main", &filter_state, true);
         assert_eq!(
             request,
             FilterRequest {
-                text: "inc".to_string(),
-                text_lower: "inc".to_string(),
-                include_tags: false,
-                incremental: true,
+                text: "tag".to_string(),
+                text_lower: "tag".to_string(),
+                include_tags: true,
             }
         );
 
         filter_state.tag_filter_text.clear();
-        let request = current_filter_request("main", "", &filter_state, false);
+        let request = current_filter_request("main", &filter_state, false);
         assert_eq!(
             request,
             FilterRequest {
                 text: "main".to_string(),
                 text_lower: "main".to_string(),
                 include_tags: false,
-                incremental: false,
             }
         );
     }
@@ -2010,19 +1971,16 @@ mod tests {
             text: "git".to_string(),
             text_lower: "git".to_string(),
             include_tags: false,
-            incremental: false,
         };
 
         assert!(filter_request_would_narrow(
             "git s",
-            "",
             &filter_state,
             false,
             Some(&previous)
         ));
         assert!(!filter_request_would_narrow(
             "gi",
-            "",
             &filter_state,
             false,
             Some(&previous)

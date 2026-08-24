@@ -125,7 +125,7 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
     if name.is_empty() {
         return Err(("Invalid library name", "Library name cannot be empty"));
     }
-    if name.len() > 50 {
+    if name.chars().count() > 50 {
         return Err((
             "Invalid library name",
             "Library name cannot exceed 50 characters",
@@ -1361,6 +1361,12 @@ Command = "sudo iptables-restore \< /path/to/rules"
     #[test]
     fn test_validate_library_name_too_long() {
         assert!(validate_library_name(&"a".repeat(51)).is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_counts_characters() {
+        assert!(validate_library_name(&"é".repeat(50)).is_ok());
+        assert!(validate_library_name(&"é".repeat(51)).is_err());
     }
 
     #[test]

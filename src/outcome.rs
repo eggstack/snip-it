@@ -237,10 +237,24 @@ impl OutputContext {
             let mut chars = text.chars();
             while let Some(c) = chars.next() {
                 if c == '\x1b' {
-                    // Skip until 'm' (SGR sequence end) or non-control
-                    for next in chars.by_ref() {
-                        if next == 'm' {
-                            break;
+                    // CSI sequences end at their final byte (0x40..=0x7e),
+                    // not only at `m` (the SGR final byte).
+                    if chars.next() == Some('[') {
+                        for next in chars.by_ref() {
+                            if ('@'..='~').contains(&next) {
+                                break;
+                            }
+                        }
+                    } else if let Some(next) = chars.next()
+                        && next == ']'
+                    {
+                        // OSC sequences terminate with BEL or ST (ESC \\).
+                        let mut previous_escape = false;
+                        for next in chars.by_ref() {
+                            if next == '\x07' || (previous_escape && next == '\\') {
+                                break;
+                            }
+                            previous_escape = next == '\x1b';
                         }
                     }
                 } else {
@@ -312,6 +326,12 @@ mod tests {
         let text = "\x1b[32msome text\x1b[0m";
         let stripped = ctx.strip_ansi_if_needed(text);
         assert_eq!(stripped, "some text");
+    }
+
+    #[test]
+    fn test_strip_non_sgr_csi_without_eating_following_text() {
+        let ctx = OutputContext::json();
+        assert_eq!(ctx.strip_ansi_if_needed("\x1b[2Khello"), "hello");
     }
 
     #[test]

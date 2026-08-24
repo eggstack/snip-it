@@ -121,6 +121,8 @@ fn saturating_i32(v: i64) -> i32 {
 
 type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 
+const MIGRATION_BATCH_SIZE: i64 = 100;
+
 impl Database {
     pub async fn connect(url: &str, max_connections: u32) -> DbResult<Self> {
         // The public configuration uses a SQLite file path for convenience,
@@ -456,6 +458,8 @@ impl Database {
         offset: i32,
         include_deleted: bool,
     ) -> DbResult<(Vec<Snippet>, i32)> {
+        let mut tx = self.pool.begin().await?;
+
         let total: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM snippets \
              WHERE user_id = ? \
@@ -467,7 +471,7 @@ impl Database {
         .bind(library_id)
         .bind(since)
         .bind(include_deleted)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
         let rows: Vec<SnippetRow> = sqlx::query_as(
@@ -486,8 +490,10 @@ impl Database {
         .bind(include_deleted)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let snippets = rows
             .into_iter()
@@ -626,46 +632,58 @@ impl Database {
     }
 
     pub async fn migrate_plaintext_api_keys(&self) -> DbResult<usize> {
-        let rows: Vec<(String, String, Option<String>)> =
-            sqlx::query_as("SELECT id, api_key, api_key_prefix FROM users")
-                .fetch_all(&self.pool)
-                .await?;
-
         let mut migrated = 0;
+        let mut last_id = String::new();
 
-        for (user_id, stored, prefix) in rows {
-            let mut needs_update = false;
-            let mut new_hash = stored.clone();
-            let mut new_prefix = prefix.clone();
+        loop {
+            let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT id, api_key, api_key_prefix FROM users \
+                 WHERE id > ? ORDER BY id LIMIT ?",
+            )
+            .bind(&last_id)
+            .bind(MIGRATION_BATCH_SIZE)
+            .fetch_all(&self.pool)
+            .await?;
 
-            // Migrate plaintext to hashed
-            if !stored.starts_with("$argon2") {
-                new_hash = hash_api_key(&stored)?;
-                needs_update = true;
+            if rows.is_empty() {
+                break;
             }
 
-            // Backfill prefix if missing
-            if prefix.is_none() {
-                if stored.starts_with("$argon2") {
-                    // Legacy hashed key: derive a stable prefix from the stored hash.
-                    // The original API key is unrecoverable, so this user will no
-                    // longer be able to authenticate — but the NULL-prefix fallback
-                    // that amplified auth into an O(N) Argon2id DoS is removed.
-                    new_prefix = Some(derive_prefix_from_hash(&stored));
-                } else {
-                    new_prefix = Some(compute_api_key_prefix(&stored));
+            for (user_id, stored, prefix) in rows {
+                last_id = user_id.clone();
+                let mut needs_update = false;
+                let mut new_hash = stored.clone();
+                let mut new_prefix = prefix.clone();
+
+                // Migrate plaintext to hashed
+                if !stored.starts_with("$argon2") {
+                    new_hash = hash_api_key(&stored)?;
+                    needs_update = true;
                 }
-                needs_update = true;
-            }
 
-            if needs_update {
-                sqlx::query("UPDATE users SET api_key = ?, api_key_prefix = ? WHERE id = ?")
-                    .bind(&new_hash)
-                    .bind(&new_prefix)
-                    .bind(&user_id)
-                    .execute(&self.pool)
-                    .await?;
-                migrated += 1;
+                // Backfill prefix if missing
+                if prefix.is_none() {
+                    if stored.starts_with("$argon2") {
+                        // Legacy hashed key: derive a stable prefix from the stored hash.
+                        // The original API key is unrecoverable, so this user will no
+                        // longer be able to authenticate — but the NULL-prefix fallback
+                        // that amplified auth into an O(N) Argon2id DoS is removed.
+                        new_prefix = Some(derive_prefix_from_hash(&stored));
+                    } else {
+                        new_prefix = Some(compute_api_key_prefix(&stored));
+                    }
+                    needs_update = true;
+                }
+
+                if needs_update {
+                    sqlx::query("UPDATE users SET api_key = ?, api_key_prefix = ? WHERE id = ?")
+                        .bind(&new_hash)
+                        .bind(&new_prefix)
+                        .bind(&user_id)
+                        .execute(&self.pool)
+                        .await?;
+                    migrated += 1;
+                }
             }
         }
 

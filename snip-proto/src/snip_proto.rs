@@ -45,8 +45,8 @@ pub struct SyncRequest {
     /// Deprecated compatibility field. Prefer authorization metadata.
     #[prost(string, tag = "1")]
     pub api_key: ::prost::alloc::string::String,
-    /// Local records to merge. Only records newer than last_sync_timestamp are
-    /// considered for insertion or conflict resolution.
+    /// Local records to merge. The server uses each record's own timestamp for
+    /// conflict resolution; `last_sync_timestamp` only selects returned data.
     #[prost(message, repeated, tag = "2")]
     pub local_snippets: ::prost::alloc::vec::Vec<Snippet>,
     /// Unix timestamp returned by the previous completed sync.

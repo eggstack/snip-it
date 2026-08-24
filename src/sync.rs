@@ -746,14 +746,14 @@ impl SyncClient {
                     {
                         return Err(grpc_error_to_snip_error("PushSnippets", &e));
                     }
+                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     tracing::warn!(
                         "PushSnippets failed (attempt {}/{}): {}. Retrying in {}ms...",
                         attempt + 1,
                         config.max_retries + 1,
                         e,
-                        delay_ms
+                        actual_delay
                     );
-                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     let delay = Duration::from_millis(actual_delay);
                     if self.limits.is_some_and(|limits| {
                         limits
@@ -837,14 +837,14 @@ impl SyncClient {
                         return Err(grpc_error_to_snip_error("Sync request", &e));
                     }
                     let is_rate_limited = e.code() == Code::ResourceExhausted;
+                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     tracing::warn!(
                         "Sync request failed (attempt {}/{}): {}. Retrying in {}ms...",
                         attempt + 1,
                         config.max_retries + 1,
                         e,
-                        delay_ms
+                        actual_delay
                     );
-                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     let delay = Duration::from_millis(actual_delay);
                     if self.limits.is_some_and(|limits| {
                         limits

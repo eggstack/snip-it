@@ -293,10 +293,6 @@ pub fn record_failure(
     Ok(())
 }
 
-pub fn clear_for_explicit_sync(state_dir: &Path) -> Result<(), PendingError> {
-    clear(state_dir)
-}
-
 #[cfg(test)]
 pub fn set_local_generation(state_dir: &Path, generation: u64) -> Result<(), PendingError> {
     let path = pending_path(state_dir);

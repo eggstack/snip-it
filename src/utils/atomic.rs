@@ -215,6 +215,8 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
             .map_err(|e| SnipError::io_error("create temp file", &tmp_path, e))?;
         file.write_all(content.as_bytes())
             .map_err(|e| SnipError::io_error("write temp file", &tmp_path, e))?;
+        file.sync_all()
+            .map_err(|e| SnipError::io_error("sync temp file", &tmp_path, e))?;
     }
 
     #[cfg(not(unix))]
@@ -226,6 +228,8 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
             .map_err(|e| SnipError::io_error("create temp file", &tmp_path, e))?;
         file.write_all(content.as_bytes())
             .map_err(|e| SnipError::io_error("write temp file", &tmp_path, e))?;
+        file.sync_all()
+            .map_err(|e| SnipError::io_error("sync temp file", &tmp_path, e))?;
     }
 
     fs::rename(&tmp_path, path).map_err(|e| SnipError::io_error("atomic rename file", path, e))?;

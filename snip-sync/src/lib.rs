@@ -1171,7 +1171,16 @@ impl SnippetSync for SnipSyncService {
                         reason = %e,
                         "Snippet upsert failed"
                     );
-                    rejected += 1;
+                    if let Err(rollback_error) = tx.rollback().await {
+                        tracing::error!(
+                            request_id = %request_id,
+                            error = %rollback_error,
+                            "Failed to roll back push transaction"
+                        );
+                    }
+                    self.record_request_duration("push_snippets", start);
+                    self.record_request_finished("push_snippets", false);
+                    return Err(Status::internal("Internal error"));
                 }
             }
         }
@@ -1279,10 +1288,6 @@ impl SnippetSync for SnipSyncService {
                     "Snippet skipped: validation failed"
                 );
                 skipped_ids.push(snippet.id.clone());
-                continue;
-            }
-
-            if snippet.updated_at <= req.last_sync_timestamp {
                 continue;
             }
 
@@ -2237,6 +2242,57 @@ mod tests {
         let resp = service.sync(req).await.unwrap();
         let sync = resp.into_inner();
         assert_eq!(sync.snippets.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sync_accepts_local_record_older_than_pull_watermark() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "clock-skew-test".to_string(),
+        });
+        let library_id = service
+            .create_library(req)
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![ProtoSnippet {
+                id: "clock-skewed".to_string(),
+                description: "local mutation".to_string(),
+                command: "echo local".to_string(),
+                tags: vec![],
+                created_at: 10,
+                updated_at: 10,
+                device_id: "device".to_string(),
+                deleted: false,
+                encrypted: false,
+            }],
+            last_sync_timestamp: 1_000,
+            library_id: library_id.clone(),
+            limit: 100,
+            offset: 0,
+        });
+        service.sync(req).await.unwrap();
+
+        let response = service
+            .get_snippets(Request::new(GetSnippetsRequest {
+                api_key,
+                library_id,
+                limit: 100,
+                offset: 0,
+                since: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.total_count, 1);
+        assert_eq!(response.snippets[0].id, "clock-skewed");
     }
 
     #[tokio::test]

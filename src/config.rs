@@ -14,7 +14,7 @@ pub use crate::utils::config::derive_sync_state_dir;
 pub use crate::utils::config::get_sync_config_path;
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -90,15 +90,24 @@ struct CachedToml {
     content: String,
 }
 
+struct TomlCache {
+    entries: HashMap<String, CachedToml>,
+    insertion_order: VecDeque<String>,
+}
+
 const MAX_TOML_CACHE_SIZE: usize = 100;
 
-static TOML_CACHE: LazyLock<Mutex<HashMap<String, CachedToml>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static TOML_CACHE: LazyLock<Mutex<TomlCache>> = LazyLock::new(|| {
+    Mutex::new(TomlCache {
+        entries: HashMap::new(),
+        insertion_order: VecDeque::new(),
+    })
+});
 
 pub fn invalidate_toml_cache(path: &std::path::Path) {
     let key = path.to_string_lossy().to_string();
     if let Ok(mut cache) = TOML_CACHE.lock() {
-        cache.remove(&key);
+        cache.entries.remove(&key);
     }
 }
 
@@ -157,7 +166,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let len = metadata.len();
 
     let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(entry) = cache.get(&key)
+    if let Some(entry) = cache.entries.get(&key)
         && entry.mtime == mtime
         && entry.len == len
     {
@@ -168,19 +177,29 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let content = fs::read_to_string(path)
         .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
 
+    // Capture metadata after reading so a write between the initial stat and
+    // read cannot install a cache entry describing the old file.
+    let metadata = fs::metadata(path)
+        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
+    let mtime = metadata
+        .modified()
+        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
+    let len = metadata.len();
+
     let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if cache.len() >= MAX_TOML_CACHE_SIZE {
-        let keys_to_remove: Vec<_> = cache
-            .keys()
-            .take(MAX_TOML_CACHE_SIZE / 2)
-            .cloned()
-            .collect();
-        for key in keys_to_remove {
-            cache.remove(&key);
+    while cache.entries.len() >= MAX_TOML_CACHE_SIZE {
+        let Some(oldest) = cache.insertion_order.pop_front() else {
+            break;
+        };
+        if cache.entries.remove(&oldest).is_some() {
+            break;
         }
     }
 
-    cache.insert(
+    if !cache.entries.contains_key(&key) {
+        cache.insertion_order.push_back(key.clone());
+    }
+    cache.entries.insert(
         key,
         CachedToml {
             mtime,
@@ -367,21 +386,13 @@ fn serialize_api_key<S: serde::Serializer>(
     match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
         Err(e) => {
-            if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
-                tracing::warn!(
-                    "Keychain unavailable, storing API key in config file (explicitly allowed): {}",
-                    e
-                );
-                serializer.serialize_str(api_key)
-            } else {
-                tracing::error!(
-                    "Keychain unavailable, refusing to store API key in plaintext. \
-                     Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow."
-                );
-                Err(serde::ser::Error::custom(format!(
-                    "keychain unavailable: {e}. Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow plaintext storage."
-                )))
-            }
+            tracing::error!(
+                "Keychain unavailable, refusing to store API key in plaintext. \
+                 Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow."
+            );
+            Err(serde::ser::Error::custom(format!(
+                "keychain unavailable: {e}. Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow plaintext storage."
+            )))
         }
     }
 }

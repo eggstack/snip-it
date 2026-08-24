@@ -336,8 +336,23 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                             field.value.clone()
                         };
                         let text = format!("{prefix}{display_value}");
+                        let scroll = if i == selected {
+                            use unicode_width::UnicodeWidthStr;
+                            let cursor_byte = field.cursor.min(field.value.len());
+                            let cursor_width = prefix.width()
+                                + field
+                                    .value
+                                    .get(..cursor_byte)
+                                    .unwrap_or("")
+                                    .width();
+                            let inner_width = var_areas[i].width.saturating_sub(2) as usize;
+                            cursor_width.saturating_sub(inner_width)
+                        } else {
+                            0
+                        };
 
                         let p = Paragraph::new(text)
+                            .scroll((0, scroll.min(u16::MAX as usize) as u16))
                             .block(var_block)
                             .style(style_fg(theme.text));
 
@@ -398,10 +413,15 @@ fn prompt_variables_inner(vars: Vec<Variable>) -> io::Result<VariablePromptResul
                 let prefix_len = 2;
                 let cursor_byte = field.cursor.min(field.value.len());
                 let prefix_str = field.value.get(..cursor_byte).unwrap_or("");
+                let inner_width = var_areas[selected].width.saturating_sub(2) as usize;
+                let cursor_width = prefix_len + prefix_str.width();
+                let scroll = cursor_width.saturating_sub(inner_width);
                 let cursor_x = var_areas[selected].x
                     + 1
-                    + prefix_len
-                    + prefix_str.width().min(u16::MAX as usize) as u16;
+                    + cursor_width
+                        .saturating_sub(scroll)
+                        .min(inner_width)
+                        .min(u16::MAX as usize) as u16;
                 let cursor_y = var_areas[selected].y + 1;
                 f.set_cursor_position((cursor_x, cursor_y));
             }

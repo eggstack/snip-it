@@ -70,8 +70,8 @@ pub fn clear_key_cache() {
 struct DerivedKey([u8; 32]);
 
 impl DerivedKey {
-    fn new(key: [u8; 32]) -> Self {
-        Self(key)
+    fn new(key: &[u8; 32]) -> Self {
+        Self(*key)
     }
 
     fn as_slice(&self) -> &[u8] {
@@ -151,7 +151,7 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         if let Ok(cache) = KEY_CACHE.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return Ok(DerivedKey::new(*cached));
+            return Ok(DerivedKey::new(cached));
         }
     }
 
@@ -204,7 +204,9 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         cache.insert(cache_key, key_bytes);
     }
 
-    Ok(DerivedKey::new(key_bytes))
+    let derived = DerivedKey::new(&key_bytes);
+    key_bytes.zeroize();
+    Ok(derived)
 }
 
 pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {

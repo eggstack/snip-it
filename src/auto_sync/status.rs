@@ -255,8 +255,9 @@ pub fn record_failure(
     status.consecutive_failures = consecutive_failures;
     status.next_attempt_at_unix_ms = next_attempt_at_unix_ms;
     status.executor_exit_code = exit_code;
-    status.attention_required =
-        failure_class.is_deferred() || matches!(failure_class, FailureClass::LocalFailure);
+    status.attention_required = failure_class.is_deferred()
+        || matches!(failure_class, FailureClass::LocalFailure)
+        || (matches!(failure_class, FailureClass::Internal) && consecutive_failures >= 3);
     status.message = sanitize_message(message);
     status.config_fingerprint = config_fingerprint;
 
@@ -569,6 +570,36 @@ integrity = 0
         .unwrap();
         let status = read_status(dir.path()).unwrap();
         assert!(status.attention_required);
+    }
+
+    #[test]
+    fn test_internal_failure_requires_attention_after_three_attempts() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Internal,
+            1,
+            2,
+            0,
+            "internal failure",
+            0,
+        )
+        .unwrap();
+        assert!(!read_status(dir.path()).unwrap().attention_required);
+
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Internal,
+            1,
+            3,
+            0,
+            "internal failure",
+            0,
+        )
+        .unwrap();
+        assert!(read_status(dir.path()).unwrap().attention_required);
     }
 
     #[test]
