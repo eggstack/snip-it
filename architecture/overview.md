@@ -31,7 +31,7 @@ detail.
 ```
 snip-it/              Main crate — binary "snp"
   src/                Application source (CLI, commands, TUI, sync, core)
-  tests/              Integration tests (~49 files)
+  tests/              Integration tests (~46 files + shared support)
   architecture/       This directory — module deep-dive docs
   docs/               Public API docs, threat model, security audit
   .skills/            Specialized agent reference docs
@@ -317,7 +317,8 @@ Full utility inventory: [utils.md](utils.md).
 
 **Deep dive**: [test-infrastructure.md](test-infrastructure.md)
 
-~49 integration test files in `tests/`. Reusable components in
+~46 integration test files in `tests/` (plus 4 shared modules in
+`tests/support/`). Reusable components in
 `tests/support/`: `TestEnvironment` (isolated TempDir), `RecordingServer`,
 `EventSink`.
 
