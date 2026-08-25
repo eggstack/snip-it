@@ -15,10 +15,13 @@ bash scripts/release-check.sh dry-run snip-it
 # Production seam proof — verifies test-only env vars are inactive in production builds
 bash scripts/ci/test-production-seams.sh
 
-# Build the workspace
-cargo build --workspace
-cargo build --release
+# Single integration test target
+cargo test --test platform_smoke
+```
 
+### Lint & Format
+
+```bash
 # Lint (warnings are errors) — use --all-targets, NOT --all-features;
 # test-support and test-helpers are enabled only for specific test targets
 cargo clippy --workspace --all-targets -- -D warnings
@@ -34,23 +37,30 @@ cargo fmt
 # Unit tests only (parallel — each test uses isolated TempDir)
 cargo test --workspace --lib
 
-# All tests including integration (serial — for migration checks only)
+# All tests including integration (serial)
 cargo test --workspace --all-features -- --test-threads=1
 
 # snip-sync tests (needs test-helpers feature)
 cargo test -p snip-sync --features test-helpers
 ```
 
-**Key gotcha:** `cargo test --lib -p snip-it` does not work — `snip-it` is binary-only. Use `cargo test -p snip-it` or `cargo test --workspace`.
-
 **Key gotcha:** Only 3 integration tests require `--features test-support` to compile: `repair_transactions`, `process_lock_concurrency`, and `local_data_lock_barriers`. All other integration tests compile without the feature.
 
 **Key gotcha:** PTY tests (`pty_integration.rs`) use real terminal pairs — always pass `--test-threads=1`.
 
-## Toolchain
+## Toolchain & Environment
 
 - **Rust 1.94**, edition 2024 (not 2021). See `rust-toolchain.toml`.
 - `rustfmt.toml`: `max_width=100`, 4-space indent, Unix newlines, `edition = "2024"`.
+- `.cargo/config.toml` raises the Windows thread stack to 8 MB — the large `Commands` enum overflows the 1 MB default. Do not remove.
+- Linux needs `libdbus-1-dev pkg-config` installed (CI installs them); tonic TLS also needs OpenSSL headers on Linux.
+
+## Release & Branching
+
+- Publishing to crates.io is manual and local — no publish workflow exists; CI has no crates.io token.
+- Publish in dependency order: `snip-proto` → `snip-sync` → `snip-it`. If `snip-proto` changes, bump its version in both dependents.
+- Topic branches squash-merge into `main`; commits: imperative mood, first line under 72 chars.
+- Version bumps + `CHANGELOG.md` update go together in one PR (see `CONTRIBUTING.md`, `RELEASING.md`).
 
 ## Project Structure
 
@@ -67,7 +77,7 @@ themes/           50 Halloy TOML theme files
 
 - `main.rs` — CLI entry point, clap dispatch
 - `lib.rs` — Library crate (exports for integration tests)
-- `commands/` — 24 files (23 command modules + shared helpers in `mod.rs`)
+- `commands/` — one module per command + shared helpers in `mod.rs`
 - `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
@@ -92,7 +102,7 @@ themes/           50 Halloy TOML theme files
 The save path does NOT post-process `toml::to_string_pretty` output. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline. See `src/utils/toml_helpers.rs`.
 
 ### Single-helper execution lock
-The detached `auto-sync-worker` holds `SyncExecutionLock` for the entire bounded cycle and runs `sync_commands::run_sync` directly. Manual sync and cron acquire the same lock.
+The detached `auto-sync-worker` holds `SyncExecutionLock` for the entire bounded cycle and runs `sync_commands::run_sync_with_limits` directly. Manual sync and cron acquire the same lock.
 
 ### Kernel-backed process file locks
 All auto-sync locks and the `snip-sync` server singleton use `flock` (Unix) / `LockFileEx` (Windows). The kernel alone is authoritative — persistent lock files may contain stale metadata. `Drop` releases the lock without unlinking the file.
@@ -114,6 +124,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Live snippet conflicts use `(updated_at, device_id, SHA-256(synced fields))`; never reintroduce role-dependent `>=` server-wins behavior.
 - Deletion wins over live content, including when the live copy has a later timestamp. This is intentional no-resurrection behavior, not pure LWW.
 - `output`, `folders`, and `favorite` are local-only and must not enter the conflict fingerprint.
+- `output` is local-only — not synced, not in `ProtoSnippet`. `snp edit --output` requires `--filter`.
 
 ### Sync uploads
 - Sync uploads are byte-bounded using Prost `encoded_len()`. The client ceiling defaults to 3.5 MiB (below the server's 4 MiB gRPC limit).
@@ -144,33 +155,23 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - The auto-sync detached helper uses `Builder::new_current_thread()` instead of `new_multi_thread()`.
 - The client retains `tokio`'s `rt-multi-thread` feature because the production detached auto-sync worker creates its own multi-thread runtime; do not prune it.
 
-## Error Handling
+## Error Handling & CLI Surface
 
-- `SnipError` enum (`src/error.rs`), `SnipResult<T> = Result<T, SnipError>`.
-- `SnipError` never carries credentials or API keys.
-- `FailureClass` has 4 variants: `Transient`, `Configuration`, `LocalFailure`, `Internal`.
-
-## CLI Surface
-
-- `SnipError` variants map to stable exit codes via `CliOutcome` → `exit_code::*`.
-- Selection output, editor resolution, and theme behavior reuse canonical helpers.
+- `SnipError` enum (`src/error.rs`), `SnipResult<T> = Result<T, SnipError>`. `SnipError` never carries credentials or API keys.
+- `FailureClass` (`src/sync_failure.rs`) has 4 variants: `Transient`, `Configuration`, `LocalFailure`, `Internal`.
+- `SnipError` variants map to stable exit codes via `CliOutcome` → `exit_code::*`; see `docs/EXIT_CODES.md`.
 - Exact selector construction is canonicalized via `resolve_exact_target()` in `selector.rs`.
 - Clipboard copy side effects (audit log, usage index update) are canonicalized via `copy_to_clipboard()` in `clip_cmd.rs`.
 
-## Selection & Exit Codes
-
+### Selection & exit codes
 - `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
 - Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0
 - Output-file execution failures (timeout/spawn) map to exit code 8
 
-## Output Field
-
-- `output` is local-only — not synced, not in `ProtoSnippet`
-- `snp edit --output` requires `--filter`
-
 ## Keyring
 
-- `Cargo.toml` enables native keyring store features: `apple-native` (macOS), `windows-native` (Windows), `sync-secret-service` (Linux desktop). Without a supported store feature, keyring uses its mock store as default — not acceptable as production credential persistence.
+- `keyring = "4"` relies on its default `v1` feature set for platform stores: Apple Keychain, Windows Credential Manager, zbus Secret Service (Linux desktop). Do not build with `default-features = false` without re-enabling a store — credential persistence silently degrades to keyring's mock store.
+- Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true`; never remove that seam from test commands.
 
 ## Configuration Files
 
@@ -205,6 +206,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 | Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
 | Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
+| Multi-batch sync | serial target | `sync_multibatch.rs` — also runs in `check.sh` with `--test-threads=1` |
 | PTY | serial target | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
 | Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
