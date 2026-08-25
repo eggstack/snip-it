@@ -161,9 +161,9 @@ All dependencies must come from crates.io (the only allowed registry). Git depen
 
 | Crate | Version | Description |
 |-------|---------|-------------|
-| `snip-it` | 1.3.3 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
-| `snip-proto` | 0.1.0 | Protobuf definitions and tonic-generated gRPC code. |
-| `snip-sync` | 0.1.1 | gRPC sync server (axum HTTP + tonic gRPC, SQLite storage). |
+| `snip-it` | 1.3.7 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
+| `snip-proto` | 0.1.3 | Protobuf definitions and tonic-generated gRPC code. |
+| `snip-sync` | 0.1.4 | gRPC sync server (axum HTTP + tonic gRPC, SQLite storage). |
 
 All three crates share the same license (MIT), Rust edition (2024), and minimum supported Rust version (1.94).
 
@@ -175,9 +175,9 @@ The following direct dependencies are critical to the project's security and fun
 
 | Crate | Version | Purpose | Security Relevance |
 |-------|---------|---------|-------------------|
-| `aes-gcm` | 0.10 | AES-256-GCM authenticated encryption | Encrypts snippet payloads at rest and in transit |
+| `aes-gcm` | 0.11 | AES-256-GCM authenticated encryption | Encrypts snippet payloads at rest and in transit |
 | `argon2` | 0.5 | Argon2id key derivation | Derives encryption keys from API keys |
-| `keyring` | 3 | OS keychain integration | Stores API keys securely in platform keychain |
+| `keyring` | 4 | OS keychain integration | Stores API keys securely in platform keychain |
 | `zeroize` | 1 | Zeroing memory for secrets | Ensures sensitive buffers are wiped after use |
 | `tonic` | 0.14 | gRPC framework (client + server) | Transport layer for sync protocol |
 | `prost` | 0.14 | Protobuf serialization | Wire format for sync messages |

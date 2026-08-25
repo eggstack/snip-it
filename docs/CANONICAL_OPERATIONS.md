@@ -13,7 +13,7 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Canonical** | `src/library.rs:767` — `load_library(path: &Path) -> SnipResult<Snippets>` |
+| **Canonical** | `src/library.rs:889` — `load_library(path: &Path) -> SnipResult<Snippets>` |
 | **Semantics** | Reads TOML, applies `fix_invalid_toml_escapes`, deduplicates snippet IDs, returns default on missing/corrupt (with backup). Uses `cached_read_toml`. |
 
 ### Callers
@@ -21,7 +21,7 @@
 | Caller | Location | Adapts? |
 |--------|----------|---------|
 | `load_snippets(config)` | `src/commands/mod.rs:114` | Yes — resolves path via `get_config_path(config)`, uses raw `fs::read_to_string` instead of `cached_read_toml`, returns error (not default) on corrupt. **Semantics differ: does not dedup IDs, does not use `cached_read_toml`.** |
-| `status_snapshot::load_library` | `src/status_snapshot.rs:562` | No — direct call |
+| `status_snapshot::load_library` | `src/status_snapshot.rs:561` | No — direct call |
 | `sync_commands::run_sync` | `src/sync_commands.rs:530` | No — direct call |
 | `edit_cmd::run` | `src/commands/edit_cmd.rs:76` | No — direct call |
 | `new_cmd::run` | `src/commands/new_cmd.rs:559` | No — fallback path only |

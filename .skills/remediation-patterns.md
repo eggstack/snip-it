@@ -3,11 +3,12 @@
 ## Key Patterns Used in Remediation
 
 ### 1. Security: Keychain Integration (keyring crate)
-- `keyring = "3"` for cross-platform OS keychain access
+- `keyring = "4"` for cross-platform OS keychain access (default `v1` features)
 - `Entry::new(service, user)` to create credential entries
 - `entry.set_password()` / `entry.get_password()` for storage/retrieval
 - Graceful fallback: if keychain unavailable, store plaintext with warning
 - Migration: detect plaintext on load, move to keychain, save marker
+- Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true`
 
 ### 2. Security: Rate Limiting
 - Rate limit check BEFORE auth check (cheaper operation first)
@@ -53,9 +54,8 @@
 ### 10. Removing Dead Public Items
 - Audit public API surface before releasing (see `docs/PUBLIC_API.md`)
 - Remove unused fields, constants, and functions from public types
-- For removed items: verify no callers exist in the workspace (`rg <item_name>`)
+- For removed items: verify no callers exist in the workspace (`rg <item_name>`) and record rationale in the CHANGELOG
 - Apply `#[non_exhaustive]` to public enums to prevent future breakage from variant additions
-- Document removed items in `docs/OBSOLETE_ITEMS.md` with rationale
 - Common pattern: a field/method was added speculatively but never wired up — delete it before it becomes a stability commitment
 
 ### 11. Clippy Compliance
@@ -106,7 +106,7 @@ The following dead items were identified and **removed** during the API tighteni
 
 - **`AutoSyncPolicy.max_retries`** — **REMOVED.** Field was never read; backoff is now durable and retry-count-based via `auto-sync-status.toml`. Do not re-add; use `schedule_sync()` backoff decisions instead.
 - **`STALE_LOCK_THRESHOLD_SECS`** — **REMOVED.** Constant was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks. Do not re-add; use timeout-based staleness detection.
-- **`encryption::ct_eq`** — **REMOVED.** Constant-time equality helper was unreferenced; replaced by downstream crate functionality. Do not re-add.
+- **`encryption::ct_eq`** — **Removed from public API.** The constant-time equality helper was unreferenced by production code; it survives only as a `#[cfg(test)]` test helper in `encryption.rs`. Keep it out of the public surface.
 
 Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
 
@@ -124,7 +124,7 @@ The following patterns were introduced in Phase 07A:
 
 ### Transaction Journal (`src/transaction.rs`)
 - Operations touching 2+ files must use `Transaction::begin()`
-- Journal lives at `<config>/transaction.journal` with operation list + file checksums
+- Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/` (alongside locks, durable backups, and staged files)
 - On crash recovery: `check_interrupted_transactions()` rolls back incomplete transactions
 - Journal is removed only after successful commit
 

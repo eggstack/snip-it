@@ -13,7 +13,7 @@ src/ui/
 
 ## Key Types
 - `Theme` — 10-color palette (Copy, Clone): primary, secondary, accent, background, text, border, selected_bg, muted, string_color, escape_color
-- `SelectState` — Selected index, list state, scroll state (in `state.rs`)
+- `SelectState` — `selected` index + `scroll_state` (`pub(super)` in `state.rs`, internal to the UI module)
 - `FilterState` — Sort mode and tag filter text (in `state.rs`)
 - `SortMode` — None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed
 - `VariablePromptResult` — User's response to variable prompts

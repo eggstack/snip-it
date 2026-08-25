@@ -220,7 +220,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 
 | Property | Value |
 |----------|-------|
-| **Canonical path** | `~/.config/snp/transaction-journals/<uuid>.journal` |
+| **Canonical path** | `~/.config/snp/.transaction/txn-<uuid>.toml` (alongside `transaction.lock`, durable backups, staged files) |
 | **Owner module** | `src/transaction.rs` |
 | **Schema** | TOML manifest of staged operations (source, destination, backup, hash, action) |
 | **User-editable** | No |

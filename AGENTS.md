@@ -91,6 +91,16 @@ themes/           50 Halloy TOML theme files
 - `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
 - `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
 - `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
+- `local_data.rs` — `LocalDataLock`, `<config>/.transaction` derivation, lock hierarchy
+- `migration.rs` — Schema versioning (`SchemaVersion`, idempotent TOML migrations)
+- `sync_failure.rs` — `FailureClass` (4 variants) + legacy status-code compat
+- `status_snapshot.rs` — Read-only auto-sync `StatusSnapshot` behind `snp status`
+- `sort.rs` — Snippet sort/rank modes shared by TUI and list
+- `output.rs` — Output-file execution pipeline
+- `usage.rs` — Local usage metadata (not synced)
+- `clipboard.rs` — Clipboard backend with auto-clear
+- `diagnostics.rs` — `snp doctor` diagnostics engine
+- `update.rs` — Self-update support
 - `logging.rs` — Structured logging and audit trail
 
 ## Critical Gotchas
@@ -185,7 +195,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `~/.config/snp/usage.toml` — local usage metadata (not synced)
 - `~/.config/snp/auto-sync-status.toml` — durable sync status (not synced, private)
 - `~/.config/snp/auto-sync-pending.toml` — pending mutation marker
-- `~/.config/snp/transaction-journals/` — transaction journals
+- `~/.config/snp/.transaction/` — transaction journals, locks, durable backups, staged files
 - `~/.config/snp/backups/` — backup snapshots
 
 ## Testing Notes
@@ -214,6 +224,16 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 | Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
 
+Remaining integration targets (`integration.rs`, the `auto_sync_*` suites,
+`scale.rs`, `security.rs`, `schema.rs`, `restore_*.rs`, `execution_outcomes.rs`,
+`mutual_exclusion.rs`, `readonly_no_recovery.rs`, `recovery_integration.rs`,
+`selector_integration.rs`, `snip_sync_lifetime.rs`, `canary_nonexecution.rs`,
+`edit_mutation_notify.rs`, `backup_snapshot_concurrency.rs`,
+`recording_telemetry.rs`, `release4_regression.rs`, `output_contracts.rs`,
+`identity_contract.rs`, `persistence_unit.rs`, `manifest_contracts.rs`) run
+under the standard full-suite invocation:
+`cargo test --workspace --all-features -- --test-threads=1`.
+
 ### Deterministic test assertions
 Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. Auto-sync closure cases live in `tests/auto_sync_closure.rs`; sync-boundary cases live in `tests/sync_integration.rs` and `tests/sync_contracts.rs`.
 
@@ -232,6 +252,7 @@ The helper emits lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines)
 | Remediation | `.skills/remediation-patterns.md` | Atomic writes, transactions, durability classes, repair patterns |
 | Server | `.skills/server-module.md` | snip-sync server architecture, env vars, gRPC endpoints |
 | Sync | `.skills/sync-module.md` | Sync flow, merge strategy, failure classification, recovery commands |
+| Transactions & auto-sync | `.skills/transactions-and-auto-sync.md` | Journal state machine, lock hierarchy, mutation gate, pending generations, worker contracts |
 | UI | `.skills/ui-module.md` | TUI module structure, theme system, syntax highlighting |
 
 ### Architecture Index
@@ -259,5 +280,12 @@ The helper emits lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines)
 | Usage | `architecture/usage.md` |
 | Output | `architecture/output.md` |
 | Utilities | `architecture/utils.md` |
+| Per-command deep-dives | `architecture/commands/*.md` (one per command module) |
+| Utils deep-dives | `architecture/utils/*.md` (atomic, config, shell_keywords, tempfile_guard, toml_helpers, variables) |
 | UI modules | `architecture/ui.md` |
 | Test infra | `architecture/test-infrastructure.md` |
+
+Docs under `docs/` split into evergreen references (EXIT_CODES,
+PERSISTENCE_INVENTORY, THREAT_MODEL, COMMAND_CONTRACTS, etc.) and
+historical snapshots (SECURITY_AUDIT, FEATURE_BOUNDARIES) — check the
+header before treating a claim as current contract.

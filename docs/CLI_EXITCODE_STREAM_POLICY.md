@@ -7,36 +7,28 @@ exit codes and stdout/stderr stream usage.
 
 ### Exit Codes
 
-All errors are handled in `src/main.rs:1423-1445`:
+Exit codes are now **implemented and stable** via `CliOutcome` in
+`src/outcome.rs`, mapped to `exit_code::*` constants. The authoritative,
+verified reference is [`docs/EXIT_CODES.md`](EXIT_CODES.md).
 
-```rust
-if let Err(e) = dispatch_command(cli.command) {
-    eprintln!("error: {e}");
-    std::process::exit(1);
-}
-```
+| Code | Name | Meaning |
+|------|------|---------|
+| 0 | `SUCCESS` | Snippet executed/copied, or command completed |
+| 1 | `GENERAL_ERROR` | Any unclassified `SnipError` / persistence failure |
+| 2 | `USAGE_ERROR` | CLI argument error (clap) |
+| 3 | `NOT_FOUND` | Snippet not found |
+| 4 | `CANCELLED` | User cancelled TUI interaction (`snp select` only) |
+| 5 | `AMBIGUOUS` | Multiple snippets match filter |
+| 6 | `VALIDATION_FAILED` | Data validation failure |
+| 7 | `SYNC_FAILED` | Sync operation failure |
+| 8 | `EXECUTION_FAILED` | Output-file execution failure (timeout/spawn) |
+| 9 | `CONFLICT_OR_REFUSED` | Lock conflict, kernel refusal |
+| 10 | `UNSAFE_REPAIRS` | Repair refused: unsafe repairs require manual review |
 
-| Condition | Exit Code | Notes |
-|-----------|-----------|-------|
-| Success | 0 | Implicit — no `process::exit` call |
-| Any `SnipError` | 1 | All error variants map to the same code |
-| Async runtime failure | 1 | `LazyLock` panic path (`main.rs:23-28`) |
-| Signal handler registration failure | 1 | `main.rs:38-45` |
-
-There is **no distinction** between error types. A TOML parse error, a missing
-file, a clipboard failure, and a sync network error all produce exit code 1.
-
-`SnipError` variants (`src/error.rs`):
-
-| Variant | Typical Cause |
-|---------|---------------|
-| `Io` | File read/write, directory creation, permission denied |
-| `Toml` | Malformed TOML, serialization failure |
-| `Clipboard` | Clipboard access denied or unavailable |
-| `Command` | Shell command spawn failure (editor, snippet execution) |
-| `Runtime` | Sync failure, validation error, timeout, not-found |
-
-None of these map to distinct exit codes today.
+Selection semantics: `run_snippet_selection()` returns `SelectionOutcome`
+(Selected or Cancelled). For `run`, `clip`, and `search`, cancellation is
+treated as normal completion (exit 0). For `snp select`, cancellation maps
+to exit 4 via `CommandOutcome::Cancelled` at the CLI boundary in `main.rs`.
 
 ### Stream Usage (stdout vs stderr)
 
@@ -299,28 +291,36 @@ Auto-sync scheduling failure messages
 go to stderr via `eprintln!` — stdout is never contaminated. Worker-side
 diagnostics appear in the log files and via `snp doctor` only.
 
-## Proposed Contract (Release 1B+) — NOT YET IMPLEMENTED
+## Exit Code Contract (IMPLEMENTED) vs Stream Contract (ASPIRATIONAL)
 
-> **Status**: This section describes aspirational changes that have not been implemented.
-> Exit codes 2-6, the stream contract changes (moving human-readable output to stderr),
-> and the `--stdout` transitional flag are all deferred. The current behavior described
-> in the "Current Behavior" section above is authoritative.
+> **Status**: The exit-code portion of this contract **is implemented** — codes
+> 0–10 exist in `src/outcome.rs` (superseding the 2-6 proposal below; see the
+> Current Behavior table). The **stream contract is still aspirational** and has
+> not been implemented: human-readable output still goes to stdout, no
+> `--stdout` transitional flag exists. The stream sections below describe a
+> possible future direction only.
 
-### Exit Codes
+### Historical Proposal: Exit Codes (SUPERSEDED)
+
+The original Release 1B proposal below was narrower than what shipped.
+It is retained for design rationale only:
 
 | Code | Name | Meaning | Examples |
 |------|------|---------|----------|
 | 0 | `SUCCESS` | Operation completed successfully | Snippet executed, clipboard copied, list printed |
-| 1 | `ERROR` | General/unclassified error | Default for all current `SnipError` variants |
-| 2 | `USAGE` | Invalid arguments or missing required input | Bad CLI flags, missing library name for `library delete` |
-| 3 | `NOT_FOUND` | Requested resource does not exist | Snippet not found, library not found, file missing |
-| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc`/Ctrl-C in snippet selector (`snp select`) |
-| 5 | `IO` | Filesystem or clipboard failure | Cannot write file, clipboard unavailable |
-| 6 | `PARSE` | Configuration or data format error | Malformed TOML, invalid sync config |
+| 1 | `ERROR` | General/unclassified error | Default for unclassified failures |
+| 2 | `USAGE` | Invalid arguments or missing required input | Bad CLI flags |
+| 3 | `NOT_FOUND` | Requested resource does not exist | Snippet/library not found |
+| 4 | `CANCELLED` | User cancelled TUI interaction | `q`/`Esc`/Ctrl-C in selector (`snp select`) |
+| 5 | `IO` | Filesystem or clipboard failure | Cannot write file |
+| 6 | `PARSE` | Configuration or data format error | Malformed TOML |
 
-**Migration path**: Exit codes 2-6 are additive. Existing scripts checking
-`exit != 0` will continue to work. Scripts can opt into finer-grained handling
-by checking specific codes.
+The shipped mapping instead distinguishes `AMBIGUOUS` (5), `VALIDATION_FAILED`
+(6), `SYNC_FAILED` (7), `EXECUTION_FAILED` (8), `CONFLICT_OR_REFUSED` (9), and
+`UNSAFE_REPAIRS` (10) — see `docs/EXIT_CODES.md`.
+
+**Migration path**: New exit codes are additive. Existing scripts checking
+`exit != 0` will continue to work.
 
 **Note**: `run_snippet_selection()` returns `SelectionOutcome` (Selected or
 Cancelled). For existing commands (`run`, `clip`, `search`), cancellation is
@@ -410,12 +410,12 @@ fi
 
 - **Exit code 0/1**: No change. All existing scripts checking `exit == 0` or
   `exit != 0` continue to work.
-- **New exit codes (2-6)**: Additive. Only scripts that explicitly check for
-  these codes will be affected.
-- **Stream moves**: Moving human-readable output from stdout to stderr may
-  break scripts that `grep` or parse stdout from `snp list`, `snp keybindings`,
-  etc. This is a **breaking change** for those scripts — document in release
-  notes and provide a `--stdout` flag during transition.
-- **`--stdout` flag** (transitional): When human-readable output moves to
-  stderr, a `--stdout` flag will force it back to stdout for backward
-  compatibility. Deprecated after two releases.
+- **New exit codes (2-10)**: Additive and stable (see `docs/EXIT_CODES.md`).
+  Only scripts that explicitly check for these codes will be affected.
+- **Stream moves** (aspirational): Moving human-readable output from stdout to
+  stderr would break scripts that `grep` or parse stdout from `snp list`,
+  `snp keybindings`, etc. This is a **breaking change** for those scripts —
+  document in release notes and provide a `--stdout` flag during transition.
+- **`--stdout` flag** (transitional, not yet implemented): If human-readable
+  output ever moves to stderr, a `--stdout` flag will force it back to stdout
+  for backward compatibility. Deprecated after two releases.

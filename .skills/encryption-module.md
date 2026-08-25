@@ -24,7 +24,8 @@ let hash_bytes = hash_output.as_bytes();
 ```
 
 The derived key is wrapped in `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop`.
-After use, the key is explicitly zeroized via `drop(std::mem::take(&mut key))` (lines 227, 252).
+The encrypt path zeroizes via `key.zeroize()` (`encryption.rs:225`); the decrypt path
+uses `drop(std::mem::take(&mut key))` (`encryption.rs:251`).
 
 ## Payload Format
 
@@ -34,7 +35,8 @@ Base64(Salt[16] + Nonce[12] + Ciphertext[...])
 
 - Salt: 16 random bytes (OsRng)
 - Nonce: 12 random bytes (OsRng)
-- Ciphertext: AES-256-GCM encrypted JSON of `{description, command, tags}`
+- Ciphertext: AES-256-GCM over arbitrary caller-supplied plaintext; sync callers
+  (`encrypt_snippet` in `sync.rs`) serialize the `ProtoSnippet` to JSON first
 
 ## API
 
@@ -57,7 +59,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError`. The `?` operator auto-converts `CryptoError` to `SnipError::Runtime`.
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`error.rs:310`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
 
 ## Security Properties
 

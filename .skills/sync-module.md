@@ -152,7 +152,7 @@ cover encryption and retry/timestamp behavior.
 
 ### FailureClass Enum
 
-`FailureClass` (`src/auto_sync/policy.rs`) classifies sync errors into 4 variants:
+`FailureClass` (defined in `src/sync_failure.rs:24`, re-exported by `auto_sync/policy.rs`) classifies sync errors into 4 variants:
 
 | Variant | Meaning | Retry Disposition |
 |---------|---------|-------------------|
@@ -199,7 +199,7 @@ The scheduler does not probe the execution lock. Worker acquisition is the sole 
 
 **Top-level state precedence:** CorruptOrInaccessible → LiveExecution → PendingAttentionRequired → PendingRetryBackoff → PendingAwaitingScheduling → ConfiguredAndCurrent → ConfiguredAutoSyncDisabled → NotConfigured.
 
-**Attempt state derivation:** NeverAttempted → AttentionRequired → Succeeded → RetryScheduled → Deferred → Succeeded.
+**Attempt state derivation** (`AttemptStateView`, `status_snapshot.rs:85`): `NeverAttempted → Succeeded → RetryScheduled → AttentionRequired → Deferred → Corrupt`.
 
 **Diagnostic codes:** CONFIG_LOAD_FAILED, NOT_CONFIGURED, PENDING_CORRUPT, PENDING_INACCESSIBLE, EXECUTION_LOCK_STALE, EXECUTION_LOCK_MALFORMED, EXECUTION_LOCK_INACCESSIBLE, WORKER_LOCK_STALE, WORKER_LOCK_MALFORMED, WORKER_LOCK_INACCESSIBLE, ATTENTION_REQUIRED, STATUS_CORRUPT.
 

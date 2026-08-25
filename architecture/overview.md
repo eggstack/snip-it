@@ -549,6 +549,5 @@ snp run [--filter FOO] [--sync]
 
 | File | Subject |
 |------|---------|
-| [review_plan.md](review_plan.md) | Architecture review process (historical) |
 | `../docs/LOGICAL_LAYERS.md` | Target logical layer architecture |
 | `../docs/ARCHITECTURE_INVENTORY.md` | Comprehensive module inventory |

@@ -235,6 +235,9 @@ sync policy.
 | `snp premade` | Browse and install premade libraries from a sync server |
 | `snp import pet` | Import a pet snippet file |
 | `snp doctor` | Diagnose files, the local installation, shell integration, or sync |
+| `snp status` | Show auto-sync and sync state as JSON or text |
+| `snp backup` | Create a checksummed snapshot of local state |
+| `snp restore` | Restore local state from a backup snapshot |
 | `snp data` | Validate, back up, restore, repair, or inspect local state |
 | `snp repair` | Validate and repair configuration and library files |
 | `snp validate` | Read-only validation of snippet data and structure |

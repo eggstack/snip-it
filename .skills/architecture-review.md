@@ -26,7 +26,7 @@ Look for:
 - **Test Coverage Gaps**: Missing tests for critical paths
 
 ### 4. Write Findings
-Output to `plans/<module>_review.md` with:
+Report findings directly (session summary or PR description) with:
 - Document Accuracy (verified correct + discrepancies)
 - Bugs & Issues (with file:line locations)
 - Design Issues
@@ -67,16 +67,16 @@ Output to `plans/<module>_review.md` with:
 
 ### Sync
 - **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`)
-- **Timestamp merge**: Server wins on equal timestamps (`>=` not `>`)
+- **Conflict resolution**: Live conflicts order by `(updated_at, device_id, SHA-256(synced fields))` — never reintroduce role-dependent `>=` server-wins comparisons; deletion wins over live content regardless of timestamp
 - **Push-only counter**: `completed` should increment regardless of `has_failures`
 
 ### Known Historical Fixes (verify they're still in place)
-- Encryption `drop(key)` now zeroizes via `std::mem::take` before drop
+- Encryption keys are zeroized after use: encrypt path calls `key.zeroize()`, decrypt path uses `drop(std::mem::take(&mut key))`
 - Clipboard debug→warn for auto-clear failures
 - Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs`
 - Premade TOCTOU: read from `canonical_path` not original `path`
 - Health RPC verifies database connectivity via `db.ping()`
-- `CryptoError` integrates with `SnipError` via `From` impl
+- `CryptoError` converts to `SnipError::SyncFailure` via the `From` impl (`error.rs`)
 - `From<io::Error>` auto-conversion with kind-based operation strings (`error.rs`)
 
 ## Phase 06A Checklist
@@ -86,7 +86,7 @@ When reviewing public API changes or architecture docs, verify:
 1. **Public API inventory** (`docs/PUBLIC_API.md`): Every public item is accounted for and justified
 2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports
 3. **Canonical operations** (`docs/CANONICAL_OPERATIONS.md`): Each operation has a single, documented entry point
-4. **Dead items** (`docs/OBSOLETE_ITEMS.md`): Removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, `encryption::ct_eq`) are confirmed gone from source and not referenced. Verify no re-introduction.
+4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, public `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction.
 5. **`#[non_exhaustive]`**: All public enums that may gain variants are marked `#[non_exhaustive]`
 6. **Feature boundaries** (`docs/FEATURE_BOUNDARIES.md`): Feature-gated items are correctly gated and documented
 

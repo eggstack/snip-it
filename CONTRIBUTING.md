@@ -101,21 +101,21 @@ snip-it/
 ├── snip-proto/         # Protobuf + tonic stubs (published to crates.io)
 ├── snip-sync/          # Sync server binary (published to crates.io)
 ├── tests/              # Integration tests
-├── assets/             # Demo GIF + vhs tape
+├── assets/             # vhs tape for the demo GIF (rendered to demo/)
 ├── architecture/       # Internal architecture docs (AI-agent oriented)
 ├── .skills/            # AI-agent context files
 ├── AGENTS.md           # AI-agent contributor guide
 └── AGENTS.override.md  # Per-user overrides for AI-agent context
 ```
 
-The `architecture/`, `.skills/`, `AGENTS.md`, `AGENTS.override.md`,
-and `plan.md` files are **kept in the public repo on purpose** so
+The `architecture/`, `.skills/`, `AGENTS.md`, and `AGENTS.override.md`
+files are **kept in the public repo on purpose** so
 that contributors using AI coding agents have the same context the
 maintainer does. They are excluded from the published crate.
 
 ## Pull Requests
 
-- Fill out the PR template (`.github/PULL_REQUEST_TEMPLATE.md`).
+- Describe what changed and why in the PR body.
 - Reference any related issue.
 - Make sure CI is green.
 - New features should include a test where practical.

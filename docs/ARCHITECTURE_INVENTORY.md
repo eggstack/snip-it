@@ -66,15 +66,16 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
 - Reuses the same source validation, TOML parsing, and entry analysis as `import_cmd` for consistency
 - Security: doctor never mutates source, destination, config, or library state
-- External library support (R4-C) is deferred: no runtime behavior, no config surface, no provenance tracking. See `plans/pet-compat-release-4c-external-libraries.md` for rationale.
+- External library support (R4-C) is deferred: no runtime behavior, no config surface, no provenance tracking. Rationale recorded in `docs/PET_COMPATIBILITY.md` (release roadmap table).
 
 ### Error Handling (`src/error.rs`)
-- `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`
+- `SnipError` enum (`#[non_exhaustive]`): `Io`, `Toml`, `Clipboard`, `Command`, `Runtime`, `SyncFailure`
 - `SnipResult<T>` type alias
-- Constructor helpers: `io_error()`, `toml_error()`, `clipboard_error()`, `command_error()`, `runtime_error()`
+- Constructor helpers: `io_error()`, `toml_error()`, `clipboard_error()`, `command_error()`, `runtime_error()`, `sync_failure()`
 - `From<io::Error>` auto-conversion with kind-based operation strings
-- `From<CryptoError>` for encryption failures
-- All errors → `exit(1)` in `main()` — no exit code distinction
+- `From<CryptoError>` → `SnipError::SyncFailure` (encryption failures)
+- `FailureClass` (`src/sync_failure.rs`): `Transient`, `Configuration`, `LocalFailure`, `Internal`
+- Errors map to stable exit codes 0–10 via `CliOutcome` in `src/outcome.rs`; see `docs/EXIT_CODES.md`
 
 ### TUI (`src/ui/`)
 - `select_snippet_inner()` — main event loop (1955 lines in `mod.rs`)
@@ -307,6 +308,7 @@ Key invariants:
 | 7 | SyncFailed | Sync operation failure |
 | 8 | ExecutionFailed | Output-file execution failure (timeout/spawn) |
 | 9 | ConflictOrRefused | Lock conflict, kernel refusal |
+| 10 | UnsafeRepairs | Repair refused: unsafe repairs require manual review |
 
 ## Configuration Files
 
@@ -325,4 +327,4 @@ Key invariants:
 | `~/.config/snp/logs/` | Rolling log files (daily rotation) |
 | `~/.config/snp/audit.log` | Audit log for snippet operations |
 | `~/.config/snp/backups/` | Timestamped library backups (max 10/library) |
-| `~/.config/snp/transaction-journals/` | Transaction journals for crash recovery |
+| `~/.config/snp/.transaction/` | Transaction journals, locks, durable backups, staged files (crash recovery) |

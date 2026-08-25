@@ -8,8 +8,13 @@ This skill covers the pattern used in snp for keychain integration.
 
 ### Dependencies
 ```toml
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+keyring = "4"
 ```
+
+Keyring 4's default `v1` feature set provides the platform stores (Apple Keychain,
+Windows Credential Manager, zbus Secret Service on Linux desktop). Do **not**
+build with `default-features = false` without re-enabling a store — credential
+persistence silently degrades to keyring's mock store.
 
 ### Storage (on save)
 ```rust
