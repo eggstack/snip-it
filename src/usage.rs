@@ -112,7 +112,9 @@ impl UsageIndex {
     /// Useful for lazily pruning records of snippets that have been
     /// deleted from the library.
     pub fn prune(&mut self, active_ids: &[String]) {
-        self.entries.retain(|e| active_ids.contains(&e.id));
+        let active: std::collections::HashSet<&str> =
+            active_ids.iter().map(String::as_str).collect();
+        self.entries.retain(|e| active.contains(e.id.as_str()));
     }
 
     /// Return a reference to all entries.

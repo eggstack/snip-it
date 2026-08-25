@@ -107,7 +107,9 @@ pub fn needs_migration(path: &Path) -> SnipResult<bool> {
 /// Get the current schema version of a file.
 ///
 /// Returns `SchemaVersion::LEGACY` if the file has no version marker
-/// or cannot be read.
+/// or cannot be parsed as TOML. An out-of-range integer version
+/// (negative or above `u32::MAX`) is malformed data and fails closed
+/// rather than wrapping to a wrong-but-valid version.
 pub fn get_schema_version(path: &Path) -> SnipResult<SchemaVersion> {
     if !path.exists() {
         return Ok(SchemaVersion::LEGACY);
@@ -124,7 +126,18 @@ pub fn get_schema_version(path: &Path) -> SnipResult<SchemaVersion> {
     match content.parse::<toml::Table>() {
         Ok(table) => {
             if let Some(version) = table.get(SCHEMA_KEY).and_then(|v| v.as_integer()) {
-                Ok(SchemaVersion(version as u32))
+                let version = u32::try_from(version).map_err(|_| {
+                    SnipError::runtime_error(
+                        "invalid schema_version",
+                        Some(&format!(
+                            "{} carries schema_version {version}, which is outside the valid \
+                             range (0..={}); the file may be corrupted",
+                            path.display(),
+                            u32::MAX
+                        )),
+                    )
+                })?;
+                Ok(SchemaVersion(version))
             } else {
                 Ok(SchemaVersion::LEGACY)
             }
@@ -511,6 +524,23 @@ updated_at = 1700000000
         assert_eq!(version, SchemaVersion(999));
         // needs_migration compares < CURRENT, so v999 is NOT less than v1
         assert!(!needs_migration(&path).unwrap());
+    }
+
+    /// Out-of-range schema versions must fail closed instead of truncating
+    /// modulo 2³² or wrapping negatives to huge (migration-skipping) values.
+    #[test]
+    fn test_out_of_range_schema_version_fails_closed() {
+        for content in [
+            "schema_version = -1\n",
+            "schema_version = 4294967296\n", // u32::MAX + 1
+            "schema_version = 9223372036854775807\n",
+        ] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("out_of_range.toml");
+            fs::write(&path, content).unwrap();
+            let result = get_schema_version(&path);
+            assert!(result.is_err(), "expected error for {content:?}");
+        }
     }
 
     /// Malformed source preservation — write_schema_version should not

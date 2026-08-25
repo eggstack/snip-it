@@ -161,29 +161,43 @@ fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
     Ok(())
 }
 
+/// Sync a parent directory so a completed rename's entry is durable.
+///
+/// Unix only; other platforms cannot dir-fsync through std.
+fn parent_dir_sync_durable(
+    #[cfg_attr(not(unix), allow(unused_variables))] parent: &Path,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let dir = fs::OpenOptions::new().read(true).open(parent)?;
+        dir.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Err(std::io::Error::other(
+            "dir fsync unsupported on this platform",
+        ))
+    }
+}
+
 /// Attempt to sync the parent directory to ensure the rename is durable.
 ///
 /// Returns `Some(true)` if dirfsync succeeded, `Some(false)` if it failed
-/// (logged but not fatal), and `None` for ephemeral durability.
-fn parent_dir_sync(
-    #[cfg_attr(not(unix), allow(unused_variables))] parent: &Path,
-    durability: Durability,
-) -> Option<bool> {
+/// or is unsupported (logged but not fatal), and `None` for ephemeral
+/// durability. Callers that must guarantee durability should use
+/// [`parent_dir_sync_durable`] directly to surface the error.
+fn parent_dir_sync(parent: &Path, durability: Durability) -> Option<bool> {
     match durability {
         Durability::EphemeralCoordination => None,
         _ => {
             #[cfg(unix)]
             {
-                match fs::OpenOptions::new().read(true).open(parent) {
-                    Ok(dir) => match dir.sync_all() {
-                        Ok(()) => Some(true),
-                        Err(_) => Some(false),
-                    },
-                    Err(_) => Some(false),
-                }
+                Some(parent_dir_sync_durable(parent).is_ok())
             }
             #[cfg(not(unix))]
             {
+                let _ = parent;
                 Some(false)
             }
         }
@@ -235,8 +249,19 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
     guard.persist();
 
     // Flush the rename's directory entry so the new file survives power
-    // loss. This is the persistence path for all primary user data.
-    let _ = parent_dir_sync(parent, Durability::DurableUserData);
+    // loss. This is the persistence path for all primary user data: a
+    // failed directory fsync means durability is not guaranteed, so the
+    // error must surface instead of reporting a successful write. (Other
+    // platforms cannot dir-fsync through std; there the rename is the
+    // best available guarantee, as before.)
+    #[cfg(unix)]
+    if let Err(e) = parent_dir_sync_durable(parent) {
+        return Err(SnipError::io_error(
+            "fsync parent directory after atomic write",
+            parent,
+            e,
+        ));
+    }
 
     Ok(())
 }

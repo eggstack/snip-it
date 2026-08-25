@@ -460,11 +460,17 @@ impl Database {
     ) -> DbResult<(Vec<Snippet>, i32)> {
         let mut tx = self.pool.begin().await?;
 
+        // `>=` (not `>`) is required for delta correctness: timestamps have
+        // second granularity and the watermark returned to the client is
+        // `MAX(updated_at)`. With `>`, a row written in the same second as
+        // the previous sync's watermark would be skipped by every future
+        // incremental sync. Re-delivering boundary rows is safe — merges are
+        // idempotent by snippet identity.
         let total: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM snippets \
              WHERE user_id = ? \
                AND library_id = ? \
-               AND updated_at > ? \
+               AND updated_at >= ? \
                AND (? OR deleted = 0)",
         )
         .bind(user_id)
@@ -479,7 +485,7 @@ impl Database {
              FROM snippets \
              WHERE user_id = ? \
                AND library_id = ? \
-               AND updated_at > ? \
+               AND updated_at >= ? \
                AND (? OR deleted = 0) \
              ORDER BY updated_at DESC, id DESC \
              LIMIT ? OFFSET ?",
@@ -842,6 +848,43 @@ mod tests {
         assert_eq!(snippets[0].description, "Test snippet");
         assert_eq!(snippets[0].command, "echo hello");
         assert_eq!(snippets[0].tags, vec!["test"]);
+    }
+
+    /// Delta queries must include rows at exactly the watermark: timestamps
+    /// have second granularity and the client stores `MAX(updated_at)` as
+    /// `last_sync`. With strict `>`, a row written in the same second as the
+    /// watermark was invisible to every later incremental sync.
+    #[tokio::test]
+    async fn test_delta_query_includes_watermark_boundary_row() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let snippet = Snippet {
+            id: "boundary-snip".to_string(),
+            description: "Boundary".to_string(),
+            command: "echo boundary".to_string(),
+            tags: vec![],
+            created_at: 500,
+            updated_at: 500,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        db.upsert_snippet(&snippet, &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let latest = db.get_latest_timestamp(&user_id, &lib_id).await.unwrap();
+        assert_eq!(latest, 500);
+
+        // A subsequent incremental sync sends `since = MAX(updated_at)`.
+        let (snippets, total) = db
+            .get_snippets(&user_id, &lib_id, latest, 10, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(total, 1, "row at exactly `since` must be returned");
+        assert_eq!(snippets[0].id, "boundary-snip");
     }
 
     #[tokio::test]

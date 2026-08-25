@@ -133,25 +133,47 @@ pub fn run_edit_output(
 
     let mut snippets = load_library(&lib_path)?;
 
-    // Find the snippet matching the filter
+    // Find the snippets matching the filter. Substring matching can easily
+    // hit several snippets, and this path mutates a local-only field —
+    // guessing would silently edit the wrong snippet's output.
     let filter_lower = filter.to_lowercase();
-    let matching_idx = snippets
+    let matching: Vec<usize> = snippets
         .snippets
         .iter()
         .enumerate()
         .filter(|(_, s)| !s.deleted)
-        .find(|(_, s)| {
+        .filter(|(_, s)| {
             s.description.to_lowercase().contains(&filter_lower)
                 || s.command.to_lowercase().contains(&filter_lower)
         })
-        .map(|(i, _)| i);
+        .map(|(i, _)| i)
+        .collect();
 
-    let idx = match matching_idx {
-        Some(i) => i,
-        None => {
+    let idx = match matching.as_slice() {
+        [only] => *only,
+        [] => {
             return Err(crate::error::SnipError::runtime_error(
                 "No matching snippet",
                 Some(&format!("No snippet matching '{filter}' found in library")),
+            ));
+        }
+        many => {
+            let candidates = many
+                .iter()
+                .map(|&i| {
+                    let s = &snippets.snippets[i];
+                    format!("  - {} (id: {})", s.description, s.id)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(crate::error::SnipError::runtime_error(
+                "Ambiguous filter match",
+                Some(&format!(
+                    "Filter '{filter}' matches {} snippets:\n{candidates}\n\
+                     Refine the filter or use an exact selector \
+                     (--id / --description-exact / --command-exact).",
+                    many.len()
+                )),
             ));
         }
     };

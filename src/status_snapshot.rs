@@ -270,7 +270,10 @@ pub fn attempt_state_view(status: &AutoSyncStatus) -> AttemptStateView {
     if status.consecutive_failures > 0 {
         return AttemptStateView::RetryScheduled;
     }
-    AttemptStateView::Succeeded
+    // Reached only by an inconsistent/partially written status file (an
+    // attempt is recorded but neither success, failure count, nor retry
+    // schedule is set). Never claim success for state we cannot interpret.
+    AttemptStateView::RetryScheduled
 }
 
 pub fn execution_state_view(state_dir: &Path) -> (ProcessStateView, ProcessStateView) {
@@ -1087,6 +1090,21 @@ mod tests {
             ..AutoSyncStatus::default()
         };
         assert_eq!(attempt_state_view(&status), AttemptStateView::Deferred);
+    }
+
+    /// A partially written status file (attempt recorded, but no success
+    /// timestamp, failure count, or retry schedule) must not be reported as
+    /// `Succeeded` — the conservative fallback is a retry state.
+    #[test]
+    fn test_attempt_state_inconsistent_file_is_not_succeeded() {
+        let status = AutoSyncStatus {
+            last_attempt_at_unix_ms: 1000,
+            ..AutoSyncStatus::default()
+        };
+        assert_eq!(
+            attempt_state_view(&status),
+            AttemptStateView::RetryScheduled
+        );
     }
 
     #[test]

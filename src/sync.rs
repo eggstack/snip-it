@@ -586,7 +586,24 @@ impl SyncClient {
             );
         }
 
+        // Hard bound: a buggy or malicious server answering `has_more = true`
+        // with non-empty pages forever must not spin manual sync
+        // indefinitely. 10_000 pages at the default page size of 1000
+        // snippets is far beyond any real library.
+        const MAX_SYNC_PAGES: usize = 10_000;
+        let mut pages_fetched = 0usize;
+
         loop {
+            pages_fetched += 1;
+            if pages_fetched > MAX_SYNC_PAGES {
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::SyncRequestFailed,
+                    Some(&format!(
+                        "server pagination did not terminate after {MAX_SYNC_PAGES} pages; \
+                         aborting incremental fetch"
+                    )),
+                ));
+            }
             let request = SyncRequest {
                 api_key: String::new(),
                 local_snippets: Vec::new(),
@@ -1368,14 +1385,17 @@ pub(crate) fn build_upload_batches(
     Ok(batches)
 }
 
-/// Add batch context to a sync error while preserving the original
-/// `SyncFailureKind`. This replaces the previous pattern of wrapping
-/// every error as `SyncRequestFailed`, which lost typed classifications
-/// such as `ClockSkew`, `Timeout`, and authentication failures.
+/// Add batch context to a sync error while preserving its classification.
+///
+/// `SyncFailure` kinds (e.g. `ClockSkew`, `Timeout`) keep their kind; other
+/// variants must NOT be re-wrapped as `SyncRequestFailed` — that would
+/// classify persistent server-side faults (e.g. gRPC `internal`, which maps
+/// to `Runtime` → `FailureClass::Internal`) as `Transient` and retry them
+/// forever instead of escalating to attention-required.
 fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError {
+    let ctx = format!("batch {batch}/{total}");
     match error {
         SnipError::SyncFailure { kind, detail } => {
-            let ctx = format!("batch {batch}/{total}");
             let new_detail = match detail {
                 Some(d) => format!("{ctx}: {d}"),
                 None => ctx,
@@ -1385,10 +1405,11 @@ fn add_batch_context(error: SnipError, batch: usize, total: usize) -> SnipError 
                 detail: Some(new_detail),
             }
         }
-        _other => {
-            let ctx = format!("batch {batch}/{total}: {_other}");
-            SnipError::sync_failure(SyncFailureKind::SyncRequestFailed, Some(&ctx))
-        }
+        SnipError::Runtime { message, detail } => SnipError::Runtime {
+            message: format!("{ctx}: {message}"),
+            detail,
+        },
+        other => other,
     }
 }
 
@@ -2090,28 +2111,31 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_context_wraps_non_sync_failure() {
+    fn test_batch_context_preserves_runtime_variant() {
         let err = SnipError::runtime_error("test op", Some("something broke"));
         let contextualized = add_batch_context(err, 3, 4);
 
         match &contextualized {
-            SnipError::SyncFailure { kind, detail } => {
+            SnipError::Runtime { message, detail } => {
                 assert!(
-                    matches!(kind, SyncFailureKind::SyncRequestFailed),
-                    "expected SyncRequestFailed, got {kind:?}"
-                );
-                let detail = detail.as_deref().expect("detail should be present");
-                assert!(
-                    detail.contains("batch 3/4"),
-                    "detail should include batch context: {detail}"
+                    message.contains("batch 3/4"),
+                    "message should include batch context: {message}"
                 );
                 assert!(
-                    detail.contains("something broke"),
-                    "detail should preserve the original error message: {detail}"
+                    message.contains("test op"),
+                    "message should preserve the original error message: {message}"
                 );
+                assert_eq!(detail.as_deref(), Some("something broke"));
             }
-            other => panic!("expected SyncFailure(SyncRequestFailed), got {other:?}"),
+            other => panic!("expected Runtime variant to be preserved, got {other:?}"),
         }
+
+        // Re-wrapping as SyncRequestFailed would classify this as Transient
+        // and retry a persistent fault forever; Runtime must stay Internal.
+        assert_eq!(
+            crate::sync_failure::FailureClass::from_error(&contextualized),
+            crate::sync_failure::FailureClass::Internal
+        );
     }
 
     // ── All-encryption-failed regression ───────────────────────────

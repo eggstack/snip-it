@@ -73,7 +73,9 @@ Hard rules:
   sync, explicit `--sync`, and cron acquire the same lock. The scheduler NEVER probes
   the execution lock.
 - Pending generations are monotonic. A lower generation observed during debounce or
-  preflight is corrupt state: preserve the marker, log, do not spawn work.
+  preflight is corrupt state: preserve the marker, log, do not spawn work. Exception:
+  a lower generation carrying a strictly newer creation timestamp is a marker that an
+  explicit sync cleared and a new mutation re-recorded; debounce adopts it.
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed
   local scheduling errors. Never collapse pending-read or spawn failures into
   `NoPending`/`SpawnNow`/a successful notification.

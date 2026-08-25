@@ -170,6 +170,28 @@ fn compute_deadline(
     target.min(start.checked_add(lifetime).unwrap_or(target))
 }
 
+/// Interpret a pending observation whose generation is lower than the one
+/// being debounced.
+///
+/// A lower generation normally indicates corrupt rollback (fail closed), but
+/// it is benign when an explicit sync cleared the marker and a new mutation
+/// immediately re-recorded one: `record_pending_mutation` restarts at
+/// generation 1 with a fresh creation timestamp. Such a reset is adopted as
+/// the new debounce target; a regression that keeps an equal-or-older
+/// creation timestamp remains corrupt state.
+fn adopt_generation_reset(current: &PendingState, latest: PendingState) -> Option<PendingState> {
+    if latest.created_at_unix_ms > current.created_at_unix_ms {
+        tracing::info!(
+            observed_generation = current.generation,
+            recreated_generation = latest.generation,
+            "pending marker was cleared and recreated during debounce; adopting new generation"
+        );
+        Some(latest)
+    } else {
+        None
+    }
+}
+
 pub fn debounce(
     state_dir: &Path,
     observed: PendingState,
@@ -198,9 +220,25 @@ pub fn debounce(
                     continue;
                 }
                 Ok(latest) if latest.generation < current.generation => {
-                    return DebounceResult::Failed(
-                        "pending generation rollback during debounce".into(),
-                    );
+                    match adopt_generation_reset(&current, latest) {
+                        Some(recreated) => {
+                            current = recreated;
+                            deadline = compute_deadline(
+                                current.created_at_unix_ms,
+                                debounce_duration,
+                                start,
+                                max_lifetime,
+                                clock,
+                            )
+                            .min(max_target);
+                            continue;
+                        }
+                        None => {
+                            return DebounceResult::Failed(
+                                "pending generation rollback during debounce".into(),
+                            );
+                        }
+                    }
                 }
                 Ok(_) => return DebounceResult::Ready(current),
                 Err(pending::PendingError::NotFound) => {
@@ -226,9 +264,26 @@ pub fn debounce(
                 .min(max_target);
             }
             Ok(latest) if latest.generation < current.generation => {
-                return DebounceResult::Failed(
-                    "pending generation rollback during debounce".into(),
-                );
+                match adopt_generation_reset(&current, latest) {
+                    // Track the freshly recreated marker through a new full
+                    // debounce window instead of failing the cycle.
+                    Some(recreated) => {
+                        current = recreated;
+                        deadline = compute_deadline(
+                            current.created_at_unix_ms,
+                            debounce_duration,
+                            start,
+                            max_lifetime,
+                            clock,
+                        )
+                        .min(max_target);
+                    }
+                    None => {
+                        return DebounceResult::Failed(
+                            "pending generation rollback during debounce".into(),
+                        );
+                    }
+                }
             }
             Ok(_) => {}
             Err(pending::PendingError::NotFound) => return DebounceResult::CancelledMarkerRemoved,
@@ -445,12 +500,107 @@ pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pend
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerOutcome, follow_up_allowed};
+    use super::{DebounceResult, WorkerOutcome, follow_up_allowed};
+    use crate::auto_sync::pending::{self, PendingSnapshot};
+    use crate::auto_sync::policy::MutationKind;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn failed_or_empty_sync_cannot_enter_new_generation_follow_up() {
         assert!(!follow_up_allowed(WorkerOutcome::Failed));
         assert!(!follow_up_allowed(WorkerOutcome::NothingToDo));
         assert!(follow_up_allowed(WorkerOutcome::Success));
+    }
+
+    fn write_marker(state_dir: &Path, generation: u64, created_at_ms: u64) {
+        pending::set_local_generation_with_timestamp(state_dir, generation, created_at_ms).unwrap();
+    }
+
+    fn mutation_snapshot() -> PendingSnapshot {
+        PendingSnapshot::Mutation {
+            kind: MutationKind::SnippetCreate,
+        }
+    }
+
+    /// Explicit-sync clear + immediate re-record (generation restarts at 1
+    /// with a newer creation timestamp) is benign: debounce must adopt it
+    /// instead of classifying it as corrupt rollback.
+    #[test]
+    fn debounce_adopts_cleared_and_recreated_marker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_ms: u64 = 1_700_000_000_000;
+
+        // The marker being debounced.
+        write_marker(dir.path(), 3, base_ms);
+
+        // Mid-debounce, an explicit sync clears the marker and a new
+        // mutation re-records one at generation 1.
+        pending::clear(dir.path()).unwrap();
+        write_marker(dir.path(), 1, base_ms + 5_000);
+
+        // What the worker observed before the clear/re-record race.
+        let observed = super::PendingState {
+            generation: 3,
+            snapshot: mutation_snapshot(),
+            created_at_unix_ms: base_ms,
+        };
+
+        let start = Instant::now();
+        let result = super::debounce(
+            dir.path(),
+            observed,
+            start - Duration::from_secs(1),
+            start,
+            Duration::from_secs(300),
+            Duration::ZERO,
+            &super::SystemClock,
+        );
+
+        match result {
+            DebounceResult::Ready(state) => {
+                assert_eq!(state.generation, 1);
+                assert_eq!(state.created_at_unix_ms, base_ms + 5_000);
+            }
+            other => panic!("expected Ready(gen=1) after recreation, got {other:?}"),
+        }
+    }
+
+    /// A lower generation with an equal-or-older creation timestamp is
+    /// genuine rollback and must still fail closed.
+    #[test]
+    fn debounce_fails_closed_on_genuine_generation_rollback() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_ms: u64 = 1_700_000_000_000;
+
+        write_marker(dir.path(), 3, base_ms);
+        // Corrupt rewind: same creation timestamp, lower generation.
+        write_marker(dir.path(), 1, base_ms);
+
+        let start = Instant::now();
+        let observed = super::PendingState {
+            generation: 3,
+            snapshot: mutation_snapshot(),
+            created_at_unix_ms: base_ms,
+        };
+        let result = super::debounce(
+            dir.path(),
+            observed,
+            start - Duration::from_secs(1),
+            start,
+            Duration::from_secs(300),
+            Duration::ZERO,
+            &super::SystemClock,
+        );
+
+        assert!(
+            matches!(result, DebounceResult::Failed(ref msg) if msg.contains("rollback")),
+            "expected Failed(rollback), got {result:?}"
+        );
+        // The corrupt marker must be preserved for inspection/repair.
+        assert_eq!(
+            pending::read_state_from_dir(dir.path()).unwrap().generation,
+            1
+        );
     }
 }

@@ -34,7 +34,9 @@ force-cancelled.
 - The scheduler never probes the execution lock. Worker acquisition is the sole
   execution authority; concurrent spawn attempts may produce redundant helper
   processes, but only one performs sync work while others exit cheaply.
-- Pending generations are monotonic. Lower or corrupt state fails closed.
+- Pending generations are monotonic. Lower or corrupt state fails closed, except for
+  a cleared-and-recreated marker (lower generation, strictly newer creation timestamp),
+  which the debounce adopts as new work.
 - `clear_if_generation_matches` is the automatic acknowledgement boundary.
   `GenerationChanged` preserves newer work; `Missing` is treated as already
   cleared; clear errors preserve recoverability and record failure.

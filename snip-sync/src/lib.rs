@@ -824,7 +824,8 @@ impl SnipSyncService {
         }
         // Lower clock-skew bound: a zero timestamp means the client clock was
         // unset (epoch). Such rows would be invisible to every delta query
-        // (`updated_at > since`), so reject them instead of storing them.
+        // (`updated_at >= since` with positive watermarks), so reject them
+        // instead of storing them.
         if snippet.created_at == 0 || snippet.updated_at == 0 {
             return Err(Status::invalid_argument(
                 "Timestamps must be positive; zero indicates an unset client clock",

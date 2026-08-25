@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Delta-sync watermark off-by-one** (snip-sync): incremental queries now use
+  `updated_at >= since` so a snippet written in the same second as the previous
+  sync's watermark is no longer skipped by every later incremental sync.
+- **Flaky cross-process lock test**: the poller waits for non-empty outcome
+  content and the helper publishes outcomes via temp+rename, eliminating a
+  create/truncate write race observed on APFS/ext4.
+- **`snp edit --output --filter` ambiguity**: substring filters that match
+  multiple snippets now fail with a candidate list instead of silently editing
+  the first fuzzy match's local-only output field.
+- **Batch-context error flattening**: `add_batch_context` no longer re-wraps
+  non-`SyncFailure` errors (e.g. gRPC `internal` → `Runtime`) as transient
+  `SyncRequestFailed`; persistent server faults now escalate to
+  attention-required instead of retrying indefinitely.
+- **Plaintext-mode credential seam**: `SNP_ALLOW_PLAINTEXT_API_KEY=true` with an
+  `@keychain` marker in `sync.toml` now fails fast instead of authenticating
+  with the literal marker string as the API key.
+- **Schema-version parsing fails closed**: out-of-range `schema_version`
+  integers (negative or > u32::MAX) produce an error instead of wrapping to a
+  wrong-but-valid version via `as u32`.
+- **Durability surfacing in `write_private_atomic`**: a failed parent-directory
+  fsync after rename is now an error instead of being discarded.
+- **Lock-quarantine growth**: stale/malformed lock quarantine files older than
+  7 days are garbage-collected opportunistically when a new quarantine file is
+  created.
+- **Status snapshot fallback**: a partially written auto-sync status file is
+  reported conservatively (retry scheduled) instead of `Succeeded`.
+- **Debounce generation-reset race**: a pending marker cleared by an explicit
+  sync and immediately re-recorded at generation 1 (fresh creation timestamp)
+  is adopted by the debouncing worker instead of recording spurious
+  internal-failure telemetry.
+
+### Changed
+- `UsageIndex::prune()` uses a `HashSet` for O(n+m) pruning.
+- Manual sync pagination enforces a hard page bound (10,000 pages) against
+  misbehaving servers that never clear `has_more`.
+
 ## [1.3.7] - 2026-08-18
 
 ### Changed

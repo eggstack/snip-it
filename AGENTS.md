@@ -143,7 +143,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 
 ### Auto-sync scheduling
 - `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
-- Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt state: preserve the marker, log the failure, and do not spawn sync work.
+- Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt state: preserve the marker, log the failure, and do not spawn sync work. Exception: a lower generation with a strictly newer creation timestamp means the marker was cleared by an explicit sync and re-recorded from scratch — debounce adopts it as new work instead of failing.
 
 ### Transaction boundaries
 - `restore` uses `begin_transaction` / `advance_to_backups_durable` / `advance_to_committing` / `advance_to_committed_local` / `commit_transaction` / `rollback_transaction`.

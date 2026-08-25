@@ -47,7 +47,11 @@ fn wait_for_release() {
 
 fn record(label: &str, what: &str) {
     let path = outcome_path(label);
-    std::fs::write(&path, what).expect("write outcome");
+    // Write via temp+rename so a concurrent poller never observes a
+    // created-but-empty (or partially written) outcome file.
+    let tmp = path.with_extension("outcome.tmp");
+    std::fs::write(&tmp, what).expect("write outcome temp");
+    std::fs::rename(&tmp, &path).expect("publish outcome");
 }
 
 fn wait_for_drop() {

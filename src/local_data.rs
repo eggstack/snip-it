@@ -241,7 +241,16 @@ fn quarantine_local_data_lock(lock_path: &Path) -> SnipResult<PathBuf> {
         .unwrap_or(lock_path)
         .join(&quarantine_name);
     match fs::rename(lock_path, &quarantine_path) {
-        Ok(()) => Ok(quarantine_path),
+        Ok(()) => {
+            // Opportunistic GC: without it, quarantine files accumulate
+            // without bound under pathological spawn/kill churn.
+            crate::transaction::prune_quarantine_files(
+                quarantine_path.parent().unwrap_or(&quarantine_path),
+                "local-data.lock.quarantine.",
+                crate::transaction::QUARANTINE_RETENTION,
+            );
+            Ok(quarantine_path)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Another writer already quarantined the lock — treat as success.
             tracing::debug!("local-data lock already quarantined by another writer");

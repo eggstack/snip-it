@@ -1185,7 +1185,14 @@ fn quarantine_stale_lock(lock_path: &Path) -> SnipResult<PathBuf> {
         .unwrap_or(lock_path)
         .join(&quarantine_name);
     match fs::rename(lock_path, &quarantine_path) {
-        Ok(()) => Ok(quarantine_path),
+        Ok(()) => {
+            prune_quarantine_files(
+                quarantine_path.parent().unwrap_or(&quarantine_path),
+                TRANSACTION_QUARANTINE_PREFIX,
+                QUARANTINE_RETENTION,
+            );
+            Ok(quarantine_path)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Another writer already quarantined the lock — treat as success.
             tracing::debug!("transaction lock already quarantined by another writer");
@@ -1196,6 +1203,52 @@ fn quarantine_stale_lock(lock_path: &Path) -> SnipResult<PathBuf> {
             quarantine_path.clone(),
             e,
         )),
+    }
+}
+
+/// Filename prefix shared by transaction-lock quarantine files.
+const TRANSACTION_QUARANTINE_PREFIX: &str = "transaction.lock.quarantine.";
+
+/// How long quarantine files are kept for debugging before GC removes them.
+pub(crate) const QUARANTINE_RETENTION: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Best-effort removal of quarantine files in `dir` older than `max_age`.
+///
+/// Every stale/malformed lock is quarantined under a fresh UUID name; without
+/// GC, pathological spawn/kill churn would grow the state directory without
+/// bound. Pruning runs whenever a new quarantine file is created (rare), so
+/// the directory scan cost is negligible. Individual failures are logged and
+/// ignored — GC must never break the acquisition path it is called from.
+pub(crate) fn prune_quarantine_files(dir: &Path, prefix: &str, max_age: std::time::Duration) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with(prefix) {
+            continue;
+        }
+        let age = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok());
+        match age {
+            Some(age) if age >= max_age => match fs::remove_file(entry.path()) {
+                Ok(()) => tracing::debug!(file = %name_str, "removed expired quarantine file"),
+                Err(e) => tracing::debug!(
+                    error = %e,
+                    file = %name_str,
+                    "could not remove expired quarantine file"
+                ),
+            },
+            _ => {}
+        }
     }
 }
 
@@ -2539,6 +2592,42 @@ mod tests {
         assert!(lock_path.exists());
         // Clean up manually
         fs::remove_file(&lock_path).unwrap();
+    }
+
+    #[test]
+    fn test_prune_quarantine_files_removes_only_expired_matches() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        fs::write(path.join("transaction.lock.quarantine.a"), "a").unwrap();
+        fs::write(path.join("transaction.lock.quarantine.b"), "b").unwrap();
+        fs::write(path.join("local-data.lock.quarantine.c"), "c").unwrap();
+        fs::write(path.join("transaction.lock"), "canonical").unwrap();
+
+        // A long retention keeps everything (files are brand new).
+        prune_quarantine_files(
+            path,
+            TRANSACTION_QUARANTINE_PREFIX,
+            std::time::Duration::from_secs(3600),
+        );
+        assert!(path.join("transaction.lock.quarantine.a").exists());
+        assert!(path.join("transaction.lock.quarantine.b").exists());
+        assert!(path.join("local-data.lock.quarantine.c").exists());
+        assert!(path.join("transaction.lock").exists());
+
+        // Zero max-age expires every matching file; the canonical lock and
+        // other prefixes must survive.
+        prune_quarantine_files(
+            path,
+            TRANSACTION_QUARANTINE_PREFIX,
+            std::time::Duration::ZERO,
+        );
+
+        assert!(!path.join("transaction.lock.quarantine.a").exists());
+        assert!(!path.join("transaction.lock.quarantine.b").exists());
+        // Different prefix — must not be touched by this prune.
+        assert!(path.join("local-data.lock.quarantine.c").exists());
+        assert!(path.join("transaction.lock").exists());
     }
 
     #[test]

@@ -37,7 +37,12 @@ fn wait_for_outcome(barrier: &Path, label: &str, timeout: Duration) -> String {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            return content.trim().to_string();
+            // The helper's plain `std::fs::write` can be observed after
+            // create-with-truncate but before the bytes land; an empty read
+            // means the outcome has not been recorded yet.
+            if !content.trim().is_empty() {
+                return content.trim().to_string();
+            }
         }
         std::thread::sleep(Duration::from_millis(20));
     }

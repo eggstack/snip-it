@@ -229,7 +229,7 @@ runs the canonical sync operation after local mutations.
 **Key invariants**:
 - Parent never holds the worker lock
 - `schedule_sync()` is the sole scheduling authority
-- Pending generations are monotonic; lower generation = corrupt state
+- Pending generations are monotonic; lower generation = corrupt state (unless the marker was cleared and re-recorded: fresh creation timestamp)
 - Local mutations always commit before remote work
 
 ---

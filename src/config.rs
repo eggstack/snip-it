@@ -446,11 +446,19 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
             }
         }
         if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
-            tracing::warn!(
+            // Fail fast: returning the literal marker would authenticate
+            // every subsequent sync with a bogus credential. Refuse to load
+            // instead so no request is sent with "@keychain" as the key.
+            tracing::error!(
                 "sync.toml stores API key as `@keychain` marker but plaintext mode is enabled; \
-                 keeping marker in-memory. Subsequent sync operations may fail."
+                 refusing to use the marker as a credential. \
+                 Re-save sync settings (snp sync config) to store the key in plaintext."
             );
-            return Ok(raw);
+            return Err(serde::de::Error::custom(
+                "api_key is stored as the `@keychain` keychain marker, but \
+                 SNP_ALLOW_PLAINTEXT_API_KEY=true forbids keychain access; \
+                 re-save sync settings to store the key in plaintext",
+            ));
         }
         match keychain_retrieve(KEYCHAIN_DEFAULT_USER) {
             Ok(key) => Ok(key),
