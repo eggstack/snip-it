@@ -6,8 +6,14 @@
 
 ## Entry Point
 
+Each subcommand dispatches to a dedicated function:
+
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run_list() -> SnipResult<()>
+pub fn run_create(name: String) -> SnipResult<()>
+pub fn run_delete(name: String, force: bool) -> SnipResult<()>
+pub fn run_set_primary(name: String) -> SnipResult<()>
+pub fn run_show(name: Option<String>) -> SnipResult<()>
 ```
 
 ## Subcommands
@@ -28,7 +34,7 @@ Creates a new empty library file at `~/.config/snp/libraries/<name>.toml`.
 ```bash
 snp library delete <name>
 ```
-Deletes a library file (with confirmation). Cannot delete primary library.
+Deletes a library file (with confirmation). If the deleted library was primary, another library is promoted.
 
 ### set-primary
 ```bash

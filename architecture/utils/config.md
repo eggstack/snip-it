@@ -44,20 +44,12 @@ Recursively copies all files from the legacy macOS path to the canonical path.
 
 | Function | Returns |
 |----------|---------|
+| `get_config_path(filename)` | `~/.config/snp/{filename}` |
 | `get_snippets_path()` | `~/.config/snp/snippets.toml` |
-| `get_libraries_dir()` | `~/.config/snp/libraries/` |
-| `get_libraries_index_path()` | `~/.config/snp/libraries.toml` |
 | `get_sync_config_path()` | `~/.config/snp/sync.toml` |
-| `get_usage_path()` | `~/.config/snp/usage.toml` |
-| `get_themes_dir()` | `~/.config/snp/themes/` |
-| `get_themes_config_path()` | `~/.config/snp/themes.toml` |
-| `get_log_dir()` | `~/.config/snp/logs/` |
-| `get_audit_log_path()` | `~/.config/snp/audit.log` |
-| `get_backup_dir()` | `~/.config/snp/backups/` |
-| `get_premade_dir()` | `~/.config/snp/premade/` |
-| `get_auto_sync_status_path()` | `~/.config/snp/auto-sync-status.toml` |
-| `get_auto_sync_pending_path()` | `~/.config/snp/auto-sync-pending.toml` |
-| `get_transaction_journals_dir()` | `~/.config/snp/transaction-journals/` |
+| `derive_sync_state_dir()` | parent of `get_sync_config_path()` |
+
+Other config-path functions (`get_libraries_dir`, `get_premade_dir`, `get_audit_log_path`, etc.) live on their respective domain types (`LibraryManager`, logging module), not in `config.rs`.
 
 ## Security
 

@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Provides three distinct diagnostic modes:
+Provides five diagnostic modes:
 
 1. **Pet file analysis** — Analyzes a pet TOML snippet file for compatibility with snp
 2. **Environment audit** — Checks the installed snp environment for common issues
@@ -24,11 +24,14 @@ Analyzes a pet TOML file for import compatibility:
 
 ### `--compatibility`
 Audits the installed snp environment:
-- Checks config directory existence
-- Validates `libraries.toml` structure
-- Checks library file permissions (0o600 on Unix)
-- Verifies backup directory state
-- Reports findings as `CompatibilityDiagnostic` list
+- Reports binary version
+- Checks config directory existence and writability
+- Checks library directory existence
+- Validates primary library resolution and snippet count
+- Checks sync configuration presence and loadability
+- Checks shell availability (bash, zsh, fish)
+- Checks `snp select` and `snp new` flag availability
+- Reports findings as `DoctorReport`
 
 ### `--sync`
 Runs sync-focused diagnostics:
@@ -44,8 +47,11 @@ Validates generated shell integration code:
 
 ### `--library <NAME_OR_PATH>`
 Validates a specific library file:
-- Loads the library via `load_library()`
-- Checks snippet structure, field validity, ID uniqueness
+- Loads the library via `parse_pet_toml()` (same as `--pet-file`)
+- Detects unknown TOML fields
+- Analyzes each snippet for variable syntax and field validity
+- Detects unsupported pet-specific concepts
+- Detects duplicate commands and descriptions
 - Reports diagnostics
 
 ## Output Formats
@@ -62,7 +68,7 @@ Validates a specific library file:
 - `W-DUP-CMD` / `W-DUP-DESC` — duplicate commands or descriptions
 - `W-DEST-CONFLICT` — import destination conflict
 - `W-DESC-MISSING` / `W-CMD-MISSING` — missing required fields
-- `W-DESC-EMPTY` / `W-CMD-EMPTY` / `W-TAG-EMPTY` — empty field values
+- `W-DESC-EMPTY` / `W-TAG-EMPTY` — empty field values
 - `W-TYPE-MISMATCH` — field type mismatch
 
 ## Diagnostic Code Mapping
@@ -74,8 +80,14 @@ The doctor command maps `StatusDiagnostic` codes from the status snapshot to dot
 | `CONFIG_LOAD_FAILED` | `sync.config.load_failed` |
 | `NOT_CONFIGURED` | `sync.config.not_configured` |
 | `PENDING_CORRUPT` | `sync.pending.corrupt` |
+| `PENDING_INACCESSIBLE` | `sync.pending.inaccessible` |
 | `EXECUTION_LOCK_STALE` | `sync.execution.dead_stale` |
+| `EXECUTION_LOCK_MALFORMED` | `sync.execution.malformed` |
+| `EXECUTION_LOCK_INACCESSIBLE` | `sync.execution.malformed` |
 | `WORKER_LOCK_STALE` | `sync.worker_lock.dead_stale` |
+| `WORKER_LOCK_MALFORMED` | `sync.worker_lock.malformed` |
+| `WORKER_LOCK_INACCESSIBLE` | `sync.worker_lock.malformed` |
+| `STATUS_CORRUPT` | `sync.status.corrupt` |
 | `ATTENTION_REQUIRED` | `sync.attention.*` (varies by failure class) |
 
 ## Integration Points

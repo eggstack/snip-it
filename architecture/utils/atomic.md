@@ -22,17 +22,17 @@ pub enum Durability {
 ### write_private_atomic()
 
 ```rust
-pub fn write_private_atomic(path: &Path, content: &[u8]) -> SnipResult<()>
+pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> SnipResult<()>
 ```
 
-Simple atomic write: writes to temp file, renames to target. Used for most TOML persistence.
+Simple atomic write: writes to temp file, renames to target. On Unix the temp file is created with `0o600` permissions. Used for most TOML persistence (snippets, libraries, usage, config, transaction journals).
 
 ### atomic_replace()
 
 ```rust
 pub fn atomic_replace(
-    path: &Path,
-    content: &[u8],
+    target: &Path,
+    bytes: &[u8],
     options: &AtomicWriteOptions,
 ) -> SnipResult<AtomicWriteReport>
 ```
@@ -71,7 +71,7 @@ pub struct AtomicWriteReport {
 ## Integration
 
 - `library.rs` — saves snippets/libraries via `write_private_atomic()`
-- `usage.rs` — saves usage counters via `write_private_atomic()` with `RecoverableMetadata`
+- `usage.rs` — saves usage counters via `write_private_atomic()`
 - `config.rs` — saves sync settings via `write_private_atomic()`
-- `transaction.rs` — saves journals with `DurableUserData`
+- `transaction.rs` — saves journals with `write_private_atomic()` (uses `DurableUserData` parent dir sync internally)
 - `restore_cmd.rs` — restores files via `atomic_replace()` with permission control

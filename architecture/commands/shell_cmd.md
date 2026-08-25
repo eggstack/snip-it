@@ -8,7 +8,7 @@ Generates shell integration functions for bash, zsh, and fish. These functions a
 
 ## Generated Functions
 
-Each shell gets three functions:
+Each shell gets four functions:
 
 ### `snp_select_raw` / `snp_select_expanded`
 Opens the TUI snippet selector and replaces the current shell buffer with the selected command.

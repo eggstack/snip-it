@@ -10,7 +10,7 @@ Defines the gRPC service and message types used for client-server communication.
 
 ## Proto Definition
 
-**File**: `snip-proto/proto/sync.proto` (172 lines)
+**File**: `snip-proto/proto/sync.proto` (216 lines)
 
 ### Service
 
@@ -26,6 +26,7 @@ service SnippetSync {
     rpc DeleteLibrary (DeleteLibraryRequest) returns (DeleteLibraryResponse);
     rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
     rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
+    rpc SearchPremadeLibraries (SearchPremadeLibrariesRequest) returns (SearchPremadeLibrariesResponse);
 }
 ```
 
@@ -34,10 +35,10 @@ service SnippetSync {
 | Message | Key Fields |
 |---------|-----------|
 | `Snippet` | id, description, command, tags[], created_at, updated_at, device_id, deleted, encrypted |
-| `SyncRequest` | api_key, local_snippets[], last_sync_timestamp, library_id, limit |
-| `SyncResponse` | success, message, snippets[], server_timestamp, skipped_count, skipped_ids[] |
+| `SyncRequest` | api_key, local_snippets[], last_sync_timestamp, library_id, limit, offset |
+| `SyncResponse` | success, message, snippets[], server_timestamp, skipped_count, skipped_ids[], has_more, total_count |
 | `Library` | id, name, created_at, snippet_count |
-| `PremadeLibrary` | name, filename, description, snippet_count |
+| `PremadeLibrary` | name, filename, description, snippet_count, tags[] |
 
 ## Code Generation
 

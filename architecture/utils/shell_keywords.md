@@ -2,7 +2,7 @@
 
 ## Overview
 
-Provides a static list of ~190 shell command names used by the TUI syntax highlighter to colorize the first token of snippet commands.
+Provides a static list of ~190 shell command names used by the TUI syntax highlighter to colorize command tokens in snippet commands.
 
 **File**: `src/utils/shell_keywords.rs`
 
@@ -25,4 +25,4 @@ Includes common tools across categories:
 
 ## Usage
 
-Used by `src/ui/highlight.rs` to identify the command token for coloring in the TUI. The highlighter checks if the first word of a snippet command matches a keyword to apply the accent color.
+Used by `src/ui/highlight.rs` to identify command tokens for coloring in the TUI. The highlighter checks if any word in a snippet command matches a keyword to apply the keyword color.

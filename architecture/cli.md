@@ -43,18 +43,19 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |
+| `select` | `sel` | `select_cmd` | No | Select a snippet and print its command to stdout (no execution) |
 | `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`); exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI for output editing |
 | `get` | — | `get_cmd` | No | Deterministic non-TUI snippet retrieval (never executes, no clipboard) |
-| `validate` | — | `validate_cmd` | No | Validate snippet libraries and configuration |
+| `validate` | `val` | `validate_cmd` | No | Validate snippet libraries and configuration |
 | `backup` | — | `backup_cmd` | No | Backup snippet libraries to directory with manifest |
 | `restore` | — | `restore_cmd` | No | Restore snippets from backup (dry-run, merge, replace) |
-| `repair` | — | `repair_cmd` | No | Repair snippet libraries and sync artifacts |
+| `repair` | `rp` | `repair_cmd` | No | Repair snippet libraries and sync artifacts |
 | `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
 | `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
-| `import` | — | `import_cmd` | No | Import snippets from external formats |
+| `import` | `i` | `import_cmd` | No | Import snippets from external formats |
 | `doctor` | — | `doctor_cmd` | No | Diagnose configuration and environment |
 | `sync` | `y` | `sync_cmd` | Yes | Sync snippets with server |
-| `cron` | — | `cron_cmd` | No | Generate crontab entry for auto-sync |
+| `cron` | `cr` | `cron_cmd` | No | Generate crontab entry for auto-sync |
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
 | `status` | — | `status_cmd` | No | Show auto-sync status |
@@ -91,8 +92,8 @@ pub enum StartupRecoveryPolicy {
 
 | Policy | Commands |
 |--------|----------|
-| `Allow` | `new`, `run`, `clip`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary` |
-| `SuppressReadOnly` | `version`, `list`, `search`, `select`, `status`, `get`, `validate`, `backup`, `library list/show` |
+| `Allow` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary` |
+| `SuppressReadOnly` | `version`, `list`, `select`, `status`, `get`, `validate`, `backup`, `library list/show` |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` |
 | `SuppressConfiguration` | `update`, `doctor`, `completions`, `shell`, `keybindings` |
@@ -162,6 +163,7 @@ All commands map outcomes to stable exit codes via `CliOutcome`:
 | 7 | Sync failure |
 | 8 | Execution failure |
 | 9 | Conflict/refused |
+| 10 | Unsafe repairs (repair found issues requiring operator decision) |
 
 `PersistenceFailed` maps to code 1 (general error). `ExecutionFailed` propagates the
 child process exit code when available, falling back to code 8.

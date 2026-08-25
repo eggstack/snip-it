@@ -7,7 +7,13 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(
+    filter: Option<String>,
+    do_sync: bool,
+    library: Option<String>,
+    sort_opts: Option<SortOptions>,
+    runtime: Option<&tokio::runtime::Runtime>,
+) -> SnipResult<CommandOutcome>
 ```
 
 ## Flow
@@ -23,13 +29,13 @@ pub fn run(matches: &ArgMatches) -> SnipResult<()>
 ## Shell Execution
 
 - Default shell from `$SHELL` env var, fallback to platform-specific (`/bin/sh`, `cmd.exe`)
-- `Command::new(shell).arg("-c")` for POSIX, `cmd.exe /c` for Windows
+- `Command::new(shell).arg("-c")` for POSIX, `cmd.exe /C` for Windows
 - Blocks until command completes
 - Return code checked; non-zero logged as error
 
 ## Variable Handling
 
-See [variables.md](../../utils/variables.md) for parsing/expansion details.
+See [variables.md](../utils/variables.md) for parsing/expansion details.
 
 ### Prompt UI
 

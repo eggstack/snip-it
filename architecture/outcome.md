@@ -43,6 +43,7 @@ Each variant maps to a stable exit code via `CliOutcome::exit_code()`.
 | `SYNC_FAILED` | 7 | `SyncFailed` | Synchronization with remote server failed |
 | `EXECUTION_FAILED` | 8 | `ExecutionFailed` | Snippet execution failed (no child code) |
 | `CONFLICT_OR_REFUSED` | 9 | `ConflictOrRefused` | Destructive action refused or generation changed |
+| `UNSAFE_REPAIRS` | 10 | — | Repairs found but not applied — unsafe items await operator decision |
 
 ## Special Cases
 

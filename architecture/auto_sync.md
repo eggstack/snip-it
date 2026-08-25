@@ -60,13 +60,14 @@ Legacy status codes are read compatibly via `from_code()`.
 
 ## Module layout
 
-- `policy.rs` — policy, failure classification (`FailureClass`, 4 variants),
-  retry disposition, direction resolution, and `MutationKind`/`MutationOrigin`.
+- `policy.rs` — policy, retry disposition, direction resolution, and
+  `MutationKind`/`MutationOrigin`. `FailureClass` (4 variants) is defined in
+  `sync_failure.rs` and re-exported here unchanged.
 - `pending.rs` / `pending_lock.rs` — durable generation marker and its short
   transaction lock.
 - `execution_lock.rs` — shared kernel-backed sync lock, worker lock types,
-  `spawn_worker()` helper, and platform detachment. The former `lock.rs` and
-  `spawn.rs` modules are merged here.
+  `spawn_worker()` helper, and platform detachment. The former `spawn.rs`
+  module is merged here; `lock.rs` is retained as a re-export shim.
 - `schedule.rs` / `notification.rs` — pending recording and detached spawn.
   Scheduler does not probe the execution lock; worker handles contention.
 - `worker.rs` — debounce, preflight, direct canonical sync, exact-generation

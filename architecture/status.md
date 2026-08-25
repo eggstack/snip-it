@@ -57,6 +57,7 @@ This makes `snp status` safe to run at any time, including during active sync, w
   "schema": 1,
   "generated_at_unix_ms": 1700000000000,
   "config_root": "/Users/user/.config/snp",
+  "log_dir": "/Users/user/.local/share/snp/logs",
   "local": {
     "libraries": 2,
     "snippets": 42,
@@ -175,7 +176,7 @@ Diagnostics are collected by `collect_diagnostics()` and sorted by severity (Inf
 
 ## Attempt State View
 
-`AttemptStateView` is derived from `AutoSyncStatus`:
+`AttemptStateView` is derived from `AutoSyncStatus` (6 variants):
 
 | Condition | View |
 |-----------|------|
@@ -184,6 +185,7 @@ Diagnostics are collected by `collect_diagnostics()` and sorted by severity (Inf
 | `last_success >= last_attempt` | `Succeeded` |
 | `next_attempt > now` | `RetryScheduled` |
 | `next_attempt > 0` (but ≤ now) | `Deferred` |
+| `StatusRead::Corrupt` | `Corrupt` |
 | Otherwise | `Succeeded` |
 
 ## Pending State View
@@ -206,9 +208,9 @@ The status snapshot's `Action` field suggests recovery commands:
 
 | Top-level state | Suggested action |
 |-----------------|------------------|
-| `PendingAttentionRequired` | `snp sync retry` |
-| `CorruptOrInaccessible` | `snp sync repair` |
-| `PendingRetryBackoff` | Wait for backoff to expire, or `snp sync retry` to force |
+| `PendingAttentionRequired` | `Action: run 'snp sync retry' to retry now` |
+| `CorruptOrInaccessible` | `Action: run 'snp sync repair' to diagnose` |
+| `PendingRetryBackoff` | `Action: retry eligible at {next_attempt_time}` |
 
 See [commands/sync_cmd.md](commands/sync_cmd.md) for details on each recovery command.
 
@@ -217,7 +219,7 @@ See [commands/sync_cmd.md](commands/sync_cmd.md) for details on each recovery co
 The module has comprehensive unit tests covering:
 
 - Top-level state derivation for all 8 states
-- Attempt state view for all 5 states
+- Attempt state view for all 6 states
 - Pending state view for all read-error variants
 - Process state view for live/dead/malformed/idle/empty lock files
 - Diagnostic ordering (severity then code)

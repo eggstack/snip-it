@@ -28,7 +28,7 @@ Returns path to `snippets.toml` or active library file.
 ### load_snippets()
 
 ```rust
-pub fn load_snippets() -> SnipResult<Snippets>
+pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<Snippets>
 ```
 - Reads TOML from library path
 - Returns empty `Snippets` if file doesn't exist
@@ -37,57 +37,68 @@ pub fn load_snippets() -> SnipResult<Snippets>
 ### save_snippets()
 
 ```rust
-pub fn save_snippets(snippets: &Snippets) -> SnipResult<()>
+pub fn save_snippets(snippets: &Snippets, config: &Option<PathBuf>) -> SnipResult<()>
 ```
 - Writes TOML to library path
 - Creates parent directories if needed
-- No automatic backup (handled by callers like `new_cmd`)
+- Uses atomic write (temp file + rename) and creates a backup before saving
 
 ### get_snippet_data()
 
-Returns a reference to the inner `Vec<Snippet>` from `Snippets`.
+Extracts parallel arrays of descriptions, commands, tags, folders, and favorites for TUI display, along with a mapping from filtered indices to original snippet indices. Deleted snippets are filtered out.
 
 ## Snippet Expansion
 
 ### expand_snippet_command()
 
-Substitutes variable placeholders in the command string:
+Expands a snippet command, prompting for variables if present:
 
 ```rust
-pub fn expand_snippet_command(
-    command: &str,
-    variables: &[(String, Option<String>)],
-) -> SnipResult<String>
+pub fn expand_snippet_command(snippet: &Snippet) -> SnipResult<ExpandedCommand>
 ```
 
-- Syntax: `<name>` or `<name=default>`
+- If no variables found, strips escape sequences and returns `Expanded`
+- If variables found, prompts user via TUI dialog
+- Returns `Cancel`, `Skip`, or `Expanded(String)`
+- Variable syntax: `<name>` or `<name=default>`
 - Escapes: `\<` → `<`, `\>` → `>`
-- Returns error if required variable (no default) is missing
 
 ### strip_escape_sequences()
 
-Converts escape sequences back to literal characters for display/execution.
+Defined in `crate::utils::variables`. Converts escape sequences back to literal characters for display/execution.
 
 ## Shared TUI Selection
 
 ### run_snippet_selection()
 
 ```rust
-pub fn run_snippet_selection<F>(process_snippet: F) -> SnipResult<()>
+pub fn run_snippet_selection<F>(
+    filter: Option<String>,
+    library: Option<String>,
+    do_sync: bool,
+    allow_delete: bool,
+    sort_opts: Option<SortOptions>,
+    runtime: Option<&tokio::runtime::Runtime>,
+    mut process_fn: F,
+) -> SnipResult<SelectionOutcome>
 where
-    F: FnOnce(&Snippet) -> SnipResult<()>,
+    F: FnMut(&Snippet, Option<String>) -> SnipResult<ProcessResult>,
 ```
 
-Common flow for `run`, `clip`, `search` commands:
-1. Load snippets
+Common flow for `run`, `clip`, `select`, `search` commands:
+1. Load library and snippets
 2. Open TUI with snippet list
-3. User selects snippet
-4. Call `process_snippet` closure with selected snippet
-5. Return result
+3. User selects snippet (or deletes if allowed)
+4. Call `process_fn` closure with selected snippet and copy flag
+5. Optionally run post-selection sync (when `do_sync` is true)
+6. Return `SelectionOutcome`
+
+The `runtime` parameter must be `Some(&RUNTIME)` when `do_sync` is true, `None` otherwise.
 
 Used by:
 - `run_cmd` — Executes snippet via shell
 - `clip_cmd` — Copies to clipboard
+- `select_cmd` — Returns snippet for programmatic use
 - `search_cmd` — Displays snippet details
 
 ## Error Handling

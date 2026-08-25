@@ -7,20 +7,26 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(
+    filter: Option<String>,
+    do_sync: bool,
+    library: Option<String>,
+    config: Option<PathBuf>,
+    sort_opts: Option<crate::sort::SortOptions>,
+    runtime: Option<&tokio::runtime::Runtime>,
+) -> SnipResult<()>
 ```
 
 ## Flow
 
 1. **TUI Selection** — Call `run_snippet_selection()` to get user-selected snippet
-2. **Display** — Show snippet details in the TUI:
-   - Name
-   - Command (with syntax highlighting)
-   - Output (if set)
+2. **Display** — Show snippet details to stdout:
+   - Description
+   - Command
+   - Output
    - Tags
    - Folders
    - Favorite status
-   - Created/Updated timestamps
 
 ## Fuzzy Matching
 

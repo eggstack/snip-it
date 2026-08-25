@@ -18,7 +18,7 @@ The CLI accepts these mutually exclusive command-body sources:
 | `snp new` | `CommandSource::InteractivePrompt` | Existing single-line prompt, with the existing trim behavior. |
 | `snp new --multiline` | `CommandSource::MultilinePrompt` | Existing two-blank-line stdin prompt. |
 | `snp new --command-stdin` | `CommandSource::Stdin` | Reads stdin as exact UTF-8 command data. |
-| `snp new --from-file <path>` | `CommandSource::FromFile` | Reads the specified file as exact UTF-8 command data. Symlinks are followed; the resolved target must be a regular file. |
+| `snp new --from-file <path>` | `CommandSource::File` | Reads the specified file as exact UTF-8 command data. Symlinks are followed; the resolved target must be a regular file. |
 | `snp new --editor` | `CommandSource::Editor` | Opens `$VISUAL` (if set), then `$EDITOR`, then `vim` for authoring the command body. Editor arguments are parsed with shell-word semantics. |
 
 `--command-stdin` conflicts with a positional command, `--multiline`, `--from-file`, and `--editor`.
@@ -40,7 +40,7 @@ The data model rejects commands that are empty or whitespace-only, matching
 
 ## File-based ingestion (`--from-file`)
 
-`read_command_from_file(path)` reads the specified file as exact UTF-8 command
+`read_file_command(path)` reads the specified file as exact UTF-8 command
 data. It applies the same validation as `read_command_stdin()`: at most 16 MiB,
 valid UTF-8, no NUL bytes. Symlinks are followed; the resolved target must be a
 regular file (directories, FIFOs, sockets, and device nodes are rejected). File
@@ -52,7 +52,7 @@ is consumed but never included in the snippet data.
 
 ## Editor-based creation (`--editor`)
 
-`read_command_from_editor()` resolves the editor using `$VISUAL` (if non-empty),
+`read_editor_command()` resolves the editor using `$VISUAL` (if non-empty),
 then `$EDITOR` (if non-empty), then falls back to `vim`. The editor
 specification is parsed with `shell-words` so values like `code --wait`,
 `nvim -f`, or `"/path with spaces/bin/code" --wait` work without invoking a
@@ -81,7 +81,7 @@ validation function:
 ```rust
 fn validate_exact_command_bytes(
     bytes: Vec<u8>,
-    source_name: &'static str,
+    source: CommandSourceKind,
 ) -> SnipResult<String>
 ```
 

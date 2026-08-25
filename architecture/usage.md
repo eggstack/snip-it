@@ -66,8 +66,7 @@ Usage entries are keyed by snippet UUID (`id` field). When snippets are imported
 - **TUI** (`src/ui/mod.rs`): `UsageIndex` is loaded once per selection session in `run_snippet_selection()` and passed via `SnippetListParams.usage`. The `sort_filtered_indices()` function uses real usage data for `LastUsed` and `MostUsed` interactive sort modes.
 - **Run command** (`src/commands/run_cmd.rs`): Calls `record_use()` after successful execution.
 - **Clip command** (`src/commands/clip_cmd.rs`): Calls `record_use()` after successful clipboard copy.
-- **Select command** (`src/commands/select_cmd.rs`): Calls `record_use()` after successful selection.
 
 ## Test Coverage
 
-6 unit tests covering: load missing file, record increment, timestamp accuracy, save/load roundtrip, corrupt file fail-open, prune stale entries, and default for unknown IDs. Integration tests verify usage tracking through PTY end-to-end tests.
+7 unit tests covering: load missing file, record increment, timestamp accuracy, save/load roundtrip, corrupt file fail-open, prune stale entries, and default for unknown IDs. Integration tests verify usage tracking through PTY end-to-end tests.

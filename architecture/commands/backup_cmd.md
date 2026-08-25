@@ -27,15 +27,18 @@ Each backup includes a `BackupManifest`:
 
 ```rust
 pub struct BackupManifest {
-    pub entries: Vec<BackupManifestEntry>,
-    pub created_at: String,
-    pub version: String,
+    pub schema: u32,
+    pub created_at_unix_ms: i64,
+    pub snip_it_version: String,
+    pub layout: String,
+    pub files: Vec<BackupManifestEntry>,
 }
 ```
 
 Each entry records:
 - `kind` — entry type
 - `path` — relative path within backup
+- `size` — file size in bytes
 - `sha256` — content checksum
 
 ## Path Validation

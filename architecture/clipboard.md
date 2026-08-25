@@ -13,7 +13,7 @@ Cross-platform clipboard access with auto-clear scheduling.
 | Platform | Crate | Backend |
 |----------|-------|---------|
 | Windows | `clipboard-win` | Windows Clipboard API |
-| macOS/Linux | `copypasta` | X11/Wayland/macOS pasteboard |
+| macOS/Linux | `arboard` | X11/Wayland/macOS pasteboard |
 
 ## Functions
 
@@ -41,7 +41,7 @@ Uses `AtomicU64` generation counter to prevent multiple concurrent clear schedul
 - `src/commands/run_cmd.rs` — Copies snippet before execution if `copy` flag set
 - `src/commands/clip_cmd.rs` — Primary clipboard copy command
 - `src/commands/cron_cmd.rs` — Optional clipboard copy of crontab entry
-- `src/ui/mod.rs` — `y` key and Ctrl+C copy selected snippet
+- `src/ui/mod.rs` — `y` key copies selected snippet to clipboard
 
 ## Tests
 

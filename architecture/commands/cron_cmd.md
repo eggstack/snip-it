@@ -7,7 +7,7 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(interval: u32) -> SnipResult<()>
 ```
 
 ## Flow
@@ -20,34 +20,32 @@ pub fn run(matches: &ArgMatches) -> SnipResult<()>
 ## Generated Crontab Entry
 
 ```cron
-*/15 * * * * /path/to/snp sync --local
+*/15 * * * * /path/to/snp sync
 ```
-This runs sync every 15 minutes in local-only mode.
+This runs sync every 15 minutes.
 
 ## Interval Mapping
 
 | Interval Flag | Crontab |
 |---------------|---------|
 | `--interval 15` | `*/15 * * * *` |
-| `--interval 60` | `0 * * * *` |
-| `--interval 3600` | `0 */1 * * *` |
-| `--interval 0` | Removes crontab entry |
+| `--interval 60` | `*/60 * * * *` |
+| `--interval 1` | `*/1 * * * *` |
+| `--interval 0` | Error: "Interval must be at least 1 minute" |
 
 ## Flags
 
-- `--install` — Append generated crontab to user's crontab
-- `--remove` — Remove snip-it crontab entries
-- `--interval <seconds>` — Sync interval override
+- `--interval <minutes>` — Sync interval in minutes (default: 15)
 
 ## Safety
 
-- `--install` appends only snip-it related entries
-- Existing crontab entries preserved
-- Uses `crontab -` to read/write safely
+- Prints the crontab entry to stdout for manual review
+- Optionally copies to clipboard
+- On Windows, prints Task Scheduler instructions instead
 
 ## Sync Mode
 
-Generated entries use `--local` flag to avoid sync conflicts from multiple concurrent instances. For server sync, use a unique lock file mechanism.
+Generated entries use `snp sync` which respects the configured sync direction in `sync.toml`. The cron entry does not add extra flags — it relies on the user's saved sync configuration.
 
 ## Related
 

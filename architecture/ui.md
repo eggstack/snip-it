@@ -101,7 +101,7 @@ Uses `fuzzy-matcher` crate (skim algorithm) via lazy-static `MATCHER`. Filtering
 
 ### Variable Prompting
 
-`prompt_variables_inner()` renders a separate TUI for entering variable values when a snippet contains `<name>` or `<name=default>` syntax. Variables are filled one at a time with Tab navigation.
+`prompt_variables_inner()` renders a separate TUI for entering variable values when a snippet contains `<name>` or `<name=default>` syntax. Variables are filled one at a time with Tab navigation. Returns `VariablePromptResult::Cancel | Back | Skip | Values(...)`.
 
 ## Key Behaviors
 

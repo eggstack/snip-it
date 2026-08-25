@@ -58,10 +58,13 @@ pub struct SyncSettings {
     pub sync_interval_minutes: u32,       // Default: 30
     pub auto_sync: bool,                  // Default: false
     pub auto_sync_debounce_seconds: u64,  // Default: 2 (clamped 0..300)
-    pub auto_sync_timeout_seconds: Option<u64>, // Automatic network/retry budget
     pub auto_sync_failure: AutoSyncFailureMode,  // Default: Warn
+    pub auto_sync_max_delay_seconds: Option<u64>, // Max delay before forced sync
+    pub auto_sync_timeout_seconds: Option<u64>,   // Default: None (resolves to 30s)
     pub sync_direction: SyncDirection,    // Default: Push
     pub clipboard_auto_clear_seconds: Option<u32>,
+    pub sync_limit: Option<i32>,          // Snippet count limit for sync
+    pub credential_revision: u64,         // Monotonic key-change counter
 }
 ```
 
@@ -122,20 +125,17 @@ filesystem operations are not force-cancelled.
 | Variable | Used By | Default |
 |----------|---------|---------|
 | `XDG_CONFIG_HOME` | `utils/config.rs` | `~/.config` |
-| `SNP_CONFIG_HOME` | `utils/config.rs` | `~/.config/snp` |
 | `SNP_THEME` | `ui/theme.rs` | `"dark"` |
 | `COLORFGBG` | `ui/theme.rs` (theme detection) | — |
-| `SHELL` | `run_cmd.rs` | `"sh"` |
-| `EDITOR` | `edit_cmd.rs` | `"vim"` |
-| `RUST_LOG` | `tracing-subscriber` | `"snp=info,warn"` |
+| `SHELL` | `run_cmd.rs` | `"/bin/sh"` |
+| `EDITOR` | `new_cmd.rs` | `"vim"` |
+| `RUST_LOG` | `tracing-subscriber` | `"snp=info"` |
 | `SNP_LOG` | `logging.rs` | — (per-module filter) |
-| `SNP_LOG_LEVEL` | `logging.rs` | `"info"` |
 | `SNP_COMMAND_TIMEOUT` | `run_cmd.rs` | 0 (disabled) |
 | `SNP_CLIPBOARD_TIMEOUT` | `clipboard.rs` | `5` |
 | `SNP_ALLOW_PLAINTEXT_API_KEY` | `config.rs` | `false` |
 | `SNP_SYNC_CONNECT_TIMEOUT` | `sync.rs` | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | `sync.rs` | `30` |
-| `SNP_EDITOR_TIMEOUT` | `edit_cmd.rs` | — |
 
 ## Key Files
 

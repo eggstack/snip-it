@@ -32,9 +32,11 @@ Reads `BackupManifest` from the backup directory (created by `backup_cmd`):
 
 ```rust
 pub struct BackupManifest {
-    pub entries: Vec<BackupManifestEntry>,
-    pub created_at: String,
-    pub version: String,
+    pub schema: u32,
+    pub created_at_unix_ms: i64,
+    pub snip_it_version: String,
+    pub layout: String,
+    pub files: Vec<BackupManifestEntry>,
 }
 ```
 

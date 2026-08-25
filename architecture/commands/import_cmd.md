@@ -28,7 +28,7 @@ Imports snippets from pet-format TOML files into native snip-it libraries. Handl
    - Preserves command text semantically
    - Records normalization diagnostics
 5. **Deduplicate** — In merge mode, exact duplicates (same description + command) are skipped
-6. **Persist** — Writes the library file via `LibraryManager::create_library()` or `save_library()`
+6. **Persist** — Writes the library file via `crate::library::save_library()` and registers it in the library config
 7. **Report** — Outputs diagnostics as human-readable or JSON
 
 ## Duplicate Detection
@@ -45,14 +45,12 @@ Three types of duplicates are detected:
 
 | Code | Severity | Meaning |
 |------|----------|---------|
-| `W-MALFORMED-VAR` | Warning | Invalid `<name>` variable syntax |
 | `W-DUP-CMD` | Warning | Duplicate command text |
 | `W-DUP-DESC` | Warning | Duplicate description |
-| `W-DEST-CONFLICT` | Warning | Import destination conflict |
-| `W-UNKNOWN-FIELD` | Warning | Unknown TOML field |
+| `I-FIELD-UNKNOWN` | Info | Unknown TOML field |
 | `W-DESC-MISSING` | Warning | Missing description |
 | `W-CMD-MISSING` | Warning | Missing command |
-| `W-CMD-EMPTY` | Warning | Empty command |
+| `E-CMD-EMPTY` | Error | Empty command |
 | `W-DESC-EMPTY` | Warning | Empty description |
 | `W-TYPE-MISMATCH` | Warning | Field type mismatch |
 

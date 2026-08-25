@@ -197,9 +197,12 @@ This separation ensures the pending marker is never written to the `.transaction
 ### State Machine
 
 ```
-Prepared → BackupsDurable → Committing{next_commit_position} → CommittedLocal{pending_generation, pending_recorded} → Committed
+Prepared → Committing{next_commit_position} → CleaningUp{outcome, next_step} → (journal removed)
+Prepared → RollingBack{next_rollback_position} → CleaningUp{outcome, next_step} → (journal removed)
 Prepared → Failed(error_message)
 ```
+
+New transactions never persist terminal `Committed` or `RolledBack` states. The journal is removed during cleanup, making the absence of a journal the true terminal indicator. Legacy `Committed`, `RolledBack`, `BackupsDurable`, and `CommittedLocal` journals (from older versions) are handled during recovery.
 
 ### Components
 
@@ -236,30 +239,28 @@ pub struct StagedFile {
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `pid`, `nonce`, `created_at_unix_ms`, `schema_version`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
 
 ### API
 
 | Function | Description |
 |----------|-------------|
-| `acquire_transaction_lock(state_dir)` | Acquire exclusive lock, error if held |
+| `acquire_transaction_lock(state_dir, operation)` | Acquire exclusive lock, error if held |
 | `begin_transaction(state_dir, operation, affected_files)` | Create journal in `Prepared` state |
-| `commit_transaction(state_dir, journal)` | Mark `Committed`, remove backups and journal |
+| `commit_transaction(state_dir, journal)` | Begin cleanup phase; removes backups and journal |
 | `rollback_transaction(journal)` | Restore files from backups in reverse order |
-| `check_interrupted_transactions(state_dir)` | Find journals in `Prepared` state on startup |
+| `check_interrupted_transactions(state_dir)` | Find journals in interruptible states on startup |
 
 ### Crash Recovery
 
-`check_interrupted_transactions()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `RollingBack`). These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
+`check_interrupted_transactions()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`). These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
 
 ### Journal Lifecycle
 
 1. `begin_transaction` writes journal via `write_private_atomic` in `Prepared` state
-2. Caller creates durable backups and staged files, then advances to `BackupsDurable`
-3. Caller performs live replacements, advancing through `Committing { next_commit_position }` per file — progress persisted only after each verified atomic write
-4. After all writes complete, advance to `CommittedLocal { pending_generation, pending_recorded }` — records pending sync intent atomically
-5. `commit_transaction` marks `Committed`, cleans up backups and journal
-6. If interrupted between begin and commit, `check_interrupted_transactions` finds the orphan in any interruptible state (including `CommittedLocal`, which completes the pending intent recording)
+2. Caller performs live replacements, advancing through `Committing { next_commit_position }` per file — progress persisted only after each verified atomic write
+3. After all writes complete, advance to `CleaningUp { outcome: Commit, next_step }` — records pending sync intent, then removes backups and journal
+4. If interrupted between begin and cleanup completion, `check_interrupted_transactions` finds the orphan in any interruptible state (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`). Legacy `CommittedLocal` and `BackupsDurable` journals from older versions are handled during recovery.
 
 ### Commit Progress Semantics
 
@@ -279,9 +280,9 @@ All transaction artifact paths (backup, staged, destination) are validated by `v
 
 The helper runs for every transaction state (not just on disk existence), and backup references are revalidated immediately before reading in rollback.
 
-### CommittedLocal State
+### CommittedLocal State (Legacy)
 
-`CommittedLocal { pending_generation, pending_recorded }` eliminates the crash window between durable restore commit and pending-sync intent recording. After all live writes are committed, the journal transitions to `CommittedLocal` with the pending generation number. The pending sync intent is then recorded. If a crash occurs between `CommittedLocal` and `Committed`, recovery completes the pending intent recording.
+`CommittedLocal { pending }` is a legacy state from older versions. New transactions transition directly from `Committing` to `CleaningUp`. Legacy `CommittedLocal` journals are handled during recovery via `FinalizeCommittedLocal`, which completes the pending intent recording.
 
 ---
 

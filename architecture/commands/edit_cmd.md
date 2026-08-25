@@ -7,12 +7,12 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(library: Option<String>, config: Option<PathBuf>) -> SnipResult<()>
 ```
 
 ## Flow
 
-1. Determine editor: `$EDITOR` env var → fallback to platform default
+1. Determine editor: `$VISUAL` env var → `$EDITOR` env var → fallback to `vim`
 2. Determine library path: active library file
 3. Open in editor: `Command::new(editor).arg(path).spawn()`
 4. Wait for editor to exit
@@ -21,7 +21,7 @@ pub fn run(matches: &ArgMatches) -> SnipResult<()>
 
 Uses `clap` value parser that checks for known editors:
 - `vim`, `nvim`, `nano`, `code`, `subl`, `emacs`, etc.
-- Falls back to system default if `$EDITOR` is not set
+- Falls back to `vim` if neither `$VISUAL` nor `$EDITOR` is set
 
 ## Use Cases
 
@@ -33,8 +33,8 @@ Uses `clap` value parser that checks for known editors:
 ## Error Handling
 
 - `SnipError::Command` if editor not found
-- `SnipError::Io` if library file doesn't exist
-- `SnipError::Toml` if edited file fails to parse on reload
+- `SnipError::Io` if library file doesn't exist or cannot be created
+- Editor non-zero exit with file changes is reported as an error but sync notification is still sent
 
 ## Note
 

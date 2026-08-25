@@ -16,13 +16,12 @@ The TUI provides an interactive, fuzzy-search snippet selector using `ratatui` a
 
 ```rust
 // In ui/state.rs
-pub struct SelectState {
+pub(super) struct SelectState {
     pub selected: usize,               // Current selection index
-    pub list_state: ListState,         // ratatui list state
     pub scroll_state: ScrollbarState,  // Scrollbar position
 }
 
-pub struct FilterState {
+pub(super) struct FilterState {
     pub sort_mode: SortMode,           // None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed
     pub tag_filter_text: String,       // Tag filter input
 }
@@ -74,7 +73,7 @@ Resolved via `get_theme()` which reads from a process-global `RwLock<Theme>`.
 - **Strings** (quoted) — Green
 - **Flags** (`--flag`) — Secondary color
 - **Comments** (`# ...`) — Muted
-- **Escape sequences** (`\<`, `\>`) — Magenta
+- **Escape sequences** (`\n`, `\t`) — Magenta
 
 Pre-computed once at startup, cached for draw loop performance.
 
@@ -84,9 +83,9 @@ Pre-computed once at startup, cached for draw loop performance.
 - Shows variable name and default
 - Editable text field
 - Keyboard navigation (arrows, tab, enter)
-- `q` to cancel, `Esc` to skip
+- `q` to return to snippet selector, `Ctrl+C` to quit
 
-Returns `VariablePromptResult::Cancel | Skip | Values(...)`.
+Returns `VariablePromptResult::Cancel | Back | Skip | Values(...)`.
 
 ## Keybindings
 
@@ -94,10 +93,10 @@ Returns `VariablePromptResult::Cancel | Skip | Values(...)`.
 
 | Key | Action |
 |-----|--------|
-| `h` / `←` | Move left (visual mode) |
+| `h` / `←` | Move up |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `l` / `→` | Move right (visual mode) |
+| `l` / `→` | Move down |
 | `gg` | Jump to top |
 | `G` | Jump to bottom |
 | `v` | Toggle visual mode |
@@ -106,25 +105,27 @@ Returns `VariablePromptResult::Cancel | Skip | Values(...)`.
 | `d` | Open delete confirmation; `y` confirms and any other key cancels |
 | `/` | Start incremental search |
 | `t` | Tag filter mode |
-| `n` | Sort by name |
-| `o` | Sort by date |
-| `a` | Sort by usage |
-| `z` | Toggle display mode |
-| `q` / `Esc` | Quit |
+| `n` | Sort by newest |
+| `o` | Sort by oldest |
+| `a` | Sort alphabetically |
+| `z` | Sort alphabetically (descending) |
+| `x` / `c` | Clear filter |
+| `Tab` | Toggle display mode |
+| `e` | Open theme picker |
+| `q` / `Ctrl+c` | Quit |
 | `Enter` | Select/execute |
 
 ### Insert Mode
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` / `↑` / `↓` | Navigate list |
+| `↑` / `↓` | Navigate list |
 | `Esc` | Return to normal mode |
 | `/` | Start search |
 | `Enter` | Select/execute |
-| `Ctrl+f` / `PageDown` | Page down |
-| `Ctrl+b` / `PageUp` | Page up |
-| `Ctrl+u` | Half page up |
-| `Ctrl+d` | Half page down |
+| `Ctrl+f` / `Ctrl+d` / `PageDown` | Page down |
+| `Ctrl+b` / `Ctrl+u` / `PageUp` | Page up |
+| `Tab` | Toggle display mode |
 
 The `d` key is ordinary filter input in insert mode. Deleting a snippet marks
 it as a hidden tombstone in its library TOML so an enabled sync can propagate

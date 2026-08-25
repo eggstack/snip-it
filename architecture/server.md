@@ -36,7 +36,7 @@ A standalone gRPC + HTTP server that stores encrypted snippets, manages users/li
 
 ## Database
 
-**File**: `snip-sync/src/db.rs` (~1215 lines)
+**File**: `snip-sync/src/db.rs` (~1256 lines)
 
 SQLite via `sqlx` with in-memory support for tests.
 
@@ -44,8 +44,8 @@ SQLite via `sqlx` with in-memory support for tests.
 
 | Table | Columns |
 |-------|---------|
-| `users` | `id`, `api_key_hash`, `api_key_prefix`, `device_id`, `created_at` |
-| `libraries` | `id`, `user_id`, `name`, `created_at` |
+| `users` | `id`, `api_key`, `api_key_prefix`, `created_at`, `updated_at` |
+| `libraries` | `id`, `user_id`, `name`, `created_at`, `deleted_at` |
 | `snippets` | `id`, `user_id`, `library_id`, `description`, `command`, `tags`, `created_at`, `updated_at`, `device_id`, `deleted`, `encrypted` |
 
 ### API Key Hashing
@@ -113,12 +113,11 @@ Configurable via `CORS_ALLOWED_ORIGINS` env var or config file. Supports multipl
 
 ## Rate Limiter
 
-**File**: `snip-sync/src/rate_limiter.rs` (151 lines)
+**File**: `snip-sync/src/rate_limiter.rs` (159 lines)
 
 In-memory per-key rate limiting:
 - Default: 120 requests/minute per API key
-- Sliding window based on `Instant`
-- Background cleanup task runs every 60s
+- Sliding window based on `SystemTime` (epoch seconds)
 
 ## Metrics
 
@@ -263,6 +262,7 @@ determined by the operating-system lock, not by whether the file exists.
 - `snip-sync/src/lib.rs` — Config loading, `SnipSyncService` implementation, axum routes
 - `snip-sync/src/db.rs` — SQLite database, user/snippet/library operations (18 tests)
 - `snip-sync/src/bootstrap.rs` — Server initialization and service wiring
+- `snip-sync/src/orchestration.rs` — Graceful shutdown coordination (`run_services_until_shutdown`)
 - `snip-sync/src/rate_limiter.rs` — Per-key rate limiting
 - `snip-sync/src/metrics.rs` — Prometheus counters
 - `snip-sync/src/premade.rs` — Premade library file scanning
@@ -271,5 +271,6 @@ determined by the operating-system lock, not by whether the file exists.
 - `snip-sync/src/cli.rs` — CLI argument parsing
 - `snip-sync/src/editor.rs` — Editor integration
 - `snip-sync/src/process.rs` — Process management
+- `snip-sync/src/server_lock.rs` — Server singleton kernel lock
 - `snip-sync/src/test_helpers.rs` — In-process test server support
 - `snip-sync/src/update.rs` — Server self-update

@@ -27,13 +27,6 @@ preventing duplicate delayed sync attempts for the same mutation generation.
 
 ## Sync Modes
 
-### Local-Only Sync (`--local`)
-```bash
-snp sync --local
-```
-- Reads `~/.config/snp/sync.toml` for settings
-- Performs sync without server (local-only backup/snapshot)
-
 ### Server Libraries (`--servers`)
 ```bash
 snp sync --servers
@@ -73,6 +66,8 @@ Flags:
 - `--show` — Display current auto-sync configuration
 - `--auto-sync <on|off>` — Enable or disable auto-sync after mutations
 - `--debounce <secs>` — Debounce delay in seconds (0-300)
+- `--max-delay <secs>` — Maximum delay before forcing a sync (0-600)
+- `--timeout <secs>` — Executor sync timeout in seconds (5-120, default 30)
 - `--failure <ignore|warn|error>` — Failure behavior
 
 Examples:
@@ -80,6 +75,7 @@ Examples:
 snp sync config --show
 snp sync config --auto-sync on
 snp sync config --debounce 5 --failure warn
+snp sync config --max-delay 60 --timeout 45
 ```
 
 ### `snp sync retry`

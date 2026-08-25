@@ -166,16 +166,17 @@ Defines `SnippetSync` service:
 
 ```protobuf
 service SnippetSync {
-    rpc Sync(SyncRequest) returns (SyncResponse);
-    rpc GetSnippets(GetRequest) returns (GetResponse);
-    rpc PushSnippets(PushRequest) returns (PushResponse);
-    rpc Register(RegisterRequest) returns (RegisterResponse);
-    rpc CreateLibrary(CreateLibraryRequest) returns (CreateLibraryResponse);
-    rpc ListLibraries(ListLibrariesRequest) returns (ListLibrariesResponse);
-    rpc DeleteLibrary(DeleteLibraryRequest) returns (DeleteLibraryResponse);
-    rpc ListPremadeLibraries(Empty) returns (ListPremadeLibrariesResponse);
-    rpc GetPremadeLibrary(GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
-    rpc Health(HealthRequest) returns (HealthResponse);
+    rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);
+    rpc PushSnippets (PushSnippetsRequest) returns (PushSnippetsResponse);
+    rpc Sync (SyncRequest) returns (SyncResponse);
+    rpc Health (HealthRequest) returns (HealthResponse);
+    rpc Register (RegisterRequest) returns (RegisterResponse);
+    rpc CreateLibrary (CreateLibraryRequest) returns (CreateLibraryResponse);
+    rpc ListLibraries (ListLibrariesRequest) returns (ListLibrariesResponse);
+    rpc DeleteLibrary (DeleteLibraryRequest) returns (DeleteLibraryResponse);
+    rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
+    rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
+    rpc SearchPremadeLibraries (SearchPremadeLibrariesRequest) returns (SearchPremadeLibrariesResponse);
 }
 ```
 
@@ -379,7 +380,7 @@ Retry dispositions by class:
 | LocalFailure | RequiresAttention | Persistence, conflict, and corruption issues persist |
 | Internal | RetryAfter(Duration), then RequiresAttention | Bounded retry (3 attempts), then RequiresAttention |
 
-Classified from `SnipError` via `FailureClass::from_error()` in `policy.rs`,
+Classified from `SnipError` via `FailureClass::from_error()` in `sync_failure.rs`,
 which applies typed variant matching with a fallback heuristic for legacy runtime
 errors. The worker records the classification into
 `auto-sync-status.toml` for diagnostics.

@@ -12,9 +12,9 @@ The library module is the core data layer of snip-it. It defines the `Snippet` a
 pub struct Snippet {
     pub id: String,              // Opaque ID; UUID for new, deterministic for legacy
     pub description: String,     // Human-readable name
-    pub command: String,         // Shell command (may contain <variables>)
     pub output: String,          // Output file path
     pub tags: Vec<String>,       // User-defined tags
+    pub command: String,         // Shell command (may contain <variables>)
     pub folders: Vec<String>,    // Folder organization
     pub favorite: bool,          // Starred flag
     pub created_at: i64,         // Unix timestamp
@@ -26,7 +26,7 @@ pub struct Snippet {
 
 ### Snippets
 
-Wrapper struct that holds a list of snippets and serializes to TOML with a `[[snippet]]` table array.
+Wrapper struct that holds a list of snippets and serializes to TOML with a `[[snippets]]` table array.
 
 ### LibraryMeta & LibraryConfig
 

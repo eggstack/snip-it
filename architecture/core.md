@@ -14,9 +14,9 @@ Individual snippet with metadata:
 pub struct Snippet {
     pub id: String,           // Opaque ID; UUID for new, deterministic for legacy
     pub description: String,  // Human-readable name
-    pub command: String,      // Shell command (may contain <variables>)
-    pub output: String,       // Output file path (relative, validated)
+    pub output: String,       // Output file path
     pub tags: Vec<String>,    // User-defined tags
+    pub command: String,      // Shell command (may contain <variables>)
     pub folders: Vec<String>, // Folder organization
     pub favorite: bool,       // Starred flag
     pub created_at: i64,      // Unix timestamp
@@ -91,7 +91,8 @@ last_sync = 1234567890
 Library names are validated:
 - Non-empty, max 50 chars
 - No slashes (`/`, `\`) or null bytes
-- Prevents path traversal
+- No path traversal sequences (`.`, `..`)
+- Cannot end with `.toml`
 
 ## Error Handling
 
@@ -104,6 +105,7 @@ pub enum SnipError {
     Clipboard { operation, message },
     Command { command, args, source },
     Runtime { message, detail },
+    SyncFailure { kind, detail },
 }
 ```
 
@@ -115,6 +117,7 @@ SnipError::toml_error("serialize", toml_err)
 SnipError::clipboard_error("set text", msg)
 SnipError::command_error("sh", args, io_err)
 SnipError::runtime_error("sync failed", Some("detail"))
+SnipError::sync_failure(SyncFailureKind::ConnectFailed, Some("detail"))
 ```
 
 ### Conversions
@@ -125,5 +128,5 @@ SnipError::runtime_error("sync failed", Some("detail"))
 ## Key Files
 
 - `src/library.rs` — Snippet, Snippets, LibraryManager, load/save/backup
-- `src/error.rs` — SnipError enum, constructors, Display impl
+- `src/error.rs` — SnipError enum, SyncFailureKind, constructors, Display impl
 - `src/commands/mod.rs` — `load_snippets()`, `save_snippets()` (thin wrappers)

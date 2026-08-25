@@ -24,7 +24,7 @@ pub enum VariableKind {
     DefaultValue(String),
     Choices {
         values: Vec<String>,
-        default_index: usize,
+        default_index: Option<usize>,
     },
 }
 ```
@@ -40,15 +40,15 @@ pub fn parse_variables(command: &str) -> Vec<Variable>
 Extracts all variables from a command string:
 - `<name>` → `Variable { name, kind: Required, default: None }`
 - `<name=default>` → `Variable { name, kind: DefaultValue("default"), default: Some("default") }`
-- `<name=|_opt1_||_opt2_||_opt3_||>` → `Variable { name, kind: Choices { values: ["opt1", "opt2", "opt3"], default_index: 0 }, default: Some("opt1") }`
+- `<name=|_opt1_||_opt2_||_opt3_||>` → `Variable { name, kind: Choices { values: ["opt1", "opt2", "opt3"], default_index: Some(0) }, default: Some("opt1") }`
 
-### extract_variable_tokens()
+### extract_variable_tokens() *(internal)*
 
-Returns raw `<...>` tokens for display without parsing defaults.
+Returns raw `<...>` tokens for internal use by `parse_variables` and `expand_command`.
 
-### is_choice_syntax() / extract_choices()
+### is_choice_syntax() / extract_choices() *(internal)*
 
-Detects Pet-compatible multiple-choice syntax (`|_..._||_..._||`) within a default value string and extracts the individual choice values. Returns `(Vec<String>, usize)` — the choices and the default index (always 0).
+Private helpers. `is_choice_syntax` detects Pet-compatible multiple-choice syntax (`|_..._||_..._||`) within a default value string. `extract_choices` parses the individual choice values and returns `Option<Vec<String>>` — `None` if malformed.
 
 ## Expansion
 
@@ -57,23 +57,24 @@ Detects Pet-compatible multiple-choice syntax (`|_..._||_..._||`) within a defau
 ```rust
 pub fn expand_command(
     command: &str,
-    variables: &[(String, Option<String>)],
-) -> SnipResult<String>
+    values: &[(String, String)],
+) -> String
 ```
 
 Substitutes values into command:
-- Looks up `name` in provided variables
+- Looks up `name` in provided values
 - Uses default if value not provided but default exists
-- Returns error for missing required variables
+- Falls back to the variable name itself for missing required variables (no error returned)
 - For `Choices` variables, the selected value is used just like a required variable value
 
 ## Escape Sequences
 
 ### strip_escape_sequences()
 
-Converts escaped angle brackets:
+Converts escaped angle brackets and backslashes:
 - `\<` → `<`
 - `\>` → `>`
+- `\\` → `\`
 
 This allows literal angle brackets in commands without triggering variable substitution.
 
@@ -104,5 +105,5 @@ Variables are expanded before shell execution:
 
 ## Related
 
-- [ui/variables.rs](../../ui/variables.md) — TUI variable prompt
-- [run_cmd.md](run_cmd.md) — Variable expansion during execution
+- `src/ui/variables.rs` — TUI variable prompt (see [ui.md](../ui.md))
+- [run_cmd.md](../commands/run_cmd.md) — Variable expansion during execution

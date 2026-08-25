@@ -25,11 +25,11 @@ Provides deterministic, stable sorting of snippets for both CLI (`--sort` flag) 
 
 ### Tie-Break Chain
 
-Within equal primary keys, a deterministic 5-level tie-break ensures stable output:
+The comparison chain ensures deterministic, stable output:
 
-1. **Primary key** — the selected `SnippetSort` variant
-2. **Favorites-first** — when enabled, favorited snippets sort before non-favorited within each primary-key group
-3. **Fuzzy relevance** — used as secondary when primary is not `Relevance` (e.g., `MostUsed` with equal counts)
+1. **Favorites-first** — when enabled, favorited snippets sort before non-favorited (orthogonal modifier, applied before the primary key)
+2. **Primary key** — the selected `SnippetSort` variant
+3. **Fuzzy relevance** — used as tie-break when primary is not `Relevance` (e.g., `MostUsed` with equal counts)
 4. **Normalized description** — case-insensitive alphabetical (skipped for `Relevance` mode)
 5. **Original index** — ascending, guarantees stability for identical inputs
 
@@ -74,4 +74,4 @@ In both cases, when no fuzzy query is active, the explicit sort mode fully deter
 
 ## Test Coverage
 
-50 unit tests covering all sort modes, tie-break chains, edge cases (empty input, single element, all-equal, non-contiguous indices), favorites-first grouping, favorites-first + usage sort combinations, divergent metadata fixtures, relevance tie behavior, and default options. Integration tests verify CLI flags, divergent metadata ordering (recent/most-used/last-used), favorites-first + usage combinations, and CSV output.
+47 unit tests covering all sort modes, tie-break chains, edge cases (empty input, single element, all-equal, non-contiguous indices), favorites-first grouping, favorites-first + usage sort combinations, divergent metadata fixtures, relevance tie behavior, and default options. Integration tests verify CLI flags, divergent metadata ordering (recent/most-used/last-used), favorites-first + usage combinations, and CSV output.

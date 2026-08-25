@@ -27,9 +27,8 @@
 ## Safety Model
 
 - All actions marked `is_safe() = true` are applied automatically with `--apply`
-- Unsafe actions require explicit `--action` flags or interactive confirmation
+- Unsafe actions are reported but skipped (not applied)
 - A backup snapshot is always created before any mutation
-- The `gate_mutation_on_interrupted_transactions()` check runs before repair mutations
 
 ## Transaction Repair
 
@@ -42,4 +41,4 @@ The primary use case is recovering from interrupted transactions:
 
 - Default: lists discovered repair candidates
 - `--apply`: executes safe repairs (with backup)
-- `--action <category>`: targets specific repair category
+- `--json`: machine-readable JSON report

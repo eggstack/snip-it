@@ -7,24 +7,21 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()>
 ```
 
 ## Flow
 
 1. **URL Input** — Prompt for server URL (or use saved setting)
-2. **Credentials** — Prompt for username/password or API key
-3. **Registration Request** — Call `SyncClient::register_device()` via gRPC
-4. **Store API Key** — Save returned API key to system keychain via `keyring`
-5. **Update Config** — Save server URL and direction to `sync.toml`
+2. **Registration Request** — Call `SyncClient::register()` via gRPC
+3. **Store API Key** — Save returned API key to `sync.toml` via `save_sync_settings()` (OS keychain used for read-back; plaintext fallback with `SNP_ALLOW_PLAINTEXT_API_KEY=true`)
+4. **Update Config** — Save server URL and direction to `sync.toml`
 
 ## Registration Request
 
 ```protobuf
 message RegisterRequest {
-    string server_id = 1;    // Server identifier
-    string device_name = 2;  // Hostname/user@host
-    string api_key = 3;      // Pre-shared key or password
+    string device_id = 1;    // Device identifier (empty for new registrations)
 }
 ```
 
@@ -33,31 +30,29 @@ message RegisterRequest {
 ```protobuf
 message RegisterResponse {
     bool success = 1;
-    string message = 2;
-    string api_key = 3;      // New API key for this device
+    string api_key = 2;      // New API key for this device
+    string message = 3;
+    string device_id = 4;    // Assigned device identifier
 }
 ```
 
 ## Keychain Storage
 
-The returned API key is stored in the system keychain:
+On platforms with a supported keyring, the API key is stored in the system keychain for secure read-back:
 - **macOS**: Keychain via `keyring`
 - **Linux**: libsecret DBUS
 - **Windows**: Credential Manager
 
-This avoids storing plaintext API keys in config files.
+When the keychain is unavailable, the API key is stored in plaintext in `sync.toml`. Set `SNP_ALLOW_PLAINTEXT_API_KEY=true` to allow this explicitly.
 
 ## Flags
 
-- `--server <url>` — Server URL (non-interactive)
-- `--name <device>` — Device name override
-- `--api-key <key>` — Use existing API key
+- `--server <url>` — Server URL (defaults to built-in server URL)
+- `--force` — Re-register even if already registered
 
 ## Error Handling
 
-- `SnipError::Sync` on registration failure
-- `SnipError::Keychain` on keyring access failure
-- `SnipError::InvalidCredentials` on auth failure
+- `SnipError::RuntimeError` on registration failure or settings save failure
 
 ## Related
 

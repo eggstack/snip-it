@@ -7,7 +7,14 @@
 ## Entry Point
 
 ```rust
-pub fn run(matches: &ArgMatches) -> SnipResult<()>
+pub fn run(
+    filter: Option<String>,
+    config: Option<PathBuf>,
+    library: Option<String>,
+    format: ListFormat,
+    sort_opts: Option<SortOptions>,
+    search_output: bool,
+) -> SnipResult<()>
 ```
 
 ## Flow
@@ -31,19 +38,20 @@ pub fn run(matches: &ArgMatches) -> SnipResult<()>
 ```json
 [
   {
-    "id": "...",
-    "name": "hello",
+    "description": "hello",
     "command": "echo \"Hello, World!\"",
+    "output": "",
     "tags": ["demo"],
-    "folders": ["scripts"]
+    "folders": ["scripts"],
+    "favorite": false
   }
 ]
 ```
 
 ### CSV (`--csv`)
 ```csv
-name,command,tags,folders
-hello,echo "Hello, World!",demo,scripts
+description,command,output,tags,folders,favorite
+hello,echo "Hello, World!",,demo,scripts,false
 ```
 
 ## Filters
