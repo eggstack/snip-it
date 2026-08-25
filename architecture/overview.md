@@ -8,6 +8,7 @@ detail.
 
 - [Project Layout](#project-layout)
 - [Workspace Crates](#workspace-crates)
+- [Logical Layers](#logical-layers)
 - [CLI & Command Dispatch](#cli--command-dispatch)
 - [Command Modules](#command-modules)
 - [Core Data Layer](#core-data-layer)
@@ -31,7 +32,7 @@ detail.
 ```
 snip-it/              Main crate — binary "snp"
   src/                Application source (CLI, commands, TUI, sync, core)
-  tests/              Integration tests (~46 files + shared support)
+  tests/              Integration tests (45 files + shared support)
   architecture/       This directory — module deep-dive docs
   docs/               Public API docs, threat model, security audit
   .skills/            Specialized agent reference docs
@@ -55,10 +56,41 @@ premade-libraries/    Premade snippet library files
 The library surface of `snip-it` exposes a stable public API (`Snippet`,
 `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library`,
 atomic write utilities, `SnipError`, `SnippetSort`, `SyncSettings`, etc.).
-Everything else (`commands`, `ui`, `auto_sync`, `sync`, `encryption`,
-`logging`, `process_file_lock`, `selector`, `usage`) is
-`#[doc(hidden)]` — public for binary/integration-test access but not part
-of the supported external API.
+Everything else (`commands`, `ui`, `auto_sync`, `sync`, `logging`,
+`process_file_lock`, `selector`, `usage`) is `#[doc(hidden)]` — public for
+binary/integration-test access but not part of the supported external API.
+Modules such as `library`, `encryption`, `clipboard`, and `utils` are
+`pub(crate)` (crate-internal only).
+
+---
+
+## Logical Layers
+
+Source modules are organized into three logical layers with a strict
+dependency direction, documented in [`../docs/LOGICAL_LAYERS.md`](../docs/LOGICAL_LAYERS.md)
+and enforced by source-scanning tests in `tests/architecture.rs`:
+
+```
+┌─────────────────────────────────────────────┐
+│           Application / CLI Layer           │
+│  main.rs, commands/*, ui/*, auto_sync/*,    │
+│  clipboard, logging, update, transaction,   │
+│  local_data, migration, status_snapshot     │
+├─────────────────────────────────────────────┤
+│           Sync-Client Layer                 │
+│  sync.rs, sync_commands.rs, encryption.rs,  │
+│  sync_failure.rs, config.rs (sync settings) │
+├─────────────────────────────────────────────┤
+│           Domain / Core Layer               │
+│  library.rs, sort.rs, usage.rs, output.rs,  │
+│  diagnostics.rs, error.rs, selector.rs,     │
+│  utils/*                                    │
+└─────────────────────────────────────────────┘
+```
+
+**Dependency rule**: `application → sync-client → core`. No reverse
+dependencies: core must not import UI/commands/sync; sync-client must not
+import commands/ui/logging/auto_sync.
 
 ---
 
@@ -80,7 +112,7 @@ commands manage their own behavior.
 
 **Exit codes** (stable): 0 success, 1 general error, 2 usage error,
 3 not found, 4 cancelled, 5 ambiguous, 6 validation, 7 sync failure,
-8 execution failure, 9 conflict/refused.
+8 execution failure, 9 conflict/refused, 10 unsafe repairs pending.
 
 ---
 
@@ -160,6 +192,8 @@ transmission (AES-256-GCM).
 - `retry_grpc!` macro — configurable retry with jitter
 - `sync_encrypted()` — byte-bounded upload batches (3.5 MiB ceiling)
 - `sync_commands::run_sync()` — full bidirectional sync orchestration
+- `sync_failure.rs` — `FailureClass` (4 variants), lives in this layer so
+  `crate::sync` can classify errors without depending on `auto_sync::policy`
 
 **Merge strategy**:
 - Live conflicts: `(updated_at, device_id, SHA-256(synced fields))`
@@ -280,6 +314,7 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 | `utils/shell_keywords` | `src/utils/shell_keywords.rs` | [utils/shell_keywords.md](utils/shell_keywords.md) | ~190 shell command names for syntax highlighting |
 | `utils/tempfile_guard` | `src/utils/tempfile_guard.rs` | [utils/tempfile_guard.md](utils/tempfile_guard.md) | RAII guard for temporary file cleanup |
 | `utils/atomic` | `src/utils/atomic.rs` | [utils/atomic.md](utils/atomic.md) | `write_private_atomic()`, `atomic_replace()` — durability-aware atomic writes |
+| `utils/process` | `src/utils/process.rs` | — | Shared process-liveness (`is_process_alive`) and owned-lock-file removal helpers used by the transaction, local-data, and execution locks |
 | `clipboard` | `src/clipboard.rs` | [clipboard.md](clipboard.md) | Cross-platform clipboard (arboard/clipboard-win) |
 | `logging` | `src/logging.rs` | [logging.md](logging.md) | Structured logging (`tracing`), audit trail, panic handler |
 | `process_file_lock` | `src/process_file_lock.rs` | — | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
@@ -317,7 +352,7 @@ Full utility inventory: [utils.md](utils.md).
 
 **Deep dive**: [test-infrastructure.md](test-infrastructure.md)
 
-~46 integration test files in `tests/` (plus 4 shared modules in
+45 integration test files in `tests/` (plus 4 shared modules in
 `tests/support/`). Reusable components in
 `tests/support/`: `TestEnvironment` (isolated TempDir), `RecordingServer`,
 `EventSink`.
@@ -409,7 +444,7 @@ snp run [--filter FOO] [--sync]
 - AES-256-GCM for snippet payload encryption
 - Argon2id for key derivation from API key
 - Key cache for repeated operations
-- See [encryption.md](encryption.md) and [architecture/encryption.md](encryption.md)
+- See [encryption.md](encryption.md)
 
 ### Process Locks
 - Kernel-backed (`flock` Unix / `LockFileEx` Windows) for:

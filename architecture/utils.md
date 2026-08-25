@@ -12,6 +12,9 @@
 | `variables` | `variables.rs` | Variable parsing and expansion |
 | `toml_helpers` | `toml_helpers.rs` | TOML escape sequence handling |
 | `shell_keywords` | `shell_keywords.rs` | Shell keyword set for syntax highlighting |
+| `atomic` | `atomic.rs` | Durability-aware atomic writes ([utils/atomic.md](utils/atomic.md)) |
+| `tempfile_guard` | `tempfile_guard.rs` | RAII temporary-file cleanup ([utils/tempfile_guard.md](utils/tempfile_guard.md)) |
+| `process` | `process.rs` | Shared process-liveness checks (`is_process_alive`) and owned-lock-file removal; used by the transaction, local-data, and execution locks |
 
 ## Variables
 
