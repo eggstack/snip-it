@@ -42,6 +42,11 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if let Err(e) =
+            crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+        {
+            tracing::warn!("Failed to disable mouse capture: {}", e);
+        }
         ratatui::restore();
     }
 }

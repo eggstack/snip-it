@@ -736,7 +736,10 @@ fn finish_exact_outcome(outcome: snip_it::outcome::CliOutcome) -> SnipResult<Com
     match outcome {
         snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
         snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-        other => std::process::exit(other.exit_code()),
+        snip_it::outcome::CliOutcome::ExecutionFailed { child_code } => {
+            Ok(CommandOutcome::ExecutionFailed { child_code })
+        }
+        other => Ok(CommandOutcome::Exit(other.exit_code())),
     }
 }
 
@@ -1444,7 +1447,12 @@ fn main() {
             }
             std::process::exit(child_code.unwrap_or(8));
         }
-        Ok(_) => {}
+        Ok(CommandOutcome::Exit(code)) => {
+            if behavior.services != StartupServices::Minimal {
+                log_shutdown_info();
+            }
+            std::process::exit(code);
+        }
         Err(e) => {
             eprintln!("error: {e}");
             if behavior.services != StartupServices::Minimal {
@@ -1452,6 +1460,7 @@ fn main() {
             }
             std::process::exit(1);
         }
+        _ => unreachable!("all CommandOutcome variants are matched"),
     }
 
     if behavior.services != StartupServices::Minimal {

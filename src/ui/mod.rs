@@ -42,7 +42,11 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        if let Err(e) =
+            crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+        {
+            tracing::warn!("Failed to disable mouse capture: {}", e);
+        }
         ratatui::restore();
     }
 }
@@ -1262,8 +1266,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         if polled {
             match event::read() {
                 Ok(CEvent::Mouse(mouse_event)) => {
-                    needs_redraw = true;
                     if !theme_picker_mode {
+                        needs_redraw = true;
                         // Check for scroll events
                         if mouse_event.kind == crossterm::event::MouseEventKind::ScrollDown {
                             sel.move_down(filtered.len());
@@ -1689,12 +1693,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                         filter_state.tag_filter_text.pop();
                                         filter_dirty = true;
                                         last_filter_update = Some(std::time::Instant::now());
-                                    } else if insert_mode {
-                                        input_text.pop();
-                                        filter.pop();
-                                        filter_dirty = true;
-                                        last_filter_update = Some(std::time::Instant::now());
                                     } else {
+                                        input_text.pop();
                                         filter.pop();
                                         filter_dirty = true;
                                         last_filter_update = Some(std::time::Instant::now());

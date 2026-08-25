@@ -325,17 +325,20 @@ where
     let mut snippets = crate::library::load_library(&lib_path)?;
 
     let usage_index = crate::usage::UsageIndex::load();
-    let usage_data: Vec<crate::usage::UsageData> = snippets
-        .snippets
-        .iter()
-        .map(|s| usage_index.get_usage(&s.id))
-        .collect();
 
     let mut selected_and_processed = false;
     let mut cancelled = false;
     let mut failed_exit_code: Option<Option<i32>> = None;
     loop {
         let (snippet_data, original_indices) = get_snippet_data(&snippets);
+        let live_snippets: Vec<crate::library::Snippet> = original_indices
+            .iter()
+            .map(|&i| snippets.snippets[i].clone())
+            .collect();
+        let live_usage: Vec<crate::usage::UsageData> = live_snippets
+            .iter()
+            .map(|s| usage_index.get_usage(&s.id))
+            .collect();
         let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
             descriptions: &snippet_data.descriptions,
             commands: &snippet_data.commands,
@@ -344,10 +347,10 @@ where
             initial_filter: filter.as_deref(),
             folders: &snippet_data.folders,
             favorites: &snippet_data.favorites,
-            snippets: &snippets.snippets,
+            snippets: &live_snippets,
             original_indices: &original_indices,
             sort_opts: sort_opts.as_ref(),
-            usage: Some(&usage_data),
+            usage: Some(&live_usage),
             allow_delete,
         })?;
         if let Some(result) = result {

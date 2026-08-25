@@ -293,13 +293,6 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                     folders: Vec::new(),
                 };
                 crate::library::save_library(&dest_path, &snippets)?;
-
-                // Register in config
-                let is_first = mgr.list_libraries().is_empty();
-                let mut meta = crate::library::LibraryMeta::new(&dest_name);
-                meta.is_primary = is_first;
-                // We need a mutable mgr to save config — but save_library is a free function.
-                // We'll use the mgr to register after saving.
             }
 
             report.imported = converted.len();
@@ -421,16 +414,20 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
     }
 
     // Phase 6: Register library in config (for create/merge of new libraries)
-    if !options.dry_run && !dest_path.exists() && options.mode != ImportMode::Merge {
-        // This case shouldn't happen, but handle defensively
-    }
-    if !options.dry_run && dest_path.exists() && mgr.get_library_by_filename(&dest_name).is_none() {
-        let is_first = mgr.list_libraries().is_empty();
-        let mut meta = crate::library::LibraryMeta::new(&dest_name);
-        meta.is_primary = is_first;
-        // We need to push to config and save
-        // LibraryManager's config field is private, so we use add_existing_library
-        mgr.add_existing_library(&dest_name)?;
+    if !options.dry_run
+        && dest_path.exists()
+        && mgr.get_library_by_filename(&dest_name).is_none()
+        && let Err(e) = mgr.add_existing_library(&dest_name)
+    {
+        eprintln!(
+            "Warning: library file '{}' was written but not registered: {}",
+            dest_path.display(),
+            e
+        );
+        eprintln!(
+            "Run 'snp validate' to detect it, then re-run the import with --merge to register it."
+        );
+        return Err(e);
     }
 
     // Auto-sync trigger: notify once after successful import commit (Workstream B4).

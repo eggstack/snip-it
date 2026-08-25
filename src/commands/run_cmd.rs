@@ -50,7 +50,18 @@ fn wait_for_command(
             && start.elapsed() >= timeout
         {
             let _ = child.kill();
-            let _ = child.wait();
+            // Reaping is bounded: a child stuck in uninterruptible I/O could
+            // otherwise block `wait()` forever. If it still has not exited
+            // after the grace period, give up (the zombie is reaped when this
+            // process exits).
+            let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < reap_deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
             return Err(SnipError::runtime_error(
                 "Command timed out",
                 Some(&format!(

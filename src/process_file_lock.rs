@@ -365,7 +365,13 @@ fn inner_acquire(path: &Path, purpose: &str) -> Result<ProcessFileLock, ProcessF
         if let Ok(meta) = std::fs::metadata(path) {
             let mut perms = meta.permissions();
             perms.set_mode(0o600);
-            let _ = std::fs::set_permissions(path, perms);
+            if let Err(e) = std::fs::set_permissions(path, perms) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "failed to tighten lock file permissions to 0600"
+                );
+            }
         }
     }
 

@@ -389,11 +389,14 @@ fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {
     );
 
     use std::io::Write;
-    let mut file = match fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
+    let mut opts = fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = match opts.open(&log_path) {
         Ok(f) => f,
         Err(e) => {
             tracing::error!(error = %e, path = %log_path.display(), "Failed to open audit log for writing");

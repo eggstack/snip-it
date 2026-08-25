@@ -149,6 +149,12 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
             "Library name cannot contain path traversal sequences",
         ));
     }
+    if name.ends_with(".toml") {
+        return Err((
+            "Invalid library name",
+            "Library name cannot end with '.toml' (the extension is added automatically)",
+        ));
+    }
     Ok(())
 }
 
@@ -599,10 +605,11 @@ snippets = []
             return Ok(());
         }
 
+        let is_first = self.config.libraries.is_empty();
         let meta = LibraryMeta {
             filename: filename.to_string(),
             library_id: String::new(),
-            is_primary: false,
+            is_primary: is_first,
             last_sync: None,
             server_id: None,
         };
@@ -1373,6 +1380,32 @@ Command = "sudo iptables-restore \< /path/to/rules"
     #[test]
     fn test_validate_library_name_empty() {
         assert!(validate_library_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_rejects_toml_suffix() {
+        assert!(validate_library_name("foo.toml").is_err());
+        assert!(validate_library_name(".toml").is_err());
+        assert!(validate_library_name("foo").is_ok());
+        assert!(validate_library_name("foo.toml.txt").is_ok());
+    }
+
+    #[test]
+    fn test_add_existing_library_promotes_first_to_primary() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut mgr = LibraryManager::with_config_dir(temp_dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("libraries")).unwrap();
+        std::fs::write(temp_dir.path().join("libraries").join("imported.toml"), "").unwrap();
+
+        mgr.add_existing_library("imported").unwrap();
+
+        let libs = mgr.list_libraries();
+        assert_eq!(libs.len(), 1);
+        assert_eq!(libs[0].filename, "imported");
+        assert!(
+            libs[0].is_primary,
+            "the only registered library must become primary"
+        );
     }
 
     #[test]

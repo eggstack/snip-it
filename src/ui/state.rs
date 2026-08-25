@@ -15,17 +15,13 @@ pub(super) enum SortMode {
 #[derive(Clone, Default)]
 pub(super) struct SelectState {
     pub selected: usize,
-    pub list_state: ratatui::widgets::ListState,
     pub scroll_state: ScrollbarState,
 }
 
 impl SelectState {
     pub fn new() -> Self {
-        let mut list_state = ratatui::widgets::ListState::default();
-        list_state.select(Some(0));
         SelectState {
             selected: 0,
-            list_state,
             scroll_state: ScrollbarState::default(),
         }
     }
@@ -36,7 +32,6 @@ impl SelectState {
         } else if self.selected >= filtered_len {
             self.selected = filtered_len.saturating_sub(1);
         }
-        self.list_state.select(Some(self.selected));
         self.scroll_state = self
             .scroll_state
             .content_length(filtered_len)

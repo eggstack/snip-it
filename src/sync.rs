@@ -427,7 +427,7 @@ impl SyncClient {
                     &mut server_decrypt_failed_count,
                     &mut all_skipped_ids,
                 );
-                offset = snippets_len as i32;
+                offset = i32::try_from(snippets_len).unwrap_or(i32::MAX);
 
                 return self
                     .paginate_remaining(
@@ -473,7 +473,7 @@ impl SyncClient {
                     &mut server_decrypt_failed_count,
                     &mut all_skipped_ids,
                 );
-                offset = offset.saturating_add(snippets_len as i32);
+                offset = offset.saturating_add(i32::try_from(snippets_len).unwrap_or(i32::MAX));
 
                 return self
                     .paginate_remaining(
@@ -527,7 +527,7 @@ impl SyncClient {
                     &mut server_decrypt_failed_count,
                     &mut all_skipped_ids,
                 );
-                offset = snippets_len as i32;
+                offset = i32::try_from(snippets_len).unwrap_or(i32::MAX);
 
                 return self
                     .paginate_remaining(
@@ -625,7 +625,7 @@ impl SyncClient {
                 );
             }
 
-            *offset = offset.saturating_add(snippets_len as i32);
+            *offset = offset.saturating_add(i32::try_from(snippets_len).unwrap_or(i32::MAX));
         }
     }
 
@@ -669,7 +669,7 @@ impl SyncClient {
             message,
             snippets: all_server_snippets,
             server_timestamp,
-            skipped_count: total_skipped as i32,
+            skipped_count: i32::try_from(total_skipped).unwrap_or(i32::MAX),
             skipped_ids: all_skipped_ids,
             has_more: false,
             total_count,
@@ -947,7 +947,7 @@ impl SyncClient {
                 "List libraries"
             )?;
             let inner = response.into_inner();
-            let count = inner.libraries.len() as i32;
+            let count = i32::try_from(inner.libraries.len()).unwrap_or(i32::MAX);
             all_libraries.extend(inner.libraries);
             // Server signals end-of-stream with `!has_more` (preferred).
             // `count < PAGE_LIMIT` is a fallback when the server returns

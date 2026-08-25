@@ -173,8 +173,14 @@ pub fn transient_backoff(consecutive_failures: u32) -> Duration {
     // Bounded jitter: 0-20% of base delay
     let jitter_max = base_secs / 5;
     let jitter = if jitter_max > 0 {
-        // Use a simple deterministic-ish jitter based on failure count
-        (consecutive_failures as u64 * 7 + 13) % (jitter_max + 1)
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let mix = now_ms
+            ^ ((std::process::id() as u64) << 32)
+            ^ (consecutive_failures as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        ((mix >> 13) ^ mix) % (jitter_max + 1)
     } else {
         0
     };

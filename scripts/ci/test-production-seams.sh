@@ -27,10 +27,10 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 # Create a temporary config dir for the test scenario.
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+SEAM_TEST_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$SEAM_TEST_TMPDIR"' EXIT
 
-CONFIG_HOME="$TMPDIR/config"
+CONFIG_HOME="$SEAM_TEST_TMPDIR/config"
 mkdir -p "$CONFIG_HOME/snp"
 export XDG_CONFIG_HOME="$CONFIG_HOME"
 export SNP_ALLOW_PLAINTEXT_API_KEY=true
@@ -80,7 +80,7 @@ wait_for_exit() {
 echo ""
 echo "=== Test 1: SNP_TEST_FAILPOINT does not abort production restore ==="
 # Create a valid backup to restore.
-BACKUP_DIR="$TMPDIR/valid-backup"
+BACKUP_DIR="$SEAM_TEST_TMPDIR/valid-backup"
 mkdir -p "$BACKUP_DIR/libraries"
 LIB_CONTENT='[[snippets]]
 id = "test-1"
@@ -148,10 +148,10 @@ echo ""
 echo "=== Test 4: SNP_TEST_EVENTS_DIR does not create event files ==="
 # Run the real helper path with SNP_TEST_EVENTS_DIR set.
 # Production binary ignores the variable — no event file should be created.
-EVENTS_DIR="$TMPDIR/events"
+EVENTS_DIR="$SEAM_TEST_TMPDIR/events"
 mkdir -p "$EVENTS_DIR"
 SNP_TEST_EVENTS_DIR="$EVENTS_DIR" \
-    "$BINARY" auto-sync-worker --state-dir "$TMPDIR/state" \
+    "$BINARY" auto-sync-worker --state-dir "$SEAM_TEST_TMPDIR/state" \
     >/dev/null 2>&1 || true
 if [ -f "$EVENTS_DIR/test-events.jsonl" ]; then
     echo "FAIL: production binary created event file at $EVENTS_DIR/test-events.jsonl"
@@ -162,7 +162,7 @@ echo "PASS: no event file created in production binary"
 echo ""
 echo "=== Test 5: SNP_TEST_MUTATION_BARRIER_DIR does not block production ==="
 # Set up a barrier directory for a barrier point reached by library creation.
-BARRIER_DIR="$TMPDIR/barrier"
+BARRIER_DIR="$SEAM_TEST_TMPDIR/barrier"
 mkdir -p "$BARRIER_DIR"
 echo "library-create" > "$BARRIER_DIR/point"
 # Do NOT create a release file — if the binary checked the barrier, it would hang.

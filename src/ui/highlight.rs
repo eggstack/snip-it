@@ -9,9 +9,45 @@ use crate::utils::shell_keywords::SHELL_KEYWORDS_SET;
 
 use super::theme::{get_theme, style_fg};
 
+/// Char iterator that tracks how many chars have been consumed, so
+/// lookahead checks can consult precomputed suffix data instead of
+/// cloning and rescanning the remainder.
+struct CountingChars<'a> {
+    inner: std::iter::Peekable<std::str::Chars<'a>>,
+    consumed: usize,
+}
+
+impl Iterator for CountingChars<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        let next = self.inner.next();
+        if next.is_some() {
+            self.consumed += 1;
+        }
+        next
+    }
+}
+
+impl CountingChars<'_> {
+    fn peek(&mut self) -> Option<&char> {
+        self.inner.peek()
+    }
+}
+
 pub(crate) fn highlight_command(command: &str) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut chars = command.chars().peekable();
+    let mut chars = CountingChars {
+        inner: command.chars().peekable(),
+        consumed: 0,
+    };
+    // gt_remaining[i] counts '>' occurrences at or after char offset i.
+    let all_chars: Vec<char> = command.chars().collect();
+    let total_chars = all_chars.len();
+    let mut gt_remaining = vec![0usize; total_chars + 1];
+    for i in (0..total_chars).rev() {
+        gt_remaining[i] = gt_remaining[i + 1] + usize::from(all_chars[i] == '>');
+    }
     let mut prev_was_backslash = false;
 
     let theme = get_theme();
@@ -45,7 +81,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
             // Only consume into a variable token when a closing '>' exists
             // ahead; an unclosed '<' is emitted literally so the rest of the
             // line keeps its normal token styling.
-            if !chars.clone().any(|next| next == '>') {
+            if gt_remaining[chars.consumed] == 0 {
                 spans.push(Span::styled(c.to_string(), color_default));
                 continue;
             }
@@ -85,7 +121,7 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
                 }
             }
             spans.push(Span::styled(string_content, color_string));
-        } else if c == '-' && chars.peek().map(|&c| c == '-').unwrap_or(false) {
+        } else if c == '-' {
             let mut flag = String::from(c);
             while let Some(&next) = chars.peek() {
                 if next.is_alphanumeric() || next == '-' || next == '=' {
@@ -95,15 +131,6 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static> {
                 } else {
                     break;
                 }
-            }
-            spans.push(Span::styled(flag, color_flag));
-        } else if c == '-' {
-            let mut flag = String::from(c);
-            if let Some(&next) = chars.peek()
-                && next.is_alphabetic()
-                && let Some(c) = chars.next()
-            {
-                flag.push(c);
             }
             spans.push(Span::styled(flag, color_flag));
         } else if c.is_whitespace() {

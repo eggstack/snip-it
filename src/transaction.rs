@@ -537,7 +537,7 @@ pub fn classify_journal_recovery(
 ) -> SnipResult<RecoveryClass> {
     // Validate ALL artifact references for safety for EVERY state.
     // This ensures unsafe paths are caught regardless of transaction state.
-    journal_owns_artifacts(transaction_dir, journal)?;
+    let owns_artifacts = journal_owns_artifacts(transaction_dir, journal)?;
 
     Ok(match &journal.state {
         TransactionState::Prepared
@@ -547,14 +547,14 @@ pub fn classify_journal_recovery(
         TransactionState::CommittedLocal { .. } => RecoveryClass::FinalizeCommittedLocal,
         TransactionState::CleaningUp { .. } => RecoveryClass::ResumeCleanup,
         TransactionState::Committed => {
-            if journal_owns_artifacts(transaction_dir, journal)? {
+            if owns_artifacts {
                 RecoveryClass::CleanupLegacyCommitted
             } else {
                 RecoveryClass::RemoveTerminalJournal
             }
         }
         TransactionState::RolledBack => {
-            if journal_owns_artifacts(transaction_dir, journal)? {
+            if owns_artifacts {
                 RecoveryClass::CleanupLegacyRolledBack
             } else {
                 RecoveryClass::RemoveTerminalJournal

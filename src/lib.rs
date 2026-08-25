@@ -131,6 +131,8 @@ pub enum CommandOutcome {
         /// The child process exit code, if available.
         child_code: Option<i32>,
     },
+    /// Terminal outcome carrying an already-mapped process exit code.
+    Exit(i32),
 }
 
 /// Internal outcome of the shared snippet-selection TUI loop.
