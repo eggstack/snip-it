@@ -10,6 +10,9 @@ pub(super) enum SortMode {
     AlphaDesc,
     LastUsed,
     MostUsed,
+    /// Initial-only mode mapped from `--sort command`; sorts by command text
+    /// and is never produced by the interactive sort toggles.
+    Command,
 }
 
 #[derive(Clone, Default)]

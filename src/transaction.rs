@@ -72,9 +72,10 @@ impl ProcessIdentity {
 
 /// Get the current process identity with start-time token.
 pub fn current_process_identity() -> ProcessIdentity {
+    let pid = std::process::id();
     ProcessIdentity {
-        pid: std::process::id(),
-        start_token: get_process_start_token(std::process::id()),
+        pid,
+        start_token: get_process_start_token(pid),
     }
 }
 

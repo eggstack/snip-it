@@ -793,7 +793,7 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
 
-        let (library_id, _last_sync) = get_library_sync_info(&mgr, lib_name);
+        let (library_id, last_sync) = get_library_sync_info(&mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::warn!(library = %lib_name, "Library not linked to server, skipping");
@@ -818,7 +818,7 @@ pub(crate) fn run_sync_with_limits(
             }
 
             let result =
-                runtime.block_on(client.sync_encrypted(local_snippets, _last_sync, &library_id));
+                runtime.block_on(client.sync_encrypted(local_snippets, last_sync, &library_id));
 
             match result {
                 Ok(response) => {
@@ -931,7 +931,7 @@ pub(crate) fn run_sync_with_limits(
         }
 
         if direction == SyncDirection::Pull && !library_id.is_empty() {
-            let result = runtime.block_on(client.sync_encrypted(vec![], _last_sync, &library_id));
+            let result = runtime.block_on(client.sync_encrypted(vec![], last_sync, &library_id));
 
             match result {
                 Ok(response) => {

@@ -143,7 +143,7 @@ fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)>
             "Library name cannot contain null bytes",
         ));
     }
-    if name == "." || name == ".." || name.contains("..") {
+    if name == "." || name == ".." {
         return Err((
             "Invalid library name",
             "Library name cannot contain path traversal sequences",
@@ -1438,7 +1438,13 @@ Command = "sudo iptables-restore \< /path/to/rules"
     fn test_validate_library_name_dot() {
         assert!(validate_library_name(".").is_err());
         assert!(validate_library_name("..").is_err());
-        assert!(validate_library_name("my..lib").is_err());
+    }
+
+    #[test]
+    fn test_validate_library_name_allows_internal_double_dot() {
+        // Traversal is impossible once slashes and bare "."/".." are rejected;
+        // internal dots are ordinary characters.
+        assert!(validate_library_name("my..lib").is_ok());
     }
 
     #[test]

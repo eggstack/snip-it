@@ -174,6 +174,7 @@ fn sort_filtered_indices(
     filter_state: &FilterState,
     snippets: &[crate::library::Snippet],
     display_lower: &[String],
+    command_lower: &[String],
     has_filter: bool,
     favorites_first: bool,
     usage: Option<&[crate::usage::UsageData]>,
@@ -271,6 +272,10 @@ fn sort_filtered_indices(
                     .get(a.0)
                     .zip(display_lower.get(b.0))
                     .map(|(a_display, b_display)| b_display.cmp(a_display)),
+                SortMode::Command => command_lower
+                    .get(a.0)
+                    .zip(command_lower.get(b.0))
+                    .map(|(a_cmd, b_cmd)| a_cmd.cmp(b_cmd).then_with(|| a.0.cmp(&b.0))),
                 _ => None,
             };
 
@@ -563,7 +568,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             crate::sort::SnippetSort::LastUsed => state::SortMode::LastUsed,
             crate::sort::SnippetSort::MostUsed => state::SortMode::MostUsed,
             crate::sort::SnippetSort::Description => state::SortMode::AlphaAsc,
-            crate::sort::SnippetSort::Command => state::SortMode::AlphaAsc,
+            crate::sort::SnippetSort::Command => state::SortMode::Command,
         };
         FilterState {
             sort_mode: mode,
@@ -623,6 +628,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         .map(|(i, _)| format!("[{}]: {}", descriptions[i], commands[i]))
         .collect();
     let all_display_lower: Vec<String> = all_display.iter().map(|d| d.to_lowercase()).collect();
+    let all_commands_lower: Vec<String> = commands.iter().map(|c| c.to_lowercase()).collect();
     let all_tags_search: Vec<String> = tags
         .iter()
         .map(|snippet_tags| snippet_tags.join("\n").to_lowercase())
@@ -754,6 +760,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 &filter_state,
                 snippets,
                 &all_display_lower,
+                &all_commands_lower,
                 has_filter,
                 favorites_first,
                 usage,
@@ -811,6 +818,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                 SortMode::AlphaDesc => "[z-a]".to_string(),
                 SortMode::LastUsed => "[used]".to_string(),
                 SortMode::MostUsed => "[freq]".to_string(),
+                SortMode::Command => "[cmd]".to_string(),
             };
 
             let draw_result = terminal.draw(|f| {
@@ -1709,11 +1717,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     if tag_filter_mode {
                                         filter_state.tag_filter_text.push(c);
                                         filter_dirty = true;
-                                    } else if insert_mode {
-                                        input_text.push(c);
-                                        filter.push(c);
-                                        filter_dirty = true;
                                     } else {
+                                        input_text.push(c);
                                         filter.push(c);
                                         filter_dirty = true;
                                     }

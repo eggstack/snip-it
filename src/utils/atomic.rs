@@ -250,7 +250,7 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
 /// 2. Validates the existing target (rejects directories, FIFOs, sockets,
 ///    devices; optionally symlinks).
 /// 3. Creates a UUID-named temp file in the same directory.
-/// 4. For `SensitiveConfig` on Unix, sets `0o600` on the temp file.
+/// 4. On Unix, sets `0o600` on the temp file.
 /// 5. Writes `bytes`, then flushes to kernel.
 /// 6. For `DurableUserData`, calls `sync_all` on the file.
 /// 7. Atomic rename over the target.
@@ -295,9 +295,7 @@ pub fn atomic_replace(
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            if options.durability == Durability::SensitiveConfig {
-                opts.mode(0o600);
-            }
+            opts.mode(0o600);
         }
 
         let mut file = opts
@@ -490,6 +488,14 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"key\":1}");
         // Report should indicate parent sync was attempted.
         assert!(report.parent_sync_supported.is_some());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // User data must not be group/world-readable either.
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 
     #[test]
