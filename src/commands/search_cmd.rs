@@ -11,12 +11,16 @@ pub fn run(
     sort_opts: Option<crate::sort::SortOptions>,
     runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
-    // Propagate --config to the snippet selection pipeline
+    // Propagate --config to the snippet selection pipeline. The pipeline
+    // takes a library *name*, so derive one from the config file stem.
+    // Surface the derivation so errors are not confusing when the stem
+    // differs from a registered library name.
     let effective_library = library.or_else(|| {
         config.as_ref().and_then(|p| {
-            p.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
+            p.file_stem().and_then(|s| s.to_str()).map(|s| {
+                eprintln!("note: using library '{s}' derived from --config path");
+                s.to_string()
+            })
         })
     });
     let _outcome = run_snippet_selection(

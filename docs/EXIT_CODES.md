@@ -19,6 +19,7 @@
 | 7 | `SYNC_FAILED` | Sync failure | Synchronization with remote server failed |
 | 8 | `EXECUTION_FAILED` | Execution failure | Snippet execution (child process) failed wrapper |
 | 9 | `CONFLICT_OR_REFUSED` | Conflict/refused | Destructive action refused or generation changed |
+| 10 | `UNSAFE_REPAIRS` | Unsafe repairs pending | Valid invocation found repairs, but all are unsafe and await an operator decision (not a usage error) |
 
 ## `CliOutcome` Enum
 

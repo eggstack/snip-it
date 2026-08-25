@@ -837,9 +837,9 @@ fn test_one_success_one_failure_exits_1() {
     );
 }
 
-// C9: Unsafe-only exits 2 when --apply has no safe item
+// C9: Unsafe-only exits 10 when --apply has no safe item
 #[test]
-fn test_unsafe_only_exits_2() {
+fn test_unsafe_only_exits_10() {
     let (_tmp, config_dir) = setup_test_env();
     // Create a Failed journal (unsafe).
     write_journal(&config_dir, "failed0000-0000-0000-000000000000", "Failed");
@@ -850,8 +850,9 @@ fn test_unsafe_only_exits_2() {
         .unwrap();
     let code = output.status.code().unwrap_or(1);
 
-    // Unsafe-only should exit 2.
-    assert_eq!(code, 2, "unsafe-only should exit 2, got code={code}");
+    // Unsafe-only is a valid invocation with repairs awaiting an operator
+    // decision — distinct from USAGE_ERROR (2).
+    assert_eq!(code, 10, "unsafe-only should exit 10, got code={code}");
 }
 
 // C10: JSON output contains typed action/category/transaction_id/applied/failed/exit

@@ -705,7 +705,11 @@ enum ShellIntegration {
 }
 
 /// Map a `RepairExitStatus` to the appropriate process exit code.
-/// Clean/DryRun/Repaired → 0 (implicit), UnsafeOnly → 2, PartialFailure → 1.
+/// Clean/DryRun/Repaired → 0 (implicit), UnsafeOnly → 10, PartialFailure → 1.
+///
+/// `UnsafeOnly` deliberately does not reuse 2 (`USAGE_ERROR`): a valid
+/// invocation that found unsafe repairs awaiting an operator decision is
+/// not a usage error, and scripts must be able to tell the two apart.
 fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
     match status {
         commands::repair_cmd::RepairExitStatus::Clean
@@ -715,7 +719,7 @@ fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
             std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
         }
         commands::repair_cmd::RepairExitStatus::UnsafeOnly => {
-            std::process::exit(snip_it::outcome::exit_code::USAGE_ERROR);
+            std::process::exit(snip_it::outcome::exit_code::UNSAFE_REPAIRS);
         }
     }
 }
@@ -1068,7 +1072,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::sync_cmd::run_clear_failure()?;
             }
             Some(SyncCommands::DiscardPending { force, generation }) => {
-                commands::sync_cmd::run_discard_pending(force, generation)?;
+                let outcome = commands::sync_cmd::run_discard_pending(force, generation)?;
+                return finish_exact_outcome(outcome);
             }
             Some(SyncCommands::Repair { dry_run, apply }) => {
                 commands::sync_cmd::run_repair(dry_run, apply)?;
@@ -1121,7 +1126,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 ShellIntegration::Zsh => "zsh".to_string(),
                 ShellIntegration::Fish => "fish".to_string(),
             });
-            commands::doctor_cmd::run(
+            let outcome = commands::doctor_cmd::run(
                 pet_file,
                 compatibility,
                 sync,
@@ -1130,6 +1135,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 strict,
                 report,
             )?;
+            return finish_exact_outcome(outcome);
         }
         Some(Commands::Shell { command }) => match command {
             ShellCommands::Init { shell } => {

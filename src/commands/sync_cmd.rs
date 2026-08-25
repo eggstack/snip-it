@@ -2,6 +2,7 @@ use crate::commands::init_library_manager;
 use crate::config::{AutoSyncFailureMode, SyncDirection, load_sync_settings, save_sync_settings};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
+use crate::outcome::CliOutcome;
 use snip_proto::Library;
 use std::io::{self, IsTerminal, Write};
 
@@ -613,22 +614,22 @@ pub fn run_clear_failure() -> SnipResult<()> {
     }
 }
 
-pub fn run_discard_pending(force: bool, generation: Option<u64>) -> SnipResult<()> {
+pub fn run_discard_pending(force: bool, generation: Option<u64>) -> SnipResult<CliOutcome> {
     let state_dir = crate::auto_sync::notification::derive_state_dir();
 
     let observed = match crate::auto_sync::pending::read_state_from_dir(&state_dir) {
         Ok(state) => state,
         Err(crate::auto_sync::pending::PendingError::NotFound) => {
             println!("No pending sync work");
-            return Ok(());
+            return Ok(CliOutcome::Success);
         }
         Err(crate::auto_sync::pending::PendingError::Corrupted(msg)) => {
             eprintln!("Corrupt pending state: {msg}");
-            std::process::exit(3);
+            return Ok(CliOutcome::ValidationFailed);
         }
         Err(e) => {
             eprintln!("Inaccessible pending state: {e}");
-            std::process::exit(4);
+            return Ok(CliOutcome::PersistenceFailed);
         }
     };
 
@@ -642,15 +643,15 @@ pub fn run_discard_pending(force: bool, generation: Option<u64>) -> SnipResult<(
             if std::io::stdin().read_line(&mut input).is_ok() {
                 if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
                     println!("Aborted");
-                    return Ok(());
+                    return Ok(CliOutcome::Success);
                 }
             } else {
                 println!("Aborted");
-                return Ok(());
+                return Ok(CliOutcome::Success);
             }
         } else {
             eprintln!("Non-interactive: use --force to discard pending intent");
-            std::process::exit(1);
+            return Ok(CliOutcome::ConflictOrRefused);
         }
     }
 
@@ -661,25 +662,25 @@ pub fn run_discard_pending(force: bool, generation: Option<u64>) -> SnipResult<(
             "Requested generation {} does not match observed {}",
             requested_gen, observed.generation
         );
-        std::process::exit(2);
+        return Ok(CliOutcome::ConflictOrRefused);
     }
 
     match crate::auto_sync::pending::clear_if_generation_matches(&state_dir, observed.generation) {
         Ok(crate::auto_sync::pending::ConditionalClearResult::Cleared) => {
             println!("Pending intent discarded");
-            std::process::exit(0);
+            Ok(CliOutcome::Success)
         }
         Ok(crate::auto_sync::pending::ConditionalClearResult::GenerationChanged { current }) => {
             eprintln!("Generation changed to {current}, refusing to discard");
-            std::process::exit(2);
+            Ok(CliOutcome::ConflictOrRefused)
         }
         Ok(crate::auto_sync::pending::ConditionalClearResult::Missing) => {
             println!("No pending sync work");
-            std::process::exit(0);
+            Ok(CliOutcome::Success)
         }
         Err(e) => {
             eprintln!("Failed to clear pending: {e}");
-            std::process::exit(3);
+            Ok(CliOutcome::PersistenceFailed)
         }
     }
 }

@@ -1311,7 +1311,7 @@ pub fn run(
     library: Option<String>,
     strict: bool,
     report_format: DiagnosticReportFormat,
-) -> SnipResult<()> {
+) -> SnipResult<crate::outcome::CliOutcome> {
     let has_file_mode = pet_file.is_some() || library.is_some();
     let has_mode = has_file_mode || compatibility || sync || check_shell.is_some();
 
@@ -1387,10 +1387,12 @@ pub fn run(
         .any(|d| d.severity == DiagnosticSeverity::Error);
 
     if has_errors {
-        std::process::exit(2);
+        // Map through the canonical outcome table (VALIDATION_FAILED = 6)
+        // instead of bypassing it with a raw usage-error-style exit.
+        return Ok(crate::outcome::CliOutcome::ValidationFailed);
     }
 
-    Ok(())
+    Ok(crate::outcome::CliOutcome::Success)
 }
 
 #[cfg(test)]

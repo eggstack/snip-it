@@ -892,7 +892,7 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
     }
 
     let content = cached_read_toml(path)?;
-    if content.is_empty() || content.trim().is_empty() {
+    if content.trim().is_empty() {
         return Ok(Snippets::default());
     }
 

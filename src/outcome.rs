@@ -64,6 +64,9 @@ pub mod exit_code {
     pub const EXECUTION_FAILED: i32 = 8;
     /// Destructive action refused or generation changed.
     pub const CONFLICT_OR_REFUSED: i32 = 9;
+    /// Repairs found but not applied — unsafe items await an operator
+    /// decision (`snp repair --apply` without safe repairs available).
+    pub const UNSAFE_REPAIRS: i32 = 10;
 }
 
 impl CliOutcome {

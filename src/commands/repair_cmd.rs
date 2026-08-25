@@ -279,10 +279,16 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
     };
 
     let mut all_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Collected during the first pass below; reused for orphaned-usage
+    // detection so each library file is parsed only once.
+    let mut active_ids: Vec<String> = Vec::new();
 
     for lib_path in &library_files {
         match crate::library::load_library(lib_path) {
             Ok(snippets) => {
+                for snippet in &snippets.snippets {
+                    active_ids.push(snippet.id.clone());
+                }
                 // Check for empty IDs
                 for (i, snippet) in snippets.snippets.iter().enumerate() {
                     if snippet.id.is_empty() {
@@ -394,18 +400,11 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
 
     // Check for orphaned usage entries
     let usage_index = crate::usage::UsageIndex::load();
-    let mut active_ids: Vec<String> = Vec::new();
-    for lib_path in &library_files {
-        if let Ok(snippets) = crate::library::load_library(lib_path) {
-            for snippet in &snippets.snippets {
-                active_ids.push(snippet.id.clone());
-            }
-        }
-    }
+    let active_id_set: std::collections::HashSet<&String> = active_ids.iter().collect();
 
     let mut orphaned_count = 0;
     for entry in usage_index.entries() {
-        if !active_ids.contains(&entry.id) {
+        if !active_id_set.contains(&entry.id) {
             orphaned_count += 1;
         }
     }

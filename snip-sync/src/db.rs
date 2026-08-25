@@ -653,6 +653,10 @@ impl Database {
                 break;
             }
 
+            // Each batch commits atomically: a crash mid-batch leaves every
+            // row in the batch at its pre-migration state, so auth never sees
+            // a half-migrated user (hash updated but prefix stale).
+            let mut tx = self.pool.begin().await?;
             for (user_id, stored, prefix) in rows {
                 last_id = user_id.clone();
                 let mut needs_update = false;
@@ -684,11 +688,12 @@ impl Database {
                         .bind(&new_hash)
                         .bind(&new_prefix)
                         .bind(&user_id)
-                        .execute(&self.pool)
+                        .execute(&mut *tx)
                         .await?;
                     migrated += 1;
                 }
             }
+            tx.commit().await?;
         }
 
         if migrated > 0 {

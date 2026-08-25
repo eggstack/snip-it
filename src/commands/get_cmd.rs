@@ -235,8 +235,9 @@ fn has_variables(command: &str) -> bool {
 }
 
 /// Expand a command without prompting (noninteractive).
-/// Uses explicit assignments first, then defaults for variables that have them,
-/// leaves required vars as-is.
+/// Uses explicit assignments first, then defaults for variables that have them.
+/// Required variables without an assignment are left verbatim so the output
+/// never silently substitutes a semantically broken bare name.
 fn expand_without_prompt(command: &str, assignments: &Option<VariableAssignments>) -> String {
     let vars = parse_variables(command);
     if vars.is_empty() {
@@ -247,11 +248,11 @@ fn expand_without_prompt(command: &str, assignments: &Option<VariableAssignments
     for var in &vars {
         match &var.kind {
             crate::utils::variables::VariableKind::Required => {
+                let Some(replacement) = assignments.as_ref().and_then(|a| a.get(&var.name)) else {
+                    // Unassigned required var: leave the <name> token untouched.
+                    continue;
+                };
                 let token = format!("<{}>", var.name);
-                let replacement = assignments
-                    .as_ref()
-                    .and_then(|a| a.get(&var.name))
-                    .unwrap_or(&var.name);
                 result = result.replace(&token, replacement);
             }
             crate::utils::variables::VariableKind::DefaultValue(default) => {
@@ -320,8 +321,8 @@ mod tests {
 
     #[test]
     fn test_expand_without_prompt_required_var_stays() {
-        // Required vars without defaults stay as-is in the output
-        assert_eq!(expand_without_prompt("echo <name>", &None), "echo name");
+        // Required vars without defaults or assignments stay as-is in the output
+        assert_eq!(expand_without_prompt("echo <name>", &None), "echo <name>");
     }
 
     #[test]
@@ -382,9 +383,10 @@ mod tests {
             VariableAssignments::from_pairs(vec![("port".into(), "8080".into())].into_iter())
                 .unwrap(),
         );
+        // `<host>` is required and unassigned, so it stays verbatim.
         assert_eq!(
             expand_without_prompt("ssh <host> -p <port=22>", &assignments),
-            "ssh host -p 8080"
+            "ssh <host> -p 8080"
         );
     }
 }

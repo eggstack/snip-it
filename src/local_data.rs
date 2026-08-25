@@ -68,15 +68,15 @@ pub struct LocalDataLock {
 impl Drop for LocalDataLock {
     fn drop(&mut self) {
         // Only remove if we still own the lock. Verify nonce, PID, and
-        // start token (when present) to prevent removal by a wrong owner.
-        if let Ok(content) = fs::read_to_string(&self.lock_path)
-            && let Ok(existing) = toml::from_str::<LocalDataLockInfo>(&content)
-            && existing.nonce == self.info.nonce
-            && existing.pid == self.info.pid
-            && existing.start_token == self.info.start_token
-        {
-            let _ = fs::remove_file(&self.lock_path);
-        }
+        // start token (when present) through an opened handle, and confirm
+        // via handle metadata that the verified file is still the one at
+        // the path before unlinking — same invariant as `TransactionLock`.
+        crate::utils::process::remove_owned_lock_file(
+            &self.lock_path,
+            &self.info.nonce,
+            self.info.pid,
+            self.info.start_token.as_deref(),
+        );
     }
 }
 

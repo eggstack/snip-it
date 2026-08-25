@@ -28,6 +28,9 @@ pub fn run(
     sort_opts: Option<crate::sort::SortOptions>,
     search_output: bool,
 ) -> SnipResult<()> {
+    if config.is_some() && library.is_some() {
+        eprintln!("warning: --library is ignored when --config is set");
+    }
     let snippets = if config.is_some() {
         load_snippets(&config)?
     } else {

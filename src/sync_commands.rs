@@ -419,6 +419,11 @@ fn get_library_sync_info(mgr: &library::LibraryManager, lib_name: &str) -> (Stri
                     id,
                     l.server_id
                 );
+                // Never sync against the stale library_id: prefer the
+                // authoritative server-side link when present, otherwise
+                // return an empty id so the caller re-creates/re-links.
+                let fallback = l.server_id.clone().unwrap_or_default();
+                return (fallback, l.last_sync.unwrap_or(0));
             }
             (id, l.last_sync.unwrap_or(0))
         }

@@ -4319,8 +4319,8 @@ command = "echo ok"
         ])
         .output()
         .unwrap();
-    // Strict mode + error diagnostics = exit 2
-    assert_eq!(output.status.code(), Some(2));
+    // Strict mode + error diagnostics = VALIDATION_FAILED (6)
+    assert_eq!(output.status.code(), Some(6));
 }
 
 #[test]
@@ -4548,8 +4548,8 @@ fn test_doctor_pet_edge_cases() {
         .args(["doctor", "--pet-file", fixture.to_str().unwrap()])
         .output()
         .unwrap();
-    // Empty commands in edge_cases.toml trigger error diagnostics → exit code 2
-    assert_eq!(output.status.code(), Some(2));
+    // Empty commands in edge_cases.toml trigger error diagnostics → VALIDATION_FAILED (6)
+    assert_eq!(output.status.code(), Some(6));
 }
 
 #[test]

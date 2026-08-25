@@ -11,7 +11,8 @@
 
 use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Schema version.
 ///
@@ -170,22 +171,65 @@ pub fn write_schema_version(path: &Path, version: SchemaVersion) -> SnipResult<(
 /// Migrations are applied in order from `source` to `CURRENT`. Each
 /// migration is analyzed first; only if the plan has operations is it
 /// applied.
+///
+/// Before the first applied operation, a best-effort pre-migration backup
+/// is written. If any step fails mid-chain, the file is restored from that
+/// backup so the schema is never left at an intermediate version with
+/// half-applied data.
 pub fn run_migrations(
     path: &Path,
     migrations: &[Box<dyn Migration>],
 ) -> SnipResult<MigrationOutput> {
     let mut current_version = get_schema_version(path)?;
     let mut total_output = MigrationOutput::default();
+    let mut backup_path: Option<PathBuf> = None;
 
     // Filter migrations to those applicable (source >= current, target <= current+1 chain)
     for migration in migrations {
         if migration.source() == current_version {
             let plan = migration.analyze(path)?;
             if !plan.operations.is_empty() {
-                let output = migration.apply(&plan, path)?;
-                total_output.files_migrated += output.files_migrated;
-                total_output.lossy |= output.lossy;
-                total_output.warnings.extend(output.warnings);
+                // Back up once, before the first mutating step. If the copy
+                // fails we continue without rollback safety (best-effort).
+                if backup_path.is_none() {
+                    let bp = path.with_extension("toml.pre-migration.bak");
+                    match fs::copy(path, &bp) {
+                        Ok(_) => backup_path = Some(bp),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            file = %path.display(),
+                            "Could not create pre-migration backup; continuing without rollback safety"
+                        ),
+                    }
+                }
+
+                match migration.apply(&plan, path) {
+                    Ok(output) => {
+                        total_output.files_migrated += output.files_migrated;
+                        total_output.lossy |= output.lossy;
+                        total_output.warnings.extend(output.warnings);
+                    }
+                    Err(e) => {
+                        if let Some(bp) = &backup_path {
+                            if fs::copy(bp, path).is_ok() {
+                                tracing::error!(
+                                    error = %e,
+                                    file = %path.display(),
+                                    "Migration failed; file restored from pre-migration backup"
+                                );
+                            } else {
+                                tracing::error!(
+                                    error = %e,
+                                    file = %path.display(),
+                                    "Migration failed and rollback from backup also failed"
+                                );
+                            }
+                        } else {
+                            tracing::error!(error = %e, file = %path.display(), "Migration failed");
+                        }
+                        return Err(e);
+                    }
+                }
                 current_version = migration.target();
             } else {
                 current_version = migration.target();

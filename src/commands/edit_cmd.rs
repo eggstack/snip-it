@@ -37,6 +37,16 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
     // actually changed, independent of the editor's exit status.
     let before = fs::read(&path)?;
 
+    // The editor rewrites snippets.toml in place, so this is a local
+    // mutating operation: refuse when interrupted transactions await
+    // recovery (same invariant as every other writer).
+    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let transaction_dir = crate::local_data::derive_local_data_state_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+
     let status = Command::new(&editor.program)
         .args(&editor.args)
         .arg(&path)
@@ -55,6 +65,13 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
         })?;
 
     let after = fs::read(&path)?;
+
+    // Serialize the observe-and-notify window against other local writers
+    // (backup capture, concurrent saves). The interactive editor session
+    // itself cannot hold the lock; the short post-editor critical section
+    // is where consistency matters.
+    let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
+
     let changed = before != after;
 
     if !status.success() {

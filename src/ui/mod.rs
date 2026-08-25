@@ -1810,21 +1810,27 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     sel.move_down(filtered.len())
                                 }
                                 KeyCode::Char('n') => {
+                                    // Sorting reindexes `filtered`; stale visual
+                                    // anchors would yank the wrong range.
+                                    visual_mode = false;
                                     filter_state.toggle_sort_new();
                                     filter_dirty = true;
                                     last_filter_update = None;
                                 }
                                 KeyCode::Char('o') => {
+                                    visual_mode = false;
                                     filter_state.toggle_sort_old();
                                     filter_dirty = true;
                                     last_filter_update = None;
                                 }
                                 KeyCode::Char('a') => {
+                                    visual_mode = false;
                                     filter_state.toggle_sort_alpha();
                                     filter_dirty = true;
                                     last_filter_update = None;
                                 }
                                 KeyCode::Char('z') => {
+                                    visual_mode = false;
                                     filter_state.toggle_sort_alpha_rev();
                                     filter_dirty = true;
                                     last_filter_update = None;

@@ -117,8 +117,10 @@ sha256 = "$INDEX_SHA"
 EOF
 
 # Run restore with the failpoint env var set. Production binary ignores it.
+# `|| true` lets the explicit $? check below report FAIL instead of
+# `set -e` aborting the script on a non-zero exit.
 SNP_TEST_FAILPOINT="restore-after-prepared" \
-    "$BINARY" restore "$BACKUP_DIR" --mode dry-run >/dev/null 2>&1
+    "$BINARY" restore "$BACKUP_DIR" --mode dry-run >/dev/null 2>&1 || true
 if [ $? -ne 0 ]; then
     echo "FAIL: production binary aborted or errored with matching failpoint"
     exit 1
@@ -132,7 +134,7 @@ echo "=== Test 2: SNP_SKIP_WORKER_SPAWN does not suppress production scheduling 
 # We use a reachable-but-non-syncing config (auto_sync=false) so the mutation
 # completes without attempting network operations.
 SNP_SKIP_WORKER_SPAWN=1 \
-    "$BINARY" library create seam-test >/dev/null 2>&1
+    "$BINARY" library create seam-test >/dev/null 2>&1 || true
 if [ $? -ne 0 ]; then
     echo "FAIL: production binary errored with SNP_SKIP_WORKER_SPAWN set during real mutation"
     exit 1

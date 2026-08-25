@@ -26,6 +26,7 @@
 //! `CommittedLocal` journals (from older versions) are handled during recovery.
 
 use crate::error::{SnipError, SnipResult};
+use crate::utils::process::is_process_alive;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::fs;
@@ -1003,53 +1004,16 @@ pub struct TransactionLock {
 impl Drop for TransactionLock {
     fn drop(&mut self) {
         // Only remove if we still own the lock. Verify nonce, PID, and
-        // start token (when present) to prevent removal by a wrong owner.
-        if let Ok(content) = fs::read_to_string(&self.lock_path)
-            && let Ok(existing) = toml::from_str::<TransactionLockInfo>(&content)
-            && existing.nonce == self.info.nonce
-            && existing.pid == self.info.pid
-            && existing.start_token == self.info.start_token
-        {
-            let _ = fs::remove_file(&self.lock_path);
-        }
-    }
-}
-
-/// Check whether a process with the given PID is alive.
-///
-/// PID 0 is never a valid lock owner: `kill(0, 0)` targets the caller's
-/// process group and would always succeed, so it is treated as dead to
-/// match the liveness probes in `auto_sync::execution_lock`.
-#[cfg(unix)]
-fn is_process_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
-}
-
-#[cfg(unix)]
-fn classify_kill_zero_error(errno: Option<i32>) -> bool {
-    !matches!(errno, Some(libc::ESRCH))
-}
-
-#[cfg(windows)]
-fn is_process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    const STILL_ACTIVE: u32 = 259;
-    unsafe {
-        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut exit_code: u32 = 0;
-        let success = GetExitCodeProcess(handle, &mut exit_code);
-        CloseHandle(handle);
-        success != 0 && exit_code == STILL_ACTIVE
+        // start token (when present) through an opened handle, and confirm
+        // via handle metadata (dev/ino) that the verified file is still the
+        // one at the path before unlinking — a concurrent quarantine +
+        // re-acquire must not lose its lock file to our Drop.
+        crate::utils::process::remove_owned_lock_file(
+            &self.lock_path,
+            &self.info.nonce,
+            self.info.pid,
+            self.info.start_token.as_deref(),
+        );
     }
 }
 
@@ -2515,6 +2479,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn kill_zero_error_classification_is_conservative() {
+        use crate::utils::process::classify_kill_zero_error;
         assert!(classify_kill_zero_error(Some(libc::EPERM)));
         assert!(!classify_kill_zero_error(Some(libc::ESRCH)));
         assert!(classify_kill_zero_error(Some(libc::EINVAL)));

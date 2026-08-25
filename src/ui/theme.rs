@@ -621,6 +621,14 @@ fn validate_theme_name(name: &str) -> Result<(), (&'static str, &'static str)> {
     if name.contains("..") {
         return Err(("Invalid theme name", "Theme name cannot contain '..'"));
     }
+    // Control characters (tab, newline, ESC, ...) would corrupt themes.toml
+    // serialization and terminal rendering.
+    if name.chars().any(char::is_control) {
+        return Err((
+            "Invalid theme name",
+            "Theme name cannot contain control characters",
+        ));
+    }
     Ok(())
 }
 
@@ -697,8 +705,13 @@ fn resolve_legacy_or_filename(value: &str) -> Option<Theme> {
             Some(if is_light { BRIGHT_THEME } else { DARK_THEME })
         }
         other => {
-            // Validate theme name to prevent path traversal
-            if other.contains('/') || other.contains('\\') || other.contains("..") {
+            // Validate theme name to prevent path traversal. Includes NUL
+            // rejection for parity with `validate_theme_name`.
+            if other.contains('/')
+                || other.contains('\\')
+                || other.contains("..")
+                || other.contains('\0')
+            {
                 tracing::warn!(
                     "Invalid theme name '{}' contains path separators, ignoring",
                     other

@@ -104,6 +104,23 @@ static TOML_CACHE: LazyLock<Mutex<TomlCache>> = LazyLock::new(|| {
     })
 });
 
+/// Lock the TOML cache. A poisoned mutex means a previous holder panicked
+/// mid-update, so the cached contents may be inconsistent — recover by
+/// clearing the cache rather than trusting it.
+fn lock_toml_cache() -> std::sync::MutexGuard<'static, TomlCache> {
+    match TOML_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            *guard = TomlCache {
+                entries: HashMap::new(),
+                insertion_order: VecDeque::new(),
+            };
+            guard
+        }
+    }
+}
+
 pub fn invalidate_toml_cache(path: &std::path::Path) {
     let key = path.to_string_lossy().to_string();
     if let Ok(mut cache) = TOML_CACHE.lock() {
@@ -166,7 +183,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
     let len = metadata.len();
 
-    let cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = lock_toml_cache();
     if let Some(entry) = cache.entries.get(&key)
         && entry.mtime == mtime
         && entry.len == len
@@ -187,7 +204,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
     let len = metadata.len();
 
-    let mut cache = TOML_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = lock_toml_cache();
     while cache.entries.len() >= MAX_TOML_CACHE_SIZE {
         let Some(oldest) = cache.insertion_order.pop_front() else {
             break;
@@ -608,9 +625,22 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
         let backup_path = path.with_extension("toml.corrupt.bak");
         if let Err(backup_err) = fs::copy(&path, &backup_path) {
             tracing::error!("Failed to backup corrupted sync config: {}", backup_err);
+            eprintln!(
+                "warning: {} failed its integrity check and may be corrupted; \
+                 sync settings were reset to defaults (backup also failed: {backup_err}). \
+                 Run 'snp sync config' to reconfigure.",
+                path.display()
+            );
         } else {
             tracing::info!(
                 "Backed up corrupted sync config to {}",
+                backup_path.display()
+            );
+            eprintln!(
+                "warning: {} failed its integrity check and may be corrupted; \
+                 it was backed up to {} and sync settings were reset to defaults. \
+                 Run 'snp sync config' to reconfigure.",
+                path.display(),
                 backup_path.display()
             );
         }

@@ -92,6 +92,9 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
 pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: u32 = 4 * 1024 * 1024; // 4 MiB
+/// Hard upper bound for any single request's page size. Endpoints choose
+/// their own default page size when the client omits one (`sync` → 1000,
+/// `get_snippets` → 100, `list_libraries` → 50); all are clamped here.
 pub const MAX_REQUEST_LIMIT: i32 = 1000;
 
 #[derive(Deserialize, Default)]
@@ -819,6 +822,14 @@ impl SnipSyncService {
         if snippet.created_at < 0 || snippet.updated_at < 0 {
             return Err(Status::invalid_argument("Timestamps must be non-negative"));
         }
+        // Lower clock-skew bound: a zero timestamp means the client clock was
+        // unset (epoch). Such rows would be invisible to every delta query
+        // (`updated_at > since`), so reject them instead of storing them.
+        if snippet.created_at == 0 || snippet.updated_at == 0 {
+            return Err(Status::invalid_argument(
+                "Timestamps must be positive; zero indicates an unset client clock",
+            ));
+        }
         if snippet.created_at > snippet.updated_at {
             return Err(Status::invalid_argument(
                 "created_at must not be greater than updated_at",
@@ -1171,6 +1182,12 @@ impl SnippetSync for SnipSyncService {
                         reason = %e,
                         "Snippet upsert failed"
                     );
+                    // Rollback failure must not leak a dirty connection back
+                    // into the pool. sqlx 0.9 guarantees this on release: a
+                    // returned PoolConnection is pinged, which flushes any
+                    // queued/failed ROLLBACK work, and a connection that
+                    // fails the ping is hard-closed instead of pooled
+                    // (sqlx-core `pool/connection.rs::return_to_pool`).
                     if let Err(rollback_error) = tx.rollback().await {
                         tracing::error!(
                             request_id = %request_id,
@@ -2088,18 +2105,42 @@ mod tests {
     #[tokio::test]
     async fn test_validate_snippet_valid() {
         let service = setup_test_service().await;
+        let now = chrono::Utc::now().timestamp();
         let snippet = ProtoSnippet {
             id: "test-id".to_string(),
             description: "test".to_string(),
             command: "echo hello".to_string(),
             tags: vec!["bash".to_string()],
+            created_at: now,
+            updated_at: now,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        assert!(service.validate_snippet(&snippet).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_snippet_zero_timestamp_rejected() {
+        let service = setup_test_service().await;
+        let snippet = ProtoSnippet {
+            id: "epoch-id".to_string(),
+            description: "test".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
             created_at: 0,
             updated_at: 0,
             device_id: "device".to_string(),
             deleted: false,
             encrypted: false,
         };
-        assert!(service.validate_snippet(&snippet).is_ok());
+        let result = service.validate_snippet(&snippet);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().message().to_string();
+        assert!(
+            msg.contains("unset client clock"),
+            "Expected zero-timestamp message, got: {msg}"
+        );
     }
 
     #[tokio::test]

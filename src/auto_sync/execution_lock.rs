@@ -172,43 +172,22 @@ pub fn is_stale(contents: &LockIdentity) -> bool {
     !process_alive(contents.pid)
 }
 
+/// Check whether a process with the given PID is alive.
+///
+/// Delegates to the shared implementation in [`crate::utils::process`] so
+/// liveness semantics stay identical across all lock implementations.
 #[cfg(unix)]
 pub fn process_alive(pid: u32) -> bool {
-    const SIGNAL_NOOP: i32 = 0;
-    if pid == 0 {
-        return false;
-    }
-    let rc = unsafe { libc::kill(pid as i32, SIGNAL_NOOP) };
-    rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
+    crate::utils::process::is_process_alive(pid)
 }
 
-#[cfg(unix)]
-fn classify_kill_zero_error(errno: Option<i32>) -> bool {
-    !matches!(errno, Some(libc::ESRCH))
-}
-
+/// Check whether a process with the given PID is alive.
+///
+/// Delegates to the shared implementation in [`crate::utils::process`] so
+/// liveness semantics stay identical across all lock implementations.
 #[cfg(not(unix))]
 pub fn process_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    unsafe {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut exit_code: u32 = 0;
-        let ok = GetExitCodeProcess(handle, &mut exit_code);
-        CloseHandle(handle);
-        if ok == 0 {
-            return false;
-        }
-        exit_code == STILL_ACTIVE as u32
-    }
+    crate::utils::process::is_process_alive(pid)
 }
 
 // ── Worker lock (merged from lock.rs) ──────────────────────────
@@ -532,6 +511,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_kill_zero_error_classification_is_conservative() {
+        use crate::utils::process::classify_kill_zero_error;
         assert!(classify_kill_zero_error(Some(libc::EPERM)));
         assert!(!classify_kill_zero_error(Some(libc::ESRCH)));
         assert!(classify_kill_zero_error(Some(libc::EINVAL)));

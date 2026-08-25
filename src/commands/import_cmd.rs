@@ -1,5 +1,5 @@
 use crate::commands::pet_analysis::{
-    analyze_entry, detect_unknown_fields, is_exact_duplicate, parse_pet_toml, read_source_file,
+    analyze_entry, detect_unknown_fields, parse_pet_toml, read_source_file,
     same_command_different_description, same_description_different_command,
 };
 use crate::diagnostics::{
@@ -308,23 +308,60 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
             let mut skip_indices: std::collections::HashSet<usize> =
                 std::collections::HashSet::new();
 
+            // O(n+m) duplicate detection: build lookup tables over existing
+            // entries once instead of rescanning them per source candidate.
+            // Vec values preserve ascending destination order, matching the
+            // previous brute-force scan order exactly.
+            let mut first_exact: std::collections::HashMap<(&str, &str), usize> =
+                std::collections::HashMap::new();
+            let mut by_command: std::collections::HashMap<&str, Vec<usize>> =
+                std::collections::HashMap::new();
+            let mut by_description: std::collections::HashMap<&str, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (j, existing_snippet) in existing.snippets.iter().enumerate() {
+                first_exact
+                    .entry((
+                        existing_snippet.command.as_str(),
+                        existing_snippet.description.as_str(),
+                    ))
+                    .or_insert(j);
+                by_command
+                    .entry(existing_snippet.command.as_str())
+                    .or_default()
+                    .push(j);
+                by_description
+                    .entry(existing_snippet.description.as_str())
+                    .or_default()
+                    .push(j);
+            }
+
             // Detect duplicates against existing library
             for (i, candidate) in converted.iter().enumerate() {
-                for (j, existing_snippet) in existing.snippets.iter().enumerate() {
-                    if is_exact_duplicate(candidate, existing_snippet) {
-                        report.duplicates.push(ImportDuplicate {
-                            source_index: i,
-                            destination_index: j,
-                            description: candidate.description.clone(),
-                            reason: "Exact duplicate (same command and description)".to_string(),
-                        });
-                        skip_indices.insert(i);
-                        break;
+                if let Some(&j) =
+                    first_exact.get(&(candidate.command.as_str(), candidate.description.as_str()))
+                {
+                    report.duplicates.push(ImportDuplicate {
+                        source_index: i,
+                        destination_index: j,
+                        description: candidate.description.clone(),
+                        reason: "Exact duplicate (same command and description)".to_string(),
+                    });
+                    skip_indices.insert(i);
+                } else {
+                    // Union of entries sharing command or description, in
+                    // ascending destination order (same as the old scan).
+                    let mut matched: Vec<usize> = Vec::new();
+                    if let Some(js) = by_command.get(candidate.command.as_str()) {
+                        matched.extend_from_slice(js);
                     }
-                }
-                if !skip_indices.contains(&i) {
-                    // Also check for same command, different description
-                    for existing_snippet in &existing.snippets {
+                    if let Some(js) = by_description.get(candidate.description.as_str()) {
+                        matched.extend_from_slice(js);
+                    }
+                    matched.sort_unstable();
+                    matched.dedup();
+
+                    for j in matched {
+                        let existing_snippet = &existing.snippets[j];
                         if same_command_different_description(candidate, existing_snippet) {
                             report.diagnostics.push(CompatibilityDiagnostic {
                                 entry_index: Some(i),

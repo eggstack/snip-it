@@ -9,6 +9,14 @@ pub const PENDING_FILE_NAME: &str = "auto-sync-pending.toml";
 pub const STALE_PENDING_THRESHOLD_MS: u64 = 5 * 60 * 1000;
 const SCHEMA_VERSION: u32 = 2;
 
+/// How long to wait for the cross-process pending lock before giving up.
+///
+/// Generous by design: a `PendingError::Lock` here drops the mutation's
+/// sync intent until the next mutation, so slow/NFS filesystems under
+/// contention must be waited out rather than failed quickly. The lock is
+/// only held for short read-modify-write sections.
+const PENDING_TXN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PendingSnapshot {
     #[default]
@@ -67,9 +75,8 @@ pub fn record_pending_mutation(
     state_dir: &Path,
     snapshot: PendingSnapshot,
 ) -> Result<PendingState, PendingError> {
-    let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
-            .map_err(PendingError::Lock)?;
+    let _guard = pending_lock::acquire_pending_txn(state_dir, PENDING_TXN_LOCK_TIMEOUT)
+        .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
     let (new_generation, created_at_ms) = match read_state(&path) {
@@ -117,9 +124,8 @@ pub fn ensure_pending_for_transaction(
     transaction_id: &str,
     snapshot: PendingSnapshot,
 ) -> Result<TransactionPendingResult, PendingError> {
-    let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
-            .map_err(PendingError::Lock)?;
+    let _guard = pending_lock::acquire_pending_txn(state_dir, PENDING_TXN_LOCK_TIMEOUT)
+        .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
     match read_state(&path) {
@@ -232,9 +238,8 @@ pub fn clear_if_generation_matches(
     state_dir: &Path,
     observed_generation: u64,
 ) -> Result<ConditionalClearResult, PendingError> {
-    let _guard =
-        pending_lock::acquire_pending_txn(state_dir, std::time::Duration::from_millis(2000))
-            .map_err(PendingError::Lock)?;
+    let _guard = pending_lock::acquire_pending_txn(state_dir, PENDING_TXN_LOCK_TIMEOUT)
+        .map_err(PendingError::Lock)?;
 
     let path = pending_path(state_dir);
     let current = match read_state(&path) {
@@ -472,7 +477,13 @@ fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &P
         if let Ok(meta) = std::fs::metadata(path) {
             let mut perms = meta.permissions();
             perms.set_mode(0o600);
-            let _ = std::fs::set_permissions(path, perms);
+            if let Err(e) = std::fs::set_permissions(path, perms) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "Failed to restrict pending marker permissions; file may be world-readable"
+                );
+            }
         }
     }
 }

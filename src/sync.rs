@@ -1139,6 +1139,9 @@ async fn create_tls_channel(
         let tls_config = ClientTlsConfig::new()
             .with_enabled_roots()
             .domain_name(host)
+            // Skip ALPN h2 negotiation: assume the endpoint speaks HTTP/2
+            // (gRPC). Servers without proper ALPN support still work; a
+            // non-H2 endpoint surfaces as a confusing framing error.
             .assume_http2(true);
         endpoint.tls_config(tls_config)?
     } else {
