@@ -1265,32 +1265,25 @@ pub fn begin_transaction(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    let staged_files = affected_files
+    let staged_files: Vec<StagedFile> = affected_files
         .iter()
         .map(|p| {
-            let existed = p.exists();
-            let original_hash = if existed {
-                fs::read(p)
-                    .map(|bytes| {
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(&bytes);
-                        hasher
-                            .finalize()
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
+            let (existed_before, original_hash, original_metadata) = match fs::read(p) {
+                Ok(bytes) => (true, sha256_hex(&bytes), capture_original_metadata(p)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    (false, String::new(), OriginalFileMetadata::default())
+                }
+                Err(e) => {
+                    return Err(SnipError::io_error("read original transaction file", p, e));
+                }
             };
-            StagedFile {
+            Ok(StagedFile {
                 original_path: p.clone(),
                 backup_path: None,
                 staged_path: p.clone(),
                 sha256: String::new(),
-                existed_before: existed,
-                action: if existed {
+                existed_before,
+                action: if existed_before {
                     StagedAction::Replace
                 } else {
                     StagedAction::Create
@@ -1298,14 +1291,10 @@ pub fn begin_transaction(
                 original_hash,
                 new_hash: String::new(),
                 durable_staged_path: None,
-                original_metadata: if existed {
-                    capture_original_metadata(p)
-                } else {
-                    OriginalFileMetadata::default()
-                },
-            }
+                original_metadata,
+            })
         })
-        .collect();
+        .collect::<SnipResult<Vec<_>>>()?;
 
     let journal = TransactionJournal {
         id: uuid::Uuid::new_v4().to_string(),
@@ -2203,6 +2192,15 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                                 )),
                             ));
                         }
+                    } else {
+                        return Err(SnipError::runtime_error(
+                            "Rollback failed: backup is missing",
+                            Some(&format!(
+                                "Cannot restore {} because its transaction backup {} is missing",
+                                staged.original_path.display(),
+                                backup.display()
+                            )),
+                        ));
                     }
                 } else if !staged.existed_before {
                     // No backup and file didn't exist before — verify absence
@@ -2215,6 +2213,14 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
                             )),
                         ));
                     }
+                } else {
+                    return Err(SnipError::runtime_error(
+                        "Rollback failed: backup is missing",
+                        Some(&format!(
+                            "Cannot restore {} because no transaction backup was recorded",
+                            staged.original_path.display()
+                        )),
+                    ));
                 }
             }
         }
@@ -2706,6 +2712,20 @@ mod tests {
 
         // Backup should be cleaned up
         assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn test_rollback_rejects_missing_backup_for_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let state_dir = dir.path();
+        let file = dir.path().join("existing.toml");
+        fs::write(&file, "original").unwrap();
+        let _lock = acquire_transaction_lock(state_dir, "test_op").unwrap();
+        let journal = begin_transaction(state_dir, "test_op", std::slice::from_ref(&file)).unwrap();
+
+        let error = rollback_transaction(state_dir, &journal).unwrap_err();
+        assert!(error.to_string().contains("backup is missing"));
+        assert_eq!(fs::read_to_string(file).unwrap(), "original");
     }
 
     #[test]

@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tonic::Code;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
+use zeroize::Zeroizing;
 
 static JITTER_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -356,8 +357,8 @@ impl SyncClient {
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
         self.ensure_budget()?;
-        let api_key = self.settings.api_key.clone();
-        let (encrypted_snippets, encrypt_failed_ids) = encrypt_snippets(&api_key, &local_snippets);
+        let api_key = self.settings.api_key.as_str();
+        let (encrypted_snippets, encrypt_failed_ids) = encrypt_snippets(api_key, &local_snippets);
 
         self.sync_prepared_encrypted_inner(
             encrypted_snippets,
@@ -383,7 +384,7 @@ impl SyncClient {
         library_id: &str,
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
 
         let encrypt_failed_count = encrypt_failed_ids.len();
         let mut all_skipped_ids = encrypt_failed_ids;
@@ -700,7 +701,7 @@ impl SyncClient {
         library_id: &str,
     ) -> SnipResult<()> {
         self.ensure_budget()?;
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let request = PushSnippetsRequest {
             api_key: String::new(),
             library_id: library_id.to_string(),
@@ -945,7 +946,7 @@ impl SyncClient {
     /// Lists all libraries on the sync server.
     pub async fn list_libraries(&mut self) -> SnipResult<Vec<Library>> {
         self.ensure_budget()?;
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let mut all_libraries = Vec::new();
         let mut offset = 0i32;
         const PAGE_LIMIT: i32 = 50;
@@ -983,7 +984,7 @@ impl SyncClient {
     /// Creates a new library on the sync server.
     pub async fn create_library(&mut self, name: &str) -> SnipResult<Library> {
         self.ensure_budget()?;
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let name_str = name.to_string();
         let response = retry_grpc_limited!(
             self,
@@ -1016,7 +1017,7 @@ impl SyncClient {
 
     /// Lists all premade libraries available on the server.
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let response = retry_grpc!(
             async {
                 let mut req = tonic::Request::new(ListPremadeLibrariesRequest {
@@ -1032,7 +1033,7 @@ impl SyncClient {
 
     /// Downloads a premade library's content from the server.
     pub async fn get_premade_library(&mut self, filename: &str) -> SnipResult<String> {
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let filename_str = filename.to_string();
         let response = retry_grpc!(
             async {
@@ -1062,7 +1063,7 @@ impl SyncClient {
         &mut self,
         query: &str,
     ) -> SnipResult<Vec<PremadeLibrary>> {
-        let api_key = self.settings.api_key.clone();
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
         let query_str = query.to_string();
         let response = retry_grpc!(
             async {

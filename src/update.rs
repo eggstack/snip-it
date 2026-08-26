@@ -159,8 +159,7 @@ fn homebrew_formula_prefix(formula: &str) -> Option<PathBuf> {
 }
 
 fn latest_crates_version(crate_name: &str) -> Result<Version, String> {
-    let template =
-        std::env::var("SNIP_UPDATE_CRATES_API_URL").unwrap_or_else(|_| CRATES_API_URL.to_owned());
+    let template = update_endpoint("SNIP_UPDATE_CRATES_API_URL", CRATES_API_URL);
     let url = template.replace("{crate}", crate_name);
     let body = fetch_url(&url)?;
     let response: CratesResponse = serde_json::from_slice(&body)
@@ -174,11 +173,23 @@ fn latest_crates_version(crate_name: &str) -> Result<Version, String> {
 }
 
 fn latest_github_release() -> Result<GitHubRelease, String> {
-    let url =
-        std::env::var("SNIP_UPDATE_RELEASE_API_URL").unwrap_or_else(|_| RELEASE_API_URL.to_owned());
+    let url = update_endpoint("SNIP_UPDATE_RELEASE_API_URL", RELEASE_API_URL);
     let body = fetch_url(&url)?;
     serde_json::from_slice(&body)
         .map_err(|e| format!("could not parse GitHub release response: {e}"))
+}
+
+fn update_endpoint(name: &str, default: &str) -> String {
+    #[cfg(feature = "test-support")]
+    {
+        return std::env::var(name).unwrap_or_else(|_| default.to_owned());
+    }
+
+    #[cfg(not(feature = "test-support"))]
+    {
+        let _ = name;
+        default.to_owned()
+    }
 }
 
 impl GitHubRelease {

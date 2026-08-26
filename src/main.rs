@@ -841,9 +841,6 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                             CommandOutcome::ExecutionFailed { child_code } => {
                                 std::process::exit(child_code.unwrap_or(8));
                             }
-                            CommandOutcome::Cancelled => {
-                                return Ok(CommandOutcome::Cancelled);
-                            }
                             _ => snip_it::outcome::CliOutcome::Success,
                         }
                     }
@@ -865,14 +862,8 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     Some(sort_opts),
                     sync.then_some(&RUNTIME),
                 )?;
-                match outcome {
-                    CommandOutcome::ExecutionFailed { child_code } => {
-                        std::process::exit(child_code.unwrap_or(8));
-                    }
-                    CommandOutcome::Cancelled => {
-                        return Ok(CommandOutcome::Cancelled);
-                    }
-                    _ => {}
+                if let CommandOutcome::ExecutionFailed { child_code } = outcome {
+                    std::process::exit(child_code.unwrap_or(8));
                 }
             }
         }
@@ -1425,14 +1416,6 @@ fn main() {
     }
     if behavior.services != StartupServices::Minimal {
         log_startup_info();
-    }
-
-    #[cfg(not(feature = "test-support"))]
-    if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
-        tracing::warn!(
-            "SNP_ALLOW_PLAINTEXT_API_KEY is set; API keys will be stored in plaintext. \
-             This is a development convenience and should not be used in production."
-        );
     }
 
     if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(Some(behavior.recovery)) {

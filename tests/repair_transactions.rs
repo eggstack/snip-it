@@ -484,6 +484,15 @@ fn test_idempotent_cleanup_on_second_invocation() {
     let (_tmp, config_dir) = setup_test_env();
     let txn_id = "aaaa1111-0000-0000-0000-000000000001";
     write_journal(&config_dir, txn_id, "Prepared");
+    // This fixture models a newly created file, so rollback has no backup to
+    // restore and can safely remove the absent original.
+    let journal_path = txn_dir(&config_dir).join(format!("txn-{txn_id}.toml"));
+    let journal = fs::read_to_string(&journal_path).unwrap();
+    fs::write(
+        &journal_path,
+        journal.replace("existed_before = true", "existed_before = false"),
+    )
+    .unwrap();
 
     // First apply — should succeed.
     let (code1, _) = repair_apply_json(&config_dir);

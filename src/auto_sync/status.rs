@@ -12,6 +12,7 @@
 use crate::auto_sync::policy::FailureClass;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STATUS_FILE_NAME: &str = "auto-sync-status.toml";
@@ -21,6 +22,20 @@ const MAX_MESSAGE_LEN: usize = 512;
 
 /// Schema version for forward-compatible migration.
 const SCHEMA_VERSION: u32 = 1;
+
+static SECRET_ASSIGNMENT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?i)((?:api[_-]?key|token|password|passwd|secret|credential|authorization)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s&;]+)"#,
+    )
+    .expect("secret assignment pattern is valid")
+});
+static BEARER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?i)\b(Bearer)\s+[^\s"']+"#).expect("bearer pattern is valid")
+});
+static URL_CREDENTIALS_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@"#)
+        .expect("URL credential pattern is valid")
+});
 
 /// Durable auto-sync status.
 ///
@@ -282,66 +297,12 @@ fn sanitize_message(msg: &str) -> String {
 /// Strips API keys, bearer tokens, and URLs with embedded credentials.
 /// Uses simple pattern matching — this is best-effort redaction, not a
 /// security boundary.
-fn redact_secrets(msg: &str) -> String {
-    let mut result = msg.to_string();
-
-    // Redact Bearer tokens: "Bearer <token>"
-    let mut search_from = 0;
-    while let Some(relative_start) = result[search_from..].find("Bearer ") {
-        let start = search_from + relative_start;
-        let token_start = start + 7;
-        let token_end = result[token_start..]
-            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-            .map(|i| token_start + i)
-            .unwrap_or(result.len());
-        result.replace_range(start..token_end, "Bearer [REDACTED]");
-        search_from = start + "Bearer [REDACTED]".len();
-    }
-
-    // Redact "api_key=..." or "api-key=..." patterns
-    for pattern in &["api_key=", "api-key=", "apikey="] {
-        let mut search_from = 0;
-        while let Some(relative_start) = result[search_from..].find(pattern) {
-            let start = search_from + relative_start;
-            let val_start = start + pattern.len();
-            let val_end = result[val_start..]
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
-                .map(|i| val_start + i)
-                .unwrap_or(result.len());
-            if val_end > val_start {
-                result.replace_range(start..val_end, &format!("{pattern}[REDACTED]"));
-                search_from = start + pattern.len() + "[REDACTED]".len();
-            } else {
-                break;
-            }
-        }
-    }
-
-    // Redact URLs with credentials: "user:pass@host"
-    let mut search_from = 0;
-    while let Some(relative_at_pos) = result[search_from..].find('@') {
-        let at_pos = search_from + relative_at_pos;
-        // Look backward for ":" and "//" to detect URL credentials
-        let before = &result[..at_pos];
-        if before.ends_with("[REDACTED]") {
-            search_from = at_pos + 1;
-            continue;
-        }
-        if let Some(colon_pos) = before.rfind(':') {
-            let before_colon = &before[..colon_pos];
-            if before_colon.ends_with("//") || before_colon.contains("://") {
-                // This looks like user:pass@host in a URL
-                let scheme_end = before_colon.rfind("://").map(|i| i + 3).unwrap_or(0);
-                let cred_start = scheme_end;
-                result.replace_range(cred_start..at_pos + 1, "[REDACTED]@");
-                search_from = 0;
-                continue;
-            }
-        }
-        search_from = at_pos + 1;
-    }
-
-    result
+pub(crate) fn redact_secrets(msg: &str) -> String {
+    let result = SECRET_ASSIGNMENT_RE.replace_all(msg, "$1[REDACTED]");
+    let result = BEARER_RE.replace_all(&result, "$1 [REDACTED]");
+    URL_CREDENTIALS_RE
+        .replace_all(&result, "$1[REDACTED]@")
+        .into_owned()
 }
 
 fn unix_now_ms() -> u64 {
@@ -377,6 +338,14 @@ pub fn compute_config_fingerprint(settings: &crate::config::SyncSettings) -> u64
 /// `consecutive_failures` to 0, permitting a new attempt. Returns `true`
 /// if the deferral was released.
 pub fn release_deferral_on_config_change(state_dir: &Path, current_fingerprint: u64) -> bool {
+    let _execution_lock = match crate::auto_sync::execution_lock::try_acquire(state_dir) {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::debug!(%error, "status deferral release skipped while worker owns execution lock");
+            return false;
+        }
+    };
+
     let mut status = match read_status_typed(state_dir) {
         StatusRead::Valid(s) => s,
         StatusRead::Corrupt(e) => {
@@ -825,6 +794,28 @@ integrity = 0
 
         let released = release_deferral_on_config_change(dir.path(), 200);
         assert!(!released);
+    }
+
+    #[test]
+    fn test_release_skips_status_race_while_execution_lock_is_held() {
+        let dir = TempDir::new().unwrap();
+        record_failure(
+            dir.path(),
+            1,
+            FailureClass::Configuration,
+            3,
+            1,
+            0,
+            "bad key",
+            100,
+        )
+        .unwrap();
+        let _lock = crate::auto_sync::execution_lock::try_acquire(dir.path()).unwrap();
+
+        assert!(!release_deferral_on_config_change(dir.path(), 200));
+        let status = read_status(dir.path()).unwrap();
+        assert!(status.attention_required);
+        assert_eq!(status.config_fingerprint, 100);
     }
 
     #[test]

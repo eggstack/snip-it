@@ -281,11 +281,12 @@ pub fn log_command_execution(
 }
 
 fn redact_command(command: &str) -> String {
-    if command.chars().count() > 80 {
-        let truncated: String = command.chars().take(77).collect();
+    let redacted = crate::auto_sync::status::redact_secrets(command);
+    if redacted.chars().count() > 80 {
+        let truncated: String = redacted.chars().take(77).collect();
         format!("{truncated}...")
     } else {
-        command.to_string()
+        redacted
     }
 }
 
@@ -355,7 +356,10 @@ pub fn audit_log(
         timestamp,
         action: action.to_string(),
         snippet_id: snippet.id.clone(),
-        description: snippet.description.clone(),
+        // Descriptions are user-authored free text and may contain secrets;
+        // keep the audit record useful without copying that text out of the
+        // encrypted snippet store.
+        description: "[omitted]".to_string(),
         library_id: library_id.unwrap_or("").to_string(),
         device_id: snippet.device_id.clone(),
     };
@@ -608,6 +612,16 @@ mod tests {
         let short_cmd = "git status";
         let redacted = redact_command(short_cmd);
         assert_eq!(redacted, "git status");
+    }
+
+    #[test]
+    fn test_redact_command_removes_embedded_credentials() {
+        let command = r#"curl -H "Authorization: Bearer bearer-secret" 'https://user:pass@example.test' password="db-secret" token=token-secret"#;
+        let redacted = redact_command(command);
+
+        for secret in ["bearer-secret", "user:pass", "db-secret", "token-secret"] {
+            assert!(!redacted.contains(secret), "secret leaked: {secret}");
+        }
     }
 
     #[test]

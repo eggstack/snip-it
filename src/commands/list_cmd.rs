@@ -46,13 +46,14 @@ pub fn run(
 
     let matcher = SkimMatcherV2::default();
 
+    let mut fuzzy_scores = std::collections::HashMap::new();
     let mut filtered: Vec<_> = if let Some(ref filter_str) = filter {
         snippets
             .snippets
             .iter()
             .enumerate()
             .filter(|(_, s)| !s.deleted)
-            .filter(|(_, s)| {
+            .filter(|(idx, s)| {
                 let display = if search_output {
                     let output_summary =
                         crate::output::OutputPresentation::new(&s.output).for_scoring();
@@ -64,7 +65,12 @@ pub fn run(
                 } else {
                     format!("{} {}", s.description, s.command)
                 };
-                matcher.fuzzy_match(&display, filter_str).is_some()
+                if let Some(score) = matcher.fuzzy_match(&display, filter_str) {
+                    fuzzy_scores.insert(*idx, score);
+                    true
+                } else {
+                    false
+                }
             })
             .collect()
     } else {
@@ -85,8 +91,13 @@ pub fn run(
             .iter()
             .map(|s| usage_idx.get_usage(&s.id))
             .collect();
-        let sorted_indices =
-            crate::sort::rank_snippets(&indices, &snippets.snippets, None, Some(&usage_data), opts);
+        let sorted_indices = crate::sort::rank_snippets(
+            &indices,
+            &snippets.snippets,
+            filter.is_some().then_some(&fuzzy_scores),
+            Some(&usage_data),
+            opts,
+        );
         let rank_map: std::collections::HashMap<usize, usize> = sorted_indices
             .iter()
             .enumerate()

@@ -379,14 +379,20 @@ where
                         }
                     } else {
                         // Auto-sync trigger: notify after successful delete commit (Workstream B3).
-                        crate::auto_sync::notify_mutation(
-                            crate::auto_sync::MutationKind::SnippetDelete,
-                            crate::auto_sync::MutationOrigin::User,
+                        crate::auto_sync::report_notification_result(
+                            crate::auto_sync::notify_mutation(
+                                crate::auto_sync::MutationKind::SnippetDelete,
+                                crate::auto_sync::MutationOrigin::User,
+                            ),
                         );
                     }
                     continue;
                 }
                 crate::ui::SnippetSelection::Delete(_) => continue,
+                crate::ui::SnippetSelection::Copied => {
+                    selected_and_processed = true;
+                    break;
+                }
                 crate::ui::SnippetSelection::Selected(idx, copy_flag) => {
                     let snippet = &snippets.snippets[original_indices[idx]];
                     match process_fn(snippet, copy_flag)? {

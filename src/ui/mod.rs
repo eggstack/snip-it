@@ -515,6 +515,8 @@ pub struct SnippetListParams<'a> {
 pub enum SnippetSelection {
     /// Select a snippet for the command-specific action.
     Selected(usize, Option<String>),
+    /// A visual-mode selection was copied directly by the TUI.
+    Copied,
     /// Delete a snippet after the user confirmed the delete dialog.
     Delete(usize),
     /// User cancelled the selector (q, Esc, or Ctrl-C in normal mode).
@@ -643,6 +645,14 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         // Check for signal-induced termination (SIGINT/SIGTERM)
         if TERMINATE.load(std::sync::atomic::Ordering::SeqCst) {
             break;
+        }
+
+        if copied_message
+            .as_ref()
+            .is_some_and(|(_, instant)| instant.elapsed().as_secs() >= 3)
+        {
+            copied_message = None;
+            needs_redraw = true;
         }
 
         // Lazy init theme picker
@@ -1315,6 +1325,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
 
                                 if is_double_click {
                                     // Double-click: run selected snippet
+                                    sel.selected = clicked_row;
                                     break;
                                 } else {
                                     // Single click: select item
@@ -1344,10 +1355,8 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                             if theme_picker_insert_mode {
                                 match key.code {
                                     KeyCode::Esc => {
-                                        if !theme_input_text.is_empty() {
-                                            theme_filter = theme_input_text.clone();
-                                            theme_input_text.clear();
-                                        }
+                                        theme_filter = theme_input_text.clone();
+                                        theme_input_text.clear();
                                         theme_picker_insert_mode = false;
                                     }
                                     KeyCode::Down | KeyCode::Char('j')
@@ -1618,9 +1627,9 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     let copy_text = selected_items.join("\n");
                                     match clipboard::copy_to_clipboard_auto(&copy_text) {
                                         Ok(()) => {
-                                            should_copy = Some(format!(
-                                                "{} snippets copied",
-                                                end - start + 1
+                                            copied_message = Some((
+                                                format!("{} snippets copied", end - start + 1),
+                                                std::time::Instant::now(),
                                             ));
                                         }
                                         Err(e) => {
@@ -1645,7 +1654,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     }
                                     visual_mode = false;
                                     if !is_search {
-                                        break;
+                                        return Ok(Some(SnippetSelection::Copied));
                                     }
                                 }
                                 _ => {}

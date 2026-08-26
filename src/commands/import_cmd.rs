@@ -470,10 +470,10 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
     // Auto-sync trigger: notify once after successful import commit (Workstream B4).
     // Dry-run, strict abort, parse failure, and no-op merge emit none.
     if !options.dry_run && report.imported > 0 {
-        crate::auto_sync::notify_mutation(
+        crate::auto_sync::report_notification_result(crate::auto_sync::notify_mutation(
             crate::auto_sync::MutationKind::Import,
             crate::auto_sync::MutationOrigin::Import,
-        );
+        ));
     }
 
     // Phase 7: Emit report

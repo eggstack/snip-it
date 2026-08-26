@@ -1645,6 +1645,9 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
             &policy,
             crate::auto_sync::schedule::Caller::Mutation,
         ) {
+            eprintln!(
+                "warning: restore completed, but auto-sync could not be scheduled; pending changes remain for a later retry: {error}"
+            );
             tracing::warn!(%error, "restore auto-sync scheduling failed; pending work preserved");
         }
     } else {

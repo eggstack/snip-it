@@ -467,6 +467,7 @@ snippets = []
     /// Config is saved before file deletion for crash safety.
     pub fn delete_library(&mut self, filename: &str) -> SnipResult<()> {
         let _lock = self.acquire_local_data_lock()?;
+        let config_before_delete = self.config.clone();
         let (was_primary, deleted_was_server) = self
             .get_library_by_filename(filename)
             .map(|l| (l.is_primary, l.server_id.is_some()))
@@ -507,9 +508,26 @@ snippets = []
 
         mutation_barrier("library-delete-after-index-before-file");
 
-        if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| SnipError::io_error("delete library file", path.clone(), e))?;
+        if path.exists()
+            && let Err(e) = fs::remove_file(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            self.config = config_before_delete;
+            if let Err(restore_error) = self.save_config() {
+                tracing::error!(
+                    error = %restore_error,
+                    path = %path.display(),
+                    "Failed to restore library config after file deletion failure"
+                );
+                return Err(SnipError::runtime_error(
+                    "Delete library failed",
+                    Some(&format!(
+                        "Could not delete {} ({e}); restoring libraries.toml also failed: {restore_error}",
+                        path.display()
+                    )),
+                ));
+            }
+            return Err(SnipError::io_error("delete library file", path.clone(), e));
         }
 
         Ok(())
@@ -1507,6 +1525,40 @@ Command = "sudo iptables-restore \< /path/to/rules"
 
         #[cfg(unix)]
         assert_eq!(file_mode(&path), 0o600);
+    }
+
+    #[test]
+    fn test_delete_library_restores_config_when_file_deletion_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
+        let libraries_dir = config_dir.join("libraries");
+        let blocked_path = libraries_dir.join("blocked.toml");
+        std::fs::create_dir_all(&blocked_path).unwrap();
+
+        let mut mgr = LibraryManager {
+            config_dir,
+            libraries_dir,
+            premade_dir: temp_dir.path().join("premade"),
+            config: LibraryConfig {
+                libraries: vec![LibraryMeta {
+                    filename: "blocked".to_string(),
+                    library_id: String::new(),
+                    is_primary: true,
+                    last_sync: None,
+                    server_id: None,
+                }],
+                generation: 0,
+            },
+        };
+
+        assert!(mgr.delete_library("blocked").is_err());
+        assert!(mgr.get_library_by_filename("blocked").is_some());
+        assert!(blocked_path.is_dir());
+        assert!(
+            std::fs::read_to_string(temp_dir.path().join("libraries.toml"))
+                .unwrap()
+                .contains("filename = \"blocked\"")
+        );
     }
 
     #[test]

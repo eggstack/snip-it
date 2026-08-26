@@ -37,6 +37,23 @@ pub enum AutoSyncNotificationResult {
     },
 }
 
+/// Surface a scheduling failure without turning a successful local mutation
+/// into a failed command. The pending generation remains durable for retry or
+/// startup recovery.
+pub fn report_notification_result(result: AutoSyncNotificationResult) {
+    match result {
+        AutoSyncNotificationResult::SchedulingFailed {
+            generation: Some(generation),
+        } => eprintln!(
+            "warning: local change was saved, but auto-sync could not be scheduled; pending generation {generation} remains for recovery"
+        ),
+        AutoSyncNotificationResult::SchedulingFailed { generation: None } => eprintln!(
+            "warning: local change was saved, but pending sync intent could not be recorded"
+        ),
+        _ => {}
+    }
+}
+
 pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult {
     let settings = get_sync_settings();
     let policy = AutoSyncPolicy::resolve(&settings);
@@ -204,6 +221,9 @@ pub fn startup_recover_pending() {
     match worker::startup_recover(&state_dir) {
         Ok(_) => {}
         Err(error) => {
+            eprintln!(
+                "warning: auto-sync startup recovery could not be scheduled; pending changes remain for a later retry: {error}"
+            );
             tracing::warn!(%error, "auto-sync startup recovery could not read pending state")
         }
     }

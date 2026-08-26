@@ -22,15 +22,15 @@ echo "=== Unit tests ==="
 cargo test --workspace --lib
 
 echo "=== Platform smoke ==="
-cargo test --test platform_smoke
+cargo test --test platform_smoke --features test-support
 
 echo "=== Destination permissions ==="
 cargo test --test destination_permissions --features test-support
 
 echo "=== Single-helper auto-sync contracts ==="
-cargo test --test auto_sync_closure
+cargo test --test auto_sync_closure --features test-support
 
 echo "=== Multi-batch sync contracts ==="
-cargo test --test sync_multibatch -- --test-threads=1
+cargo test --test sync_multibatch --features test-support -- --test-threads=1
 
 echo "=== All checks passed ==="

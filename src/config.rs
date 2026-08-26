@@ -396,7 +396,9 @@ fn serialize_api_key<S: serde::Serializer>(
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return serializer.serialize_str(api_key);
     }
-    // Plaintext mode: skip keychain entirely (prevents D-Bus hang on headless CI).
+    // Plaintext mode is a test-only seam. Production builds must always use
+    // the OS keychain or fail rather than silently persisting credentials.
+    #[cfg(feature = "test-support")]
     if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
         return serializer.serialize_str(api_key);
     }
@@ -404,12 +406,9 @@ fn serialize_api_key<S: serde::Serializer>(
     match keychain_store(api_key, KEYCHAIN_DEFAULT_USER) {
         Ok(()) => serializer.serialize_str(KEYCHAIN_MARKER),
         Err(e) => {
-            tracing::error!(
-                "Keychain unavailable, refusing to store API key in plaintext. \
-                 Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow."
-            );
+            tracing::error!("Keychain unavailable, refusing to store API key in plaintext.");
             Err(serde::ser::Error::custom(format!(
-                "keychain unavailable: {e}. Set SNP_ALLOW_PLAINTEXT_API_KEY=true to allow plaintext storage."
+                "keychain unavailable: {e}; refusing plaintext API-key storage"
             )))
         }
     }
@@ -445,6 +444,7 @@ fn deserialize_api_key<'de, D: serde::Deserializer<'de>>(
                 }
             }
         }
+        #[cfg(feature = "test-support")]
         if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
             // Fail fast: returning the literal marker would authenticate
             // every subsequent sync with a bogus credential. Refuse to load
@@ -512,7 +512,9 @@ fn migrate_plaintext_api_key<FStore, FSave>(
     if std::env::var_os("SNP_TEST_CREDENTIAL_FILE").is_some() {
         return;
     }
-    // Plaintext mode: skip keychain migration (prevents D-Bus hang on headless CI).
+    // Plaintext mode is a test-only seam; production builds migrate plaintext
+    // credentials to the OS keychain.
+    #[cfg(feature = "test-support")]
     if std::env::var_os("SNP_ALLOW_PLAINTEXT_API_KEY").is_some_and(|v| v == "true") {
         return;
     }
@@ -707,13 +709,19 @@ mod tests {
     #[test]
     fn test_sync_settings_serialization() {
         // Ensure keychain is bypassed in CI environments without a keychain
+        #[cfg(feature = "test-support")]
         unsafe {
             std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
         }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
-            api_key: "test-key-123".to_string(),
+            api_key: if cfg!(feature = "test-support") {
+                "test-key-123"
+            } else {
+                ""
+            }
+            .to_string(),
             device_id: "device-456".to_string(),
             sync_interval_minutes: 60,
             auto_sync: true,
@@ -730,11 +738,13 @@ mod tests {
         let toml_str = toml::to_string_pretty(&settings).unwrap();
         assert!(toml_str.contains("enabled = true"));
         assert!(toml_str.contains("server_url = \"https://sync.example.com\""));
-        // API key is stored in keychain if available, otherwise plaintext
+        #[cfg(feature = "test-support")]
         assert!(
             toml_str.contains("api_key = \"@keychain\"")
                 || toml_str.contains("api_key = \"test-key-123\"")
         );
+        #[cfg(not(feature = "test-support"))]
+        assert!(toml_str.contains("api_key = \"\""));
         assert!(toml_str.contains("device_id = \"device-456\""));
         assert!(toml_str.contains("sync_interval_minutes = 60"));
         assert!(toml_str.contains("auto_sync = true"));
@@ -905,13 +915,19 @@ sync_direction = "Bidirectional"
     #[test]
     fn test_full_config_roundtrip() {
         // Ensure keychain is bypassed in CI environments without a keychain
+        #[cfg(feature = "test-support")]
         unsafe {
             std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
         }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
-            api_key: "test-key".to_string(),
+            api_key: if cfg!(feature = "test-support") {
+                "test-key"
+            } else {
+                ""
+            }
+            .to_string(),
             device_id: "device-1".to_string(),
             sync_interval_minutes: 15,
             auto_sync: true,
@@ -940,13 +956,19 @@ sync_direction = "Bidirectional"
     #[test]
     fn test_unrelated_settings_preserved() {
         // Ensure keychain is bypassed in CI environments without a keychain
+        #[cfg(feature = "test-support")]
         unsafe {
             std::env::set_var("SNP_ALLOW_PLAINTEXT_API_KEY", "true");
         }
         let settings = SyncSettings {
             enabled: true,
             server_url: "https://sync.example.com".to_string(),
-            api_key: "test-key".to_string(),
+            api_key: if cfg!(feature = "test-support") {
+                "test-key"
+            } else {
+                ""
+            }
+            .to_string(),
             device_id: "device-1".to_string(),
             sync_interval_minutes: 15,
             auto_sync: true,

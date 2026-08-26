@@ -279,6 +279,8 @@ pub fn record_failure(
     observed_generation: u64,
     classification: &str,
 ) -> Result<(), PendingError> {
+    let _guard = pending_lock::acquire_pending_txn(state_dir, PENDING_TXN_LOCK_TIMEOUT)
+        .map_err(PendingError::Lock)?;
     let path = pending_path(state_dir);
     let current = match read_state(&path) {
         Ok(s) => s,

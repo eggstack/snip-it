@@ -76,10 +76,10 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
 
     if !status.success() {
         if changed {
-            crate::auto_sync::notify_mutation(
+            crate::auto_sync::report_notification_result(crate::auto_sync::notify_mutation(
                 crate::auto_sync::MutationKind::SnippetUpdate,
                 crate::auto_sync::MutationOrigin::User,
-            );
+            ));
         }
         return Err(SnipError::runtime_error(
             "Editor failed",
@@ -99,10 +99,10 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
     // Auto-sync trigger: notify only when the library actually changed.
     // Unchanged editor sessions must not create pending sync intent.
     if changed {
-        crate::auto_sync::notify_mutation(
+        crate::auto_sync::report_notification_result(crate::auto_sync::notify_mutation(
             crate::auto_sync::MutationKind::SnippetUpdate,
             crate::auto_sync::MutationOrigin::User,
-        );
+        ));
     }
 
     Ok(())

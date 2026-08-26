@@ -40,7 +40,7 @@ cat > "$CONFIG_HOME/snp/sync.toml" <<'TOML'
 [settings.sync]
 enabled = true
 server_url = "http://127.0.0.1:1"
-api_key = "test-key"
+api_key = ""
 device_id = "test-device"
 sync_interval_minutes = 30
 auto_sync = false
