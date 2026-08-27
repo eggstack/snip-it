@@ -7,6 +7,15 @@
 //! - Exactly one contender wins a simultaneous race.
 //! - A killed owner releases through kernel process teardown.
 //! - Repeated acquire/release cycles leave only the canonical lock file.
+//!
+//! **Docker / CI caveats:**
+//! - These tests use real `flock` (Unix) and require `SYS_ADMIN` capability
+//!   or `--privileged` in Docker containers. Without it, `flock` silently
+//!   degrades to fcntl and mutual exclusion is not guaranteed.
+//! - Real subprocesses are spawned; the helper binary lives at
+//!   `tests/bin/process_lock_helper.rs` and is built by `cargo test`.
+//! - On Windows, `flock` is emulated via `LockFileEx`; no special
+//!   container privileges are needed.
 
 mod support;
 

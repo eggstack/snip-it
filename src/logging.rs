@@ -21,6 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::SnipError;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -81,16 +83,25 @@ fn level_str(level: Level) -> &'static str {
     }
 }
 
-pub fn init_logging(config: &LogConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_logging(config: &LogConfig) -> Result<(), SnipError> {
+    {
+        let guard = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return Ok(());
+        }
+    }
+
     let log_dir = &config.log_dir;
 
-    fs::create_dir_all(log_dir)?;
+    fs::create_dir_all(log_dir)
+        .map_err(|e| SnipError::io_error("create log directory", log_dir, e))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = fs::Permissions::from_mode(0o700);
-        fs::set_permissions(log_dir, perms)?;
+        fs::set_permissions(log_dir, perms)
+            .map_err(|e| SnipError::io_error("set log directory permissions", log_dir, e))?;
     }
 
     let file_appender = tracing_appender::rolling::daily(log_dir, &config.file_name);
@@ -197,7 +208,6 @@ fn self_check() {
 pub fn shutdown_logging() {
     if let Some(guard) = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take() {
         tracing::info!("Logging shutdown complete");
-        std::thread::sleep(std::time::Duration::from_millis(100));
         drop(guard);
     }
 }
@@ -281,12 +291,24 @@ pub fn log_command_execution(
 }
 
 fn redact_command(command: &str) -> String {
+    if command.len() > 256 {
+        return "<very-long-command>".to_string();
+    }
+
     let redacted = crate::auto_sync::status::redact_secrets(command);
-    if redacted.chars().count() > 80 {
-        let truncated: String = redacted.chars().take(77).collect();
-        format!("{truncated}...")
+    if redacted != command {
+        return "<redacted-command>".to_string();
+    }
+
+    if command.len() > 80 {
+        let truncated_end = command
+            .char_indices()
+            .nth(77)
+            .map(|(i, _)| i)
+            .unwrap_or(command.len());
+        format!("{}...", &command[..truncated_end])
     } else {
-        redacted
+        command.to_string()
     }
 }
 
@@ -407,6 +429,12 @@ fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {
             return Err(e);
         }
     };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&log_path, fs::Permissions::from_mode(0o600));
+    }
 
     if let Err(e) = file.write_all(log_entry.as_bytes()) {
         tracing::error!(error = %e, path = %log_path.display(), "Failed to write to audit log");
@@ -618,10 +646,7 @@ mod tests {
     fn test_redact_command_removes_embedded_credentials() {
         let command = r#"curl -H "Authorization: Bearer bearer-secret" 'https://user:pass@example.test' password="db-secret" token=token-secret"#;
         let redacted = redact_command(command);
-
-        for secret in ["bearer-secret", "user:pass", "db-secret", "token-secret"] {
-            assert!(!redacted.contains(secret), "secret leaked: {secret}");
-        }
+        assert_eq!(redacted, "<redacted-command>");
     }
 
     #[test]

@@ -88,6 +88,7 @@ struct CachedToml {
     mtime: SystemTime,
     len: u64,
     content: String,
+    mtime_nanos: u32,
 }
 
 struct TomlCache {
@@ -182,10 +183,15 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         .modified()
         .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
     let len = metadata.len();
+    let mtime_nanos = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
 
     let cache = lock_toml_cache();
     if let Some(entry) = cache.entries.get(&key)
         && entry.mtime == mtime
+        && entry.mtime_nanos == mtime_nanos
         && entry.len == len
     {
         return Ok(entry.content.clone());
@@ -203,6 +209,10 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         .modified()
         .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
     let len = metadata.len();
+    let mtime_nanos = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
 
     let mut cache = lock_toml_cache();
     while cache.entries.len() >= MAX_TOML_CACHE_SIZE {
@@ -223,6 +233,7 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
             mtime,
             len,
             content: content.clone(),
+            mtime_nanos,
         },
     );
     Ok(content)
@@ -337,7 +348,10 @@ impl Clone for SyncSettings {
 }
 
 impl SyncSettings {
-    /// Returns the sync limit value, defaulting to 1000 if not set.
+    /// Returns the sync limit value, defaulting to 1000 if not set or if
+    /// the configured value is non-positive. Negative and zero values are
+    /// silently treated as unset — `sync_limit` is a per-page snippet count
+    /// and has no defined meaning for those values.
     pub fn sync_limit_value(&self) -> i32 {
         self.sync_limit.filter(|&v| v > 0).unwrap_or(1000)
     }

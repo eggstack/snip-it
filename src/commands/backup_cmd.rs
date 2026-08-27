@@ -570,14 +570,13 @@ pub fn run(
 fn redact_sync_config(content: &str) -> SnipResult<String> {
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
-        let trimmed = line.trim();
-        if (trimmed.starts_with("api_key")
-            || trimmed.starts_with("ApiKey")
-            || trimmed.starts_with("api-key"))
-            && let Some(eq_pos) = trimmed.find('=')
-        {
-            let key_part = &trimmed[..eq_pos];
-            result.push_str(&format!("{} = \"<redacted>\"\n", key_part.trim()));
+        let trimmed = line.trim_start();
+        let lower = trimmed.to_ascii_lowercase();
+        let has_key_token =
+            lower.contains("api_key") || lower.contains("apikey") || lower.contains("api-key");
+        if has_key_token && let Some(eq_pos) = trimmed.find('=') {
+            let prefix = trimmed[..eq_pos].trim_end();
+            result.push_str(&format!("{prefix} = \"<redacted>\"\n"));
             continue;
         }
         result.push_str(line);
@@ -613,6 +612,31 @@ timeout = 30
         let redacted = redact_sync_config(input).unwrap();
         assert!(redacted.contains("timeout = 30"));
         assert!(redacted.contains("server_url"));
+    }
+
+    #[test]
+    fn test_redact_sync_config_handles_table_format() {
+        let input = r#"[settings.sync]
+api_key = "sk-secret-key-12345"
+server_url = "https://sync.example.com"
+"#;
+        let redacted = redact_sync_config(input).unwrap();
+        assert!(!redacted.contains("sk-secret-key-12345"));
+        assert!(redacted.contains("[settings.sync]"));
+        assert!(redacted.contains("api_key = \"<redacted>\""));
+        assert!(redacted.contains("server_url"));
+    }
+
+    #[test]
+    fn test_redact_sync_config_handles_indented_api_key() {
+        let input = r#"[settings.sync]
+    api_key = "sk-secret-indented"
+    device_id = "device-1"
+"#;
+        let redacted = redact_sync_config(input).unwrap();
+        assert!(!redacted.contains("sk-secret-indented"));
+        assert!(redacted.contains("device_id"));
+        assert!(redacted.contains("<redacted>"));
     }
 
     #[test]

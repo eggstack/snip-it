@@ -1127,7 +1127,11 @@ mod tests {
     #[cfg(unix)]
     fn file_mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        std::fs::metadata(path)
+            .expect("test helper: metadata read")
+            .permissions()
+            .mode()
+            & 0o777
     }
 
     #[test]

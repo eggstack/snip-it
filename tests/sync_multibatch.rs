@@ -319,7 +319,7 @@ async fn test_partial_failure_convergence() {
 
     // Phase 3: Stop the server, restart with push failure disabled.
     server_task.abort();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_task).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await;
 
     let service2 = build_file_service(db_path_str).await;
     // push_fail_after defaults to u32::MAX (no failure).

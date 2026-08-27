@@ -109,6 +109,11 @@ fn is_choice_syntax(default_content: &str) -> bool {
 /// The syntax is built from individual choices `|_value_|` concatenated with `|` separators.
 /// E.g., three choices: `|_red_||_green_||_blue_||`
 /// where the trailing `||` is the final `_|` + separator `|`.
+///
+/// Embedded `|_ ... _|` markers inside a choice value (e.g., `hello |_world_|`)
+/// will be parsed as two choices because the function does not support nested
+/// Pet markers. Pet itself never embeds `|>` inside a choice value, so this is
+/// academic.
 fn extract_choices(choice_content: &str) -> Option<Vec<String>> {
     // choice_content is the part after `=`, e.g. `|_red_||_green_||_blue_||`
     //
@@ -586,7 +591,8 @@ impl VariableAssignments {
     }
 
     /// Create from an iterator of parsed (key, value) pairs.
-    /// Rejects conflicting duplicate keys.
+    /// Duplicate keys with the same value are accepted (deduplicated);
+    /// only conflicting values are rejected.
     pub fn from_pairs(pairs: impl Iterator<Item = (String, String)>) -> SnipResult<Self> {
         let mut map = std::collections::BTreeMap::new();
         for (key, value) in pairs {

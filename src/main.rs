@@ -1419,7 +1419,7 @@ fn main() {
     }
 
     if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(Some(behavior.recovery)) {
-        snip_it::auto_sync::startup_recover_pending();
+        snip_it::auto_sync::notification::startup_recover_pending();
     }
 
     match dispatch_command(cli.command) {

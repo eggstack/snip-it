@@ -810,6 +810,7 @@ impl SyncClient {
         let config = default_retry_config();
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0;
+        let request = std::sync::Arc::new(request);
         loop {
             let remaining = self.limits.and_then(SyncRunLimits::remaining);
             if self
@@ -821,7 +822,7 @@ impl SyncClient {
                     Some("automatic sync deadline expired before retry"),
                 ));
             }
-            let mut grpc_req = tonic::Request::new(request.clone());
+            let mut grpc_req = tonic::Request::new((*request).clone());
             add_api_key_metadata(&mut grpc_req, api_key);
             let request_future = self.client.sync(grpc_req);
             let response = match self.limits {
@@ -1111,6 +1112,12 @@ fn is_loopback(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
+    if stripped.eq_ignore_ascii_case("::ffff:127.0.0.1")
+        || stripped.eq_ignore_ascii_case("::ffff:7f00:1")
+        || stripped.eq_ignore_ascii_case("::ffff:7f00:0001")
+    {
+        return true;
+    }
     stripped
         .parse::<std::net::IpAddr>()
         .is_ok_and(|addr| addr.is_loopback())
@@ -1271,6 +1278,7 @@ pub fn detect_device_conflict(
     expected_device_id: &str,
 ) -> Vec<String> {
     if expected_device_id.is_empty() {
+        tracing::debug!("device_id is empty; skipping cross-device conflict check");
         return Vec::new();
     }
     let mut conflicting_ids = Vec::new();
@@ -1355,7 +1363,9 @@ pub(crate) fn build_upload_batches(
                 ));
             }
             // Remove the overflow snippet and finalize the prior batch.
-            let overflow = current_batch.pop().expect("batch is nonempty after push");
+            let last_idx = current_batch.len() - 1;
+            let overflow = current_batch[last_idx].clone();
+            current_batch.truncate(last_idx);
             batches.push(current_batch);
             current_batch = vec![overflow];
 

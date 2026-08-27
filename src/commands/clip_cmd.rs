@@ -13,9 +13,7 @@ use std::path::PathBuf;
 /// passes the result in.
 pub(crate) fn copy_to_clipboard(snippet: &Snippet, final_command: &str) -> SnipResult<()> {
     crate::clipboard::copy_to_clipboard_auto(final_command)?;
-    if let Err(e) = crate::logging::audit_log("copy", snippet, None) {
-        tracing::debug!("Audit log write failed: {}", e);
-    }
+    crate::logging::audit_log("copy", snippet, None)?;
     let mut usage_idx = crate::usage::UsageIndex::load();
     usage_idx.record_use(&snippet.id);
     if let Err(e) = usage_idx.save() {

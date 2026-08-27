@@ -174,6 +174,9 @@ pub fn read_file_command(path: &Path) -> SnipResult<String> {
     validate_exact_command_bytes(bytes, CommandSourceKind::File)
 }
 
+/// EDGE CASE: bare ".." is intentionally NOT matched here -- it falls
+/// through to the PATH search below and produces a clean error. A
+/// leading-dot file like ".vimrc" is correctly treated as CWD-relative.
 fn has_directory_component(editor: &str) -> bool {
     editor.contains('/') || (cfg!(windows) && editor.contains('\\')) || editor.starts_with('.')
 }
@@ -745,9 +748,12 @@ mod tests {
             "temp file should use snp-editor- prefix: {name}"
         );
         let parent = path.parent().unwrap();
+        let canonical_parent =
+            std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+        let canonical_temp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
         assert_eq!(
-            parent,
-            std::env::temp_dir(),
+            canonical_parent, canonical_temp_dir,
             "temp file should be created in OS temp dir"
         );
         #[cfg(unix)]

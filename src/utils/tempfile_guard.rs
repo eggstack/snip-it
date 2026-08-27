@@ -22,7 +22,17 @@ impl TempFileGuard {
 impl Drop for TempFileGuard {
     fn drop(&mut self) {
         if !self.path.as_os_str().is_empty() {
-            let _ = std::fs::remove_file(&self.path);
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        error = %e,
+                        "TempFileGuard failed to delete temp file"
+                    );
+                }
+            }
         }
     }
 }

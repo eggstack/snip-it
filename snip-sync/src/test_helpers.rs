@@ -82,6 +82,7 @@ pub async fn start_test_server(
     tokio::task::JoinHandle<()>,
     Arc<std::sync::Mutex<Option<String>>>,
 ) {
+    // Bind to loopback only -- tests must never expose a server on all interfaces.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);

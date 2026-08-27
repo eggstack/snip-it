@@ -46,6 +46,25 @@ pub fn run(
 
     let matcher = SkimMatcherV2::default();
 
+    let output_summaries: std::collections::HashMap<usize, String> = if search_output {
+        snippets
+            .snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.deleted)
+            .filter_map(|(idx, s)| {
+                let summary = crate::output::OutputPresentation::new(&s.output).for_scoring();
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some((idx, summary))
+                }
+            })
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let mut fuzzy_scores = std::collections::HashMap::new();
     let mut filtered: Vec<_> = if let Some(ref filter_str) = filter {
         snippets
@@ -55,12 +74,11 @@ pub fn run(
             .filter(|(_, s)| !s.deleted)
             .filter(|(idx, s)| {
                 let display = if search_output {
-                    let output_summary =
-                        crate::output::OutputPresentation::new(&s.output).for_scoring();
-                    if output_summary.is_empty() {
-                        format!("{} {}", s.description, s.command)
-                    } else {
-                        format!("{} {} {}", s.description, s.command, output_summary)
+                    match output_summaries.get(idx) {
+                        Some(output_summary) => {
+                            format!("{} {} {}", s.description, s.command, output_summary)
+                        }
+                        None => format!("{} {}", s.description, s.command),
                     }
                 } else {
                     format!("{} {}", s.description, s.command)

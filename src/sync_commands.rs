@@ -66,10 +66,6 @@ fn normalized_library_name(name: &str) -> String {
     name.to_lowercase().replace(' ', "-")
 }
 
-fn recovery_marker_for(libraries_dir: &Path, library_name: &str) -> std::path::PathBuf {
-    recovery_marker_path(libraries_dir, library_name)
-}
-
 /// Handles "Library not found" recovery by re-creating the server library
 /// and retrying the sync operation.
 fn handle_library_not_found(
@@ -96,7 +92,7 @@ fn handle_library_not_found(
         ));
         return;
     };
-    let recovery_marker = recovery_marker_for(recovery_dir, lib_name);
+    let recovery_marker = recovery_marker_path(recovery_dir, lib_name);
     let mut marker = match fs::symlink_metadata(&recovery_marker) {
         Ok(_) => match read_recovery_marker(&recovery_marker) {
             Ok(marker) => marker,
@@ -187,11 +183,18 @@ fn handle_library_not_found(
     }
 
     let server_lib = if already_linked {
+        let Some(server_id) = marker.server_library_id.clone() else {
+            let e = SnipError::runtime_error(
+                "Invalid linked recovery marker",
+                Some("missing server library ID"),
+            );
+            tracing::error!(library = %lib_name, error = %e, "Refusing recovery with missing server library ID");
+            status.failed += 1;
+            results.push((lib_name.to_string(), false, e.to_string()));
+            return;
+        };
         crate::proto::Library {
-            id: marker
-                .server_library_id
-                .clone()
-                .expect("validated linked marker"),
+            id: server_id,
             name: normalized_name.clone(),
             created_at: 0,
             snippet_count: 0,

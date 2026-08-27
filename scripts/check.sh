@@ -30,6 +30,9 @@ cargo test --test destination_permissions --features test-support
 echo "=== Single-helper auto-sync contracts ==="
 cargo test --test auto_sync_closure --features test-support
 
+echo "=== Auto-sync concurrency ==="
+cargo test --test auto_sync_concurrency --features test-support -- --test-threads=1
+
 echo "=== Multi-batch sync contracts ==="
 cargo test --test sync_multibatch --features test-support -- --test-threads=1
 
