@@ -365,6 +365,13 @@ pub fn atomic_replace(
 
     // Sync parent directory.
     let parent_sync_supported = parent_dir_sync(&parent, options.durability);
+    if parent_sync_supported == Some(false) {
+        tracing::warn!(
+            path = %target.display(),
+            ?options.durability,
+            "parent directory sync unavailable; atomic rename may not survive power loss"
+        );
+    }
 
     Ok(AtomicWriteReport {
         target_existed,

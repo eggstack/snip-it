@@ -199,14 +199,13 @@ fn parse_on_disk(contents: &str) -> Result<PendingOnDisk, PendingError> {
 
     if let Ok(v1) = toml::from_str::<LegacyPendingOnDiskV1>(contents) {
         tracing::debug!("migrating legacy pending marker v1 to v2");
-        return Ok(PendingOnDisk {
-            schema: SCHEMA_VERSION,
-            generation: 1,
-            created_at_unix_ms: v1.created_at_unix_ms,
-            snapshot: PendingSnapshot::Mutation { kind: v1.kind },
-            source_transaction_id: None,
-            integrity: String::new(),
-        });
+        let snapshot = PendingSnapshot::Mutation { kind: v1.kind };
+        return Ok(build_pending_on_disk(
+            1,
+            v1.created_at_unix_ms,
+            snapshot,
+            None,
+        ));
     }
 
     Err(PendingError::Deserialize(
@@ -649,6 +648,26 @@ created_at_unix_ms = 1700000000000"#,
             PendingSnapshot::Mutation {
                 kind: MutationKind::SnippetCreate
             }
+        );
+    }
+
+    #[test]
+    fn test_legacy_v1_migration_has_valid_integrity() {
+        let contents = r#"kind = "snippet_update"
+created_at_unix_ms = 1700000000000"#;
+
+        let migrated = parse_on_disk(contents).unwrap();
+        assert_eq!(migrated.schema, SCHEMA_VERSION);
+        assert!(!migrated.integrity.is_empty());
+        assert_eq!(
+            migrated.integrity,
+            compute_integrity(
+                migrated.schema,
+                migrated.generation,
+                migrated.created_at_unix_ms,
+                &migrated.snapshot,
+                migrated.source_transaction_id.as_deref(),
+            )
         );
     }
 

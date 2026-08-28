@@ -1316,6 +1316,26 @@ fn sync_request_encoded_len(
     request.encoded_len()
 }
 
+fn varint_encoded_len(mut value: usize) -> usize {
+    let mut length = 1;
+    while value >= 128 {
+        value >>= 7;
+        length += 1;
+    }
+    length
+}
+
+fn sync_request_base_encoded_len(library_id: &str, last_sync: i64, sync_limit: i32) -> usize {
+    sync_request_encoded_len(&[], library_id, last_sync, sync_limit)
+}
+
+fn snippet_field_encoded_len(snippet: &crate::proto::Snippet) -> usize {
+    let encoded_len = snippet.encoded_len();
+    // `local_snippets` is a repeated message field: one-byte field tag,
+    // length varint, then the encoded message.
+    1 + varint_encoded_len(encoded_len) + encoded_len
+}
+
 /// Build byte-bounded upload batches from encrypted snippets.
 ///
 /// Uses Prost encoded length to measure the actual request size. Each batch is
@@ -1339,16 +1359,15 @@ pub(crate) fn build_upload_batches(
 
     let mut batches: Vec<Vec<crate::proto::Snippet>> = Vec::new();
     let mut current_batch: Vec<crate::proto::Snippet> = Vec::new();
+    let base_encoded_size = sync_request_base_encoded_len(library_id, last_sync, sync_limit);
+    let mut current_encoded_size = base_encoded_size;
 
     for snippet in encrypted_snippets {
+        let snippet_encoded_size = snippet_field_encoded_len(&snippet);
         current_batch.push(snippet);
+        current_encoded_size += snippet_encoded_size;
 
-        // Measure using SyncRequest — the larger envelope that covers
-        // both single-batch (Sync) and multi-batch (PushSnippets) paths.
-        let encoded_size =
-            sync_request_encoded_len(&current_batch, library_id, last_sync, sync_limit);
-
-        if encoded_size > byte_ceiling {
+        if current_encoded_size > byte_ceiling {
             if current_batch.len() == 1 {
                 // Single item exceeds ceiling — fail before any send.
                 let oversized = &current_batch[0];
@@ -1358,22 +1377,20 @@ pub(crate) fn build_upload_batches(
                         "snippet '{}' encoded size {} bytes exceeds request ceiling {} bytes; \
                          the local snippet is unchanged — raise both server and client message \
                          limits or reduce/split the snippet",
-                        oversized.id, encoded_size, byte_ceiling,
+                        oversized.id, current_encoded_size, byte_ceiling,
                     )),
                 ));
             }
             // Remove the overflow snippet and finalize the prior batch.
-            let last_idx = current_batch.len() - 1;
-            let overflow = current_batch[last_idx].clone();
-            current_batch.truncate(last_idx);
+            let overflow = current_batch.pop().expect("current batch is non-empty");
             batches.push(current_batch);
             current_batch = vec![overflow];
+            current_encoded_size = base_encoded_size + snippet_encoded_size;
 
             // Re-validate the new singleton immediately so an oversized
             // item following a small item is caught before any remote
             // mutation.
-            let singleton_size =
-                sync_request_encoded_len(&current_batch, library_id, last_sync, sync_limit);
+            let singleton_size = current_encoded_size;
             if singleton_size > byte_ceiling {
                 let oversized = &current_batch[0];
                 return Err(SnipError::sync_failure(
@@ -1886,6 +1903,29 @@ mod tests {
         let batches = build_upload_batches(snippets, "lib", 0, 1000, single_size + 1).unwrap();
         // First batch has at most one snippet, second has the rest.
         assert!(batches.len() >= 2);
+    }
+
+    #[test]
+    fn test_incremental_batch_size_matches_prost_encoded_length() {
+        let snippets = vec![
+            make_encrypted_snippet("a", 200),
+            make_encrypted_snippet("b", 200),
+            make_encrypted_snippet("c", 200),
+        ];
+        let estimated = sync_request_base_encoded_len("lib", 0, 1000)
+            + snippets
+                .iter()
+                .map(snippet_field_encoded_len)
+                .sum::<usize>();
+        let request = SyncRequest {
+            api_key: String::new(),
+            local_snippets: snippets,
+            last_sync_timestamp: 0,
+            library_id: "lib".to_string(),
+            limit: 1000,
+            offset: 0,
+        };
+        assert_eq!(estimated, request.encoded_len());
     }
 
     #[test]

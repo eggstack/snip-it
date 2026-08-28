@@ -280,7 +280,7 @@ pub struct SyncSettings {
     pub sync_direction: SyncDirection,
     #[serde(default)]
     pub clipboard_auto_clear_seconds: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_positive_sync_limit")]
     pub sync_limit: Option<i32>,
     /// Monotonically increasing counter incremented whenever `api_key` changes.
     /// Used by the config fingerprint to detect credential replacement without
@@ -348,10 +348,9 @@ impl Clone for SyncSettings {
 }
 
 impl SyncSettings {
-    /// Returns the sync limit value, defaulting to 1000 if not set or if
-    /// the configured value is non-positive. Negative and zero values are
-    /// silently treated as unset — `sync_limit` is a per-page snippet count
-    /// and has no defined meaning for those values.
+    /// Returns the sync limit value, defaulting to 1000 if it is not set.
+    /// Non-positive values are rejected when settings are parsed or saved;
+    /// the defensive fallback remains for manually constructed values.
     pub fn sync_limit_value(&self) -> i32 {
         self.sync_limit.filter(|&v| v > 0).unwrap_or(1000)
     }
@@ -595,6 +594,19 @@ fn default_auto_sync_debounce_seconds() -> u64 {
     2
 }
 
+fn deserialize_positive_sync_limit<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<i32>::deserialize(deserializer)?;
+    match value {
+        Some(limit) if limit <= 0 => Err(serde::de::Error::custom(
+            "sync_limit must be greater than zero",
+        )),
+        _ => Ok(value),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SyncConfigFile {
     #[serde(default)]
@@ -608,6 +620,13 @@ struct SyncConfigSettings {
 }
 
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
+    if settings.sync_limit.is_some_and(|limit| limit <= 0) {
+        return Err(SnipError::runtime_error(
+            "Invalid sync limit",
+            Some("sync_limit must be greater than zero"),
+        ));
+    }
+
     let state_dir = crate::local_data::derive_local_data_state_dir();
     let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
 
@@ -718,6 +737,19 @@ mod tests {
         assert_eq!(settings.auto_sync_failure, AutoSyncFailureMode::Warn);
         assert_eq!(settings.sync_direction, SyncDirection::Push);
         assert_eq!(settings.sync_limit, None);
+    }
+
+    #[test]
+    fn test_sync_limit_rejects_non_positive_values() {
+        for limit in ["0", "-1"] {
+            let content = format!(
+                "enabled = false\nserver_url = \"https://sync.example.com\"\nsync_interval_minutes = 30\nsync_limit = {limit}\n"
+            );
+            assert!(
+                toml::from_str::<SyncSettings>(&content).is_err(),
+                "sync_limit = {limit} should be rejected"
+            );
+        }
     }
 
     #[test]

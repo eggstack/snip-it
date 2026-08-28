@@ -181,8 +181,7 @@ fn compute_deadline(
 /// creation timestamp remains corrupt state.
 fn adopt_generation_reset(current: &PendingState, latest: PendingState) -> Option<PendingState> {
     let is_reset = latest.generation == 1 && latest.created_at_unix_ms > current.created_at_unix_ms;
-    let is_advancing = latest.created_at_unix_ms > current.created_at_unix_ms;
-    if is_reset || is_advancing {
+    if is_reset {
         tracing::info!(
             observed_generation = current.generation,
             recreated_generation = latest.generation,
@@ -633,6 +632,35 @@ mod tests {
         );
 
         assert!(matches!(result, DebounceResult::Ready(state) if state.generation == 1));
+    }
+
+    #[test]
+    fn debounce_rejects_newer_timestamp_with_non_reset_generation() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_ms: u64 = 1_700_000_000_000;
+        write_marker(dir.path(), 3, base_ms);
+        write_marker(dir.path(), 2, base_ms + 5_000);
+
+        let start = Instant::now();
+        let observed = super::PendingState {
+            generation: 3,
+            snapshot: mutation_snapshot(),
+            created_at_unix_ms: base_ms,
+        };
+        let result = super::debounce(
+            dir.path(),
+            observed,
+            start - Duration::from_secs(1),
+            start,
+            Duration::from_secs(300),
+            Duration::ZERO,
+            &super::SystemClock,
+        );
+
+        assert!(
+            matches!(result, DebounceResult::Failed(ref message) if message.contains("rollback")),
+            "non-reset generation rollback must be rejected, got {result:?}"
+        );
     }
 
     #[test]

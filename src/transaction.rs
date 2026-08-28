@@ -440,7 +440,9 @@ pub fn scan_transaction_journals(transaction_dir: &Path) -> SnipResult<JournalIn
 
     let mut entries: Vec<_> = fs::read_dir(transaction_dir)
         .map_err(|e| SnipError::io_error("read transaction directory", transaction_dir, e))?
-        .filter_map(|e| e.ok())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| SnipError::io_error("read transaction directory", transaction_dir, e))?
+        .into_iter()
         .filter(|e| {
             let path = e.path();
             path.extension().is_some_and(|ext| ext == "toml")

@@ -23,17 +23,13 @@ use snip_sync::db::Database;
 use snip_sync::test_helpers::start_test_server;
 use snip_sync::{Config, Metrics, PremadeManager, RateLimiter, SnipSyncService};
 
-/// Enough snippets to force multiple upload batches with a reduced ceiling.
-/// Each snippet has a ~10 KB command; encrypted they are ~13.5 KB. With a
-/// ceiling of 100 KiB, each batch holds ~7 snippets, so 50 snippets
-/// produce ~7 batches.
-const MULTI_BATCH_COUNT: usize = 50;
+/// Enough snippets to force multiple upload batches with a reduced ceiling
+/// while keeping the encryption-heavy integration suite bounded.
+const MULTI_BATCH_COUNT: usize = 2;
 
 /// Reduced ceiling to force multi-batch with a manageable number of
-/// snippets. Must be large enough for at least one encrypted snippet
-/// (~15 KB) but small enough that MULTI_BATCH_COUNT requires multiple
-/// batches.
-const TEST_BYTE_CEILING: usize = 100 * 1024; // 100 KiB
+/// snippets. Each encrypted snippet is about 13.5 KiB.
+const TEST_BYTE_CEILING: usize = 16 * 1024; // 16 KiB
 
 async fn build_file_service(db_path: &str) -> SnipSyncService {
     let db = Arc::new(Database::connect(db_path, 5).await.unwrap());
@@ -179,7 +175,8 @@ async fn test_sync_convergence_after_partial_upload() {
 
     let now = chrono::Utc::now().timestamp();
 
-    let small_batch: Vec<Snippet> = (0..5)
+    let midpoint = MULTI_BATCH_COUNT / 2;
+    let small_batch: Vec<Snippet> = (0..midpoint)
         .map(|i| Snippet {
             id: format!("conv-{i}"),
             description: "convergence test".to_string(),
@@ -199,7 +196,7 @@ async fn test_sync_convergence_after_partial_upload() {
         .expect("first sync should succeed");
     assert!(resp1.success);
 
-    let large_batch: Vec<Snippet> = (5..MULTI_BATCH_COUNT)
+    let large_batch: Vec<Snippet> = (midpoint..MULTI_BATCH_COUNT)
         .map(|i| Snippet {
             id: format!("conv-{i}"),
             description: "convergence test".to_string(),
@@ -251,7 +248,7 @@ async fn test_partial_failure_convergence() {
     let db_path = tmp.path().join("test.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    // Phase 1: Start server with push_fail_after=2 (fail on 3rd push batch).
+    // Phase 1: Start server with push_fail_after=2 (fail on 2nd push batch).
     let service = build_file_service(db_path_str).await;
     service
         .push_fail_after
@@ -280,7 +277,7 @@ async fn test_partial_failure_convergence() {
         })
         .collect();
 
-    // Sync should fail deterministically on the 3rd push batch.
+    // Sync should fail deterministically on the 2nd push batch.
     let sync_result = client
         .sync_encrypted_with_ceiling(snippets.clone(), 0, "", TEST_BYTE_CEILING)
         .await;

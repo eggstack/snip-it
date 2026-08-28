@@ -853,6 +853,14 @@ fn snippet_content_key(snippet: &Snippet) -> String {
         key.push('\0');
     }
     key.push_str(&snippet.output);
+    key.push('\0');
+    for folder in &snippet.folders {
+        key.push_str(folder);
+        key.push('\0');
+    }
+    key.push_str(if snippet.favorite { "1" } else { "0" });
+    key.push('\0');
+    key.push_str(&snippet.device_id);
     key
 }
 
@@ -869,6 +877,14 @@ fn deterministic_legacy_id(snippet: &Snippet, occurrence: usize) -> String {
         hasher.update(b"\0");
     }
     hasher.update(&snippet.output);
+    hasher.update(b"\0");
+    for folder in &snippet.folders {
+        hasher.update(folder);
+        hasher.update(b"\0");
+    }
+    hasher.update([u8::from(snippet.favorite)]);
+    hasher.update(b"\0");
+    hasher.update(&snippet.device_id);
     hasher.update(b"\0");
     hasher.update(occurrence.to_le_bytes());
     let hash = hasher.finalize();
@@ -891,6 +907,14 @@ fn deterministic_duplicate_id(original_id: &str, snippet: &Snippet, occurrence: 
         hasher.update(b"\0");
     }
     hasher.update(&snippet.output);
+    hasher.update(b"\0");
+    for folder in &snippet.folders {
+        hasher.update(folder);
+        hasher.update(b"\0");
+    }
+    hasher.update([u8::from(snippet.favorite)]);
+    hasher.update(b"\0");
+    hasher.update(&snippet.device_id);
     hasher.update(b"\0");
     hasher.update(occurrence.to_le_bytes());
     let hash = hasher.finalize();
@@ -1017,7 +1041,13 @@ pub fn save_library_internal(
     // Serialize from a borrowed, recency-sorted view so the full snippet
     // payloads are not cloned on every save.
     let mut order: Vec<usize> = (0..snippets.snippets.len()).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(snippets.snippets[i].updated_at));
+    if !snippets
+        .snippets
+        .windows(2)
+        .all(|pair| pair[0].updated_at >= pair[1].updated_at)
+    {
+        order.sort_by_key(|&i| std::cmp::Reverse(snippets.snippets[i].updated_at));
+    }
     let sorted_view = SortedSnippetsView {
         snippets: order.iter().map(|&i| &snippets.snippets[i]).collect(),
         folders: &snippets.folders,
@@ -2703,5 +2733,27 @@ command = "echo length"
         );
         assert!(id.starts_with("legacy-"));
         assert_eq!(id.len(), 71); // "legacy-" (7) + 64 hex chars
+    }
+
+    #[test]
+    fn test_legacy_ids_include_folder_favorite_and_device() {
+        let base = Snippet {
+            description: "same".to_string(),
+            command: "echo same".to_string(),
+            ..Default::default()
+        };
+        let base_id = deterministic_legacy_id(&base, 0);
+
+        let mut folder_variant = base.clone();
+        folder_variant.folders.push("work".to_string());
+        assert_ne!(base_id, deterministic_legacy_id(&folder_variant, 0));
+
+        let mut favorite_variant = base.clone();
+        favorite_variant.favorite = true;
+        assert_ne!(base_id, deterministic_legacy_id(&favorite_variant, 0));
+
+        let mut device_variant = base;
+        device_variant.device_id = "other-device".to_string();
+        assert_ne!(base_id, deterministic_legacy_id(&device_variant, 0));
     }
 }

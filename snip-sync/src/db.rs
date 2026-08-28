@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -135,7 +136,8 @@ impl Database {
         } else {
             SqliteConnectOptions::new().filename(url)
         }
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .busy_timeout(Duration::from_secs(5));
 
         let filename = options.get_filename();
         if filename != Path::new(":memory:")

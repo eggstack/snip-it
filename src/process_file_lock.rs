@@ -404,14 +404,7 @@ fn publish_identity(file: &mut File, identity: &LockIdentity) -> std::io::Result
 }
 
 fn generate_nonce() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}-{:x}-{:x}", std::process::id(), nanos, seq)
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn unix_now_ms() -> u64 {
