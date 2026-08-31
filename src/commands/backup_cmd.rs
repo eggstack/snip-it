@@ -70,14 +70,15 @@ impl BackupRelativePath {
         // Reject Windows drive letters and UNC paths (cross-platform check)
         // On Unix, "C:test.toml" is a valid filename but a Windows drive-relative
         // path that could cause issues on Windows. Reject on all platforms.
-        if input.len() >= 2 && input.chars().nth(1) == Some(':') {
-            let drive = input.chars().next().unwrap();
-            if drive.is_ascii_alphabetic() {
-                return Err(SnipError::runtime_error(
-                    "Windows drive-relative path in backup manifest",
-                    Some(&format!("Path contains Windows drive letter: {input}")),
-                ));
-            }
+        if input.len() >= 2
+            && input.chars().nth(1) == Some(':')
+            && let Some(drive) = input.chars().next()
+            && drive.is_ascii_alphabetic()
+        {
+            return Err(SnipError::runtime_error(
+                "Windows drive-relative path in backup manifest",
+                Some(&format!("Path contains Windows drive letter: {input}")),
+            ));
         }
 
         // Reject UNC paths (\\server\share or //server/share)
@@ -381,7 +382,7 @@ pub fn run(
     // Acquire the local-data lock for the duration of snapshot capture.
     // This ensures the backup captures either the complete before-state or
     // complete after-state of all local data, never a mixed state.
-    let state_dir = crate::local_data::derive_local_data_state_dir();
+    let state_dir = crate::local_data::transaction_dir();
     let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
     let generation_before = read_library_generation(&config_dir)?;
     let mut manifest = BackupManifest {

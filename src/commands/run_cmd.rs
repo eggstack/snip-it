@@ -296,17 +296,27 @@ pub fn run_exact(
     do_sync: bool,
     runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<crate::CommandOutcome> {
+    let runtime = if do_sync {
+        Some(runtime.ok_or_else(|| {
+            crate::error::SnipError::runtime_error(
+                "sync requested but no runtime",
+                Some("run_exact called with do_sync=true and runtime=None"),
+            )
+        })?)
+    } else {
+        None
+    };
     let result = process_snippet(snippet, false)?;
     if let crate::ProcessResult::Failed { exit_code, .. } = result {
         return Ok(crate::CommandOutcome::ExecutionFailed {
             child_code: exit_code,
         });
     }
-    if do_sync {
-        let rt = runtime.expect("run_exact: runtime required when do_sync is true");
-        if let Err(e) = crate::commands::run_explicit_sync(rt) {
-            tracing::warn!(error = %e, "post-run explicit sync failed");
-        }
+    if do_sync
+        && let Some(rt) = runtime
+        && let Err(e) = crate::commands::run_explicit_sync(rt)
+    {
+        tracing::warn!(error = %e, "post-run explicit sync failed");
     }
     Ok(crate::CommandOutcome::Success)
 }
@@ -364,5 +374,19 @@ mod tests {
         // do_sync=false, runtime=None should succeed without attempting sync
         let result = run_exact(&snippet, false, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_exact_with_sync_requires_runtime() {
+        let snippet = Snippet {
+            command: "echo hello".to_string(),
+            ..Default::default()
+        };
+        let result = run_exact(&snippet, true, None);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("sync run without a runtime should fail"),
+        };
+        assert!(error.to_string().contains("no runtime"));
     }
 }

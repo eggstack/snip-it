@@ -173,7 +173,7 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
 
     // Check for interrupted transactions before any mutation.
     let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
-    let transaction_dir = crate::local_data::derive_local_data_state_dir();
+    let transaction_dir = crate::local_data::transaction_dir();
     crate::transaction::gate_mutation_on_interrupted_transactions(
         &sync_state_dir,
         &transaction_dir,
@@ -315,6 +315,17 @@ where
         Option<String>,
     ) -> crate::error::SnipResult<crate::ProcessResult>,
 {
+    let runtime = if do_sync {
+        Some(runtime.ok_or_else(|| {
+            SnipError::runtime_error(
+                "sync requested but no runtime",
+                Some("run_snippet_selection called with do_sync=true and runtime=None"),
+            )
+        })?)
+    } else {
+        None
+    };
+
     let lib_path = match get_library_path(library)? {
         Some(p) => p,
         None => {
@@ -372,9 +383,9 @@ where
                         tracing::debug!("Audit log write failed: {}", e);
                     }
                     if do_sync {
-                        let rt = runtime
-                            .expect("run_snippet_selection: runtime required when do_sync is true");
-                        if let Err(e) = run_explicit_sync(rt) {
+                        if let Some(rt) = runtime
+                            && let Err(e) = run_explicit_sync(rt)
+                        {
                             tracing::warn!(error = %e, "post-delete explicit sync failed");
                         }
                     } else {
@@ -418,11 +429,12 @@ where
             break;
         }
     }
-    if do_sync && selected_and_processed {
-        let rt = runtime.expect("run_snippet_selection: runtime required when do_sync is true");
-        if let Err(e) = run_explicit_sync(rt) {
-            tracing::warn!(error = %e, "post-selection explicit sync failed");
-        }
+    if do_sync
+        && selected_and_processed
+        && let Some(rt) = runtime
+        && let Err(e) = run_explicit_sync(rt)
+    {
+        tracing::warn!(error = %e, "post-selection explicit sync failed");
     }
     if cancelled {
         Ok(crate::SelectionOutcome::Cancelled)
@@ -563,5 +575,17 @@ command = "echo hello"
         // through integration tests and run_exact unit tests.
         fn _assert_signature(_f: fn(&tokio::runtime::Runtime) -> crate::error::SnipResult<()>) {}
         _assert_signature(super::run_explicit_sync);
+    }
+
+    #[test]
+    fn test_run_snippet_selection_requires_runtime_for_sync() {
+        let result = run_snippet_selection(None, None, true, false, None, None, |_snippet, _| {
+            Ok(crate::ProcessResult::Continue)
+        });
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("sync selection without a runtime should fail"),
+        };
+        assert!(error.to_string().contains("no runtime"));
     }
 }

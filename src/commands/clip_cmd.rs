@@ -44,17 +44,27 @@ pub fn run_exact(
     do_sync: bool,
     runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
+    let runtime = if do_sync {
+        Some(runtime.ok_or_else(|| {
+            crate::error::SnipError::runtime_error(
+                "sync requested but no runtime",
+                Some("run_exact called with do_sync=true and runtime=None"),
+            )
+        })?)
+    } else {
+        None
+    };
     let final_command = match expand_snippet_command(snippet)? {
         crate::commands::ExpandedCommand::Cancel => return Ok(()),
         crate::commands::ExpandedCommand::Skip => return Ok(()),
         crate::commands::ExpandedCommand::Expanded(cmd) => cmd,
     };
     copy_to_clipboard(snippet, &final_command)?;
-    if do_sync {
-        let rt = runtime.expect("run_exact: runtime required when do_sync is true");
-        if let Err(e) = crate::commands::run_explicit_sync(rt) {
-            tracing::warn!(error = %e, "post-clip explicit sync failed");
-        }
+    if do_sync
+        && let Some(rt) = runtime
+        && let Err(e) = crate::commands::run_explicit_sync(rt)
+    {
+        tracing::warn!(error = %e, "post-clip explicit sync failed");
     }
     Ok(())
 }
@@ -108,5 +118,15 @@ mod tests {
         };
         let result = super::run_exact(&snippet, false, None);
         assert!(result.is_ok(), "clip run_exact without sync should succeed");
+    }
+
+    #[test]
+    fn test_clip_run_exact_with_sync_requires_runtime() {
+        let snippet = Snippet {
+            command: "echo hello".to_string(),
+            ..Default::default()
+        };
+        let result = super::run_exact(&snippet, true, None);
+        assert!(result.unwrap_err().to_string().contains("no runtime"));
     }
 }

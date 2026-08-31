@@ -1249,13 +1249,16 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
     // Run syntax check
     let output = match shell_type {
         ShellType::Bash => std::process::Command::new("bash")
-            .args(["-n", tmp.path().to_str().unwrap()])
+            .args(["-n"])
+            .arg(tmp.path())
             .output(),
         ShellType::Zsh => std::process::Command::new("zsh")
-            .args(["-n", tmp.path().to_str().unwrap()])
+            .args(["-n"])
+            .arg(tmp.path())
             .output(),
         ShellType::Fish => std::process::Command::new("fish")
-            .args(["--no-execute", tmp.path().to_str().unwrap()])
+            .args(["--no-execute"])
+            .arg(tmp.path())
             .output(),
     };
 

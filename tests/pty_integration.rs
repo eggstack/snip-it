@@ -320,6 +320,18 @@ fn test_select_ctrl_c_returns_exit_4() {
 }
 
 #[test]
+fn test_select_no_match_returns_exit_4() {
+    let (_tmp, config_dir) = setup_test_env();
+    let (code, output) = run_snp_pty(
+        &["select", "--query", "definitely-no-match"],
+        &config_dir,
+        b"\x1bq",
+    );
+    eprintln!("OUTPUT: {output}");
+    assert_eq!(code, 4, "snp select with no matches should exit 4");
+}
+
+#[test]
 fn test_select_enter_returns_exit_0() {
     let (_tmp, config_dir) = setup_test_env();
     let (code, output) = run_snp_pty(&["select", "--filter", "Test snippet"], &config_dir, b"\r");

@@ -435,14 +435,20 @@ pub fn resolve_selector(selector: &SnippetSelector) -> SnipResult<SelectionResul
 
             match all_matches.len() {
                 0 => Ok(SelectionResult::NotFound),
-                1 => Ok(SelectionResult::One(Box::new(
-                    all_matches.into_iter().next().unwrap(),
-                ))),
+                1 => {
+                    let Some(m) = all_matches.into_iter().next() else {
+                        return Ok(SelectionResult::NotFound);
+                    };
+                    Ok(SelectionResult::One(Box::new(m)))
+                }
                 _ => match selector.resolution {
                     ResolutionPolicy::All => Ok(SelectionResult::Many(all_matches)),
-                    ResolutionPolicy::First => Ok(SelectionResult::One(Box::new(
-                        all_matches.into_iter().next().unwrap(),
-                    ))),
+                    ResolutionPolicy::First => {
+                        let Some(m) = all_matches.into_iter().next() else {
+                            return Ok(SelectionResult::NotFound);
+                        };
+                        Ok(SelectionResult::One(Box::new(m)))
+                    }
                     ResolutionPolicy::Unique => {
                         let identities: Vec<SnippetIdentity> = all_matches
                             .iter()

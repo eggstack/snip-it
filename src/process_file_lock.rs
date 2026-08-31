@@ -302,7 +302,7 @@ fn inner_acquire(path: &Path, purpose: &str) -> Result<ProcessFileLock, ProcessF
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            if matches!(err.raw_os_error(), Some(libc::EWOULDBLOCK)) {
+            if is_lock_busy_error(err.raw_os_error()) {
                 let owner = read_owner(path);
                 return Err(ProcessFileLockError::Busy { owner });
             }
@@ -391,6 +391,11 @@ fn inner_acquire(path: &Path, purpose: &str) -> Result<ProcessFileLock, ProcessF
         path: path.to_path_buf(),
         identity,
     })
+}
+
+#[cfg(unix)]
+fn is_lock_busy_error(code: Option<i32>) -> bool {
+    matches!(code, Some(value) if value == libc::EWOULDBLOCK || value == libc::EAGAIN)
 }
 
 fn publish_identity(file: &mut File, identity: &LockIdentity) -> std::io::Result<()> {
@@ -511,6 +516,14 @@ mod tests {
         assert_eq!(guard.identity().purpose, "test-first");
         assert!(guard.identity().pid > 0);
         assert!(!guard.identity().nonce.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eagain_and_ewouldblock_are_lock_contention() {
+        assert!(is_lock_busy_error(Some(libc::EAGAIN)));
+        assert!(is_lock_busy_error(Some(libc::EWOULDBLOCK)));
+        assert!(!is_lock_busy_error(Some(libc::EINTR)));
     }
 
     #[test]

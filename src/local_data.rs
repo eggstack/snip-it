@@ -274,11 +274,10 @@ pub fn with_local_data_lock<T>(state_dir: &Path, f: impl FnOnce() -> T) -> SnipR
     Ok(f())
 }
 
-/// Derive the state directory for the local-data lock.
+/// Return the transaction directory shared by local-data locks and journals.
 ///
-/// Returns `<config_dir>/.transaction` — the same directory used by the
-/// transaction module.
-pub fn derive_local_data_state_dir() -> PathBuf {
+/// Returns `<config_dir>/.transaction`.
+pub fn transaction_dir() -> PathBuf {
     crate::config::derive_sync_state_dir().join(".transaction")
 }
 
@@ -340,8 +339,8 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_local_data_state_dir() {
-        let state_dir = derive_local_data_state_dir();
+    fn test_transaction_dir() {
+        let state_dir = transaction_dir();
         assert!(state_dir.ends_with(".transaction"));
     }
 

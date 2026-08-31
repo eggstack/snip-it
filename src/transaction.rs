@@ -1049,6 +1049,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
     // create_new succeeding and content being written.
     let content = toml::to_string_pretty(&info)
         .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
+    let mut empty_retries = 0u32;
 
     // Single acquisition loop: create_new, write immediately, classify existing owner.
     loop {
@@ -1102,8 +1103,16 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                     Ok(info) => info,
                     Err(_) if content.trim().is_empty() => {
                         // Empty file — another writer just called
-                        // create_new but hasn't written yet. Retry
-                        // instead of quarantining.
+                        // create_new but hasn't written yet. Retry briefly,
+                        // then reclaim a file left by a crashed writer.
+                        empty_retries += 1;
+                        if empty_retries > 50 {
+                            tracing::warn!(
+                                "Empty transaction lock record did not become valid; quarantining"
+                            );
+                            quarantine_stale_lock(&lock_path)?;
+                            empty_retries = 0;
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
@@ -2576,6 +2585,26 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("lock"), "Expected lock error, got: {msg}");
+    }
+
+    #[test]
+    fn test_empty_lock_is_reclaimed_after_bounded_wait() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("transaction.lock");
+        fs::write(&lock_path, "").unwrap();
+
+        let lock = acquire_transaction_lock(dir.path(), "reclaim-empty").unwrap();
+        assert_eq!(lock.info.operation, "reclaim-empty");
+        assert!(
+            dir.path()
+                .read_dir()
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .any(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(TRANSACTION_QUARANTINE_PREFIX))
+        );
     }
 
     #[test]

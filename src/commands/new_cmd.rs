@@ -323,7 +323,15 @@ pub fn parse_editor_spec(spec: &str) -> SnipResult<EditorCommand> {
     }
 
     let mut iter = parts.into_iter();
-    let program = iter.next().expect("checked non-empty above").into();
+    let program = iter
+        .next()
+        .ok_or_else(|| {
+            SnipError::runtime_error(
+                "Editor command is empty",
+                Some("the editor specification must contain a program"),
+            )
+        })?
+        .into();
     let args: Vec<OsString> = iter.map(OsString::from).collect();
     Ok(EditorCommand { program, args })
 }

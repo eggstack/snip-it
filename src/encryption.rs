@@ -59,11 +59,10 @@ static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
 
 /// Clear the session key cache. Should be called at the end of a sync operation.
 pub fn clear_key_cache() {
-    if let Ok(mut cache) = KEY_CACHE.lock() {
-        // Every cached value is a `DerivedKey` (ZeroizeOnDrop), so clearing
-        // the map wipes the key material even when this is never called.
-        cache.clear();
-    }
+    let mut cache = KEY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // Every cached value is a `DerivedKey` (ZeroizeOnDrop), so clearing
+    // the map wipes the key material even when this is never called.
+    cache.clear();
 }
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop, Default)]

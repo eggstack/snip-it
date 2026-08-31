@@ -41,7 +41,7 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
     // mutating operation: refuse when interrupted transactions await
     // recovery (same invariant as every other writer).
     let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
-    let transaction_dir = crate::local_data::derive_local_data_state_dir();
+    let transaction_dir = crate::local_data::transaction_dir();
     crate::transaction::gate_mutation_on_interrupted_transactions(
         &sync_state_dir,
         &transaction_dir,

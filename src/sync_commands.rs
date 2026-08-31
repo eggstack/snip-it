@@ -302,7 +302,7 @@ fn handle_library_not_found(
                     {
                         tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
                     }
-                    status.pulled += server_snippets.len() as u32;
+                    status.add_pulled(server_snippets.len());
                     results.push((
                         lib_name.to_string(),
                         true,
@@ -566,6 +566,12 @@ impl SyncStatus {
             conflicts: 0,
             failed: 0,
         }
+    }
+
+    fn add_pulled(&mut self, count: usize) {
+        self.pulled = self
+            .pulled
+            .saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
     }
 }
 
@@ -868,7 +874,7 @@ pub(crate) fn run_sync_with_limits(
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
 
-                                status.pulled += server_snippets.len() as u32;
+                                status.add_pulled(server_snippets.len());
                                 if has_failures {
                                     status.conflicts += 1;
                                 }
@@ -956,7 +962,7 @@ pub(crate) fn run_sync_with_limits(
                                 {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
-                                status.pulled += server_snippets.len() as u32;
+                                status.add_pulled(server_snippets.len());
                                 if !conflicts.is_empty() {
                                     results.push((
                                         lib_name.clone(),
@@ -1184,6 +1190,10 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                 VersionWinner::Equivalent => merged_snippets.push((*local_snip).clone()),
             }
         } else {
+            // A server-only tombstone is intentionally dropped: the local
+            // device never observed this snippet and therefore cannot have a
+            // local deletion to preserve. This is the no-resurrection policy
+            // for deletions that were never synced to this device.
             if server_snip.deleted {
                 continue;
             }
