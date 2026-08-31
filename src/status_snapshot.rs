@@ -242,6 +242,9 @@ pub fn pending_state_view(state_dir: &Path) -> PendingStateView {
         Err(PendingError::Serialize(_)) => PendingStateView::Corrupt {
             reason_code: "serialization_failure".to_string(),
         },
+        Err(PendingError::Scheduling(_)) => PendingStateView::Inaccessible {
+            reason_code: "scheduling_failure".to_string(),
+        },
     }
 }
 

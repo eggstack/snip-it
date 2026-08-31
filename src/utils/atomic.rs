@@ -334,8 +334,12 @@ pub fn atomic_replace(
         file.flush()
             .map_err(|e| SnipError::io_error("flush temp file", &tmp_path, e))?;
 
-        // For durable data, sync to physical storage.
-        if options.durability == Durability::DurableUserData {
+        // For durable data (user content and sensitive config), sync to physical storage.
+        // SensitiveConfig (API keys, sync recovery markers) must survive power loss too.
+        if matches!(
+            options.durability,
+            Durability::DurableUserData | Durability::SensitiveConfig
+        ) {
             file.sync_all()
                 .map_err(|e| SnipError::io_error("sync temp file", &tmp_path, e))?;
         }

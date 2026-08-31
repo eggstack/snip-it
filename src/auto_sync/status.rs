@@ -309,7 +309,13 @@ fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                "system clock is before UNIX epoch; auto-sync status timestamps will \
+                 report 0 and sync will fail with ClockSkew until the clock is corrected"
+            );
+            0
+        })
 }
 
 /// Compute a configuration fingerprint from sync settings.

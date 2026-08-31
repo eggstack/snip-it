@@ -258,6 +258,8 @@ pub fn clear_if_generation_matches(
 }
 
 pub fn clear(state_dir: &Path) -> Result<(), PendingError> {
+    let _guard = pending_lock::acquire_pending_txn(state_dir, PENDING_TXN_LOCK_TIMEOUT)
+        .map_err(PendingError::Lock)?;
     let path = pending_path(state_dir);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -328,10 +330,16 @@ pub enum PendingError {
     Io(std::io::Error),
     Serialize(toml::ser::Error),
     Deserialize(toml::de::Error),
-    IntegrityMismatch { expected: String, got: String },
+    IntegrityMismatch {
+        expected: String,
+        got: String,
+    },
     NotFound,
     Lock(PendingTxnLockError),
     Corrupted(String),
+    /// Transient scheduling failure (e.g., worker spawn error) — not data corruption.
+    /// The pending marker is preserved on disk for retry at the next opportunity.
+    Scheduling(String),
 }
 
 impl std::fmt::Display for PendingError {
@@ -346,6 +354,7 @@ impl std::fmt::Display for PendingError {
             Self::NotFound => write!(f, "pending state not found"),
             Self::Lock(e) => write!(f, "pending txn lock error: {e}"),
             Self::Corrupted(msg) => write!(f, "corrupted pending state: {msg}"),
+            Self::Scheduling(msg) => write!(f, "scheduling failure: {msg}"),
         }
     }
 }
@@ -501,7 +510,13 @@ fn unix_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                "system clock is before UNIX epoch; auto-sync timestamps will report 0 \
+                 and sync will fail with ClockSkew until the clock is corrected"
+            );
+            0
+        })
 }
 
 #[cfg(test)]

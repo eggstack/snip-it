@@ -219,7 +219,13 @@ fn unix_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                "system clock is before UNIX epoch; auto-sync backoff timestamps will \
+                 report 0 and sync will fail with ClockSkew until the clock is corrected"
+            );
+            0
+        })
 }
 
 #[cfg(test)]

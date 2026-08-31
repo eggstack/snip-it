@@ -540,13 +540,13 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
     }
 
     // Phase 8: Write report file if requested
-    if let Some(ref report_path) = options.report_file {
+    if let Some(ref report_path) = options.report_file
+        && !options.dry_run
+    {
         let json = serde_json::to_string_pretty(&report).map_err(|e| {
             SnipError::runtime_error("Failed to serialize report", Some(&e.to_string()))
         })?;
-        if !options.dry_run {
-            crate::utils::atomic::write_private_atomic(report_path, &json, "import-report")?;
-        }
+        crate::utils::atomic::write_private_atomic(report_path, &json, "import-report")?;
     }
 
     Ok(())

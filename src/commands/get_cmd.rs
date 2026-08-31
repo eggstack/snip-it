@@ -276,10 +276,13 @@ fn expand_without_prompt(command: &str, assignments: &Option<VariableAssignments
                     .as_ref()
                     .and_then(|a| a.get(&var.name))
                     .unwrap_or(fallback);
-                if let Some(start) = result.find(&format!("<{}=", var.name))
-                    && let Some(end) = result[start..].find('>')
+                // Search the original `command` for the token boundary, not
+                // `result` (which may already contain substituted text that
+                // could spuriously look like another `<name=` token).
+                if let Some(start) = command.find(&format!("<{}=", var.name))
+                    && let Some(end) = command[start..].find('>')
                 {
-                    let full_token = &result[start..=start + end];
+                    let full_token = &command[start..=start + end];
                     result = result.replacen(full_token, replacement, 1);
                 }
             }

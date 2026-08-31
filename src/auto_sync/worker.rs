@@ -458,7 +458,13 @@ fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                "system clock is before UNIX epoch; auto-sync worker timestamps will \
+                 report 0 and sync will fail with ClockSkew until the clock is corrected"
+            );
+            0
+        })
 }
 
 pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending::PendingError> {
@@ -473,7 +479,7 @@ pub fn startup_recover(state_dir: &Path) -> Result<Option<PendingState>, pending
         crate::auto_sync::schedule::Caller::StartupRecovery,
     ) {
         tracing::warn!(%error, "startup recovery scheduling failed; pending work preserved");
-        return Err(pending::PendingError::Corrupted(format!(
+        return Err(pending::PendingError::Scheduling(format!(
             "startup recovery scheduling failed: {error}"
         )));
     }

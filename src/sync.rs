@@ -643,7 +643,20 @@ impl SyncClient {
                 );
             }
 
-            *offset = offset.saturating_add(i32::try_from(snippets_len).unwrap_or(i32::MAX));
+            let next_offset =
+                offset.saturating_add(i32::try_from(snippets_len).unwrap_or(i32::MAX));
+            // Detect i32 saturation: a library larger than ~2.1B snippets
+            // cannot be paginated through a 32-bit offset. Surface an
+            // explicit error instead of looping with an offset stuck at
+            // i32::MAX (which would otherwise terminate only via the
+            // MAX_SYNC_PAGES bound, masking the real cause).
+            if next_offset == i32::MAX {
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::RequestTooLarge,
+                    Some("library exceeds i32::MAX snippets; pagination offset saturated"),
+                ));
+            }
+            *offset = next_offset;
         }
     }
 
