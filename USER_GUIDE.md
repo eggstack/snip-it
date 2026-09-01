@@ -703,6 +703,7 @@ Useful environment variables:
 | `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | `0` for direct terminal runs |
 | `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds | `5` |
 | `SNP_ALLOW_PLAINTEXT_API_KEY` | Permit plaintext API-key storage when keychain storage fails | unset |
+| `SNP_ALLOW_DIR_FSYNC_FAILURE` | Allow atomic writes to continue when the filesystem rejects parent-directory fsync; weakens power-loss durability | unset |
 | `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
 | `SNP_THEME` | Legacy theme or theme filename | bundled default |

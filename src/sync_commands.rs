@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -419,24 +419,31 @@ impl From<&Snippet> for ProtoSnippet {
     }
 }
 
-fn get_library_sync_info(mgr: &library::LibraryManager, lib_name: &str) -> (String, i64) {
+fn get_library_sync_info(mgr: &mut library::LibraryManager, lib_name: &str) -> (String, i64) {
     match mgr.get_library_by_filename(lib_name) {
         Some(l) => {
             let id = l.library_id.clone();
-            if !id.is_empty() && l.server_id.as_deref() != Some(id.as_str()) {
+            let server_id = l.server_id.clone();
+            let last_sync = l.last_sync.unwrap_or(0);
+            if server_id.as_deref() != Some(id.as_str()) {
                 tracing::warn!(
                     "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
                     lib_name,
                     id,
-                    l.server_id
+                    server_id
                 );
-                // Never sync against the stale library_id: prefer the
-                // authoritative server-side link when present, otherwise
-                // return an empty id so the caller re-creates/re-links.
-                let fallback = l.server_id.clone().unwrap_or_default();
-                return (fallback, l.last_sync.unwrap_or(0));
+                if let Some(server_id) = server_id {
+                    if let Err(e) = mgr.relink_server_library(lib_name, &server_id, Some(last_sync))
+                    {
+                        tracing::error!(library = %lib_name, error = %e, "Failed to repair stale library linkage");
+                    }
+                    return (server_id, last_sync);
+                }
+                // Without an authoritative server ID, return an empty ID so
+                // the caller follows the normal create/re-link path.
+                return (String::new(), last_sync);
             }
-            (id, l.last_sync.unwrap_or(0))
+            (id, last_sync)
         }
         None => (String::new(), 0),
     }
@@ -740,7 +747,7 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
 
-        let (library_id, _last_sync) = get_library_sync_info(&mgr, lib_name);
+        let (library_id, _last_sync) = get_library_sync_info(&mut mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::info!(library = %lib_name, "Creating library on server");
@@ -801,8 +808,10 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
         completed += 1;
-        print!("\r[{completed}/{total}] Syncing {lib_name}...");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+        if std::io::stdout().is_terminal() {
+            print!("\r[{completed}/{total}] Syncing {lib_name}...");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
 
         let lib_path = mgr.get_libraries_dir().join(format!("{lib_name}.toml"));
 
@@ -811,7 +820,7 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
 
-        let (library_id, last_sync) = get_library_sync_info(&mgr, lib_name);
+        let (library_id, last_sync) = get_library_sync_info(&mut mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::warn!(library = %lib_name, "Library not linked to server, skipping");

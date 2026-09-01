@@ -4,6 +4,7 @@
 //! Application Support on macOS, AppData on Windows) and macOS legacy
 //! config directory migration.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 /// Returns the path to the user's snp config directory without touching
@@ -61,17 +62,15 @@ pub fn ensure_config_dir() -> std::io::Result<PathBuf> {
 }
 
 /// Returns the old macOS platform-specific config directory
-/// (`~/Library/Application Support/snp/`) if it exists and the
-/// canonical config directory (`~/.config/snp/`) does not.
-/// This is used to detect data that needs migration.
+/// (`~/Library/Application Support/snp/`) if it exists and differs from the
+/// canonical config directory (`~/.config/snp/`). Returning the legacy path
+/// even when the new path exists lets interrupted cross-device migrations
+/// resume on the next startup.
 pub fn get_legacy_macos_config_dir() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
     }
     let new_dir = get_config_dir();
-    if new_dir.exists() {
-        return None;
-    }
     let legacy_dir = dirs::config_dir()?.join("snp");
     if legacy_dir.exists() && legacy_dir != new_dir {
         Some(legacy_dir)
@@ -90,6 +89,19 @@ fn copy_recursively(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     } else {
         std::fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+fn sync_recursively(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            sync_recursively(&entry?.path())?;
+        }
+        #[cfg(unix)]
+        std::fs::File::open(path)?.sync_all()?;
+    } else {
+        std::fs::File::open(path)?.sync_all()?;
     }
     Ok(())
 }
@@ -116,20 +128,27 @@ pub fn migrate_macos_config_dir() -> std::io::Result<()> {
         let entry = entry?;
         let src = entry.path();
         let dst = new_dir.join(entry.file_name());
-        if std::fs::rename(&src, &dst).is_ok() {
-            continue;
-        }
-        copy_recursively(&src, &dst)?;
-        if src.is_dir() {
-            let _ = std::fs::remove_dir_all(&src);
-        } else {
-            let _ = std::fs::remove_file(&src);
+        match std::fs::rename(&src, &dst) {
+            Ok(()) => continue,
+            Err(error) if error.kind() == ErrorKind::CrossesDevices || dst.exists() => {
+                copy_recursively(&src, &dst)?;
+                sync_recursively(&dst)?;
+                if src.is_dir() {
+                    std::fs::remove_dir_all(&src)?;
+                } else {
+                    std::fs::remove_file(&src)?;
+                }
+            }
+            Err(error) => return Err(error),
         }
     }
 
-    // Remove legacy dir if it's now empty
+    #[cfg(unix)]
+    std::fs::File::open(&new_dir)?.sync_all()?;
+
+    // Remove legacy dir if it is now empty
     if std::fs::read_dir(&legacy_dir)?.next().is_none() {
-        let _ = std::fs::remove_dir(&legacy_dir);
+        std::fs::remove_dir(&legacy_dir)?;
     }
 
     tracing::info!("Config migration complete");

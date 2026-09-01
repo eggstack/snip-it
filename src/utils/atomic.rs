@@ -204,6 +204,46 @@ fn parent_dir_sync(parent: &Path, durability: Durability) -> Option<bool> {
     }
 }
 
+fn sync_parent_dir(
+    parent: &Path,
+    target: &Path,
+    durability: Durability,
+) -> SnipResult<Option<bool>> {
+    if matches!(
+        durability,
+        Durability::DurableUserData | Durability::SensitiveConfig
+    ) {
+        match parent_dir_sync_durable(parent) {
+            Ok(()) => return Ok(Some(true)),
+            Err(e) if std::env::var_os("SNP_ALLOW_DIR_FSYNC_FAILURE").is_some_and(|v| v == "1") => {
+                tracing::warn!(
+                    path = %target.display(),
+                    error = %e,
+                    "parent directory fsync failed; continuing due to SNP_ALLOW_DIR_FSYNC_FAILURE=1"
+                );
+                return Ok(Some(false));
+            }
+            Err(e) => {
+                return Err(SnipError::io_error(
+                    "fsync parent directory after atomic write",
+                    parent,
+                    e,
+                ));
+            }
+        }
+    }
+
+    let supported = parent_dir_sync(parent, durability);
+    if supported == Some(false) {
+        tracing::warn!(
+            path = %target.display(),
+            ?durability,
+            "parent directory sync unavailable; atomic rename may not survive power loss"
+        );
+    }
+    Ok(supported)
+}
+
 /// Write a file via a same-directory temp file and atomic rename.
 ///
 /// On Unix the temp file is created with `0o600` so newly written config and
@@ -253,21 +293,7 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
     // directory fsync; permit an explicit opt-out while keeping the durable
     // default for ordinary filesystems.
     #[cfg(unix)]
-    if let Err(e) = parent_dir_sync_durable(parent) {
-        if std::env::var_os("SNP_ALLOW_DIR_FSYNC_FAILURE").is_some_and(|v| v == "1") {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "parent directory fsync failed; continuing due to SNP_ALLOW_DIR_FSYNC_FAILURE=1"
-            );
-        } else {
-            return Err(SnipError::io_error(
-                "fsync parent directory after atomic write",
-                parent,
-                e,
-            ));
-        }
-    }
+    sync_parent_dir(parent, path, Durability::SensitiveConfig)?;
 
     Ok(())
 }
@@ -374,14 +400,7 @@ pub fn atomic_replace(
     }
 
     // Sync parent directory.
-    let parent_sync_supported = parent_dir_sync(&parent, options.durability);
-    if parent_sync_supported == Some(false) {
-        tracing::warn!(
-            path = %target.display(),
-            ?options.durability,
-            "parent directory sync unavailable; atomic rename may not survive power loss"
-        );
-    }
+    let parent_sync_supported = sync_parent_dir(&parent, target, options.durability)?;
 
     Ok(AtomicWriteReport {
         target_existed,

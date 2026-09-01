@@ -63,6 +63,18 @@ fn hash_api_key(api_key: &str) -> String {
 static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub(crate) struct KeyCacheGuard;
+
+impl Drop for KeyCacheGuard {
+    fn drop(&mut self) {
+        clear_key_cache();
+    }
+}
+
+pub(crate) fn key_cache_guard() -> KeyCacheGuard {
+    KeyCacheGuard
+}
+
 /// Clear the session key cache. Should be called at the end of a sync operation.
 pub fn clear_key_cache() {
     let mut cache = KEY_CACHE.lock().unwrap_or_else(|e| e.into_inner());

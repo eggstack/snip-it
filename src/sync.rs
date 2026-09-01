@@ -350,6 +350,7 @@ impl SyncClient {
         library_id: &str,
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
+        let _key_cache_guard = encryption::key_cache_guard();
         self.ensure_budget()?;
         let api_key = self.settings.api_key.as_str();
         let (encrypted_snippets, encrypt_failed_ids) = encrypt_snippets(api_key, &local_snippets);
@@ -1100,7 +1101,10 @@ fn allow_plaintext_http(uri: &Uri) -> bool {
     if scheme != "http" {
         return true; // HTTPS or other schemes are fine.
     }
-    if is_loopback(uri.host().unwrap_or("")) {
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    if is_loopback(host) {
         return true;
     }
     // SNIP_SYNC_ALLOW_HTTP overrides the loopback check (for testing).
@@ -1136,6 +1140,7 @@ async fn create_tls_channel(
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let uri: Uri = server_url.parse()?;
     let scheme = uri.scheme_str().unwrap_or("https").to_ascii_lowercase();
+    let uri_host = uri.host().ok_or("No host in URI")?;
 
     if scheme == "http" && !allow_plaintext_http(&uri) {
         return Err(
@@ -1146,7 +1151,7 @@ async fn create_tls_channel(
     }
 
     let host = if scheme == "https" {
-        Some(uri.host().ok_or("No host in URI")?.to_string())
+        Some(uri_host.to_string())
     } else {
         None
     };

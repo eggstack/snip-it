@@ -218,9 +218,8 @@ fn strip_integrity_line(content: &str) -> String {
 pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
     let key = toml_cache_key(path);
 
-    let path_metadata = toml_path_metadata(path)?;
-
     let cache = lock_toml_cache();
+    let path_metadata = toml_path_metadata(path)?;
     if let Some(entry) = cache.entries.get(&key)
         && entry.mtime == path_metadata.mtime
         && entry.mtime_nanos == path_metadata.mtime_nanos
