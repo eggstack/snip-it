@@ -48,7 +48,13 @@ const MAX_KEY_CACHE_SIZE: usize = 10_000;
 /// cause one user's derived key to be served from another user's cache entry.
 fn hash_api_key(api_key: &str) -> String {
     let hash = Sha256::digest(api_key.as_bytes());
-    hash.iter().map(|b| format!("{b:02x}")).collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(hash.len() * 2);
+    for byte in hash {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 /// Session-local cache for derived keys to avoid re-running Argon2id

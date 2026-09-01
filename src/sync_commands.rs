@@ -39,6 +39,14 @@ enum RecoveryPhase {
     Linked,
 }
 
+struct KeyCacheGuard;
+
+impl Drop for KeyCacheGuard {
+    fn drop(&mut self) {
+        crate::encryption::clear_key_cache();
+    }
+}
+
 fn recovery_marker_path(libraries_dir: &Path, library_name: &str) -> std::path::PathBuf {
     libraries_dir.join(format!("{library_name}.sync_recovery"))
 }
@@ -635,6 +643,7 @@ pub(crate) fn run_sync_with_limits(
     runtime: &tokio::runtime::Runtime,
     limits: Option<sync::SyncRunLimits>,
 ) -> SnipResult<()> {
+    let _key_cache_guard = KeyCacheGuard;
     let direction = if push_only {
         SyncDirection::Push
     } else if pull_only {
@@ -1019,9 +1028,6 @@ pub(crate) fn run_sync_with_limits(
             tracing::info!(library = %name, details = %msg, "Sync result");
         }
     }
-
-    // Clear the session key cache to free memory from derived keys
-    crate::encryption::clear_key_cache();
 
     tracing::info!(
         pushed = status.pushed,

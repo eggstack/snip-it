@@ -16,6 +16,7 @@ use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::Read;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -91,6 +92,13 @@ struct CachedToml {
     mtime_nanos: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TomlMetadata {
+    mtime: SystemTime,
+    len: u64,
+    mtime_nanos: u32,
+}
+
 struct TomlCache {
     entries: HashMap<String, CachedToml>,
     insertion_order: VecDeque<String>,
@@ -123,11 +131,44 @@ fn lock_toml_cache() -> std::sync::MutexGuard<'static, TomlCache> {
 }
 
 pub fn invalidate_toml_cache(path: &std::path::Path) {
-    let key = path.to_string_lossy().to_string();
+    let key = toml_cache_key(path);
     if let Ok(mut cache) = TOML_CACHE.lock() {
         cache.entries.remove(&key);
         cache.insertion_order.retain(|k| k != &key);
     }
+}
+
+fn toml_cache_key(path: &std::path::Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| Some(parent.canonicalize().ok()?.join(path.file_name()?)))
+            .unwrap_or_else(|| path.to_path_buf())
+    });
+    canonical.to_string_lossy().into_owned()
+}
+
+fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMetadata> {
+    let metadata = file
+        .metadata()
+        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
+    let mtime = metadata
+        .modified()
+        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
+    let mtime_nanos = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    Ok(TomlMetadata {
+        mtime,
+        len: metadata.len(),
+        mtime_nanos,
+    })
+}
+
+fn toml_path_metadata(path: &std::path::Path) -> SnipResult<TomlMetadata> {
+    let file = fs::File::open(path)
+        .map_err(|e| SnipError::io_error("open toml file", path.to_path_buf(), e))?;
+    toml_metadata(&file, path)
 }
 
 fn compute_crc32(data: &str) -> u32 {
@@ -175,68 +216,64 @@ fn strip_integrity_line(content: &str) -> String {
 }
 
 pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
-    let key = path.to_string_lossy().to_string();
+    let key = toml_cache_key(path);
 
-    let metadata = fs::metadata(path)
-        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
-    let mtime = metadata
-        .modified()
-        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
-    let len = metadata.len();
-    let mtime_nanos = mtime
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
+    let path_metadata = toml_path_metadata(path)?;
 
     let cache = lock_toml_cache();
     if let Some(entry) = cache.entries.get(&key)
-        && entry.mtime == mtime
-        && entry.mtime_nanos == mtime_nanos
-        && entry.len == len
+        && entry.mtime == path_metadata.mtime
+        && entry.mtime_nanos == path_metadata.mtime_nanos
+        && entry.len == path_metadata.len
     {
         return Ok(entry.content.clone());
     }
     drop(cache);
 
-    let content = fs::read_to_string(path)
-        .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
-
-    // Capture metadata after reading so a write between the initial stat and
-    // read cannot install a cache entry describing the old file.
-    let metadata = fs::metadata(path)
-        .map_err(|e| SnipError::io_error("stat toml file", path.to_path_buf(), e))?;
-    let mtime = metadata
-        .modified()
-        .map_err(|e| SnipError::io_error("read mtime", path.to_path_buf(), e))?;
-    let len = metadata.len();
-    let mtime_nanos = mtime
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-
-    let mut cache = lock_toml_cache();
-    while cache.entries.len() >= MAX_TOML_CACHE_SIZE {
-        let Some(oldest) = cache.insertion_order.pop_front() else {
-            break;
-        };
-        if cache.entries.remove(&oldest).is_some() {
-            break;
+    // Read through the opened file and verify that its metadata did not change
+    // during the read. This keeps content and cache metadata tied to one file
+    // snapshot, even if the path is atomically replaced concurrently.
+    for _ in 0..2 {
+        let mut file = fs::File::open(path)
+            .map_err(|e| SnipError::io_error("open toml file", path.to_path_buf(), e))?;
+        let before = toml_metadata(&file, path)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
+        let after = toml_metadata(&file, path)?;
+        if before != after {
+            continue;
         }
+
+        let mut cache = lock_toml_cache();
+        while cache.entries.len() >= MAX_TOML_CACHE_SIZE {
+            let Some(oldest) = cache.insertion_order.pop_front() else {
+                break;
+            };
+            if cache.entries.remove(&oldest).is_some() {
+                break;
+            }
+        }
+
+        if !cache.entries.contains_key(&key) {
+            cache.insertion_order.push_back(key.clone());
+        }
+        cache.entries.insert(
+            key.clone(),
+            CachedToml {
+                mtime: after.mtime,
+                len: after.len,
+                content: content.clone(),
+                mtime_nanos: after.mtime_nanos,
+            },
+        );
+        return Ok(content);
     }
 
-    if !cache.entries.contains_key(&key) {
-        cache.insertion_order.push_back(key.clone());
-    }
-    cache.entries.insert(
-        key,
-        CachedToml {
-            mtime,
-            len,
-            content: content.clone(),
-            mtime_nanos,
-        },
-    );
-    Ok(content)
+    Err(SnipError::runtime_error(
+        "read toml file",
+        Some("file changed while being read"),
+    ))
 }
 
 /// Sync configuration settings.
@@ -823,6 +860,18 @@ mod tests {
         let occurrences = cache.insertion_order.iter().filter(|k| **k == key).count();
         assert_eq!(occurrences, 1);
         assert_eq!(cache.entries.get(&key).map(|e| e.len), Some(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_toml_cache_key_canonicalizes_symlink_aliases() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("real.toml");
+        let alias = temp_dir.path().join("alias.toml");
+        std::fs::write(&path, "value = 1\n").unwrap();
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+
+        assert_eq!(toml_cache_key(&path), toml_cache_key(&alias));
     }
 
     #[test]

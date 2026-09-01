@@ -248,19 +248,25 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
     fs::rename(&tmp_path, path).map_err(|e| SnipError::io_error("atomic rename file", path, e))?;
     guard.persist();
 
-    // Flush the rename's directory entry so the new file survives power
-    // loss. This is the persistence path for all primary user data: a
-    // failed directory fsync means durability is not guaranteed, so the
-    // error must surface instead of reporting a successful write. (Other
-    // platforms cannot dir-fsync through std; there the rename is the
-    // best available guarantee, as before.)
+    // Flush the rename's directory entry so the new file survives power loss.
+    // Some filesystems (notably FUSE and certain container mounts) reject
+    // directory fsync; permit an explicit opt-out while keeping the durable
+    // default for ordinary filesystems.
     #[cfg(unix)]
     if let Err(e) = parent_dir_sync_durable(parent) {
-        return Err(SnipError::io_error(
-            "fsync parent directory after atomic write",
-            parent,
-            e,
-        ));
+        if std::env::var_os("SNP_ALLOW_DIR_FSYNC_FAILURE").is_some_and(|v| v == "1") {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "parent directory fsync failed; continuing due to SNP_ALLOW_DIR_FSYNC_FAILURE=1"
+            );
+        } else {
+            return Err(SnipError::io_error(
+                "fsync parent directory after atomic write",
+                parent,
+                e,
+            ));
+        }
     }
 
     Ok(())

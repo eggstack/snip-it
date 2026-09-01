@@ -80,7 +80,13 @@ pub fn record_pending_mutation(
 
     let path = pending_path(state_dir);
     let (new_generation, created_at_ms) = match read_state(&path) {
-        Ok(existing) => (existing.generation.saturating_add(1), unix_now_ms()),
+        Ok(existing) => (
+            existing
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| PendingError::Corrupted("generation overflow".into()))?,
+            unix_now_ms(),
+        ),
         Err(PendingError::NotFound) => (1u64, unix_now_ms()),
         Err(e) => return Err(e),
     };
@@ -868,5 +874,25 @@ created_at_unix_ms = 1700000000000"#;
         set_local_generation(dir.path(), 42).unwrap();
         let state = read_state_from_dir(dir.path()).unwrap();
         assert_eq!(state.generation, 42);
+    }
+
+    #[test]
+    fn test_record_pending_mutation_rejects_generation_overflow() {
+        let dir = TempDir::new().unwrap();
+        set_local_generation(dir.path(), u64::MAX).unwrap();
+
+        let result = record_pending_mutation(
+            dir.path(),
+            PendingSnapshot::Mutation {
+                kind: MutationKind::SnippetCreate,
+            },
+        );
+        assert!(
+            matches!(result, Err(PendingError::Corrupted(message)) if message == "generation overflow")
+        );
+        assert_eq!(
+            read_state_from_dir(dir.path()).unwrap().generation,
+            u64::MAX
+        );
     }
 }

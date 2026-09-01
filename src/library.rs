@@ -1125,14 +1125,15 @@ fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()
             let name = entry.file_name().to_string_lossy().to_string();
             name.starts_with(&prefix) && name.ends_with(".toml.bak")
         })
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            let modified = metadata.modified().ok()?;
-            Some((entry.path(), modified))
+        .map(|entry| {
+            (
+                entry.path(),
+                entry.file_name().to_string_lossy().into_owned(),
+            )
         })
         .collect();
 
-    backups.sort_by_key(|b| std::cmp::Reverse(b.1));
+    backups.sort_by(|a, b| b.1.cmp(&a.1));
 
     if backups.len() > MAX_BACKUPS_PER_LIBRARY {
         for (path, _) in backups.into_iter().skip(MAX_BACKUPS_PER_LIBRARY) {

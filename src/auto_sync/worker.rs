@@ -118,7 +118,7 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
                 );
             }
         };
-        let observed = match preflight_check(state_dir, observed.generation) {
+        let observed = match preflight_check(state_dir, &observed) {
             Ok(state) => state,
             Err(error) => {
                 tracing::debug!(%error, "auto-sync helper preflight found no executable work");
@@ -132,6 +132,9 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
         match pending::read_state_from_dir(state_dir) {
             Ok(current) if current.generation > observed.generation => continue,
             Ok(current) if current.generation < observed.generation => {
+                if adopt_generation_reset(&observed, current).is_some() {
+                    continue;
+                }
                 return record_sync_failure(
                     state_dir,
                     observed.generation,
@@ -293,12 +296,17 @@ pub fn debounce(
     }
 }
 
-pub fn preflight_check(state_dir: &Path, observed_generation: u64) -> Result<PendingState, String> {
+pub fn preflight_check(state_dir: &Path, observed: &PendingState) -> Result<PendingState, String> {
     match pending::read_state_from_dir(state_dir) {
-        Ok(state) if state.generation < observed_generation => Err(format!(
-            "pending generation rollback: observed {} after {}",
-            state.generation, observed_generation
-        )),
+        Ok(state) if state.generation < observed.generation => {
+            let generation = state.generation;
+            adopt_generation_reset(observed, state).ok_or_else(|| {
+                format!(
+                    "pending generation rollback: observed {} after {}",
+                    generation, observed.generation
+                )
+            })
+        }
         Ok(state) => Ok(state),
         Err(pending::PendingError::NotFound) => Err("pending marker removed, nothing to do".into()),
         Err(error) => Err(format!("corrupt pending state: {error}")),
@@ -510,7 +518,7 @@ pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pend
 
 #[cfg(test)]
 mod tests {
-    use super::{DebounceResult, WorkerOutcome, follow_up_allowed};
+    use super::{DebounceResult, WorkerOutcome, follow_up_allowed, preflight_check};
     use crate::auto_sync::pending::{self, PendingSnapshot};
     use crate::auto_sync::policy::MutationKind;
     use std::path::Path;
@@ -696,5 +704,22 @@ mod tests {
             matches!(result, DebounceResult::Failed(_)),
             "generation reset with older timestamp should be rejected as corrupt"
         );
+    }
+
+    #[test]
+    fn preflight_adopts_cleared_and_recreated_marker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_ms: u64 = 1_700_000_000_000;
+        write_marker(dir.path(), 3, base_ms);
+        let observed = super::PendingState {
+            generation: 3,
+            snapshot: mutation_snapshot(),
+            created_at_unix_ms: base_ms,
+        };
+        write_marker(dir.path(), 1, base_ms + 5_000);
+
+        let current = preflight_check(dir.path(), &observed).unwrap();
+        assert_eq!(current.generation, 1);
+        assert_eq!(current.created_at_unix_ms, base_ms + 5_000);
     }
 }

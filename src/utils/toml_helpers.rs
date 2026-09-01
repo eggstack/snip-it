@@ -40,7 +40,7 @@ fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String 
         let c = bytes[i];
 
         // Skip line comments until end of line.
-        if c == b'#' {
+        if c == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
             let start = i;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
@@ -373,6 +373,13 @@ mod tests {
     #[test]
     fn test_line_comment_with_backslash_passes_through() {
         let input = "# legacy: command = \"bad \\<thing\\>\"\nkey = \"ok\"";
+        let result = fix_invalid_toml_escapes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_hash_inside_bare_key_is_not_a_comment() {
+        let input = "a#b = \"value\" # comment\n";
         let result = fix_invalid_toml_escapes(input);
         assert_eq!(result, input);
     }

@@ -211,13 +211,7 @@ fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipErro
         )
     } else if status.code() == Code::InvalidArgument {
         let msg = status.message();
-        if msg.contains("timestamp")
-            || msg.contains("ahead of server time")
-            || msg.contains("Updated")
-            || msg.contains("updated_at")
-            || msg.contains("Created")
-            || msg.contains("created_at")
-        {
+        if msg.starts_with("CLOCK_SKEW:") {
             SnipError::sync_failure(crate::error::SyncFailureKind::ClockSkew, Some(msg))
         } else {
             SnipError::runtime_error(operation, Some(msg))
@@ -2063,7 +2057,7 @@ mod tests {
         let error = grpc_error_to_snip_error(
             "sync",
             &tonic::Status::invalid_argument(
-                "updated_at is 742 seconds ahead of server time; synchronize the client clock and retry",
+                "CLOCK_SKEW: updated_at is 742 seconds ahead of server time; synchronize the client clock and retry",
             ),
         );
         assert!(matches!(
@@ -2083,6 +2077,15 @@ mod tests {
     fn test_non_clock_skew_invalid_argument_is_generic() {
         let error =
             grpc_error_to_snip_error("sync", &tonic::Status::invalid_argument("bad snippet id"));
+        assert!(matches!(error, SnipError::Runtime { .. }));
+    }
+
+    #[test]
+    fn test_timestamp_text_without_clock_skew_marker_is_generic() {
+        let error = grpc_error_to_snip_error(
+            "sync",
+            &tonic::Status::invalid_argument("updated_at field is malformed"),
+        );
         assert!(matches!(error, SnipError::Runtime { .. }));
     }
 

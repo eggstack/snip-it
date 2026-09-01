@@ -806,7 +806,7 @@ impl SnipSyncService {
         if snippet.updated_at > now + tolerance {
             let skew = snippet.updated_at - now;
             return Err(Status::invalid_argument(format!(
-                "updated_at is {} seconds ahead of server time; \
+                "CLOCK_SKEW: updated_at is {} seconds ahead of server time; \
                  synchronize the client clock and retry",
                 skew
             )));
@@ -814,7 +814,7 @@ impl SnipSyncService {
         if snippet.created_at > now + tolerance {
             let skew = snippet.created_at - now;
             return Err(Status::invalid_argument(format!(
-                "created_at is {} seconds ahead of server time; \
+                "CLOCK_SKEW: created_at is {} seconds ahead of server time; \
                  synchronize the client clock and retry",
                 skew
             )));
