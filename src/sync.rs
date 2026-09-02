@@ -1123,15 +1123,19 @@ fn is_loopback(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    if stripped.eq_ignore_ascii_case("::ffff:127.0.0.1")
-        || stripped.eq_ignore_ascii_case("::ffff:7f00:1")
-        || stripped.eq_ignore_ascii_case("::ffff:7f00:0001")
-    {
-        return true;
+    if let Ok(addr) = stripped.parse::<std::net::IpAddr>() {
+        if addr.is_loopback() {
+            return true;
+        }
+        if let std::net::IpAddr::V6(v6) = addr
+            && let Some(mapped) = v6.to_ipv4_mapped().or_else(|| v6.to_ipv4())
+            && mapped.is_loopback()
+        {
+            return true;
+        }
+        return false;
     }
-    stripped
-        .parse::<std::net::IpAddr>()
-        .is_ok_and(|addr| addr.is_loopback())
+    false
 }
 
 async fn create_tls_channel(

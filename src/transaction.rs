@@ -1106,7 +1106,12 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                         // create_new but hasn't written yet. Retry briefly,
                         // then reclaim a file left by a crashed writer.
                         empty_retries += 1;
-                        if empty_retries > 50 {
+                        let is_old = fs::metadata(&lock_path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+                            .is_some_and(|age| age > std::time::Duration::from_millis(100));
+                        if empty_retries > 200 || (empty_retries > 50 && is_old) {
                             tracing::warn!(
                                 "Empty transaction lock record did not become valid; quarantining"
                             );

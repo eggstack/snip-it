@@ -87,6 +87,10 @@ fn handle_library_not_found(
     status: &mut SyncStatus,
     results: &mut Vec<(String, bool, String)>,
 ) {
+    debug_assert!(
+        !lib_name.contains('/') && !lib_name.contains('\\'),
+        "library name must not contain path separators"
+    );
     tracing::info!(library = %lib_name, "Server library deleted, re-creating on server");
     let normalized_name = normalized_library_name(lib_name);
 
@@ -707,28 +711,13 @@ pub(crate) fn run_sync_with_limits(
     let libraries_to_sync: Vec<_> = if let Some(name) = library_name {
         vec![name.to_string()]
     } else {
-        match std::fs::read_dir(mgr.get_libraries_dir()) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
-                .filter_map(|e| {
-                    e.path()
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                })
-                .collect(),
-            Err(e) => {
-                tracing::error!(
-                    directory = %mgr.get_libraries_dir().display(),
-                    error = %e,
-                    "Failed to read libraries directory"
-                );
-                return Err(SnipError::sync_failure(
-                    crate::error::SyncFailureKind::LibrariesDirReadFailed,
-                    Some(&e.to_string()),
-                ));
-            }
-        }
+        // Enumerate from the config index, not the filesystem. An orphan
+        // file left behind by a crash during delete_library (config saved
+        // before file removal) must not be resurrected as a sync candidate.
+        mgr.list_libraries()
+            .iter()
+            .map(|m| m.filename.clone())
+            .collect()
     };
 
     if libraries_to_sync.is_empty() {

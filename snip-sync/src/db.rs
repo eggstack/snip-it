@@ -555,18 +555,20 @@ impl Database {
 
         sqlx::query(
             "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                description = excluded.description,
-                command = excluded.command,
-                tags = excluded.tags,
-                updated_at = excluded.updated_at,
-                device_id = excluded.device_id,
-                deleted = excluded.deleted,
-                encrypted = excluded.encrypted
-             WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
-           AND (excluded.updated_at > snippets.updated_at \
-                OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id))",
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                 description = excluded.description,
+                 command = excluded.command,
+                 tags = excluded.tags,
+                 updated_at = excluded.updated_at,
+                 device_id = excluded.device_id,
+                 deleted = excluded.deleted,
+                 encrypted = excluded.encrypted
+              WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
+            AND (excluded.updated_at > snippets.updated_at \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id) \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command > snippets.command) \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command = snippets.command AND excluded.description > snippets.description))",
         )
         .bind(&snippet.id)
         .bind(user_id)
@@ -599,20 +601,25 @@ impl Database {
         // Upsert with last-write-wins conflict resolution.
         // Tie-breaking uses device_id string comparison, which is correct for
         // lowercase hex UUIDs (lexicographic == numeric for lowercase hex).
+        // When updated_at and device_id are equal, fall back to content
+        // comparison (command, description) to provide a deterministic
+        // winner that mirrors the client's fingerprint tie-break.
         sqlx::query(
             "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                description = excluded.description,
-                command = excluded.command,
-                tags = excluded.tags,
-                updated_at = excluded.updated_at,
-                device_id = excluded.device_id,
-                deleted = excluded.deleted,
-                encrypted = excluded.encrypted
-             WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
-           AND (excluded.updated_at > snippets.updated_at \
-                OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id))",
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                 description = excluded.description,
+                 command = excluded.command,
+                 tags = excluded.tags,
+                 updated_at = excluded.updated_at,
+                 device_id = excluded.device_id,
+                 deleted = excluded.deleted,
+                 encrypted = excluded.encrypted
+              WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
+            AND (excluded.updated_at > snippets.updated_at \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id) \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command > snippets.command) \
+                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command = snippets.command AND excluded.description > snippets.description))",
         )
         .bind(&snippet.id)
         .bind(user_id)

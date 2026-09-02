@@ -90,6 +90,14 @@ struct CachedToml {
     len: u64,
     content: String,
     mtime_nanos: u32,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(windows)]
+    file_index: u64,
+    #[cfg(windows)]
+    volume_serial: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +105,14 @@ struct TomlMetadata {
     mtime: SystemTime,
     len: u64,
     mtime_nanos: u32,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(windows)]
+    file_index: u64,
+    #[cfg(windows)]
+    volume_serial: u64,
 }
 
 struct TomlCache {
@@ -132,19 +148,44 @@ fn lock_toml_cache() -> std::sync::MutexGuard<'static, TomlCache> {
 
 pub fn invalidate_toml_cache(path: &std::path::Path) {
     let key = toml_cache_key(path);
-    if let Ok(mut cache) = TOML_CACHE.lock() {
-        cache.entries.remove(&key);
-        cache.insertion_order.retain(|k| k != &key);
+    let mut cache = lock_toml_cache();
+    cache.entries.remove(&key);
+    cache.insertion_order.retain(|k| k != &key);
+    // BUG-02 mitigation: the cache key can diverge when a symlink is
+    // atomically replaced (canonical path vs parent+filename fallback).
+    // Remove the alternative form as well so a stale entry does not survive
+    // an invalidation done via the other string form.
+    let alt_key = path
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .map(|cp| cp.join(path.file_name().unwrap_or_default()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !alt_key.is_empty() && alt_key != key {
+        cache.entries.remove(&alt_key);
+        cache.insertion_order.retain(|k| k != &alt_key);
+    }
+    let raw_key = path.to_path_buf().to_string_lossy().into_owned();
+    if raw_key != key && raw_key != alt_key {
+        cache.entries.remove(&raw_key);
+        cache.insertion_order.retain(|k| k != &raw_key);
     }
 }
 
 fn toml_cache_key(path: &std::path::Path) -> String {
-    let canonical = path.canonicalize().unwrap_or_else(|_| {
-        path.parent()
-            .and_then(|parent| Some(parent.canonicalize().ok()?.join(path.file_name()?)))
-            .unwrap_or_else(|| path.to_path_buf())
-    });
-    canonical.to_string_lossy().into_owned()
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical.to_string_lossy().into_owned();
+    }
+    if let Some(parent) = path.parent()
+        && let Ok(canonical_parent) = parent.canonicalize()
+    {
+        let candidate = canonical_parent.join(path.file_name().unwrap_or_default());
+        if let Ok(canonical_candidate) = candidate.canonicalize() {
+            return canonical_candidate.to_string_lossy().into_owned();
+        }
+        return candidate.to_string_lossy().into_owned();
+    }
+    path.to_path_buf().to_string_lossy().into_owned()
 }
 
 fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMetadata> {
@@ -162,6 +203,26 @@ fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMeta
         mtime,
         len: metadata.len(),
         mtime_nanos,
+        #[cfg(unix)]
+        inode: {
+            use std::os::unix::fs::MetadataExt;
+            metadata.ino()
+        },
+        #[cfg(unix)]
+        device: {
+            use std::os::unix::fs::MetadataExt;
+            metadata.dev()
+        },
+        #[cfg(windows)]
+        file_index: {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_index().unwrap_or(0)
+        },
+        #[cfg(windows)]
+        volume_serial: {
+            use std::os::windows::fs::MetadataExt;
+            metadata.volume_serial_number().unwrap_or(0)
+        },
     })
 }
 
@@ -224,6 +285,21 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         && entry.mtime == path_metadata.mtime
         && entry.mtime_nanos == path_metadata.mtime_nanos
         && entry.len == path_metadata.len
+        && {
+            #[cfg(unix)]
+            {
+                entry.inode == path_metadata.inode && entry.device == path_metadata.device
+            }
+            #[cfg(windows)]
+            {
+                entry.file_index == path_metadata.file_index
+                    && entry.volume_serial == path_metadata.volume_serial
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                true
+            }
+        }
     {
         return Ok(entry.content.clone());
     }
@@ -264,6 +340,14 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
                 len: after.len,
                 content: content.clone(),
                 mtime_nanos: after.mtime_nanos,
+                #[cfg(unix)]
+                inode: after.inode,
+                #[cfg(unix)]
+                device: after.device,
+                #[cfg(windows)]
+                file_index: after.file_index,
+                #[cfg(windows)]
+                volume_serial: after.volume_serial,
             },
         );
         return Ok(content);
@@ -849,7 +933,7 @@ mod tests {
         let path = temp_dir.path().join("cache-churn.toml");
         std::fs::write(&path, "value = 1\n").unwrap();
 
-        let key = path.to_string_lossy().to_string();
+        let key = toml_cache_key(&path);
         for _ in 0..10 {
             invalidate_toml_cache(&path);
             let _ = cached_read_toml(&path).unwrap();
