@@ -118,7 +118,7 @@ commands manage their own behavior.
 
 ## Command Modules
 
-**Source**: `src/commands/` (24 modules)
+**Source**: `src/commands/` (24 files incl. `mod.rs`; 23 submodules)
 **Deep dives**: [commands/mod.md](commands/mod.md) and per-command files
 
 | Command | Module | Purpose |
@@ -207,7 +207,7 @@ transmission (AES-256-GCM).
 
 ## Auto-Sync Subsystem
 
-**Source**: `src/auto_sync/` (11 modules)
+**Source**: `src/auto_sync/` (11 files incl. `mod.rs`; 10 submodules)
 **Deep dive**: [auto_sync.md](auto_sync.md)
 
 Single detached-helper model. A background worker (`snp auto-sync-worker`)

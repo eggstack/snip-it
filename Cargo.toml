@@ -69,6 +69,11 @@ name = "process_lock_concurrency"
 path = "tests/process_lock_concurrency.rs"
 required-features = ["test-support"]
 
+[[test]]
+name = "local_data_lock_barriers"
+path = "tests/local_data_lock_barriers.rs"
+required-features = ["test-support"]
+
 [package.metadata.docs.rs]
 all-features = false
 default-target = "x86_64-unknown-linux-gnu"

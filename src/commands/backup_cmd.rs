@@ -224,11 +224,13 @@ fn read_for_snapshot(path: &Path, label: &str) -> SnipResult<Vec<u8>> {
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    let digest = hasher.finalize();
+    let mut s = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Read the library generation from `libraries.toml` if it exists.

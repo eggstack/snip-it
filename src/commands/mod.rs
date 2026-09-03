@@ -346,9 +346,24 @@ where
             .iter()
             .map(|&i| snippets.snippets[i].clone())
             .collect();
+        // One-shot index so per-snippet usage lookup is O(1) instead of a
+        // linear scan per snippet (O(k*m) over the selection).
+        let usage_map: std::collections::HashMap<&str, &crate::usage::UsageEntry> = usage_index
+            .entries()
+            .iter()
+            .map(|e| (e.id.as_str(), e))
+            .collect();
         let live_usage: Vec<crate::usage::UsageData> = live_snippets
             .iter()
-            .map(|s| usage_index.get_usage(&s.id))
+            .map(|s| {
+                usage_map
+                    .get(s.id.as_str())
+                    .map(|e| crate::usage::UsageData {
+                        use_count: e.use_count,
+                        last_used_at: e.last_used_at,
+                    })
+                    .unwrap_or_default()
+            })
             .collect();
         let result = crate::ui::select_snippet(crate::ui::SnippetListParams {
             descriptions: &snippet_data.descriptions,

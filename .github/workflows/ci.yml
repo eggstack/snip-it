@@ -59,4 +59,4 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --all-targets
       - name: CLI/platform smoke
-        run: cargo test --test platform_smoke
+        run: cargo test --test platform_smoke --features test-support

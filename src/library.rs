@@ -888,7 +888,11 @@ fn deterministic_legacy_id(snippet: &Snippet, occurrence: usize) -> String {
     hasher.update(b"\0");
     hasher.update(occurrence.to_le_bytes());
     let hash = hasher.finalize();
-    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let mut hex = String::with_capacity(hash.len() * 2);
+    for b in hash {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
     format!("legacy-{hex}")
 }
 
@@ -918,7 +922,11 @@ fn deterministic_duplicate_id(original_id: &str, snippet: &Snippet, occurrence: 
     hasher.update(b"\0");
     hasher.update(occurrence.to_le_bytes());
     let hash = hasher.finalize();
-    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let mut hex = String::with_capacity(hash.len() * 2);
+    for b in hash {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
     format!("legacy-{hex}")
 }
 

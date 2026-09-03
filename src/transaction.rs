@@ -2259,13 +2259,15 @@ pub fn rollback_transaction(state_dir: &Path, journal: &TransactionJournal) -> S
 
 /// Compute the SHA-256 hex digest of a byte slice.
 fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     let mut hasher = sha2::Sha256::new();
     hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    let digest = hasher.finalize();
+    let mut s = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Write bytes to a file, sync it, reopen it, and verify its hash.
@@ -2386,11 +2388,10 @@ fn sync_parent_dir(path: &Path) {
 /// Read a file and compute its SHA-256 hex digest.
 ///
 /// This is used to verify installed destinations from the live file,
-/// not from source buffers.
+/// not from source buffers. Delegates to the canonical helper in
+/// [`crate::utils::atomic::hash_file`] so the two cannot diverge.
 pub fn hash_file(path: &Path) -> SnipResult<String> {
-    let bytes =
-        fs::read(path).map_err(|e| SnipError::io_error("read file for hashing", path, e))?;
-    Ok(sha256_hex(&bytes))
+    crate::utils::atomic::hash_file(path)
 }
 
 /// Check for interrupted transactions and refuse or auto-recover.

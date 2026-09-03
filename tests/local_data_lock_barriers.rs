@@ -14,8 +14,6 @@
 //! - each multi-file writer is covered;
 //! - no test is merely backup → mutation → backup.
 
-#![cfg(feature = "test-support")]
-
 mod support;
 
 use std::fs;

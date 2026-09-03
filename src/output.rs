@@ -116,78 +116,60 @@ impl<'a> OutputPresentation<'a> {
 /// terminal titles), and C0 control characters except newline and tab.
 /// Does not mutate the stored value — only the presentation copy.
 pub fn sanitize_for_terminal(input: &str) -> String {
+    use std::iter::Peekable;
+    use std::str::Chars;
     let mut result = String::with_capacity(input.len());
-    let chars: Vec<char> = input.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
+    let mut chars: Peekable<Chars> = input.chars().peekable();
 
-    while i < len {
-        match chars[i] {
+    while let Some(c) = chars.next() {
+        match c {
             // ESC — start of escape sequence
-            '\x1b' => {
-                i += 1;
-                if i < len {
-                    match chars[i] {
-                        '[' => {
-                            // CSI sequence: ESC [ <params> <final byte>
-                            i += 1;
-                            // Skip parameter bytes (0x30-0x3F)
-                            while i < len && matches!(chars[i], '\x30'..='\x3f') {
-                                i += 1;
-                            }
-                            // Skip intermediate bytes (0x20-0x2F)
-                            while i < len && matches!(chars[i], '\x20'..='\x2f') {
-                                i += 1;
-                            }
-                            // Skip final byte (0x40-0x7E)
-                            if i < len && matches!(chars[i], '\x40'..='\x7e') {
-                                i += 1;
-                            }
-                        }
-                        ']' => {
-                            // OSC sequence: ESC ] <params> ST or BEL
-                            i += 1;
-                            // Skip until ST (ESC \) or BEL (\x07)
-                            while i < len {
-                                if chars[i] == '\x07' {
-                                    i += 1;
+            '\x1b' => match chars.next() {
+                None => break,
+                Some('[') => {
+                    // CSI sequence: ESC [ <params> <final byte>
+                    // Skip parameter bytes (0x30-0x3F)
+                    while matches!(chars.peek(), Some('\x30'..='\x3f')) {
+                        chars.next();
+                    }
+                    // Skip intermediate bytes (0x20-0x2F)
+                    while matches!(chars.peek(), Some('\x20'..='\x2f')) {
+                        chars.next();
+                    }
+                    // Skip final byte (0x40-0x7E)
+                    if matches!(chars.peek(), Some('\x40'..='\x7e')) {
+                        chars.next();
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: ESC ] <params> ST or BEL
+                    // Skip until ST (ESC \) or BEL (\x07)
+                    loop {
+                        match chars.next() {
+                            None => break,
+                            Some('\x07') => break,
+                            Some('\x1b') => {
+                                if chars.peek() == Some(&'\\') {
+                                    chars.next();
                                     break;
                                 }
-                                if chars[i] == '\x1b' && i + 1 < len && chars[i + 1] == '\\' {
-                                    i += 2;
-                                    break;
-                                }
-                                i += 1;
                             }
-                        }
-                        _ => {
-                            // Other escape: skip two bytes (ESC + char)
-                            i += 2;
+                            Some(_) => {}
                         }
                     }
                 }
-            }
+                // Other escape: ESC + char already consumed; drop both.
+                Some(_) => {}
+            },
             // Preserve newline and tab
-            '\n' | '\t' => {
-                result.push(chars[i]);
-                i += 1;
-            }
+            '\n' | '\t' => result.push(c),
             // Strip other C0 control characters (0x00-0x1F except \n \t)
-            '\x00'..='\x08' | '\x0b' | '\x0c' | '\x0e'..='\x1f' => {
-                i += 1;
-            }
+            '\x00'..='\x08' | '\x0b' | '\x0c' | '\x0e'..='\x1f' => {}
             // Strip DEL
-            '\x7f' => {
-                i += 1;
-            }
+            '\x7f' => {}
             // Strip C1 control characters (0x80-0x9F)
-            '\u{0080}'..='\u{009f}' => {
-                i += 1;
-            }
-            _ => {
-                result.push(chars[i]);
-                i += 1;
-            }
+            '\u{0080}'..='\u{009f}' => {}
+            _ => result.push(c),
         }
     }
     result

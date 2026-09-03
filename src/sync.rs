@@ -45,6 +45,20 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// margin below the server default.
 pub(crate) const DEFAULT_CLIENT_REQUEST_CEILING: usize = 3_584 * 1024; // 3.5 MiB
 
+/// Hard bound on paginated fetches.
+///
+/// A buggy or malicious server answering `has_more = true` with non-empty
+/// pages forever must not spin manual sync indefinitely. 10_000 pages is
+/// far beyond any real library at any supported page size.
+const MAX_PAGINATION_PAGES: usize = 10_000;
+
+/// Client-side caps for premade-library endpoints (single-RPC, unbounded
+/// by the protocol). Tonic's transport message limit is the only other
+/// backstop, so reject absurd payloads with a clear error instead of
+/// growing `Vec`/`String` allocations without bound.
+const MAX_PREMADE_LIBRARIES: usize = 10_000;
+const MAX_PREMADE_CONTENT_BYTES: usize = 4 * 1024 * 1024; // 4 MiB (server gRPC default)
+
 /// Bounds network and retry work for one automatic-sync invocation.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SyncRunLimits {
@@ -586,7 +600,7 @@ impl SyncClient {
         // with non-empty pages forever must not spin manual sync
         // indefinitely. 10_000 pages at the default page size of 1000
         // snippets is far beyond any real library.
-        const MAX_SYNC_PAGES: usize = 10_000;
+        const MAX_SYNC_PAGES: usize = MAX_PAGINATION_PAGES;
         let mut pages_fetched = 0usize;
 
         loop {
@@ -959,7 +973,18 @@ impl SyncClient {
         let mut all_libraries = Vec::new();
         let mut offset = 0i32;
         const PAGE_LIMIT: i32 = 50;
+        let mut pages_fetched = 0usize;
         loop {
+            pages_fetched += 1;
+            if pages_fetched > MAX_PAGINATION_PAGES {
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::SyncRequestFailed,
+                    Some(&format!(
+                        "server pagination did not terminate after {MAX_PAGINATION_PAGES} pages; \
+                         aborting list-libraries fetch"
+                    )),
+                ));
+            }
             let response = retry_grpc_limited!(
                 self,
                 async {
@@ -985,7 +1010,17 @@ impl SyncClient {
             if !inner.has_more || count < PAGE_LIMIT || count == 0 {
                 break;
             }
-            offset = offset.saturating_add(count);
+            let next_offset = offset.saturating_add(count);
+            // Detect i32 saturation: an absurd library count cannot be
+            // paginated through a 32-bit offset. Surface an explicit error
+            // instead of looping with an offset stuck at i32::MAX.
+            if next_offset == i32::MAX {
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::RequestTooLarge,
+                    Some("library list exceeds i32::MAX entries; pagination offset saturated"),
+                ));
+            }
+            offset = next_offset;
         }
         Ok(all_libraries)
     }
@@ -1037,7 +1072,18 @@ impl SyncClient {
             },
             "List premade libraries"
         )?;
-        Ok(response.into_inner().libraries)
+        let libraries = response.into_inner().libraries;
+        if libraries.len() > MAX_PREMADE_LIBRARIES {
+            return Err(SnipError::sync_failure(
+                SyncFailureKind::SyncRequestFailed,
+                Some(&format!(
+                    "premade library list too large ({} entries, limit {MAX_PREMADE_LIBRARIES}); \
+                     refusing to allocate unbounded response",
+                    libraries.len()
+                )),
+            ));
+        }
+        Ok(libraries)
     }
 
     /// Downloads a premade library's content from the server.
@@ -1058,6 +1104,16 @@ impl SyncClient {
 
         let response = response.into_inner();
         if response.success {
+            if response.content.len() > MAX_PREMADE_CONTENT_BYTES {
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::SyncRequestFailed,
+                    Some(&format!(
+                        "premade library content too large ({} bytes, limit \
+                         {MAX_PREMADE_CONTENT_BYTES}); refusing to allocate unbounded response",
+                        response.content.len()
+                    )),
+                ));
+            }
             Ok(response.content)
         } else {
             Err(SnipError::sync_failure(
@@ -1085,7 +1141,18 @@ impl SyncClient {
             },
             "Search premade libraries"
         )?;
-        Ok(response.into_inner().libraries)
+        let libraries = response.into_inner().libraries;
+        if libraries.len() > MAX_PREMADE_LIBRARIES {
+            return Err(SnipError::sync_failure(
+                SyncFailureKind::SyncRequestFailed,
+                Some(&format!(
+                    "premade library search result too large ({} entries, limit \
+                     {MAX_PREMADE_LIBRARIES}); refusing to allocate unbounded response",
+                    libraries.len()
+                )),
+            ));
+        }
+        Ok(libraries)
     }
 }
 

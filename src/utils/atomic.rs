@@ -248,6 +248,12 @@ fn sync_parent_dir(
 ///
 /// On Unix the temp file is created with `0o600` so newly written config and
 /// library files do not briefly exist with broader default permissions.
+///
+/// On non-Unix platforms `std` offers no creation-time permission knob, so
+/// the temp file inherits the parent directory's default ACLs. Installations
+/// rely on the config directory ACLs (`%APPDATA%` is user-private by
+/// default on Windows) rather than a file-level DACL; callers that need a
+/// stricter guarantee should set an explicit ACL after the rename.
 pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> SnipResult<()> {
     let parent = path
         .parent()
@@ -274,6 +280,10 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
 
     #[cfg(not(unix))]
     {
+        // No creation-time permission knob via std on this platform; the
+        // temp file inherits the parent directory's default ACLs. See the
+        // `write_private_atomic` docs: Windows installs rely on the
+        // user-private `%APPDATA%` directory ACLs.
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create_new(true);
         let mut file = opts
@@ -420,18 +430,45 @@ pub fn atomic_write_bytes(target: &Path, bytes: &[u8], durability: Durability) -
     Ok(())
 }
 
+/// Encode a digest as lowercase hex without per-byte allocation.
+///
+/// Pre-allocates the full `2 * digest.len()` capacity and appends with
+/// `write!` instead of collecting 32 transient `String`s.
+pub(crate) fn hex_encode(digest: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 /// Read a file and compute its SHA-256 hex digest.
 ///
 /// Used to verify installed destinations from the live file, not from
-/// source buffers.
+/// source buffers. Streams through a `BufReader` so arbitrarily large
+/// files do not require a full in-memory copy.
+///
+/// This is the single canonical file-hashing helper;
+/// [`crate::transaction::hash_file`] delegates here.
 pub fn hash_file(path: &Path) -> SnipResult<String> {
     use sha2::Digest;
-    let bytes = std::fs::read(path)
+    use std::io::Read;
+    let file = std::fs::File::open(path)
         .map_err(|e| crate::error::SnipError::io_error("read file for hashing", path, e))?;
+    let mut reader = std::io::BufReader::new(file);
     let mut hasher = sha2::Sha256::new();
-    hasher.update(&bytes);
-    let result = hasher.finalize();
-    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| crate::error::SnipError::io_error("read file for hashing", path, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
 }
 
 #[cfg(test)]

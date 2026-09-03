@@ -1130,10 +1130,24 @@ fn choose_version(local: &Snippet, remote: &ProtoSnippet) -> VersionWinner {
         (true, false) => VersionWinner::Local,
         (false, true) => VersionWinner::Remote,
         (true, true) => VersionWinner::Equivalent,
-        (false, false) => match local_version_key(local).cmp(&remote_version_key(remote)) {
+        // Timestamp-first ordering resolves the common case without hashing:
+        // `VersionKey` orders as `(updated_at, device_id, fingerprint)`, so
+        // compare the first two fields directly and compute the SHA-256
+        // fingerprint lazily only on a full tie.
+        (false, false) => match local.updated_at.cmp(&remote.updated_at) {
             Ordering::Less => VersionWinner::Remote,
             Ordering::Greater => VersionWinner::Local,
-            Ordering::Equal => VersionWinner::Equivalent,
+            Ordering::Equal => match local.device_id.cmp(&remote.device_id) {
+                Ordering::Less => VersionWinner::Remote,
+                Ordering::Greater => VersionWinner::Local,
+                Ordering::Equal => {
+                    match local_version_key(local).cmp(&remote_version_key(remote)) {
+                        Ordering::Less => VersionWinner::Remote,
+                        Ordering::Greater => VersionWinner::Local,
+                        Ordering::Equal => VersionWinner::Equivalent,
+                    }
+                }
+            },
         },
     }
 }

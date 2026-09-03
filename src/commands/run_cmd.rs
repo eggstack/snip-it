@@ -232,11 +232,62 @@ fn process_snippet(snippet: &Snippet, copy: bool) -> SnipResult<crate::ProcessRe
             }
         }
 
-        let output_file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut open_opts = fs::OpenOptions::new();
+        open_opts.create_new(true).write(true);
+        // Harden the check-to-open window: `create_new` already fails closed
+        // on a pre-existing symlink (dangling or live) with `AlreadyExists`
+        // instead of following it. `O_NOFOLLOW` makes that guarantee
+        // explicit at the syscall level so a symlink raced in between the
+        // `canonicalize` checks above and this `open` fails instead of
+        // being followed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open_opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let output_file = open_opts
             .open(&output_path)
             .map_err(|e| SnipError::io_error("create output file", snippet.output.clone(), e))?;
+
+        // Post-open verification closes the parent-directory swap window
+        // between the pre-open `canonicalize` and this `open`: if the parent
+        // still points outside CWD we fail before spawning the child (no
+        // command output has been written yet). The fd-identity check below
+        // additionally catches a swap-and-swap-back racer where the path
+        // once again resolves inside CWD but the open fd refers to a file
+        // created while the parent pointed elsewhere.
+        let canonical_after = output_path.canonicalize().map_err(|e| {
+            SnipError::runtime_error(
+                "Failed to verify output path",
+                Some(&format!(
+                    "Cannot canonicalize output path after create: {e}"
+                )),
+            )
+        })?;
+        if !canonical_after.starts_with(&canonical_cwd) {
+            return Err(SnipError::runtime_error(
+                "Invalid output path",
+                Some("Output path resolves outside of working directory (possible symlink attack)"),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let fd_meta = output_file
+                .metadata()
+                .map_err(|e| SnipError::io_error("stat output file", snippet.output.clone(), e))?;
+            let path_meta = fs::metadata(&output_path)
+                .map_err(|e| SnipError::io_error("stat output file", snippet.output.clone(), e))?;
+            if fd_meta.dev() != path_meta.dev() || fd_meta.ino() != path_meta.ino() {
+                return Err(SnipError::runtime_error(
+                    "Invalid output path",
+                    Some(
+                        "Output file changed during creation (possible parent-directory race); \
+                         refusing to write",
+                    ),
+                ));
+            }
+        }
 
         let shell = get_shell();
         let timeout = get_timeout(TimeoutPolicy::Default(Duration::from_secs(

@@ -883,8 +883,18 @@ fn install_library_file(
     // Apply destination permission policy.
     dest_class.apply_permissions(&dst, original_metadata)?;
 
-    // Verify the installed destination from the live file.
-    let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_else(|_| String::new());
+    // Verify the installed destination from the live file. Propagate I/O
+    // errors with context instead of defaulting to an empty hash (which
+    // would masquerade a transient read failure as corruption).
+    let actual = crate::utils::atomic::hash_file(&dst).map_err(|e| {
+        SnipError::runtime_error(
+            "Commit verification failed",
+            Some(&format!(
+                "Failed to hash installed file {} for verification: {e}",
+                dst.display()
+            )),
+        )
+    })?;
     if actual != intended_hash {
         return Err(SnipError::runtime_error(
             "Commit verification failed",
@@ -1368,8 +1378,18 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     &staged.original_metadata,
                                 )?;
                             }
-                            // Verify from live destination.
-                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            // Verify from live destination; propagate I/O errors
+                            // instead of treating a transient read failure as
+                            // corruption.
+                            let actual = crate::utils::atomic::hash_file(&dst).map_err(|e| {
+                                SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Failed to hash installed file {} for verification: {e}",
+                                        dst.display()
+                                    )),
+                                )
+                            })?;
                             if actual != staged.new_hash {
                                 return Err(SnipError::runtime_error(
                                     "Commit verification failed",
@@ -1419,8 +1439,18 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                                     &staged.original_metadata,
                                 )?;
                             }
-                            // Verify from live destination.
-                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            // Verify from live destination; propagate I/O errors
+                            // instead of treating a transient read failure as
+                            // corruption.
+                            let actual = crate::utils::atomic::hash_file(&dst).map_err(|e| {
+                                SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Failed to hash installed file {} for verification: {e}",
+                                        dst.display()
+                                    )),
+                                )
+                            })?;
                             if actual != staged.new_hash {
                                 return Err(SnipError::runtime_error(
                                     "Commit verification failed",
@@ -1453,8 +1483,18 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             atomic_replace(&dst, &bytes, &opts)?;
                             // SyncConfig always uses SensitiveConfig (0o600).
                             // Skip apply_original_metadata to preserve 0o600.
-                            // Verify from live destination.
-                            let actual = crate::utils::atomic::hash_file(&dst).unwrap_or_default();
+                            // Verify from live destination; propagate I/O errors
+                            // instead of treating a transient read failure as
+                            // corruption.
+                            let actual = crate::utils::atomic::hash_file(&dst).map_err(|e| {
+                                SnipError::runtime_error(
+                                    "Commit verification failed",
+                                    Some(&format!(
+                                        "Failed to hash installed file {} for verification: {e}",
+                                        dst.display()
+                                    )),
+                                )
+                            })?;
                             if actual != staged.new_hash {
                                 return Err(SnipError::runtime_error(
                                     "Commit verification failed",
@@ -2615,7 +2655,12 @@ is_primary = true
     fn sha256_hex(bytes: Vec<u8>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
-        let result = hasher.finalize();
-        result.iter().map(|b| format!("{:02x}", b)).collect()
+        let digest = hasher.finalize();
+        let mut s = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            use std::fmt::Write as _;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
     }
 }
