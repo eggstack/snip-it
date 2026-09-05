@@ -35,7 +35,7 @@ jobs:
           export PATH="$isolated_home/.local/bin:$PATH"
           bash packaging/install.sh --server --version "$VERSION" 2>&1 | tee "$RUNNER_TEMP/install.log"
           ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install.log"
-          test "$(snip-sync version 2)" = "snip-sync $VERSION"
+          test "$(snip-sync version 2>&1)" = "snip-sync $VERSION"
 
   windows-x64:
     name: Windows bootstrap (x86_64)
