@@ -1,6 +1,6 @@
 # Plan 004: binary-first self-update and restart integration
 
-Status: planned
+Status: ready
 
 Depends on: Plans 001 and 003
 

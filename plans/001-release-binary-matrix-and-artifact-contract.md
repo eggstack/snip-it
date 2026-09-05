@@ -216,4 +216,5 @@ creation remain manual as documented in `RELEASING.md`.
 
 The local release helper now validates release-tag metadata and the workflow
 contract. Plans 002 and 003 are now ready because their Plan 001 dependency is
-complete. Plans 004 and 005 remain planned pending their other dependencies.
+complete. Plan 004 is now ready because Plans 001 and 003 are complete, and
+Plan 005 is ready because its Plan 002 dependency is complete.

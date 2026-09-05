@@ -80,12 +80,31 @@ The initialized premade directory is also shown by `snip-sync paths`.
 ### Lifecycle commands
 
 Use `snip-sync stop` to stop the local server and `snip-sync restart` to stop
-and start it again. On Unix, both commands accept the current structured PID
-record and older numeric PID files. A dead numeric PID is cleaned only after
-the server singleton lock is acquired; a live process whose name is not
-`snip-sync` is refused unless `--force` is supplied. The persistent
+and start it again. If startup registration exists, `restart` delegates to
+that manager and performs a bounded health check. On Unix, both commands
+accept the current structured PID record and older numeric PID files. A dead
+numeric PID is cleaned only after the server singleton lock is acquired; a
+live process whose name is not `snip-sync` is refused unless `--force` is
+supplied. The persistent
 `snip-sync.server.lock` file may remain after shutdown because its kernel lock,
 not file existence, records ownership.
+
+Register boot startup with the server itself. `instructions` is read-only and
+prints the exact rendered unit, plist, cron block, or Task Scheduler commands:
+
+```bash
+snip-sync startup instructions
+snip-sync startup install
+snip-sync startup uninstall
+```
+
+Auto mode selects a running systemd host on Linux, cron otherwise, launchd on
+macOS, and Task Scheduler on Windows. Systemd and launchd installation use
+the intended non-root account and print an exact `sudo` command when elevation
+is needed; they never silently fall back to cron. Cron and Task Scheduler
+invoke `croncheck`, not `serve` directly. Startup registration persists only
+small manager metadata under the state directory and never removes the
+binary, database, configuration, certificates, or premade libraries.
 
 To generate local certificate assets for a reverse-proxy experiment:
 
@@ -109,7 +128,15 @@ sync.example.com {
 }
 ```
 
-Keep the server bound to loopback in `snip-sync` and run it under a supervisor:
+Keep the server bound to loopback in `snip-sync` and register it with the
+appropriate supervisor:
+
+```bash
+snip-sync startup instructions --method systemd
+snip-sync startup install --method systemd
+```
+
+For manual systemd execution, the equivalent unit is:
 
 ```ini
 # /etc/systemd/system/snip-sync.service
@@ -232,11 +259,14 @@ actual `/health` response and starts one detached server when needed. For a
 production reverse-proxy deployment, use:
 
 ```cron
-@reboot TLS_ENABLED=true SNIP_SYNC_ALLOW_HTTP=false /home/user/.cargo/bin/snip-sync croncheck
-*/5 * * * * TLS_ENABLED=true SNIP_SYNC_ALLOW_HTTP=false /home/user/.cargo/bin/snip-sync croncheck
+@reboot TLS_ENABLED=true /home/user/.cargo/bin/snip-sync croncheck
+*/5 * * * * TLS_ENABLED=true /home/user/.cargo/bin/snip-sync croncheck
 ```
 
-Use systemd or another real supervisor for production. `croncheck` is not a
+Prefer `snip-sync startup install --method cron` so these entries are
+idempotent and owned lines can be removed safely. `SNIP_SYNC_ALLOW_HTTP=true`
+is only generated for loopback binds; non-loopback startup requires the
+explicit `TLS_ENABLED=true` acknowledgement. `croncheck` is not a
 replacement for service logging, restart policies, or privilege management.
 
 ## Other commands
@@ -247,7 +277,10 @@ snip-sync init --skip-cert    # create config/layout without OpenSSL
 snip-sync init --force-cert   # regenerate the dev cert assets
 snip-sync edit                # open the active config in $EDITOR (defaults to vim)
 snip-sync stop                # stop the PID recorded by snip-sync
-snip-sync restart             # stop and run in the foreground
+snip-sync restart             # manager-aware restart, or foreground serve
+snip-sync startup instructions # print read-only startup instructions
+snip-sync startup install     # install the detected startup manager
+snip-sync startup uninstall   # remove only snip-sync-owned startup records
 snip-sync update              # check crates.io and update Cargo installs
 snip-sync update --dry-run    # check without installing
 snip-sync paths --json        # machine-readable path output

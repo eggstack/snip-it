@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -42,6 +42,11 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Install, inspect, or remove boot-time startup registration
+    Startup {
+        #[command(subcommand)]
+        command: StartupCommand,
+    },
     /// Check for and install an update from crates.io when Cargo-managed
     Update {
         #[arg(long)]
@@ -66,6 +71,32 @@ pub enum Command {
     },
     /// Print version
     Version,
+}
+
+#[derive(Subcommand)]
+pub enum StartupCommand {
+    /// Install startup registration using the selected or detected manager
+    Install {
+        #[arg(long, value_enum, default_value_t = StartupMethodArg::Auto)]
+        method: StartupMethodArg,
+    },
+    /// Print exact manual startup commands and rendered configuration
+    Instructions {
+        #[arg(long, value_enum, default_value_t = StartupMethodArg::Auto)]
+        method: StartupMethodArg,
+    },
+    /// Remove snip-sync-owned startup registration
+    Uninstall,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum StartupMethodArg {
+    Auto,
+    Systemd,
+    Launchd,
+    Cron,
+    #[value(name = "task-scheduler")]
+    TaskScheduler,
 }
 
 #[cfg(test)]
@@ -121,6 +152,26 @@ mod tests {
     fn test_parse_stop() {
         let cli = Cli::try_parse_from(["snip-sync", "stop"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Stop { force: false })));
+    }
+
+    #[test]
+    fn test_parse_startup_commands() {
+        let cli = Cli::try_parse_from([
+            "snip-sync",
+            "startup",
+            "install",
+            "--method",
+            "task-scheduler",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Startup {
+                command: StartupCommand::Install {
+                    method: StartupMethodArg::TaskScheduler
+                }
+            })
+        ));
     }
 
     #[test]

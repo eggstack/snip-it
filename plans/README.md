@@ -9,8 +9,8 @@ This directory contains active implementation plans intended for agent handoff.
 | [000](000-distribution-fleet-and-mcp-roadmap.md) | Distribution, fleet deployment, and MCP roadmap | Planned | — |
 | [001](001-release-binary-matrix-and-artifact-contract.md) | Release binary matrix and artifact contract | Complete | 000 |
 | [002](002-bootstrap-installers.md) | Binary-first bootstrap installers | Complete | 001 |
-| [003](003-snip-sync-startup-and-lifecycle.md) | snip-sync startup and lifecycle management | Ready | 001 |
-| [004](004-binary-first-self-update.md) | Binary-first self-update and restart integration | Planned | 001, 003 |
+| [003](003-snip-sync-startup-and-lifecycle.md) | snip-sync startup and lifecycle management | Complete | 001 |
+| [004](004-binary-first-self-update.md) | Binary-first self-update and restart integration | Ready | 001, 003 |
 | [005](005-local-mcp-server-and-client-registration.md) | Local MCP server and client registration | Ready | 002 |
 
 ## Execution policy

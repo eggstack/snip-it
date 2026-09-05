@@ -1,9 +1,8 @@
 #![allow(clippy::uninlined_format_args)]
 
 use clap::Parser;
-use snip_sync::cli::{Cli, Command};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use snip_sync::cli::{Cli, Command, StartupCommand};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 mod update;
@@ -23,6 +22,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Edit) => cmd_edit()?,
         Some(Command::Stop { force }) => cmd_stop(force)?,
         Some(Command::Restart { force }) => cmd_restart(force)?,
+        Some(Command::Startup { command }) => match command {
+            StartupCommand::Install { method } => {
+                snip_sync::startup::install(method, &std::env::current_exe()?)?
+            }
+            StartupCommand::Instructions { method } => {
+                snip_sync::startup::instructions(method, &std::env::current_exe()?)?
+            }
+            StartupCommand::Uninstall => snip_sync::startup::uninstall(&std::env::current_exe()?)?,
+        },
         Some(Command::Update { dry_run, locked }) => update::run(dry_run, locked)?,
         Some(Command::Croncheck { verbose }) => cmd_croncheck(verbose)?,
         Some(Command::Paths { json }) => cmd_paths(json)?,
@@ -38,6 +46,7 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let env = |name: &str| std::env::var(name).ok();
     let tls_enabled = snip_sync::parse_bool_env(&env, "TLS_ENABLED")?.unwrap_or(false);
+    let allow_http = snip_sync::parse_bool_env(&env, "SNIP_SYNC_ALLOW_HTTP")?.unwrap_or(false);
 
     tracing::info!("Starting snip-sync server v{}", env!("CARGO_PKG_VERSION"));
 
@@ -46,7 +55,6 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
             "TLS_ENABLED acknowledges TLS termination by an upstream reverse proxy; snip-sync itself still serves plaintext gRPC and HTTP."
         );
     } else {
-        let allow_http = snip_sync::parse_bool_env(&env, "SNIP_SYNC_ALLOW_HTTP")?.unwrap_or(false);
         if allow_http {
             tracing::warn!(
                 "Serving plaintext gRPC and HTTP for local development. For production, put a \
@@ -67,6 +75,14 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
     snip_sync::bootstrap::ensure_layout()?;
     snip_sync::bootstrap::ensure_config_file()?;
     let config = snip_sync::Config::load()?;
+    let grpc_addr = resolve_socket_addr(&config.grpc_host, config.grpc_port)?;
+    let http_addr = resolve_socket_addr(&config.http_host, config.http_port)?;
+    snip_sync::startup::validate_transport_policy(
+        tls_enabled,
+        allow_http,
+        grpc_addr.ip().is_loopback(),
+        http_addr.ip().is_loopback(),
+    )?;
 
     // Acquire the kernel-backed server singleton lock. This is the
     // authoritative mutual-exclusion barrier; its identity metadata is for
@@ -490,16 +506,36 @@ fn stop_owner(
             format!("Server lock owner PID {pid} is no longer the recorded process.").into(),
         );
     }
+    #[cfg(unix)]
     if !force && !snip_sync::process::validate_process_name(pid) {
         eprintln!("Warning: PID {pid} does not appear to be a snip-sync process.");
         eprintln!("Use --force to stop it anyway.");
         return Err("Refusing to stop non-snip-sync process".into());
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = force;
+        println!("Terminating recorded server process {pid}...");
+        snip_sync::process::terminate_process(pid, Duration::from_secs(10))?;
+        return match snip_sync::server_lock::ServerLock::try_acquire(&snip_sync::paths::state_dir())
+        {
+            Ok(_guard) => {
+                println!("Server stopped.");
+                Ok(())
+            }
+            Err(snip_sync::server_lock::ServerLockError::Busy { .. }) => {
+                println!("A replacement server has already started.");
+                Ok(())
+            }
+            Err(error) => Err(format!("Failed to acquire server lock: {error}").into()),
+        };
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (pid, force);
-        return Err("Stop is only supported on Unix systems.".into());
+        return Err("Stop is not supported on this platform.".into());
     }
 
     #[cfg(unix)]
@@ -639,6 +675,9 @@ fn stop_legacy(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_restart(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if snip_sync::startup::restart_if_managed(&std::env::current_exe()?, force)? {
+        return Ok(());
+    }
     let state_dir = snip_sync::paths::state_dir();
     if let Err(snip_sync::server_lock::ServerLockError::Busy { owner: Some(owner) }) =
         snip_sync::server_lock::ServerLock::try_acquire(&state_dir)
@@ -685,36 +724,6 @@ fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr, Box<dyn std:
         .ok_or_else(|| format!("Could not resolve {address}").into())
 }
 
-fn check_health(http_host: &str, http_port: u16) -> bool {
-    let address = match resolve_socket_addr(http_host, http_port) {
-        Ok(address) => address,
-        Err(_) => return false,
-    };
-    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
-        Ok(stream) => stream,
-        Err(_) => return false,
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    // Derive the Host header from the validated SocketAddr rather than
-    // interpolating the raw config string, so a hostile `http_host`
-    // cannot inject request lines (CRLF injection).
-    let request = format!("GET /health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    let mut response = [0u8; 4096];
-    let bytes_read = match stream.read(&mut response) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    if bytes_read == 0 {
-        return false;
-    }
-    let response = String::from_utf8_lossy(&response[..bytes_read]);
-    response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
-}
-
 fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     snip_sync::bootstrap::ensure_layout()?;
     snip_sync::bootstrap::ensure_config_file()?;
@@ -731,7 +740,7 @@ fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     let config = snip_sync::Config::load()?;
 
-    if check_health(&config.http_host, config.http_port) {
+    if snip_sync::startup::check_health(&config.http_host, config.http_port) {
         if verbose {
             println!(
                 "Server is healthy on {}:{}",
@@ -768,7 +777,7 @@ fn cmd_croncheck(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     // success when `serve` exits during startup.
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(250));
-        if check_health(&config.http_host, config.http_port) {
+        if snip_sync::startup::check_health(&config.http_host, config.http_port) {
             if verbose {
                 println!("Server started successfully.");
             }

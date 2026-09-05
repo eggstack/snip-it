@@ -246,5 +246,6 @@ lifecycle command is present; it does not duplicate supervisor templates.
 Added the installer contract test at `scripts/tests/installers.sh`, documented
 the bootstrap path and pipe-to-shell tradeoff in the top-level and server
 READMEs, and added the detailed installer contract in `packaging/README.md`.
-The demo GIF remains in the top-level README. Plan 005 is now unblocked and
-marked Ready; Plan 004 remains Planned because it still depends on Plan 003.
+The demo GIF remains in the top-level README. Plan 005 is unblocked and marked
+Ready. Plan 004 is also now unblocked and marked Ready because Plan 003 is
+complete.

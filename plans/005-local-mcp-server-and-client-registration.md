@@ -1,6 +1,6 @@
 # Plan 005: local MCP server and client registration
 
-Status: planned
+Status: ready
 
 Depends on: Plan 002
 

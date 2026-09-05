@@ -23,6 +23,7 @@ pub mod premade;
 pub mod process;
 pub mod rate_limiter;
 pub mod server_lock;
+pub mod startup;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 #[cfg(any(test, feature = "test-helpers"))]

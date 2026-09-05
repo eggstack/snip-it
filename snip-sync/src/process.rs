@@ -184,6 +184,23 @@ pub struct LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(file) = &self.file {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
+            let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED =
+                unsafe { std::mem::zeroed() };
+            overlapped.Anonymous.Anonymous.Offset = LOCKED_BYTE_OFFSET;
+            unsafe {
+                UnlockFileEx(
+                    file.as_raw_handle(),
+                    0,
+                    LOCKED_BYTE_COUNT,
+                    0,
+                    &mut overlapped,
+                );
+            }
+        }
         if self.remove_on_drop {
             let _ = fs::remove_file(&self.path);
         }
@@ -225,6 +242,47 @@ pub fn try_lock(path: &Path) -> Result<Option<LockGuard>, String> {
 
     #[cfg(not(unix))]
     {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+            };
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)
+                .map_err(|error| format!("Failed to open lock file {}: {error}", path.display()))?;
+            let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED =
+                unsafe { std::mem::zeroed() };
+            overlapped.Anonymous.Anonymous.Offset = LOCKED_BYTE_OFFSET;
+            let ok = unsafe {
+                LockFileEx(
+                    file.as_raw_handle(),
+                    LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                    0,
+                    LOCKED_BYTE_COUNT,
+                    0,
+                    &mut overlapped,
+                )
+            };
+            if ok == 0 {
+                let error = std::io::Error::last_os_error();
+                if matches!(error.raw_os_error(), Some(32) | Some(33)) {
+                    return Ok(None);
+                }
+                return Err(format!("Failed to lock {}: {error}", path.display()));
+            }
+            return Ok(Some(LockGuard {
+                file,
+                path: path.to_path_buf(),
+                remove_on_drop: false,
+            }));
+        }
+
+        #[cfg(not(windows))]
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -238,6 +296,50 @@ pub fn try_lock(path: &Path) -> Result<Option<LockGuard>, String> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
             Err(error) => Err(format!("Failed to lock {}: {error}", path.display())),
         }
+    }
+}
+
+#[cfg(windows)]
+const LOCKED_BYTE_COUNT: u32 = 1;
+
+#[cfg(windows)]
+const LOCKED_BYTE_OFFSET: u32 = u32::MAX;
+
+#[cfg(windows)]
+pub fn terminate_process(pid: u32, timeout: Duration) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return Err(format!(
+            "failed to open recorded server process {pid}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let terminated = unsafe { TerminateProcess(handle, 1) } != 0;
+    if !terminated {
+        let error = std::io::Error::last_os_error();
+        unsafe { CloseHandle(handle) };
+        return Err(format!(
+            "failed to terminate recorded server process {pid}: {error}"
+        ));
+    }
+    let wait_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+    let result = unsafe { WaitForSingleObject(handle, wait_ms) };
+    unsafe { CloseHandle(handle) };
+    match result {
+        WAIT_OBJECT_0 => Ok(()),
+        WAIT_TIMEOUT => Err(format!(
+            "process {pid} did not exit within {}s",
+            timeout.as_secs()
+        )),
+        _ => Err(format!(
+            "failed waiting for process {pid}: {}",
+            std::io::Error::last_os_error()
+        )),
     }
 }
 
@@ -345,6 +447,22 @@ mod tests {
         assert!(path.exists());
         remove_pid_if_unchanged_at(&path, &ParsedPidFile::LegacyPid(1234));
         assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stale_on_disk_lock_file_does_not_block_kernel_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("croncheck.lock");
+        fs::write(&path, "stale").unwrap();
+        let guard = try_lock(&path)
+            .unwrap()
+            .expect("stale file must not own lock");
+        drop(guard);
+        assert!(
+            path.exists(),
+            "kernel lock release must not depend on unlinking"
+        );
     }
 
     fn remove_pid_if_unchanged_at(path: &Path, expected: &ParsedPidFile) {
