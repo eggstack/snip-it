@@ -1,6 +1,6 @@
 # Plan 007: release publication and distribution closure
 
-Status: ready
+Status: complete
 
 Depends on: Plan 006
 
@@ -210,3 +210,16 @@ Plan 007 is complete only when all of the following are true:
 ## Handoff note
 
 Do not solve the historical validation failure by allowing mutation of published releases. The workflow did the correct thing at that boundary. The corrective goal is to distinguish safe build verification from publication and then obtain publication proof naturally on the next legitimate release.
+
+## Completion record
+
+Plan 007 is complete. The release workflow now has an explicit `workflow_dispatch` mode: `verify` is the safe default and performs the complete five-target/ten-file build, aggregation, checksum, and smoke contract without release mutation; `attach` retains draft attachment and refuses published releases. `RELEASING.md` documents both modes and the expected historical published-release refusal. The aggregate job is read-only, while only the attach job receives release-write permission and it uses the explicit repository name.
+
+Evidence:
+
+- Safe historical `snp` validation passed in [run 33984694220](https://github.com/eggstack/snip-it/actions/runs/33984694220) for `v1.3.7`; the published release remained unchanged.
+- `snip-sync` 0.1.5 was published manually to crates.io, tagged legitimately as `snip-sync-v0.1.5`, and attached in [run 33986798676](https://github.com/eggstack/snip-it/actions/runs/33986798676). The [published release](https://github.com/eggstack/snip-it/releases/tag/snip-sync-v0.1.5) contains all five target executables and five checksum sidecars; each runner also passed its isolated `/health` smoke.
+- The corrected attach path was exercised against published `v1.3.7` in [run 33987638192](https://github.com/eggstack/snip-it/actions/runs/33987638192) and refused mutation as designed.
+- `bash scripts/release-check.sh verify` passed after the crate publication, including release-profile builds, production installer seams, package checks, and the self-update/lifecycle checks. Focused updater contract tests and the stopped/running lifecycle decision table also passed. The older standalone `snip-sync` 0.1.4 binary predates binary-first updating and selected its documented Cargo fallback; the current updater seam was therefore used for deterministic contract validation, as permitted by this plan.
+- The default public Unix bootstrap consumed the published ARM64 asset on the local `aarch64` Linux host without Cargo fallback. The native [consumer smoke run 33987696368](https://github.com/eggstack/snip-it/actions/runs/33987696368) independently passed both the public `aarch64-unknown-linux-gnu` Unix installer and the Windows x86_64 PowerShell installer, with version identity checks and no Cargo fallback.
+- Ordinary CI and all non-mutating release validation runs were green after the closure changes; the published-release attach check failed only at its intentional immutability guard. No downstream plan remains blocked: Plans 001–006 were already complete, and this plan unblocked and closes Plan 000.

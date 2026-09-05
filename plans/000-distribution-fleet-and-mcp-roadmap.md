@@ -1,6 +1,6 @@
 # Plan 000: distribution, fleet deployment, and MCP roadmap
 
-Status: blocked on corrective closure (Plans 006–007)
+Status: complete
 
 ## Objective
 
@@ -181,3 +181,7 @@ This line of work is complete when all of the following are true:
 14. The ARM64 Linux bootstrap path is proven against a real published release without Rust compilation.
 
 Plan 000 must remain open until Plans 006 and 007 are complete and these closure criteria are evidenced in their completion records.
+
+## Completion record
+
+The distribution roadmap is complete. Plans 001–006 and corrective Plan 007 are complete. Release validation now has a safe non-mutating mode and a guarded draft-attachment mode; `snip-sync-v0.1.5` proved legitimate five-target draft publication and public ten-asset consumption. Public Unix/ARM64 Linux and Windows x86_64 bootstrap smoke runs passed without Cargo fallback, and the updater/lifecycle contracts were validated with the documented pre-updater compatibility limitation. There are no remaining downstream plans blocked on this roadmap.
