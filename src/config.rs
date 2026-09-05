@@ -199,6 +199,9 @@ fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMeta
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
+    #[cfg(windows)]
+    let (file_index, volume_serial) = windows_file_identity(file).unwrap_or((0, 0));
+
     Ok(TomlMetadata {
         mtime,
         len: metadata.len(),
@@ -214,16 +217,28 @@ fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMeta
             metadata.dev()
         },
         #[cfg(windows)]
-        file_index: {
-            use std::os::windows::fs::MetadataExt;
-            metadata.file_index().unwrap_or(0)
-        },
+        file_index,
         #[cfg(windows)]
-        volume_serial: {
-            use std::os::windows::fs::MetadataExt;
-            metadata.volume_serial_number().unwrap_or(0)
-        },
+        volume_serial,
     })
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &fs::File) -> Option<(u64, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return None;
+    }
+
+    let info = unsafe { info.assume_init() };
+    let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Some((file_index, u64::from(info.dwVolumeSerialNumber)))
 }
 
 fn toml_path_metadata(path: &std::path::Path) -> SnipResult<TomlMetadata> {
