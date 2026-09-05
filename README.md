@@ -40,6 +40,33 @@ secrets manager; only save and run commands you trust.
 
 ## Installation
 
+The bootstrap installer downloads a verified release binary for supported
+hosts, with exact-version Cargo fallback for source-only targets:
+
+```bash
+# snp (default)
+curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash
+
+# snip-sync, or both independently versioned components
+curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash -s -- --server
+curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash -s -- --both
+```
+
+For Windows, inspect the downloaded PowerShell script before running it:
+
+```powershell
+irm https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.ps1 -OutFile .\install-snip-it.ps1
+Get-Content .\install-snip-it.ps1
+. .\install-snip-it.ps1 -Component Snp
+```
+
+The pipe-to-shell forms are convenient but execute remote content directly;
+the download-then-inspect form is the safer reviewable alternative. See
+[packaging/README.md](packaging/README.md) for pinned installs and the full
+verification/fallback contract.
+
+Cargo remains the simplest source/package install:
+
 ```bash
 cargo install snip-it
 ```

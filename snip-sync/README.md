@@ -15,8 +15,11 @@ upstream proxy is providing TLS; it does not turn on TLS inside `snip-sync`.
 This is the shortest path for trying the client and server on one machine.
 
 ```bash
-# Install both binaries (skip either command if already installed).
-cargo install snip-it snip-sync
+# Install both verified release binaries (skip either command if already installed).
+curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash -s -- --both
+
+# Cargo is the source/package fallback when a host has no prebuilt asset.
+# cargo install snip-it snip-sync
 
 # Create the platform-specific config, database, state, and data directories.
 # Certificates are not needed for direct loopback development.
@@ -25,6 +28,21 @@ snip-sync init --skip-cert
 # Keep this in a terminal while using the client.
 SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 ```
+
+The bootstrap installer initializes missing server layout/config without
+overwriting existing data. On releases containing the lifecycle installer,
+register startup with the server itself so the appropriate supervisor is
+selected for the host:
+
+```bash
+snip-sync startup instructions
+snip-sync startup install
+```
+
+Startup registration is intentionally owned by `snip-sync`; the binary
+installer does not duplicate systemd, launchd, cron, or Task Scheduler
+templates. If an older installed binary does not expose `startup`, upgrade it
+or follow the manual supervisor examples below.
 
 In another terminal, register the client and sync:
 

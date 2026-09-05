@@ -12,6 +12,9 @@
 # Unit tests are parallel-safe (each uses an isolated TempDir).
 set -euo pipefail
 
+echo "=== Installer contract ==="
+bash scripts/tests/installers.sh
+
 echo "=== Format check ==="
 cargo fmt --all -- --check
 

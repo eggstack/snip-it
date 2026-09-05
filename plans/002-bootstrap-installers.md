@@ -1,6 +1,6 @@
 # Plan 002: binary-first bootstrap installers
 
-Status: ready
+Status: complete
 
 Depends on: Plan 001
 
@@ -230,3 +230,21 @@ Use local fixture HTTP endpoints or injectable base URLs for tests; production U
 8. Existing config/data are preserved.
 9. Successful server installation delegates startup registration to `snip-sync startup install`.
 10. README installation docs are accurate and the demo GIF remains present.
+
+## Completion record
+
+Completed: 2026-09-05
+
+Implemented `packaging/install.sh` and `packaging/install.ps1` with independent
+crates.io version resolution, exact component tags, the Plan 001 host/asset
+mapping, checksum and candidate identity verification, source-only/404-only
+exact-version Cargo fallback, destination/PATH handling, and `--both` version
+ambiguity rejection. Server installation initializes missing layout/config and
+delegates startup registration to `snip-sync startup install` when the
+lifecycle command is present; it does not duplicate supervisor templates.
+
+Added the installer contract test at `scripts/tests/installers.sh`, documented
+the bootstrap path and pipe-to-shell tradeoff in the top-level and server
+READMEs, and added the detailed installer contract in `packaging/README.md`.
+The demo GIF remains in the top-level README. Plan 005 is now unblocked and
+marked Ready; Plan 004 remains Planned because it still depends on Plan 003.
