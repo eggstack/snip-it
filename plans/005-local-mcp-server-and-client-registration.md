@@ -1,6 +1,6 @@
 # Plan 005: local MCP server and client registration
 
-Status: ready
+Status: complete
 
 Depends on: Plan 002
 
@@ -306,3 +306,34 @@ Do not remove or replace the existing demo GIF while editing the README.
 8. `snp mcp install <client>` uses official client CLI/config mechanisms only where safe; otherwise it prints instructions rather than guessing.
 9. Config mutation, where implemented, preserves unrelated user settings and is atomic.
 10. README/user docs expose the MCP path and retain the existing demo GIF.
+
+## Completion record
+
+Completed: 2026-09-05
+
+Implemented a synchronous, newline-delimited MCP stdio server in `src/mcp/`
+using the repository's existing `serde`/`serde_json` dependencies. The server
+explicitly negotiates protocol revisions `2025-11-25`, `2025-06-18`,
+`2025-03-26`, and `2024-11-05`, supports the required initialize/initialized,
+ping, tools/list, and tools/call flow, bounds messages to 1 MiB, emits only
+JSON-RPC on stdout, and exits cleanly at EOF.
+
+The first release exposes exactly `snippets_list`, `snippets_search`, and
+`snippet_get`. They reuse the existing library loader, deterministic selector,
+fuzzy matcher, and ranking primitives; read legacy single-file mode without
+triggering migration writes; exclude deleted snippets and secrets; fail closed
+on malformed TOML; and never execute or mutate snippet data.
+
+Added `snp mcp instructions <client>` and `snp mcp install <client>` for
+Claude Code, Codex, VS Code, Cursor, OpenCode, and Zed. Claude Code, Codex,
+and VS Code use their official noninteractive registration commands when the
+CLI is present. Cursor, OpenCode, and Zed print current schema-specific
+instructions and do not write guessed configuration. Added unit and real
+child-process integration coverage for protocol errors, bounded input,
+library failures, deterministic search ordering, ambiguity, EOF, stderr
+separation, and non-execution, plus README, user guide, MCP, and JSON-schema
+documentation.
+
+The existing demo GIF remains in `README.md`. No future plan depends on Plan
+005, so no additional plan was unblocked. Plan 000 remains the roadmap
+umbrella and is intentionally not marked complete by this executable plan.

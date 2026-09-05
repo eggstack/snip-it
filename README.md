@@ -79,6 +79,25 @@ supported hosts. A Homebrew-managed `snp` remains owned by Homebrew; use
 `brew upgrade snip-it` for that installation. Use `snp update --dry-run` to
 inspect the selected version and target without changing files.
 
+### Agent / MCP integration
+
+Coding agents can launch a local, read-only MCP server on demand. It uses
+stdio, never binds a port, and never executes stored commands:
+
+```bash
+snp mcp serve
+snp mcp instructions claude
+snp mcp instructions codex
+snp mcp instructions vscode
+snp mcp instructions cursor
+snp mcp instructions opencode
+snp mcp instructions zed
+```
+
+Use `snp mcp install <client>` for official noninteractive registration where
+the client provides it. See [docs/MCP.md](docs/MCP.md) for the tool contract
+and client-specific setup details.
+
 ### From source
 
 ```bash

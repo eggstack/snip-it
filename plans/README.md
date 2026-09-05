@@ -11,7 +11,7 @@ This directory contains active implementation plans intended for agent handoff.
 | [002](002-bootstrap-installers.md) | Binary-first bootstrap installers | Complete | 001 |
 | [003](003-snip-sync-startup-and-lifecycle.md) | snip-sync startup and lifecycle management | Complete | 001 |
 | [004](004-binary-first-self-update.md) | Binary-first self-update and restart integration | Complete | 001, 003 |
-| [005](005-local-mcp-server-and-client-registration.md) | Local MCP server and client registration | Ready | 002 |
+| [005](005-local-mcp-server-and-client-registration.md) | Local MCP server and client registration | Complete | 002 |
 
 ## Execution policy
 

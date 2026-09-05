@@ -436,6 +436,11 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         sync_only: bool,
     },
+    /// Expose snippets to local coding agents over MCP
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
     /// Retrieve a snippet deterministically (no TUI, no execution)
     Get {
         /// Match by exact snippet UUID
@@ -530,6 +535,22 @@ enum ShellCommands {
         /// Shell to generate integration for
         #[arg(value_enum)]
         shell: ShellIntegration,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum McpCommands {
+    /// Run the read-only newline-delimited stdio MCP server
+    Serve,
+    /// Print setup instructions for a supported MCP client
+    Instructions {
+        #[arg(value_enum)]
+        client: snip_it::mcp::McpClient,
+    },
+    /// Register snip-it with a supported MCP client when its official CLI is safe to use
+    Install {
+        #[arg(value_enum)]
+        client: snip_it::mcp::McpClient,
     },
 }
 
@@ -1216,6 +1237,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
         Some(Commands::Status { json, sync_only }) => {
             commands::status_cmd::run(json, sync_only)?;
         }
+        Some(Commands::Mcp { command }) => match command {
+            McpCommands::Serve => snip_it::mcp::serve()?,
+            McpCommands::Instructions { client } => snip_it::mcp::instructions(client)?,
+            McpCommands::Install { client } => snip_it::mcp::install(client)?,
+        },
         Some(Commands::Data { command }) => match command {
             DataCommands::Validate {
                 library,
@@ -1321,6 +1347,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             | Commands::List { .. }
             | Commands::Select { .. }
             | Commands::Status { .. }
+            | Commands::Mcp { .. }
             | Commands::Get { .. }
             | Commands::Validate { .. }
             | Commands::Backup { .. }

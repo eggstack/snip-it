@@ -39,6 +39,17 @@
 - `output` is always present but may be an empty string.
 - No wrapping envelope — the output is a bare JSON array.
 
+## Local MCP tool results
+
+The local MCP adapter returns a JSON object inside both `structuredContent`
+and a text content item. Successful snippet entries use these stable fields:
+`id`, `library`, `description`, `command`, `tags`, `folders`, and `favorite`.
+`snippets_list` and `snippets_search` wrap entries in `snippets`; a successful
+`snippet_get` returns one entry directly. Not-found and ambiguous
+`snippet_get` calls return `isError: true` with an `error` code and structured
+`matches` data. Credentials, sync state, local output/notes, and execution
+are out of scope.
+
 ---
 
 ## `get --json`

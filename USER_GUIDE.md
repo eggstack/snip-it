@@ -7,6 +7,7 @@ and automation.
 ## Contents
 
 - [Libraries](#libraries)
+- [Agent / MCP integration](#agent--mcp-integration)
 - [Pet compatibility and import](#pet-compatibility-and-import)
 - [Shell integration](#shell-integration)
 - [Themes](#themes)
@@ -158,6 +159,30 @@ Snip-it also reads older `[[Snippets]]` files and capitalized aliases such as
 (`id`, `folders`, `favorite`, timestamps, and sync state); pet will ignore data
 it does not know about, so use a separate copy if you need to preserve that
 metadata while editing the same collection with both tools.
+
+## Agent / MCP integration
+
+The local MCP adapter is a read-only stdio server launched by the agent
+client. It reads the same libraries as the CLI, does not start sync or the
+TUI, and never executes a returned command.
+
+```bash
+snp mcp serve
+snp mcp instructions claude
+snp mcp instructions codex
+snp mcp instructions vscode
+snp mcp instructions cursor
+snp mcp instructions opencode
+snp mcp instructions zed
+```
+
+`snippets_list` enumerates metadata, `snippets_search` uses snip-it's existing
+fuzzy ranking, and `snippet_get` resolves an exact ID or a unique exact
+description. Each result includes the command as text for the agent to use
+under its own execution and approval policy. `snp mcp install <client>` only
+uses official noninteractive client commands where their registration
+contract is stable; otherwise it prints a schema-specific configuration
+block without changing user files. See [docs/MCP.md](docs/MCP.md).
 
 ## Shell integration
 
