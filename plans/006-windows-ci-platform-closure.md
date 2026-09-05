@@ -1,6 +1,6 @@
 # Plan 006: Windows CI and platform closure
 
-Status: ready
+Status: complete
 
 Depends on: Plans 001–005
 
@@ -168,3 +168,27 @@ Plan 006 is complete only when all of the following are true:
 ## Handoff note
 
 The first task is diagnostic retrieval, not code editing. The repeated job-status pattern only establishes that Windows all-target compilation is the blocker; it does not establish which source line is wrong. Make the smallest change justified by the compiler output and preserve the existing CI command if at all possible.
+
+## Completion record
+
+Classification: production portability defect.
+
+The pre-fix Windows compiler output on commit `a6207f8` reported:
+
+- `error[E0658]: use of unstable library feature windows_by_handle` at `src\config.rs:219` for `metadata.file_index()`;
+- `error[E0658]: use of unstable library feature windows_by_handle` at `src\config.rs:224` for `metadata.volume_serial_number()`;
+- `error[E0308]: mismatched types` at `src\config.rs:224`, expected `u64` but found `u32`;
+- `error[E0308]: mismatched types` and `error[E0277]` at `src\utils\process.rs:48`, comparing the `u32` process exit code with the `i32` `STILL_ACTIVE` constant.
+
+The fixes were limited to the diagnosed Windows implementations: use the stable
+`GetFileInformationByHandle` API for file identity, cast `STILL_ACTIVE` to the
+process API's unsigned type, and correct `snip-sync`'s Windows lock-drop branch
+to use its owned `fs::File` directly. Requalification exposed and resolved two
+follow-on stale-binding errors in `snip-sync/src/process.rs` (the `Option<File>`
+pattern at line 188 and the removed `file` binding at line 196).
+
+Evidence:
+
+- GitHub Actions run [33975035797](https://github.com/eggstack/snip-it/actions/runs/33975035797) passed Linux correctness, macOS platform smoke, Windows `cargo check --workspace --all-targets`, and Windows `cargo test --test platform_smoke --features test-support` at commit `f55a516`.
+- `bash scripts/check.sh` passed locally, including all six multi-batch sync tests.
+- No CI weakening, target exclusion, broad feature enablement, or new regression suite was needed; the existing platform smoke covered the affected contract.

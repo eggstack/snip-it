@@ -1,6 +1,6 @@
 # Plan 007: release publication and distribution closure
 
-Status: planned
+Status: ready
 
 Depends on: Plan 006
 
