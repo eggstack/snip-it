@@ -1,0 +1,70 @@
+name: Distribution consumer smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published snip-sync version to consume
+        required: true
+        default: 0.1.5
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  unix-arm64:
+    name: Unix bootstrap (Linux ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install public ARM64 release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$VERSION" 2>&1 | tee "$RUNNER_TEMP/install.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install.log"
+          test "$(snip-sync version 2)" = "snip-sync $VERSION"
+
+  windows-x64:
+    name: Windows bootstrap (x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install public Windows release asset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
+            throw 'Expected an x86_64 Windows runner'
+          }
+          $log = Join-Path $env:RUNNER_TEMP 'install.log'
+          & ./packaging/install.ps1 -Component Server -Version $env:VERSION 2>&1 | Tee-Object -FilePath $log
+          if (Select-String -Path $log -Pattern 'Cargo fallback' -Quiet) {
+            throw 'Installer used Cargo fallback'
+          }
+          $installed = Join-Path $env:LOCALAPPDATA 'snip-it\snip-sync.exe'
+          if (-not (Test-Path -LiteralPath $installed)) {
+            $installed = Join-Path $env:ProgramFiles 'snip-it\snip-sync.exe'
+          }
+          if (-not (Test-Path -LiteralPath $installed)) {
+            throw 'Installed snip-sync binary was not found'
+          }
+          $identity = (& $installed version 2>&1 | Out-String).Trim()
+          if ($identity -ne "snip-sync $env:VERSION") {
+            throw "Unexpected installed identity: $identity"
+          }
