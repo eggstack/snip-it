@@ -13,6 +13,30 @@ permissions:
   contents: read
 
 jobs:
+  unix-x64:
+    name: Unix bootstrap (Linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install public x86_64 release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$VERSION" 2>&1 | tee "$RUNNER_TEMP/install.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install.log"
+          test "$(snip-sync version 2>&1)" = "snip-sync $VERSION"
+
   unix-arm64:
     name: Unix bootstrap (Linux ARM64)
     runs-on: ubuntu-24.04-arm
