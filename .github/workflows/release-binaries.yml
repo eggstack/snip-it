@@ -1,0 +1,482 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'snip-sync-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build (for example v1.3.7)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: '1.94'
+  ZIG_VERSION: '0.14.1'
+  CARGO_ZIGBUILD_VERSION: '0.23.4'
+
+jobs:
+  preflight:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      component: ${{ steps.validate.outputs.component }}
+      package: ${{ steps.validate.outputs.package }}
+      version: ${{ steps.validate.outputs.version }}
+      tag: ${{ steps.validate.outputs.tag }}
+    steps:
+      - name: Check out the requested tag
+        uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch, github.ref is the branch containing this
+          # workflow, so the explicit tag input must take precedence.
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate tag, commit, manifest, and tree
+        id: validate
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          component=''
+          package=''
+          manifest=''
+          version=''
+          if [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            component='snp'
+            package='snip-it'
+            manifest='Cargo.toml'
+            version="${BASH_REMATCH[1]}"
+          elif [[ "$RELEASE_TAG" =~ ^snip-sync-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            component='snip-sync'
+            package='snip-sync'
+            manifest='snip-sync/Cargo.toml'
+            version="${BASH_REMATCH[1]}"
+          else
+            echo "Unsupported release tag '$RELEASE_TAG'; expected vX.Y.Z or snip-sync-vA.B.C" >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse --verify HEAD)"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "Tag $RELEASE_TAG points to $tag_commit, but checkout is $head_commit" >&2
+            exit 1
+          fi
+
+          manifest_version="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 \
+            | jq -r --arg package "$package" '.packages[] | select(.name == $package) | .version' \
+            | head -n 1)"
+          if [[ "$manifest_version" != "$version" ]]; then
+            echo "Tag $RELEASE_TAG requires $manifest version $version, found $manifest_version" >&2
+            exit 1
+          fi
+
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'The checked-out release tree is not clean' >&2
+            git status --short >&2
+            exit 1
+          fi
+
+          {
+            echo "component=$component"
+            echo "package=$package"
+            echo "version=$version"
+            echo "tag=$RELEASE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Validated $component $version at $RELEASE_TAG ($head_commit)"
+
+  build:
+    name: Build ${{ needs.preflight.outputs.component }} (${{ matrix.target }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            zig_target: x86_64-unknown-linux-gnu.2.17
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            zig_target: aarch64-unknown-linux-gnu.2.17
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Check out the validated tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain and target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
+      - name: Install pinned Zig
+        if: runner.os == 'Linux'
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install pinned cargo-zigbuild
+        if: runner.os == 'Linux'
+        shell: bash
+        run: cargo install --locked cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}"
+
+      - name: Build, stage, smoke-test, and checksum (Unix)
+        if: runner.os != 'Windows'
+        env:
+          COMPONENT: ${{ needs.preflight.outputs.component }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ZIG_TARGET: ${{ matrix.zig_target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$COMPONENT" in
+            snp) package='snip-it'; binary='snp' ;;
+            snip-sync) package='snip-sync'; binary='snip-sync' ;;
+            *) echo "Unknown component: $COMPONENT" >&2; exit 1 ;;
+          esac
+          asset="${COMPONENT}-${TARGET}"
+          build_target="${ZIG_TARGET:-$TARGET}"
+
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            cargo zigbuild -p "$package" --release --locked --target "$build_target"
+          else
+            cargo build -p "$package" --release --locked --target "$TARGET"
+          fi
+
+          built="$(find target -type f -path '*/release/*' -name "$binary" -print -quit)"
+          if [[ -z "$built" ]]; then
+            echo "Could not locate the release executable for $binary" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$built" "dist/$asset"
+          chmod +x "dist/$asset"
+
+          identity="$("dist/$asset" version)"
+          [[ "$identity" == "$binary $VERSION" ]] || {
+            echo "Unexpected identity/version: '$identity' (expected '$binary $VERSION')" >&2
+            exit 1
+          }
+          "dist/$asset" --help >/dev/null
+
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            highest_glibc="$(readelf -W --version-info --dyn-syms "dist/$asset" \
+              | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \
+              | sed 's/^GLIBC_//' \
+              | sort -V \
+              | tail -n 1 || true)"
+            if [[ -n "$highest_glibc" && "$(printf '%s\n' "$highest_glibc" '2.17' | sort -V | tail -n 1)" != '2.17' ]]; then
+              echo "Linux artifact requires glibc $highest_glibc, above the 2.17 compatibility floor" >&2
+              exit 1
+            fi
+          fi
+
+          digest_command='sha256sum'
+          if ! command -v sha256sum >/dev/null 2>&1; then
+            digest_command='shasum -a 256'
+          fi
+          digest="$($digest_command "dist/$asset" | awk '{print $1}')"
+          [[ "$digest" =~ ^[0-9a-fA-F]{64}$ ]] || {
+            echo 'Checksum command returned an invalid SHA-256 digest' >&2
+            exit 1
+          }
+          printf '%s  %s\n' "$digest" "$asset" > "dist/$asset.sha256"
+          (
+            cd dist
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum -c "$asset.sha256"
+            else
+              expected="$(awk '{print $1}' "$asset.sha256")"
+              actual="$(shasum -a 256 "$asset" | awk '{print $1}')"
+              [[ "$expected" == "$actual" ]]
+            fi
+          )
+
+      - name: Build, stage, smoke-test, and checksum (Windows)
+        if: runner.os == 'Windows'
+        env:
+          COMPONENT: ${{ needs.preflight.outputs.component }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$COMPONENT" in
+            snp) package='snip-it'; binary='snp' ;;
+            snip-sync) package='snip-sync'; binary='snip-sync' ;;
+            *) echo "Unknown component: $COMPONENT" >&2; exit 1 ;;
+          esac
+          asset="${COMPONENT}-${TARGET}.exe"
+          cargo build -p "$package" --release --locked --target "$TARGET"
+
+          built="$(find target -type f -path '*/release/*' -name "$binary.exe" -print -quit)"
+          if [[ -z "$built" ]]; then
+            echo "Could not locate the release executable for $binary" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$built" "dist/$asset"
+
+          identity="$("dist/$asset" version)"
+          [[ "$identity" == "$binary $VERSION" ]] || {
+            echo "Unexpected identity/version: '$identity' (expected '$binary $VERSION')" >&2
+            exit 1
+          }
+          "dist/$asset" --help >/dev/null
+
+          digest="$(sha256sum "dist/$asset" | awk '{print $1}')"
+          [[ "$digest" =~ ^[0-9a-fA-F]{64}$ ]] || {
+            echo 'Checksum command returned an invalid SHA-256 digest' >&2
+            exit 1
+          }
+          printf '%s  %s\n' "$digest" "$asset" > "dist/$asset.sha256"
+          (
+            cd dist
+            sha256sum -c "$asset.sha256"
+          )
+
+      - name: Isolated snip-sync loopback health smoke (Unix)
+        if: runner.os != 'Windows' && needs.preflight.outputs.component == 'snip-sync'
+        env:
+          ASSET: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'dist/snip-sync-x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' && 'dist/snip-sync-aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-apple-darwin' && 'dist/snip-sync-x86_64-apple-darwin' || 'dist/snip-sync-aarch64-apple-darwin' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import socket
+          import subprocess
+          import tempfile
+          import time
+          import urllib.request
+
+          def free_port():
+              sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              sock.bind(("127.0.0.1", 0))
+              port = sock.getsockname()[1]
+              sock.close()
+              return port
+
+          root = tempfile.mkdtemp(prefix="snip-sync-release-smoke-", dir=os.environ.get("RUNNER_TEMP"))
+          environment = os.environ.copy()
+          environment.update({
+              "CONFIG_PATH": os.path.join(root, "config.toml"),
+              "DATABASE_URL": os.path.join(root, "snippets.db"),
+              "PREMADE_DIR": os.path.join(root, "premade"),
+              "SNIP_SYNC_STATE_DIR": os.path.join(root, "state"),
+              "XDG_CONFIG_HOME": os.path.join(root, "config-home"),
+              "XDG_DATA_HOME": os.path.join(root, "data-home"),
+              "XDG_STATE_HOME": os.path.join(root, "state-home"),
+              "GRPC_HOST": "127.0.0.1",
+              "GRPC_PORT": str(free_port()),
+              "HTTP_HOST": "127.0.0.1",
+              "HTTP_PORT": str(free_port()),
+              "SNIP_SYNC_ALLOW_HTTP": "true",
+          })
+          process = subprocess.Popen(
+              [os.path.abspath(os.environ["ASSET"]), "serve"],
+              env=environment,
+              stdin=subprocess.DEVNULL,
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+          )
+          url = f"http://127.0.0.1:{environment['HTTP_PORT']}/health"
+          try:
+              deadline = time.monotonic() + 30
+              while time.monotonic() < deadline:
+                  if process.poll() is not None:
+                      raise RuntimeError(f"snip-sync exited during health smoke ({process.returncode})")
+                  try:
+                      with urllib.request.urlopen(url, timeout=2) as response:
+                          if response.status == 200:
+                              break
+                  except Exception:
+                      time.sleep(0.25)
+              else:
+                  raise RuntimeError("snip-sync /health did not return HTTP 200 within 30 seconds")
+          finally:
+              if process.poll() is None:
+                  process.terminate()
+                  try:
+                      process.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      process.kill()
+                      process.wait(timeout=5)
+          PY
+
+      - name: Isolated snip-sync loopback health smoke (Windows)
+        if: runner.os == 'Windows' && needs.preflight.outputs.component == 'snip-sync'
+        env:
+          ASSET: dist/snip-sync-x86_64-pc-windows-msvc.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('snip-sync-release-smoke-' + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $grpcPort = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $httpPort = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          $env:CONFIG_PATH = Join-Path $root 'config.toml'
+          $env:DATABASE_URL = Join-Path $root 'snippets.db'
+          $env:PREMADE_DIR = Join-Path $root 'premade'
+          $env:SNIP_SYNC_STATE_DIR = Join-Path $root 'state'
+          $env:XDG_CONFIG_HOME = Join-Path $root 'config-home'
+          $env:XDG_DATA_HOME = Join-Path $root 'data-home'
+          $env:XDG_STATE_HOME = Join-Path $root 'state-home'
+          $env:GRPC_HOST = '127.0.0.1'
+          $env:GRPC_PORT = $grpcPort
+          $env:HTTP_HOST = '127.0.0.1'
+          $env:HTTP_PORT = $httpPort
+          $env:SNIP_SYNC_ALLOW_HTTP = 'true'
+          $process = Start-Process -FilePath (Resolve-Path $env:ASSET) -ArgumentList 'serve' -PassThru -WindowStyle Hidden
+          $healthy = $false
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+              if ($process.HasExited) {
+                throw "snip-sync exited during health smoke ($($process.ExitCode))"
+              }
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:$httpPort/health" -UseBasicParsing -TimeoutSec 2
+                if ($response.StatusCode -eq 200) {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $healthy) {
+              throw 'snip-sync /health did not return HTTP 200 within 30 seconds'
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+              $process.WaitForExit()
+            }
+          }
+
+      - name: Upload verified staged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  attach:
+    name: Attach verified assets to draft release
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download staged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify complete asset set and checksums
+        env:
+          COMPONENT: ${{ needs.preflight.outputs.component }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COMPONENT" == 'snp' ]]; then
+            assets=(
+              snp-x86_64-unknown-linux-gnu
+              snp-aarch64-unknown-linux-gnu
+              snp-x86_64-apple-darwin
+              snp-aarch64-apple-darwin
+              snp-x86_64-pc-windows-msvc.exe
+            )
+          else
+            assets=(
+              snip-sync-x86_64-unknown-linux-gnu
+              snip-sync-aarch64-unknown-linux-gnu
+              snip-sync-x86_64-apple-darwin
+              snip-sync-aarch64-apple-darwin
+              snip-sync-x86_64-pc-windows-msvc.exe
+            )
+          fi
+          for asset in "${assets[@]}"; do
+            [[ -f "dist/$asset" ]] || { echo "Missing asset: $asset" >&2; exit 1; }
+            [[ -f "dist/$asset.sha256" ]] || { echo "Missing checksum: $asset.sha256" >&2; exit 1; }
+            (cd dist && sha256sum -c "$asset.sha256")
+          done
+          if find dist -maxdepth 1 -type f -name "*-${VERSION}" -print -quit | grep -q .; then
+            echo 'Versioned artifact names are forbidden; the tag is the version namespace' >&2
+            exit 1
+          fi
+
+      - name: Create draft release if absent and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          COMPONENT: ${{ needs.preflight.outputs.component }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(mktemp)"
+          release_error="$(mktemp)"
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >"$release_json" 2>"$release_error"; then
+            draft="$(jq -r '.draft' "$release_json")"
+            if [[ "$draft" != 'true' ]]; then
+              echo "Release $TAG is already published; refusing to mutate it" >&2
+              exit 1
+            fi
+          else
+            if ! grep -Eq 'HTTP 404|Not Found' "$release_error"; then
+              cat "$release_error" >&2
+              exit 1
+            fi
+            gh release create "$TAG" \
+              --draft \
+              --title "$TAG" \
+              --notes "Verified $COMPONENT $VERSION release binaries."
+          fi
+          gh release upload "$TAG" dist/* --clobber

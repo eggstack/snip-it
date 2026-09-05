@@ -1,6 +1,6 @@
 # Plan 001: release binary matrix and artifact contract
 
-Status: planned
+Status: complete
 
 Depends on: Plan 000
 
@@ -200,3 +200,20 @@ Do not call this plan complete based only on YAML syntax review.
 8. `snip-sync` additionally passes a real isolated `/health` smoke.
 9. No workflow contains crates.io publication credentials or `cargo publish`.
 10. `RELEASING.md` accurately documents the manual crate publication plus GitHub binary-release sequence.
+
+## Completion record
+
+Completed: 2026-09-04
+
+Implemented the release-only matrix in `.github/workflows/release-binaries.yml`.
+The workflow validates the exact component tag and manifest version before
+building, builds only that component for the five required targets, qualifies
+Linux artifacts against the glibc 2.17 floor with pinned Zig/cargo-zigbuild,
+smoke-tests staged binaries, performs the isolated `snip-sync` loopback health
+check, verifies SHA-256 sidecars, and attaches assets only to a draft release.
+Published releases are treated as immutable. Crate publication and tag
+creation remain manual as documented in `RELEASING.md`.
+
+The local release helper now validates release-tag metadata and the workflow
+contract. Plans 002 and 003 are now ready because their Plan 001 dependency is
+complete. Plans 004 and 005 remain planned pending their other dependencies.

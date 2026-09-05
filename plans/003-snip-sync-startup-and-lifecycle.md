@@ -1,6 +1,6 @@
 # Plan 003: snip-sync startup and lifecycle management
 
-Status: planned
+Status: ready
 
 Depends on: Plan 001
 

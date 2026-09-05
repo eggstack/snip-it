@@ -1,6 +1,6 @@
 # Plan 002: binary-first bootstrap installers
 
-Status: planned
+Status: ready
 
 Depends on: Plan 001
 
