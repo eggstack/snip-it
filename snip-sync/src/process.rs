@@ -193,7 +193,7 @@ impl Drop for LockGuard {
             overlapped.Anonymous.Anonymous.Offset = LOCKED_BYTE_OFFSET;
             unsafe {
                 UnlockFileEx(
-                    file.as_raw_handle(),
+                    self.file.as_raw_handle(),
                     0,
                     LOCKED_BYTE_COUNT,
                     0,
