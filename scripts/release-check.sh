@@ -95,7 +95,13 @@ verify_release_contract() {
     for required in \
         "workflow_dispatch:" \
         "inputs:" \
+        "mode:" \
+        "default: verify" \
+        "type: choice" \
         "ref: \${{ inputs.tag || github.ref }}" \
+        "RELEASE_MODE" \
+        "mode == 'attach'" \
+        "name: Verify complete release asset set" \
         "ubuntu-24.04-arm" \
         "x86_64-unknown-linux-gnu.2.17" \
         "aarch64-unknown-linux-gnu.2.17" \

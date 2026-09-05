@@ -69,6 +69,37 @@ Each staged executable must pass its identity/version and `--help` smoke test;
 Each asset is uploaded with an adjacent, locally verified `.sha256` sidecar.
 Public filenames do not include the version.
 
+### Historical validation versus release attachment
+
+Manual dispatch has an explicit mode so maintainers can safely validate an
+existing tag without changing GitHub Releases:
+
+```bash
+gh workflow run "Release binaries" --ref main \
+  -f tag=vX.Y.Z -f mode=verify
+```
+
+`mode=verify` is the safe historical-tag validation path. It runs preflight,
+all five target builds, executable smoke tests, checksum generation, artifact
+aggregation, complete five-executable/ten-public-file verification, and a
+second checksum verification over the aggregate. It never creates, updates,
+or uploads to a GitHub Release. This is the default for manual dispatch.
+
+Real draft asset attachment uses the normal tag-push path, or an explicit
+manual dispatch:
+
+```bash
+gh workflow run "Release binaries" --ref main \
+  -f tag=vX.Y.Z -f mode=attach
+```
+
+`mode=attach` creates a draft release when the exact tag has no release and
+uploads the verified assets. Reruns clobber assets while the release remains a
+draft. It intentionally refuses to mutate an already-published release; that
+failure is expected immutability policy, not a validation failure. The prior
+historical-tag attempt against a published release therefore proved the guard
+was working, but did not prove draft publication.
+
 For an `snip-it` release:
 
 ```bash

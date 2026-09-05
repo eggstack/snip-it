@@ -11,9 +11,17 @@ on:
         description: Existing release tag to build (for example v1.3.7)
         required: true
         type: string
+      mode:
+        description: Verify artifacts without release mutation, or attach them to a draft release
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - attach
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-binaries-${{ inputs.tag || github.ref_name }}
@@ -34,6 +42,7 @@ jobs:
       package: ${{ steps.validate.outputs.package }}
       version: ${{ steps.validate.outputs.version }}
       tag: ${{ steps.validate.outputs.tag }}
+      mode: ${{ steps.validate.outputs.mode }}
     steps:
       - name: Check out the requested tag
         uses: actions/checkout@v4
@@ -47,6 +56,7 @@ jobs:
         id: validate
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'attach' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -91,14 +101,20 @@ jobs:
             exit 1
           fi
 
+          if [[ "$RELEASE_MODE" != 'verify' && "$RELEASE_MODE" != 'attach' ]]; then
+            echo "Unsupported release mode '$RELEASE_MODE'; expected verify or attach" >&2
+            exit 1
+          fi
+
           {
             echo "component=$component"
             echo "package=$package"
             echo "version=$version"
             echo "tag=$RELEASE_TAG"
+            echo "mode=$RELEASE_MODE"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Validated $component $version at $RELEASE_TAG ($head_commit)"
+          echo "Validated $component $version at $RELEASE_TAG ($head_commit), mode=$RELEASE_MODE"
 
   build:
     name: Build ${{ needs.preflight.outputs.component }} (${{ matrix.target }})
@@ -406,8 +422,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  attach:
-    name: Attach verified assets to draft release
+  aggregate:
+    name: Verify complete release asset set
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
@@ -451,6 +467,28 @@ jobs:
             echo 'Versioned artifact names are forbidden; the tag is the version namespace' >&2
             exit 1
           fi
+
+      - name: Preserve verified asset set for optional attachment
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-aggregate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  attach:
+    name: Attach verified assets to draft release
+    if: needs.preflight.outputs.mode == 'attach'
+    needs: [preflight, aggregate]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified aggregate
+        uses: actions/download-artifact@v4
+        with:
+          name: release-aggregate
+          path: dist
 
       - name: Create draft release if absent and upload assets
         env:
