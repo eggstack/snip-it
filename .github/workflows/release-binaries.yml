@@ -513,8 +513,9 @@ jobs:
               exit 1
             fi
             gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
               --draft \
               --title "$TAG" \
               --notes "Verified $COMPONENT $VERSION release binaries."
           fi
-          gh release upload "$TAG" dist/* --clobber
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
