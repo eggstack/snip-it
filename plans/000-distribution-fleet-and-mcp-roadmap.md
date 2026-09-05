@@ -1,6 +1,6 @@
 # Plan 000: distribution, fleet deployment, and MCP roadmap
 
-Status: planned
+Status: blocked on corrective closure (Plans 006–007)
 
 ## Objective
 
@@ -73,11 +73,11 @@ An updater first asks crates.io for the latest version of its own crate, then co
 ## Required initial binary matrix
 
 ```text
-Linux x86_64       x86_64-unknown-linux-gnu
-Linux ARM64        aarch64-unknown-linux-gnu
-macOS Intel        x86_64-apple-darwin
+Linux x86_64        x86_64-unknown-linux-gnu
+Linux ARM64         aarch64-unknown-linux-gnu
+macOS Intel         x86_64-apple-darwin
 macOS Apple Silicon aarch64-apple-darwin
-Windows x86_64     x86_64-pc-windows-msvc
+Windows x86_64      x86_64-pc-windows-msvc
 ```
 
 The Linux ARM64 binary is the primary SBC artifact for 64-bit Raspberry Pi and Le Potato deployments.
@@ -106,6 +106,11 @@ Add those to the binary matrix only after the required matrix is stable. The ins
                     ^
                     |
                     +-- 003 manager-aware restart semantics
+
+corrective closure:
+006 Windows CI/platform closure
+  -> 007 release publication + real distribution proof
+       -> close 000
 ```
 
 ## Plan boundaries
@@ -129,6 +134,20 @@ Replace Cargo-only/unmanaged update behavior with the same crates.io-authoritati
 ### Plan 005 — MCP
 
 Add `snp mcp serve` as an on-demand stdio MCP server plus small client-registration helpers for common coding agents. Start with deterministic read-only snippet retrieval/search tools.
+
+### Plan 006 — Windows CI/platform closure
+
+Restore the existing Windows all-target/platform-smoke gate on current `main`. Diagnose the actual compiler failure and apply only the minimum portability, feature-gating, dependency, or CI-prerequisite correction justified by that diagnostic.
+
+### Plan 007 — release publication/distribution closure
+
+Separate safe non-mutating workflow validation from real draft attachment, preserve published-release immutability, then obtain real release/install/update evidence on the next legitimate release, including the ARM64 Linux fleet path.
+
+## Corrective closure finding
+
+Plans 001–005 have landed as feature implementations, but the roadmap cannot be closed yet. The planning-only baseline and every implementation commit in this sequence currently show the same Windows Actions failure at `cargo check --workspace --all-targets`; Linux and macOS are green. Separately, the Plan 001 release validation successfully built and verified all five `snp` target artifacts but intentionally refused to mutate the already-published historical release selected for the dispatch test. That proves the build matrix and immutable-release guard, but not successful draft attachment or real binary-first consumption.
+
+Plans 006 and 007 are therefore corrective validation/closure work. They should not reopen or redesign Plans 001–005 unless their verification exposes a concrete implementation defect.
 
 ## Documentation outcome
 
@@ -156,4 +175,9 @@ This line of work is complete when all of the following are true:
 8. A running `snip-sync` server returns to service after a successful update when restart permission is available.
 9. `snp mcp serve` can be launched as a local stdio MCP server and exposes only the intended read-only snippet tools.
 10. README/user documentation accurately reflects the implemented installation paths and retains the demo GIF.
-11. Existing `bash scripts/check.sh` and relevant platform/release smoke tests pass.
+11. Existing `bash scripts/check.sh` and relevant Linux/macOS/Windows platform/release smoke tests pass.
+12. The release workflow has a green non-mutating five-target validation path and preserves its refusal to mutate published releases.
+13. At least one legitimate new component release proves draft asset attachment and subsequent binary-first consumption.
+14. The ARM64 Linux bootstrap path is proven against a real published release without Rust compilation.
+
+Plan 000 must remain open until Plans 006 and 007 are complete and these closure criteria are evidenced in their completion records.
