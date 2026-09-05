@@ -185,7 +185,7 @@ pub struct LockGuard {
 impl Drop for LockGuard {
     fn drop(&mut self) {
         #[cfg(windows)]
-        if let Some(file) = &self.file {
+        {
             use std::os::windows::io::AsRawHandle;
             use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
             let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED =
