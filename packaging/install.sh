@@ -129,7 +129,8 @@ download_http() {
 
     if ! status="$(curl --silent --show-error --location --compressed \
         --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 1 \
-        --proto '=https,http' -o "$destination" -w '%{http_code}' "$url")"; then
+        --proto '=https,http' --user-agent 'snip-it-installer' \
+        -o "$destination" -w '%{http_code}' "$url")"; then
         install_error "transport failure downloading $url"
         return 2
     fi
