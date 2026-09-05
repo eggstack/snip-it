@@ -1,6 +1,6 @@
 # Plan 004: binary-first self-update and restart integration
 
-Status: ready
+Status: complete
 
 Depends on: Plans 001 and 003
 
@@ -260,3 +260,34 @@ Do not hit production crates.io/GitHub in ordinary unit tests.
 10. An intentionally stopped server remains stopped.
 11. Restart failure after successful replacement is reported as partial success with nonzero exit.
 12. Existing Homebrew-managed `snp` installs are not silently overwritten by the direct-binary updater.
+
+## Completion record
+
+Completed: 2026-09-05
+
+Implemented binary-first self-update for both `snp` and `snip-sync`. Each
+binary now selects its own stable crates.io version, constructs the exact
+component GitHub tag and release asset, uses the Plan 001 target mapping,
+verifies the single-line SHA-256 sidecar and candidate identity, and stages
+the exact-version Cargo fallback only for source-only targets or a definite
+asset 404. Transport, checksum, and candidate failures are hard failures and
+never fall back to Cargo.
+
+Direct, bootstrap, and Cargo-installed executables are supported. Unix
+replacement stages beside the destination and renames over the old executable
+without unlinking it first, preserving executable permissions. Windows uses a
+fixed-purpose copied helper for replacement after the updater exits. Existing
+Homebrew-managed `snp` installations remain delegated to Homebrew.
+
+`snip-sync update` captures whether an installed manager/direct server was
+running before the update, restarts only an active server through the existing
+manager or direct lifecycle, leaves stopped/inactive services stopped, and
+reports the installed-on-disk/failed-restart state with a manual recovery
+command. Dry-run performs metadata/target/lifecycle inspection without
+updating files or starting services. Added unit coverage covers target/tag/
+asset mapping, checksum parsing, candidate contracts, and lifecycle decisions;
+the server updater uses test-only injectable endpoints.
+
+Plan 005 was already `Ready` because Plan 002 is complete, so no future plan
+status changes are required. Plan 000 remains the roadmap umbrella and is not
+an executable dependency to mark complete here.

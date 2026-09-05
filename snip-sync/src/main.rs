@@ -32,6 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             StartupCommand::Uninstall => snip_sync::startup::uninstall(&std::env::current_exe()?)?,
         },
         Some(Command::Update { dry_run, locked }) => update::run(dry_run, locked)?,
+        Some(Command::SelfReplace {
+            candidate,
+            destination,
+            restart,
+            managed_restart,
+        }) => update::run_self_replace_helper(&candidate, &destination, restart, managed_restart)?,
         Some(Command::Croncheck { verbose }) => cmd_croncheck(verbose)?,
         Some(Command::Paths { json }) => cmd_paths(json)?,
         Some(Command::Completions { shell }) => cmd_completions(shell),

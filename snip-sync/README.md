@@ -281,8 +281,8 @@ snip-sync restart             # manager-aware restart, or foreground serve
 snip-sync startup instructions # print read-only startup instructions
 snip-sync startup install     # install the detected startup manager
 snip-sync startup uninstall   # remove only snip-sync-owned startup records
-snip-sync update              # check crates.io and update Cargo installs
-snip-sync update --dry-run    # check without installing
+snip-sync update              # verified binary update, with exact Cargo fallback
+snip-sync update --dry-run    # check version/asset/lifecycle without installing
 snip-sync paths --json        # machine-readable path output
 snip-sync completions bash    # generate shell completions
 ```
@@ -291,9 +291,16 @@ snip-sync completions bash    # generate shell completions
 existing assets unless `--force` is supplied and preserves existing assets if
 certificate generation fails.
 
-`snip-sync update` is automatic for Cargo-managed installations. Homebrew,
-Docker, and source-built binaries should be updated through the tool that
-installed or built them.
+`snip-sync update` selects the stable `snip-sync` version from crates.io and
+uses the exact matching, SHA-256-verified GitHub binary on supported hosts.
+Bootstrap, Cargo, and directly managed executables use the same path; source-
+only targets and a definite release-asset 404 use an exact-version Cargo
+fallback staged before replacement. Checksum, transport, and candidate
+identity failures are hard failures and never fall back to Cargo. A running
+server is restarted through its registered manager (or the direct lifecycle),
+while an intentionally stopped or inactive server remains stopped. If restart
+fails after replacement, the command reports the partial activation and the
+manual `snip-sync restart` recovery command.
 
 ## Source build and Docker
 

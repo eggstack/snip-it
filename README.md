@@ -72,8 +72,12 @@ cargo install snip-it
 ```
 
 Building the current release requires Rust 1.94 or newer. Check with
-`snp version`. For Cargo-managed installations, `snp update` checks for and
-installs newer releases.
+`snp version`. `snp update` uses the stable `snip-it` crates.io version, then
+downloads and verifies the exact matching release binary. It works for
+bootstrap, Cargo, and directly managed executables without requiring Rust on
+supported hosts. A Homebrew-managed `snp` remains owned by Homebrew; use
+`brew upgrade snip-it` for that installation. Use `snp update --dry-run` to
+inspect the selected version and target without changing files.
 
 ### From source
 

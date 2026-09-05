@@ -74,6 +74,14 @@ enum Commands {
         #[arg(long, help = "Use Cargo's locked dependency versions")]
         locked: bool,
     },
+    /// Internal Windows self-replacement helper.
+    #[command(name = "__self-replace", hide = true)]
+    SelfReplace {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        destination: PathBuf,
+    },
     /// Create a new snippet (n)
     #[command(alias = "n")]
     New {
@@ -760,6 +768,14 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 snip_it::error::SnipError::runtime_error("update failed", Some(&error))
             })?;
         }
+        Some(Commands::SelfReplace {
+            candidate,
+            destination,
+        }) => {
+            update::run_self_replace_helper(&candidate, &destination).map_err(|error| {
+                snip_it::error::SnipError::runtime_error("self-replacement failed", Some(&error))
+            })?;
+        }
         Some(Commands::New {
             command,
             tags,
@@ -1389,6 +1405,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         // ── Config/setup commands ───────────────────────────────────
         Some(
             Commands::Update { .. }
+            | Commands::SelfReplace { .. }
             | Commands::Doctor { .. }
             | Commands::Completions { .. }
             | Commands::Shell { .. }

@@ -54,6 +54,18 @@ pub enum Command {
         #[arg(long)]
         locked: bool,
     },
+    /// Internal Windows self-replacement helper.
+    #[command(name = "__self-replace", hide = true)]
+    SelfReplace {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        destination: PathBuf,
+        #[arg(long)]
+        restart: bool,
+        #[arg(long)]
+        managed_restart: bool,
+    },
     /// Health check; start server if unhealthy/down
     Croncheck {
         #[arg(long)]

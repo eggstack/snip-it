@@ -1,34 +1,39 @@
-//! Self-update support for the `snp` client.
+//! Binary-first self-update support for the `snp` client.
 //!
-//! Updates follow the installation method: Cargo installs are refreshed from
-//! crates.io and Homebrew installs are upgraded by Homebrew. Unmanaged/source
-//! executables do not guess at unsupported release assets.
+//! The selected version comes from crates.io. Release assets are addressed by
+//! the exact component tag and are fully verified before the installed
+//! executable is changed. Cargo is a staging fallback for source-only hosts
+//! and a definite missing (404) release asset only.
 
 use semver::Version;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const REPOSITORY: &str = "eggstack/snip-it";
 const CRATES_API_URL: &str = "https://crates.io/api/v1/crates/{crate}";
-const RELEASE_API_URL: &str = "https://api.github.com/repos/eggstack/snip-it/releases/latest";
+const RELEASE_BASE_URL: &str = "https://github.com/eggstack/snip-it/releases/download";
+const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+const MAX_BINARY_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InstallMethod {
     Cargo,
     Homebrew,
-    Unsupported,
+    Direct,
 }
 
 impl fmt::Display for InstallMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cargo => f.write_str("Cargo"),
-            Self::Homebrew => f.write_str("Homebrew"),
-            Self::Unsupported => f.write_str("unmanaged executable"),
-        }
+        f.write_str(match self {
+            Self::Cargo => "Cargo",
+            Self::Homebrew => "Homebrew",
+            Self::Direct => "direct executable",
+        })
     }
 }
 
@@ -43,41 +48,40 @@ struct CrateInfo {
     max_version: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-}
-
 #[derive(Clone, Copy)]
 struct Package {
     crate_name: &'static str,
+    binary_name: &'static str,
+    tag_prefix: &'static str,
     formula: &'static str,
 }
 
 const CLIENT: Package = Package {
     crate_name: "snip-it",
+    binary_name: "snp",
+    tag_prefix: "v",
     formula: "snip-it",
 };
 
-pub fn run(dry_run: bool, locked: bool) -> Result<(), String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostTarget {
+    Prebuilt(&'static str),
+    SourceOnly(&'static str),
+}
+
+#[derive(Debug)]
+enum FetchError {
+    NotFound,
+    Failed(String),
+}
+
+pub fn run(dry_run: bool, _locked: bool) -> Result<(), String> {
     let executable = current_executable()?;
     let method = detect_install_method(&executable, &CLIENT);
-    if method == InstallMethod::Unsupported {
-        return Err(format!(
-            "snp is an unmanaged executable ({}); rebuild it from source or update it through Cargo or Homebrew",
-            executable.display()
-        ));
-    }
-    let current = Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|e| format!("invalid current version: {e}"))?;
+    let current = current_version()?;
 
     println!("Checking for snp updates ({method})...");
-    let latest = match method {
-        InstallMethod::Cargo => latest_crates_version(CLIENT.crate_name)?,
-        InstallMethod::Homebrew => latest_github_release()?.version()?,
-        InstallMethod::Unsupported => unreachable!("unsupported methods return above"),
-    };
-
+    let latest = latest_crates_version(CLIENT.crate_name)?;
     if latest <= current {
         println!("snp {current} is already up to date.");
         return Ok(());
@@ -85,21 +89,91 @@ pub fn run(dry_run: bool, locked: bool) -> Result<(), String> {
 
     println!("Update available: snp {current} -> {latest}");
     if dry_run {
-        println!("Dry run: no changes were made.");
+        print_dry_run(CLIENT, &latest, method);
         return Ok(());
     }
 
-    match method {
-        InstallMethod::Cargo => update_with_cargo(CLIENT.crate_name, locked),
-        InstallMethod::Homebrew => update_with_homebrew(CLIENT.formula),
-        InstallMethod::Unsupported => unreachable!("unsupported methods return above"),
+    if method == InstallMethod::Homebrew {
+        return update_with_homebrew(CLIENT.formula);
     }
+
+    ensure_destination_writable(&executable)?;
+    let workdir = tempfile::tempdir()
+        .map_err(|e| format!("could not create update staging directory: {e}"))?;
+    let target = host_target(std::env::consts::OS, std::env::consts::ARCH);
+    let (candidate, source) = match target {
+        Some(HostTarget::Prebuilt(target)) => {
+            match download_candidate(CLIENT, &latest, target, workdir.path())? {
+                DownloadedCandidate::Ready(path) => (path, "GitHub release binary"),
+                DownloadedCandidate::MissingAsset => {
+                    println!("No prebuilt asset is published for {target}; using Cargo fallback.");
+                    (
+                        cargo_candidate(CLIENT, &latest, workdir.path())?,
+                        "Cargo fallback",
+                    )
+                }
+            }
+        }
+        Some(HostTarget::SourceOnly(target)) => {
+            println!("Target {target} is source-only; using Cargo fallback.");
+            (
+                cargo_candidate(CLIENT, &latest, workdir.path())?,
+                "Cargo fallback",
+            )
+        }
+        None => {
+            println!("This host has no supported prebuilt target; using Cargo fallback.");
+            (
+                cargo_candidate(CLIENT, &latest, workdir.path())?,
+                "Cargo fallback",
+            )
+        }
+    };
+
+    validate_candidate(&candidate, CLIENT.binary_name, &latest)?;
+    replace_installed_executable(&candidate, &executable, workdir.path())?;
+    println!("Updated snp {current} -> {latest} (source: {source}).");
+    Ok(())
+}
+
+fn current_version() -> Result<Version, String> {
+    Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| format!("invalid current version: {e}"))
+}
+
+fn print_dry_run(package: Package, latest: &Version, method: InstallMethod) {
+    if method == InstallMethod::Homebrew {
+        println!(
+            "Dry run: Homebrew-managed installation would run `brew upgrade {}`.",
+            package.formula
+        );
+        println!("Dry run: no changes were made.");
+        return;
+    }
+    match host_target(std::env::consts::OS, std::env::consts::ARCH) {
+        Some(HostTarget::Prebuilt(target)) => println!(
+            "Dry run: would try the prebuilt asset {} at exact tag {}.",
+            asset_name(package, target),
+            component_tag(package, latest)
+        ),
+        Some(HostTarget::SourceOnly(target)) => println!(
+            "Dry run: target {target} is source-only; would run exact-version Cargo fallback."
+        ),
+        None => {
+            println!("Dry run: host target is unsupported; would run exact-version Cargo fallback.")
+        }
+    }
+    println!("Dry run: no changes were made.");
 }
 
 fn current_executable() -> Result<PathBuf, String> {
     let path = std::env::current_exe()
         .map_err(|e| format!("could not locate the running executable: {e}"))?;
-    Ok(fs::canonicalize(&path).unwrap_or(path))
+    fs::canonicalize(&path).map_err(|e| {
+        format!(
+            "could not resolve the running executable {}: {e}",
+            path.display()
+        )
+    })
 }
 
 fn detect_install_method(executable: &Path, package: &Package) -> InstallMethod {
@@ -109,9 +183,10 @@ fn detect_install_method(executable: &Path, package: &Package) -> InstallMethod 
         return InstallMethod::Homebrew;
     }
     if is_cargo_install_path(executable) {
-        return InstallMethod::Cargo;
+        InstallMethod::Cargo
+    } else {
+        InstallMethod::Direct
     }
-    InstallMethod::Unsupported
 }
 
 fn cargo_bin_dir() -> Option<PathBuf> {
@@ -161,30 +236,29 @@ fn homebrew_formula_prefix(formula: &str) -> Option<PathBuf> {
 fn latest_crates_version(crate_name: &str) -> Result<Version, String> {
     let template = update_endpoint("SNIP_UPDATE_CRATES_API_URL", CRATES_API_URL);
     let url = template.replace("{crate}", crate_name);
-    let body = fetch_url(&url)?;
+    let body = fetch_bytes(&url).map_err(fetch_error_message)?;
     let response: CratesResponse = serde_json::from_slice(&body)
         .map_err(|e| format!("could not parse crates.io response: {e}"))?;
-    Version::parse(&response.crate_info.max_version).map_err(|e| {
+    let version = Version::parse(&response.crate_info.max_version).map_err(|e| {
         format!(
             "crates.io returned invalid version {:?}: {e}",
             response.crate_info.max_version
         )
-    })
-}
-
-fn latest_github_release() -> Result<GitHubRelease, String> {
-    let url = update_endpoint("SNIP_UPDATE_RELEASE_API_URL", RELEASE_API_URL);
-    let body = fetch_url(&url)?;
-    serde_json::from_slice(&body)
-        .map_err(|e| format!("could not parse GitHub release response: {e}"))
+    })?;
+    if !version.pre.is_empty() {
+        return Err(format!(
+            "crates.io returned prerelease version {}; a stable release is required",
+            version
+        ));
+    }
+    Ok(version)
 }
 
 fn update_endpoint(name: &str, default: &str) -> String {
     #[cfg(feature = "test-support")]
     {
-        return std::env::var(name).unwrap_or_else(|_| default.to_owned());
+        std::env::var(name).unwrap_or_else(|_| default.to_owned())
     }
-
     #[cfg(not(feature = "test-support"))]
     {
         let _ = name;
@@ -192,77 +266,525 @@ fn update_endpoint(name: &str, default: &str) -> String {
     }
 }
 
-impl GitHubRelease {
-    fn version(&self) -> Result<Version, String> {
-        let tag = self.tag_name.strip_prefix('v').unwrap_or(&self.tag_name);
-        Version::parse(tag).map_err(|e| {
-            format!(
-                "GitHub returned invalid release tag {:?}: {e}",
-                self.tag_name
-            )
-        })
+fn release_base_url() -> String {
+    update_endpoint("SNIP_UPDATE_RELEASE_BASE_URL", RELEASE_BASE_URL)
+}
+
+fn validate_https_url(url: &str) -> Result<(), FetchError> {
+    #[cfg(feature = "test-support")]
+    if url.starts_with("http://") {
+        return Ok(());
+    }
+    if !url.starts_with("https://") {
+        return Err(FetchError::Failed(format!(
+            "insecure or unsupported URL scheme rejected: {url}"
+        )));
+    }
+    Ok(())
+}
+
+fn curl_protocol() -> &'static str {
+    #[cfg(feature = "test-support")]
+    {
+        "=http,https"
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        "=https"
     }
 }
 
-fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
-    if !url.starts_with("https://") {
-        return Err(format!(
-            "insecure or unsupported URL scheme rejected (production update requires HTTPS): {url}"
-        ));
-    }
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
+    validate_https_url(url)?;
     let output = Command::new("curl")
         .args([
-            "--fail",
             "--silent",
             "--show-error",
             "--location",
             "--proto",
-            "=https",
+            curl_protocol(),
             "--tlsv1.2",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "60",
+            "--max-filesize",
+            &MAX_METADATA_BYTES.to_string(),
             "--user-agent",
             "snip-it-update",
+            "--write-out",
+            "\n%{http_code}",
             url,
         ])
         .output()
-        .map_err(|e| format!("could not run curl: {e}. Install curl or update manually from https://github.com/{REPOSITORY}/releases"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if detail.is_empty() {
-            format!("download failed with status {}", output.status)
-        } else {
-            format!("download failed: {detail}")
-        });
+        .map_err(|e| FetchError::Failed(format!("could not run curl: {e}")))?;
+    if output.stdout.len() < 4 {
+        return Err(FetchError::Failed(format!(
+            "curl returned no HTTP status ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
-    Ok(output.stdout)
+    let status_start = output.stdout.len() - 3;
+    let status = String::from_utf8_lossy(&output.stdout[status_start..])
+        .parse::<u16>()
+        .map_err(|_| FetchError::Failed("curl returned an invalid HTTP status".into()))?;
+    let body = &output.stdout[..status_start - 1];
+    match status {
+        200..=299 => Ok(body.to_vec()),
+        404 => Err(FetchError::NotFound),
+        _ => Err(FetchError::Failed(format!(
+            "HTTP {status}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
+    }
 }
 
-fn update_with_cargo(crate_name: &str, locked: bool) -> Result<(), String> {
-    let mut args = vec!["install", crate_name];
-    if locked {
-        args.push("--locked");
+fn fetch_file(url: &str, path: &Path) -> Result<(), FetchError> {
+    validate_https_url(url)?;
+    let output_path = path
+        .to_str()
+        .ok_or_else(|| FetchError::Failed("staging path is not UTF-8".into()))?;
+    let output = Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            curl_protocol(),
+            "--tlsv1.2",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "60",
+            "--max-filesize",
+            &MAX_BINARY_BYTES.to_string(),
+            "--user-agent",
+            "snip-it-update",
+            "--output",
+            output_path,
+            "--write-out",
+            "%{http_code}",
+            url,
+        ])
+        .output()
+        .map_err(|e| FetchError::Failed(format!("could not run curl: {e}")))?;
+    let status = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| FetchError::Failed("curl returned an invalid HTTP status".into()))?;
+    match status {
+        200..=299 => Ok(()),
+        404 => Err(FetchError::NotFound),
+        _ => Err(FetchError::Failed(format!(
+            "HTTP {status}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
     }
-    println!("Running: cargo {}", args.join(" "));
-    run_status("cargo", &args)?;
-    println!("Update complete.");
+}
+
+fn fetch_error_message(error: FetchError) -> String {
+    match error {
+        FetchError::NotFound => "requested update metadata was not found".into(),
+        FetchError::Failed(message) => message,
+    }
+}
+
+fn host_target(os: &str, arch: &str) -> Option<HostTarget> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some(HostTarget::Prebuilt("x86_64-unknown-linux-gnu")),
+        ("linux", "aarch64") => Some(HostTarget::Prebuilt("aarch64-unknown-linux-gnu")),
+        ("linux", "arm") => Some(HostTarget::SourceOnly("armv7-unknown-linux-gnueabihf")),
+        ("macos", "x86_64") => Some(HostTarget::Prebuilt("x86_64-apple-darwin")),
+        ("macos", "aarch64") => Some(HostTarget::Prebuilt("aarch64-apple-darwin")),
+        ("windows", "x86_64") => Some(HostTarget::Prebuilt("x86_64-pc-windows-msvc")),
+        ("windows", "aarch64") => Some(HostTarget::SourceOnly("aarch64-pc-windows-msvc")),
+        _ => None,
+    }
+}
+
+fn component_tag(package: Package, version: &Version) -> String {
+    format!("{}{}", package.tag_prefix, version)
+}
+
+fn asset_name(package: Package, target: &str) -> String {
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    format!("{}-{target}{suffix}", package.binary_name)
+}
+
+enum DownloadedCandidate {
+    Ready(PathBuf),
+    MissingAsset,
+}
+
+fn download_candidate(
+    package: Package,
+    version: &Version,
+    target: &str,
+    staging: &Path,
+) -> Result<DownloadedCandidate, String> {
+    let asset = asset_name(package, target);
+    let tag = component_tag(package, version);
+    let base = release_base_url().trim_end_matches('/').to_owned();
+    let binary_url = format!("{base}/{tag}/{asset}");
+    let checksum_url = format!("{binary_url}.sha256");
+    let candidate = staging.join(&asset);
+    match fetch_file(&binary_url, &candidate) {
+        Err(FetchError::NotFound) => return Ok(DownloadedCandidate::MissingAsset),
+        Err(error) => {
+            return Err(format!(
+                "could not download {asset}: {}",
+                fetch_error_message(error)
+            ));
+        }
+        Ok(()) => {}
+    }
+    let checksum = fetch_bytes(&checksum_url).map_err(|error| {
+        format!(
+            "could not download checksum for {asset}: {}",
+            fetch_error_message(error)
+        )
+    })?;
+    verify_checksum(&candidate, &checksum, &asset)?;
+    make_executable(&candidate)?;
+    Ok(DownloadedCandidate::Ready(candidate))
+}
+
+fn verify_checksum(path: &Path, sidecar: &[u8], expected_name: &str) -> Result<(), String> {
+    let text = std::str::from_utf8(sidecar)
+        .map_err(|_| "checksum sidecar is not valid UTF-8".to_string())?;
+    let mut lines = text.lines();
+    let line = lines
+        .next()
+        .ok_or_else(|| "checksum sidecar is empty".to_string())?;
+    if lines.next().is_some() {
+        return Err("checksum sidecar must contain exactly one line".into());
+    }
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() != 2
+        || fields[1] != expected_name
+        || fields[0].len() != 64
+        || !fields[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "checksum sidecar has invalid format; expected '<64-hex-digest>  {expected_name}'"
+        ));
+    }
+    let mut file =
+        File::open(path).map_err(|e| format!("could not open downloaded candidate: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|e| format!("could not hash downloaded candidate: {e}"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let actual = digest_hex(hasher.finalize().as_ref());
+    if !actual.eq_ignore_ascii_case(fields[0]) {
+        return Err(format!(
+            "SHA-256 mismatch for {expected_name}: expected {}, got {actual}",
+            fields[0]
+        ));
+    }
     Ok(())
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn cargo_candidate(package: Package, version: &Version, staging: &Path) -> Result<PathBuf, String> {
+    let root = staging.join("cargo-root");
+    let version_arg = format!("={version}");
+    let root_arg = root
+        .to_str()
+        .ok_or_else(|| "Cargo staging path is not valid UTF-8".to_string())?;
+    println!(
+        "Running: cargo install {} --version {version_arg} --locked --root {root_arg}",
+        package.crate_name
+    );
+    let status = Command::new("cargo")
+        .args([
+            "install",
+            package.crate_name,
+            "--version",
+            &version_arg,
+            "--locked",
+            "--root",
+            root_arg,
+        ])
+        .status()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!(
+                    "Cargo is not installed; update manually with `cargo install {} --version '={version}' --locked`",
+                    package.crate_name
+                )
+            } else {
+                format!("could not run cargo: {e}")
+            }
+        })?;
+    if !status.success() {
+        return Err(format!("cargo exited with status {status}"));
+    }
+    let binary = if cfg!(windows) {
+        root.join("bin")
+            .join(format!("{}.exe", package.binary_name))
+    } else {
+        root.join("bin").join(package.binary_name)
+    };
+    if !binary.is_file() {
+        return Err(format!(
+            "Cargo completed but did not produce {}",
+            binary.display()
+        ));
+    }
+    Ok(binary)
+}
+
+fn validate_candidate(path: &Path, binary_name: &str, version: &Version) -> Result<(), String> {
+    let expected = format!("{binary_name} {version}");
+    let mut child = Command::new(path)
+        .arg("version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("verified candidate could not run: {e}"))?;
+    wait_for_candidate(&mut child, Duration::from_secs(10))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("could not collect candidate version output: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "candidate `version` command failed with {}",
+            output.status
+        ));
+    }
+    let identity = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if identity != expected {
+        return Err(format!(
+            "candidate identity mismatch: expected {expected:?}, got {identity:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn wait_for_candidate(child: &mut Child, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("could not inspect candidate process: {e}"))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("candidate `version` command timed out".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn make_executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("could not mark candidate executable: {e}"))?;
+    }
+    Ok(())
+}
+
+fn ensure_destination_writable(destination: &Path) -> Result<(), String> {
+    let parent = destination.parent().ok_or_else(|| {
+        format!(
+            "installed executable has no parent directory: {}",
+            destination.display()
+        )
+    })?;
+    let name = format!(
+        ".{}.update-check-{}-{}",
+        destination
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("snp"),
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let probe = parent.join(name);
+    match OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = fs::remove_file(probe);
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "cannot replace installed executable before stopping any service ({}): {error}",
+            destination.display()
+        )),
+    }
+}
+
+fn replace_installed_executable(
+    candidate: &Path,
+    destination: &Path,
+    _workdir: &Path,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| "installed executable has no parent directory".to_string())?;
+        let name = format!(
+            ".{}.update-{}",
+            destination
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
+            std::process::id()
+        );
+        let staged = parent.join(name);
+        let _ = fs::remove_file(&staged);
+        if let Err(error) = fs::copy(candidate, &staged) {
+            let _ = fs::remove_file(&staged);
+            return Err(format!(
+                "could not stage candidate beside installed executable: {error}"
+            ));
+        }
+        let permissions = fs::metadata(destination).map(|m| m.permissions());
+        if let Ok(permissions) = permissions {
+            if let Err(error) = fs::set_permissions(&staged, permissions) {
+                let _ = fs::remove_file(&staged);
+                return Err(format!(
+                    "could not preserve executable permissions: {error}"
+                ));
+            }
+        } else {
+            if let Err(error) = make_executable(&staged) {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
+            }
+        }
+        let file = match OpenOptions::new().read(true).open(&staged) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = fs::remove_file(&staged);
+                return Err(format!("could not open staged executable: {error}"));
+            }
+        };
+        if let Err(error) = file.sync_all() {
+            let _ = fs::remove_file(&staged);
+            return Err(format!("could not durably stage executable: {error}"));
+        }
+        drop(file);
+        fs::rename(&staged, destination).map_err(|e| {
+            let _ = fs::remove_file(&staged);
+            format!("could not replace installed executable: {e}")
+        })?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        schedule_windows_self_replace(candidate, destination, _workdir)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (candidate, destination, _workdir);
+        Err("executable replacement is not supported on this platform".into())
+    }
+}
+
+#[cfg(windows)]
+fn schedule_windows_self_replace(
+    candidate: &Path,
+    destination: &Path,
+    workdir: &Path,
+) -> Result<(), String> {
+    let helper = workdir.join("snp-self-replace-helper.exe");
+    let current = std::env::current_exe()
+        .map_err(|e| format!("could not locate updater helper source: {e}"))?;
+    fs::copy(current, &helper)
+        .map_err(|e| format!("could not stage Windows replacement helper: {e}"))?;
+    Command::new(&helper)
+        .args([
+            "__self-replace",
+            "--candidate",
+            candidate
+                .to_str()
+                .ok_or_else(|| "candidate path is not UTF-8".to_string())?,
+            "--destination",
+            destination
+                .to_str()
+                .ok_or_else(|| "destination path is not UTF-8".to_string())?,
+        ])
+        .spawn()
+        .map_err(|e| format!("could not start Windows replacement helper: {e}"))?;
+    println!(
+        "Verified candidate staged; Windows replacement will complete after this process exits."
+    );
+    Ok(())
+}
+
+pub fn run_self_replace_helper(candidate: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+        let wide = |path: &Path| {
+            path.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>()
+        };
+        let source = wide(candidate);
+        let target = wide(destination);
+        let ok = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                target.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "Windows replacement failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let _ = fs::remove_file(candidate);
+        println!("Windows executable replacement complete.");
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (candidate, destination);
+        Err("internal Windows replacement command is only supported on Windows".into())
+    }
 }
 
 fn update_with_homebrew(formula: &str) -> Result<(), String> {
     println!("Running: brew upgrade {formula}");
-    run_status("brew", &["upgrade", formula])?;
-    println!("Update complete.");
-    Ok(())
-}
-
-fn run_status(program: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(program)
-        .args(args)
+    let status = Command::new("brew")
+        .args(["upgrade", formula])
         .status()
-        .map_err(|e| format!("could not run {program}: {e}"))?;
+        .map_err(|e| format!("could not run brew: {e}"))?;
     if status.success() {
+        println!("Update complete.");
         Ok(())
     } else {
-        Err(format!("{program} exited with status {status}"))
+        Err(format!("brew exited with status {status}"))
     }
 }
 
@@ -271,57 +793,106 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_github_release_version() {
-        let release = GitHubRelease {
-            tag_name: "v1.4.0".to_owned(),
+    fn host_mapping_matches_release_contract() {
+        assert_eq!(
+            host_target("linux", "x86_64"),
+            Some(HostTarget::Prebuilt("x86_64-unknown-linux-gnu"))
+        );
+        assert_eq!(
+            host_target("linux", "aarch64"),
+            Some(HostTarget::Prebuilt("aarch64-unknown-linux-gnu"))
+        );
+        assert_eq!(
+            host_target("linux", "arm"),
+            Some(HostTarget::SourceOnly("armv7-unknown-linux-gnueabihf"))
+        );
+        assert_eq!(
+            host_target("macos", "aarch64"),
+            Some(HostTarget::Prebuilt("aarch64-apple-darwin"))
+        );
+        assert_eq!(
+            host_target("windows", "x86_64"),
+            Some(HostTarget::Prebuilt("x86_64-pc-windows-msvc"))
+        );
+        assert_eq!(
+            host_target("windows", "aarch64"),
+            Some(HostTarget::SourceOnly("aarch64-pc-windows-msvc"))
+        );
+        assert_eq!(host_target("freebsd", "x86_64"), None);
+    }
+
+    #[test]
+    fn component_tags_and_assets_are_exact() {
+        let version = Version::new(1, 2, 3);
+        assert_eq!(component_tag(CLIENT, &version), "v1.2.3");
+        let expected = if cfg!(windows) {
+            "snp-x86_64-unknown-linux-gnu.exe"
+        } else {
+            "snp-x86_64-unknown-linux-gnu"
         };
-        assert_eq!(release.version().unwrap(), Version::new(1, 4, 0));
+        assert_eq!(asset_name(CLIENT, "x86_64-unknown-linux-gnu"), expected);
     }
 
     #[test]
-    fn recognizes_cargo_install_path() {
-        let package = CLIENT;
-        let cargo_bin = PathBuf::from("/home/test/.cargo/bin");
-        let executable = cargo_bin.join("snp");
-        assert_eq!(
-            detect_install_method_with_prefixes(&executable, &package, None, Some(&cargo_bin)),
-            InstallMethod::Cargo
+    fn checksum_parser_rejects_ambiguity_and_accepts_workflow_format() {
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), b"hello").unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(b"hello");
+        let digest = digest_hex(hasher.finalize().as_ref());
+        let sidecar = format!("{digest}  candidate\n");
+        verify_checksum(path.path(), sidecar.as_bytes(), "candidate").unwrap();
+        assert!(
+            verify_checksum(
+                path.path(),
+                format!("{digest}  candidate\nextra\n").as_bytes(),
+                "candidate"
+            )
+            .is_err()
+        );
+        assert!(
+            verify_checksum(
+                path.path(),
+                format!("{digest}  other\n").as_bytes(),
+                "candidate"
+            )
+            .is_err()
         );
     }
 
     #[test]
-    fn recognizes_homebrew_install_path() {
-        let package = CLIENT;
-        let brew_prefix = PathBuf::from("/opt/homebrew/Cellar/snip-it/1.3.1");
-        let executable = brew_prefix.join("bin/snp");
+    fn unmanaged_executables_are_binary_first() {
+        let executable = Path::new("/usr/local/bin/snp");
         assert_eq!(
-            detect_install_method_with_prefixes(&executable, &package, Some(&brew_prefix), None),
-            InstallMethod::Homebrew
+            detect_install_method_with_prefixes(executable, None, None),
+            InstallMethod::Direct
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn rejects_unmanaged_binary_without_release_assets() {
-        let package = CLIENT;
-        let executable = PathBuf::from("/usr/local/bin/snp");
-        assert_eq!(
-            detect_install_method_with_prefixes(&executable, &package, None, None),
-            InstallMethod::Unsupported
-        );
+    fn windows_helper_replaces_a_temporary_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("candidate.exe");
+        let destination = directory.path().join("destination.exe");
+        fs::write(&candidate, b"new executable").unwrap();
+        fs::write(&destination, b"old executable").unwrap();
+        run_self_replace_helper(&candidate, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new executable");
+        assert!(!candidate.exists());
     }
 
     fn detect_install_method_with_prefixes(
         executable: &Path,
-        _package: &Package,
-        brew_prefix: Option<&Path>,
-        cargo_bin: Option<&Path>,
+        brew: Option<&Path>,
+        cargo: Option<&Path>,
     ) -> InstallMethod {
-        if brew_prefix.is_some_and(|prefix| executable.starts_with(prefix)) {
+        if brew.is_some_and(|prefix| executable.starts_with(prefix)) {
             return InstallMethod::Homebrew;
         }
-        if cargo_bin.is_some_and(|prefix| executable.starts_with(prefix)) {
+        if cargo.is_some_and(|prefix| executable.starts_with(prefix)) {
             return InstallMethod::Cargo;
         }
-        InstallMethod::Unsupported
+        InstallMethod::Direct
     }
 }

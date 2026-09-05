@@ -30,6 +30,17 @@ pub enum StartupMethod {
     Direct,
 }
 
+/// Whether an update must activate a new server process after replacing the
+/// executable. The installed manager is retained so restart uses the same
+/// lifecycle path that owns the service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateLifecycle {
+    ManagedRunning(StartupMethod),
+    ManagedStopped(StartupMethod),
+    DirectRunning,
+    NotRunning,
+}
+
 impl StartupMethod {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -908,6 +919,118 @@ fn server_is_running() -> Result<bool, String> {
     }
 }
 
+/// Read-only lifecycle probe used by `update --dry-run`. It deliberately does
+/// not call `ServerLock::try_acquire`, because that API creates/publishes lock
+/// metadata when the server is absent.
+fn server_is_running_read_only() -> bool {
+    let path = crate::server_lock::server_lock_path(&crate::paths::state_dir());
+    let Some(owner) = crate::server_lock::read_owner(&path) else {
+        return false;
+    };
+    if !crate::process::is_running(owner.pid) {
+        return false;
+    }
+    owner.start_token.as_ref().is_none_or(|expected| {
+        crate::process::get_process_start_token(owner.pid).is_none_or(|actual| actual == *expected)
+    })
+}
+
+pub fn classify_update_lifecycle(
+    installed: Option<StartupMethod>,
+    running: bool,
+) -> UpdateLifecycle {
+    match (installed, running) {
+        (Some(method), true) => UpdateLifecycle::ManagedRunning(method),
+        (Some(method), false) => UpdateLifecycle::ManagedStopped(method),
+        (None, true) => UpdateLifecycle::DirectRunning,
+        (None, false) => UpdateLifecycle::NotRunning,
+    }
+}
+
+/// Capture the server state before an executable update. A stopped installed
+/// service is deliberately distinct from an absent service so an update never
+/// starts a server solely because it was requested.
+pub fn update_lifecycle() -> Result<UpdateLifecycle, String> {
+    Ok(classify_update_lifecycle(
+        installed_method(),
+        server_is_running_read_only(),
+    ))
+}
+
+fn restart_systemd() -> Result<(), String> {
+    run_checked("systemctl", &["restart", SYSTEMD_UNIT_NAME])?;
+    Ok(())
+}
+
+fn restart_launchd() -> Result<(), String> {
+    let target = format!("system/{LAUNCHD_LABEL}");
+    run_checked("launchctl", &["kickstart", "-k", &target])?;
+    Ok(())
+}
+
+fn spawn_server(executable: &Path) -> Result<(), String> {
+    Command::new(executable)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to start detached server: {e}"))
+}
+
+/// Restart only a server that was running when the update began. Errors are
+/// intentionally returned after the binary replacement; callers can report a
+/// partial activation without rolling the verified binary back.
+pub fn restart_after_update(
+    executable: &Path,
+    lifecycle: UpdateLifecycle,
+    force: bool,
+) -> Result<(), String> {
+    let config = || Config::load().map_err(|e| e.to_string());
+    match lifecycle {
+        UpdateLifecycle::ManagedRunning(StartupMethod::Systemd) => {
+            restart_systemd()?;
+            wait_for_health(&config()?, Duration::from_secs(10))
+        }
+        UpdateLifecycle::ManagedRunning(StartupMethod::Launchd) => {
+            restart_launchd()?;
+            wait_for_health(&config()?, Duration::from_secs(10))
+        }
+        UpdateLifecycle::ManagedRunning(StartupMethod::Cron | StartupMethod::TaskScheduler) => {
+            let mut stop = Command::new(executable);
+            stop.arg("stop");
+            if force {
+                stop.arg("--force");
+            }
+            let status = stop
+                .status()
+                .map_err(|e| format!("failed to stop server for managed restart: {e}"))?;
+            if !status.success() {
+                return Err("managed restart could not stop the running server".into());
+            }
+            spawn_croncheck(executable)?;
+            wait_for_health(&config()?, Duration::from_secs(10))
+        }
+        UpdateLifecycle::DirectRunning | UpdateLifecycle::ManagedRunning(StartupMethod::Direct) => {
+            let mut stop = Command::new(executable);
+            stop.arg("stop");
+            if force {
+                stop.arg("--force");
+            }
+            let status = stop
+                .status()
+                .map_err(|e| format!("failed to stop server for restart: {e}"))?;
+            if !status.success() {
+                return Err("direct restart could not stop the running server".into());
+            }
+            spawn_server(executable)?;
+            wait_for_health(&config()?, Duration::from_secs(10))
+        }
+        UpdateLifecycle::ManagedStopped(_) | UpdateLifecycle::NotRunning => Ok(()),
+    }
+}
+
 fn spawn_croncheck(executable: &Path) -> Result<(), String> {
     Command::new(executable)
         .arg("croncheck")
@@ -981,6 +1104,26 @@ pub fn restart_if_managed(executable: &Path, force: bool) -> Result<bool, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_lifecycle_decision_table_preserves_stopped_state() {
+        assert_eq!(
+            classify_update_lifecycle(Some(StartupMethod::Systemd), true),
+            UpdateLifecycle::ManagedRunning(StartupMethod::Systemd)
+        );
+        assert_eq!(
+            classify_update_lifecycle(Some(StartupMethod::TaskScheduler), false),
+            UpdateLifecycle::ManagedStopped(StartupMethod::TaskScheduler)
+        );
+        assert_eq!(
+            classify_update_lifecycle(None, true),
+            UpdateLifecycle::DirectRunning
+        );
+        assert_eq!(
+            classify_update_lifecycle(None, false),
+            UpdateLifecycle::NotRunning
+        );
+    }
 
     fn loopback_env() -> TransportEnvironment {
         TransportEnvironment {
