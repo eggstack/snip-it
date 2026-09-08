@@ -31,12 +31,12 @@ Output modes are mutually exclusive: `--raw` + `--expanded`, `--json` + `--raw`/
 
 ## Resolution
 
-Uses `selector::resolve_selector()` with a configurable `--resolution` policy (`unique`, `first`, `all`). Fails on ambiguity unless `--resolution first` is specified.
+Uses `selector::resolve_selector_readonly()` with a configurable `--resolution` policy (`unique`, `first`, `all`). Fails on ambiguity unless `--resolution first` is specified. Read-only: resolves through the canonical `library::readonly_library_sources()` path, so a legacy single-file checkout is read in place without migration or file creation.
 
 ## Data Flow
 
 ```
-get run() → resolve_selector() → (optionally) expand_command() → emit field/JSON/raw
+get run() → resolve_selector_readonly() → (optionally) expand_command() → emit field/JSON/raw
 ```
 
 No TUI, no execution, no clipboard. Pure data retrieval.

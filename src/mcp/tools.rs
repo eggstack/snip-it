@@ -1,7 +1,7 @@
 //! Read-only MCP tool implementations.
 
 use crate::error::{SnipError, SnipResult};
-use crate::library::{LibraryManager, LibraryMeta, Snippet};
+use crate::library::{ResolvedLibrarySource, Snippet, readonly_library_sources};
 use crate::selector::{ResolutionPolicy, SelectionResult, SnippetSelector};
 use crate::sort::{SnippetSort, SortOptions, rank_snippets};
 use fuzzy_matcher::FuzzyMatcher;
@@ -9,17 +9,9 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1_000;
-
-#[derive(Debug, Clone)]
-struct LibrarySource {
-    name: String,
-    library_id: String,
-    path: PathBuf,
-}
 
 #[derive(Debug, Clone)]
 struct LoadedSnippet {
@@ -208,55 +200,20 @@ fn load_snippets(library: Option<&str>) -> SnipResult<Vec<LoadedSnippet>> {
     Ok(result)
 }
 
-/// Resolve read-only library sources without calling `ensure_library_mode`.
-/// That method can migrate and write a legacy file, while MCP reads should be
-/// side-effect free. Legacy single-file mode is represented as the implicit
-/// `snippets` library for compatibility with normal CLI resolution.
-fn library_sources(library: Option<&str>) -> SnipResult<Vec<LibrarySource>> {
-    let manager = LibraryManager::new()?;
-    if manager.is_single_file_mode() {
-        let path = LibraryManager::get_default_snippets_path();
-        let available = path.exists();
-        return match library {
-            None | Some("all") if available => Ok(vec![LibrarySource {
-                name: "snippets".to_string(),
-                library_id: String::new(),
-                path,
-            }]),
-            Some("snippets") if available => Ok(vec![LibrarySource {
-                name: "snippets".to_string(),
-                library_id: String::new(),
-                path,
-            }]),
-            Some("all") | None => Ok(Vec::new()),
-            Some(name) => Err(library_not_found(name)),
-        };
-    }
-
-    let make_source = |meta: &LibraryMeta| LibrarySource {
-        name: meta.filename.clone(),
-        library_id: meta.library_id.clone(),
-        path: manager
-            .get_libraries_dir()
-            .join(format!("{}.toml", meta.filename)),
-    };
-
-    match library {
-        Some("all") => Ok(manager
-            .list_libraries()
-            .into_iter()
-            .map(make_source)
-            .collect()),
-        Some(name) => manager
-            .get_library_by_filename(name)
-            .map(|meta| vec![make_source(meta)])
-            .ok_or_else(|| library_not_found(name)),
-        None => Ok(manager
-            .get_primary_library()
-            .map(make_source)
-            .into_iter()
-            .collect()),
-    }
+/// Canonical read-only library source resolution.
+///
+/// Delegates to [`readonly_library_sources`] in the library layer so MCP
+/// shares legacy single-file handling, primary-library resolution, and path
+/// construction with CLI read paths. Performs no migration and creates no
+/// files or directories; unknown names surface as MCP `invalid_params`.
+fn library_sources(library: Option<&str>) -> SnipResult<Vec<ResolvedLibrarySource>> {
+    readonly_library_sources(library).map_err(|e| match e {
+        SnipError::Runtime { message, .. } if message == "Library not found" => {
+            let name = library.unwrap_or_default();
+            library_not_found(name)
+        }
+        other => other,
+    })
 }
 
 fn snippet_json(entry: &LoadedSnippet) -> Value {

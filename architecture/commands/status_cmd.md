@@ -13,7 +13,7 @@
 ### Local Summary
 
 - Number of libraries and snippets
-- Primary library name
+- Primary library name (from the shared `LibraryManager::inspect_library_index()` view, consistent with `doctor`/`validate`)
 
 ### Sync State
 

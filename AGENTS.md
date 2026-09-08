@@ -81,13 +81,13 @@ themes/           50 Halloy TOML theme files
 - `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
-- `library.rs` — Snippet/library data structures and TOML persistence
+- `library.rs` — Snippet/library data structures and TOML persistence; canonical read-only `ResolvedLibrarySource` resolution (`resolve_readonly_sources`/`readonly_library_sources`/`library_not_found`) and shared index inspection (`inspect_library_index`/`PrimaryState`/`find_orphaned_ids`)
 - `sync.rs` — gRPC client for snip-sync server
 - `sync_commands.rs` — Sync orchestration and merge logic
 - `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
 - `config.rs` — Sync settings, path resolution, keychain API key
 - `error.rs` — `SnipError` enum, `SnipResult<T>`, `SyncFailureKind`
-- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`)
+- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`); mutating `resolve_selector` vs read-only `resolve_selector_readonly` (latter uses the canonical library resolver, no migration)
 - `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
 - `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
 - `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
@@ -184,6 +184,11 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Both spellings dispatch via single-path `handle_*` helpers in `src/main.rs`; no duplicated validation, JSON formatting, or exit-code mapping
 - `snp data` is a compatibility alias layer, not a second schema
 
+### Shared inspection (Plan 009)
+- Read-only resolution lives in `library.rs` (`ResolvedLibrarySource`); MCP `tools.rs` and `snp get` delegate to it — no duplicate legacy/primary/path policy
+- `snp get` uses `resolve_selector_readonly`; `validate` uses `LibraryManager::new()` (never `init_library_manager`); `doctor`/`validate`/`status`/`repair` share `inspect_library_index`/`find_orphaned_ids` but render into their own diagnostic types
+- Shared inspection is side-effect free: no `ensure_library_mode`, no migration, no file creation; no generic finding DSL or plugin framework
+
 ## Keyring
 
 - `keyring = "4"` relies on its default `v1` feature set for platform stores: Apple Keychain, Windows Credential Manager, zbus Secret Service (Linux desktop). Do not build with `default-features = false` without re-enabling a store — credential persistence silently degrades to keyring's mock store.
@@ -232,7 +237,8 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 
 Remaining integration targets (`integration.rs`, the `auto_sync_*` suites,
 `scale.rs`, `security.rs`, `schema.rs`, `restore_*.rs`, `execution_outcomes.rs`,
-`mutual_exclusion.rs`, `readonly_no_recovery.rs`, `recovery_integration.rs`,
+`mutual_exclusion.rs`, `readonly_no_recovery.rs`, `readonly_library_resolution.rs`,
+`recovery_integration.rs`,
 `selector_integration.rs`, `snip_sync_lifetime.rs`, `canary_nonexecution.rs`,
 `edit_mutation_notify.rs`, `backup_snapshot_concurrency.rs`,
 `recording_telemetry.rs`, `release4_regression.rs`, `output_contracts.rs`,

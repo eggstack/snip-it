@@ -92,11 +92,9 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
 
     let path = match library_name {
         Some(name) => {
-            let lib = mgr.get_library_by_filename(&name)
-                .ok_or_else(|| SnipError::runtime_error(
-                    "Library not found",
-                    Some(&format!("Library '{name}' does not exist. Use 'snp library list' to see available libraries.")),
-                ))?;
+            let lib = mgr
+                .get_library_by_filename(&name)
+                .ok_or_else(|| crate::library::library_not_found(&name))?;
             Some(
                 mgr.get_libraries_dir()
                     .join(format!("{}.toml", lib.filename)),

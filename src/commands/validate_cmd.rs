@@ -355,87 +355,77 @@ fn validate_library(
 }
 
 /// Validate library index cross-references.
+///
+/// Consumes the shared [`LibraryManager::inspect_library_index`] view so
+/// `validate`, `repair`, `doctor`, and `status` classify the same index
+/// state consistently. Rendering into [`ValidationDiagnostic`] stays local
+/// to preserve `validate`'s pass/fail plus warnings semantics.
 fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: bool) {
-    let libraries_dir = mgr.get_libraries_dir().clone();
+    let inspection = mgr.inspect_library_index();
 
     // h. Check library index references to missing files
-    for lib_meta in mgr.list_libraries() {
-        let expected_path = libraries_dir.join(format!("{}.toml", lib_meta.filename));
-        if !expected_path.exists() {
-            diags(
-                report,
-                &lib_meta.filename,
-                Some(&expected_path),
-                None,
-                "E-INDEX-MISSING-FILE",
-                Severity::Error,
-                Repairability::Manual,
-                format!(
-                    "Library '{}' is registered in index but file {} does not exist",
-                    lib_meta.filename,
-                    expected_path.display()
-                ),
-            );
-        }
+    for (name, expected_path) in &inspection.missing_files {
+        diags(
+            report,
+            name,
+            Some(expected_path),
+            None,
+            "E-INDEX-MISSING-FILE",
+            Severity::Error,
+            Repairability::Manual,
+            format!(
+                "Library '{name}' is registered in index but file {} does not exist",
+                expected_path.display()
+            ),
+        );
     }
 
     // i. Orphaned library files (files in libraries/ not in index)
-    if libraries_dir.exists() {
-        let indexed: HashSet<&str> = mgr
-            .list_libraries()
-            .iter()
-            .map(|l| l.filename.as_str())
-            .collect();
-
-        if let Ok(entries) = std::fs::read_dir(&libraries_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "toml")
-                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                    && !indexed.contains(stem)
-                {
-                    diags(
-                        report,
-                        stem,
-                        Some(&path),
-                        None,
-                        "W-ORPHAN-FILE",
-                        Severity::Warning,
-                        Repairability::Auto,
-                        format!(
-                            "File {} is not registered in the library index",
-                            path.display()
-                        ),
-                    );
-                }
-            }
-        }
+    for path in &inspection.orphan_files {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<unknown>");
+        diags(
+            report,
+            stem,
+            Some(path),
+            None,
+            "W-ORPHAN-FILE",
+            Severity::Warning,
+            Repairability::Auto,
+            format!(
+                "File {} is not registered in the library index",
+                path.display()
+            ),
+        );
     }
 
     // j. Invalid primary library (missing or nonexistent)
-    match mgr.get_primary_library() {
-        Some(primary) => {
-            let primary_path = libraries_dir.join(format!("{}.toml", primary.filename));
-            if !primary_path.exists() {
-                diags(
-                    report,
-                    &primary.filename,
-                    Some(&primary_path),
-                    None,
-                    "E-PRIMARY-MISSING",
-                    Severity::Error,
-                    Repairability::Manual,
-                    format!(
-                        "Primary library '{}' file does not exist at {}",
-                        primary.filename,
-                        primary_path.display()
-                    ),
-                );
-            }
+    match &inspection.primary {
+        crate::library::PrimaryState::FileMissing { name, path } => {
+            diags(
+                report,
+                name,
+                Some(path),
+                None,
+                "E-PRIMARY-MISSING",
+                Severity::Error,
+                Repairability::Manual,
+                format!(
+                    "Primary library '{name}' file does not exist at {}",
+                    path.display()
+                ),
+            );
         }
-        None => {
-            let libs = mgr.list_libraries();
-            if !libs.is_empty() {
+        crate::library::PrimaryState::NoPrimary { .. }
+        | crate::library::PrimaryState::NoLibraries => {
+            // `NoLibraries` means there is nothing to flag; `NoPrimary` with
+            // existing libraries matches the historical `W-NO-PRIMARY` case.
+            if matches!(
+                inspection.primary,
+                crate::library::PrimaryState::NoPrimary { .. }
+            ) {
                 diags(
                     report,
                     "<none>",
@@ -448,45 +438,53 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
                 );
             }
         }
+        crate::library::PrimaryState::Present { .. } => {}
     }
 }
 
 /// Validate orphaned usage entries.
-fn validate_usage(report: &mut ValidationReport, mgr: &LibraryManager) {
+///
+/// Shares [`crate::library::find_orphaned_ids`] with `repair` so both
+/// commands classify the same usage state consistently; rendering into
+/// [`ValidationDiagnostic`] stays local to `validate`.
+fn validate_usage(report: &mut ValidationReport, _mgr: &LibraryManager) {
     // k. Orphaned usage entries
     let usage_index = UsageIndex::load();
     if usage_index.entries().is_empty() {
         return;
     }
 
-    // Collect all active snippet IDs across all libraries
+    // Collect all active snippet IDs across all visible libraries via the
+    // canonical read-only resolver (no migration, no writes).
     let mut active_ids: HashSet<String> = HashSet::new();
-    let libraries_dir = mgr.get_libraries_dir();
-    for lib_meta in mgr.list_libraries() {
-        let lib_path = libraries_dir.join(format!("{}.toml", lib_meta.filename));
-        if let Ok(snippets) = crate::library::load_library(&lib_path) {
-            for s in &snippets.snippets {
-                active_ids.insert(s.id.clone());
+    if let Ok(sources) = crate::library::readonly_library_sources(Some("all")) {
+        for source in &sources {
+            if let Ok(snippets) = crate::library::load_library(&source.path) {
+                for s in &snippets.snippets {
+                    active_ids.insert(s.id.clone());
+                }
             }
         }
     }
 
-    for entry in usage_index.entries() {
-        if !entry.id.is_empty() && !active_ids.contains(&entry.id) {
-            diags(
-                report,
-                "<usage>",
-                None,
-                Some(&entry.id),
-                "W-USAGE-ORPHAN",
-                Severity::Warning,
-                Repairability::Auto,
-                format!(
-                    "Usage entry for snippet '{}' references a snippet not found in any library",
-                    entry.id
-                ),
-            );
-        }
+    let usage_ids: Vec<String> = usage_index
+        .entries()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    for orphan_id in crate::library::find_orphaned_ids(&active_ids, &usage_ids) {
+        diags(
+            report,
+            "<usage>",
+            None,
+            Some(&orphan_id),
+            "W-USAGE-ORPHAN",
+            Severity::Warning,
+            Repairability::Auto,
+            format!(
+                "Usage entry for snippet '{orphan_id}' references a snippet not found in any library"
+            ),
+        );
     }
 }
 
@@ -624,38 +622,34 @@ fn truncate_cmd(s: &str) -> String {
 }
 
 /// Run validation.
+///
+/// Read-only: uses [`LibraryManager::new`] plus the canonical read-only
+/// resolver. Never migrates legacy state and never creates files.
 pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<CliOutcome> {
-    let mgr = crate::commands::init_library_manager()?;
+    let mgr = LibraryManager::new()?;
 
     let mut report = ValidationReport::new(strict);
 
-    // Determine which libraries to validate
-    let lib_names: Vec<String> = match &library {
-        Some(name) => {
-            let lib = mgr.get_library_by_filename(name).ok_or_else(|| {
-                SnipError::runtime_error(
-                    "Library not found",
-                    Some(&format!(
-                        "Library '{name}' does not exist. Use 'snp library list' to see available libraries."
-                    )),
-                )
-            })?;
-            vec![lib.filename.clone()]
-        }
-        None => mgr
-            .list_libraries()
-            .iter()
-            .map(|l| l.filename.clone())
-            .collect(),
+    // Determine which libraries to validate via the canonical read-only
+    // resolver so legacy single-file checkouts validate in place.
+    let sources: Vec<crate::library::ResolvedLibrarySource> = match library.as_deref() {
+        Some(name) => crate::library::readonly_library_sources(Some(name)).map_err(|e| {
+            // Preserve the historical CLI detail wording for unknown names.
+            match e {
+                SnipError::Runtime { message, .. } if message == "Library not found" => {
+                    crate::library::library_not_found(name)
+                }
+                other => other,
+            }
+        })?,
+        None => crate::library::readonly_library_sources(Some("all"))?,
     };
 
-    report.total_libraries = lib_names.len();
-    let libraries_dir = mgr.get_libraries_dir().clone();
+    report.total_libraries = sources.len();
 
     // a. Validate each library
-    for lib_name in &lib_names {
-        let lib_path = libraries_dir.join(format!("{lib_name}.toml"));
-        validate_library(&mut report, lib_name, &lib_path, strict);
+    for source in &sources {
+        validate_library(&mut report, &source.name, &source.path, strict);
     }
 
     // h, i, j. Validate index cross-references

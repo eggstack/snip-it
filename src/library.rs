@@ -121,6 +121,90 @@ impl LibraryMeta {
     }
 }
 
+/// A single side-effect-free library source.
+///
+/// Canonical result of [`LibraryManager::resolve_readonly_sources`]. Carries
+/// the canonical filename/name, library ID, and file path for one visible
+/// library. Constructed without migration, directory creation, or metadata
+/// rewrites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedLibrarySource {
+    /// Canonical library name (filename without `.toml`).
+    pub name: String,
+    /// Server-side library ID when linked, otherwise empty.
+    pub library_id: String,
+    /// Canonical path to the library TOML file.
+    pub path: PathBuf,
+}
+
+/// Primary-library state observed by [`LibraryManager::inspect_library_index`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PrimaryState {
+    /// A primary library is set and its file exists.
+    Present { name: String },
+    /// A primary library is set but its file is missing.
+    FileMissing { name: String, path: PathBuf },
+    /// Libraries exist but none is marked primary.
+    NoPrimary { count: usize },
+    /// No libraries are registered.
+    #[default]
+    NoLibraries,
+}
+
+/// Read-only library index consistency view.
+///
+/// Returned by [`LibraryManager::inspect_library_index`]. Consumers
+/// (`doctor`, `validate`, `repair`, `status`) render this shared state into
+/// their own diagnostic types with distinct user semantics.
+#[derive(Debug, Clone, Default)]
+pub struct LibraryIndexInspection {
+    /// Index entries whose library file does not exist: `(name, path)`.
+    pub missing_files: Vec<(String, PathBuf)>,
+    /// Library files on disk with no index entry.
+    pub orphan_files: Vec<PathBuf>,
+    /// Current primary-library state.
+    pub primary: PrimaryState,
+}
+
+/// Canonical missing-library error.
+///
+/// All read-only source resolution paths use this constructor so "library
+/// not found" reporting cannot drift between CLI, MCP, and diagnostics.
+pub fn library_not_found(name: &str) -> SnipError {
+    SnipError::runtime_error(
+        "Library not found",
+        Some(&format!(
+            "Library '{name}' does not exist. Use 'snp library list' to see available libraries."
+        )),
+    )
+}
+
+/// Resolve read-only library sources from the current process config.
+///
+/// Convenience wrapper around [`LibraryManager::new`] plus
+/// [`LibraryManager::resolve_readonly_sources`]. Performs no migration and
+/// creates no files or directories.
+pub fn readonly_library_sources(library: Option<&str>) -> SnipResult<Vec<ResolvedLibrarySource>> {
+    let manager = LibraryManager::new()?;
+    manager.resolve_readonly_sources(library)
+}
+
+/// Find usage IDs with no matching active snippet ID.
+///
+/// Pure helper shared by `validate` (warning diagnostics) and `repair`
+/// (prune candidates). `active_ids` holds every live snippet ID; `usage_ids`
+/// holds candidate usage entry IDs in stable order. Empty usage IDs are
+/// ignored, matching both consumers' existing behavior.
+pub fn find_orphaned_ids(active_ids: &HashSet<String>, usage_ids: &[String]) -> Vec<String> {
+    let mut orphaned = Vec::new();
+    for id in usage_ids {
+        if !id.is_empty() && !active_ids.contains(id) {
+            orphaned.push(id.clone());
+        }
+    }
+    orphaned
+}
+
 fn validate_library_name(name: &str) -> Result<(), (&'static str, &'static str)> {
     if name.is_empty() {
         return Err(("Invalid library name", "Library name cannot be empty"));
@@ -405,6 +489,128 @@ impl LibraryManager {
             .libraries
             .iter_mut()
             .find(|l| l.filename == filename)
+    }
+
+    /// Resolve read-only library sources without mutating any state.
+    ///
+    /// This is the single canonical implementation for side-effect-free
+    /// library discovery. It never calls [`Self::ensure_library_mode`],
+    /// never creates directories or files, and never rewrites metadata.
+    /// Legacy single-file mode is represented as the implicit `snippets`
+    /// library for compatibility with normal CLI resolution.
+    ///
+    /// `library` selects scope: `None` for the default (primary, or legacy
+    /// file), `Some("all")` for every visible library, or `Some(name)` for
+    /// one named library.
+    pub fn resolve_readonly_sources(
+        &self,
+        library: Option<&str>,
+    ) -> SnipResult<Vec<ResolvedLibrarySource>> {
+        if self.is_single_file_mode() {
+            let path = Self::get_default_snippets_path();
+            let available = path.exists();
+            return match library {
+                None | Some("all") if available => Ok(vec![ResolvedLibrarySource {
+                    name: "snippets".to_string(),
+                    library_id: String::new(),
+                    path,
+                }]),
+                Some("snippets") if available => Ok(vec![ResolvedLibrarySource {
+                    name: "snippets".to_string(),
+                    library_id: String::new(),
+                    path,
+                }]),
+                Some("all") | None => Ok(Vec::new()),
+                Some(name) => Err(library_not_found(name)),
+            };
+        }
+
+        let make_source = |meta: &LibraryMeta| ResolvedLibrarySource {
+            name: meta.filename.clone(),
+            library_id: meta.library_id.clone(),
+            path: self.libraries_dir.join(format!("{}.toml", meta.filename)),
+        };
+
+        match library {
+            Some("all") => Ok(self.config.libraries.iter().map(make_source).collect()),
+            Some(name) => self
+                .get_library_by_filename(name)
+                .map(|meta| vec![make_source(meta)])
+                .ok_or_else(|| library_not_found(name)),
+            None => Ok(self
+                .get_primary_library()
+                .map(make_source)
+                .into_iter()
+                .collect()),
+        }
+    }
+
+    /// Inspect library index consistency without mutating any state.
+    ///
+    /// Reports index entries whose files are missing, library files with no
+    /// index entry, and the current primary-library state. Callers render
+    /// the result into their own diagnostic types; this function performs
+    /// no I/O beyond existence checks and directory listing.
+    pub fn inspect_library_index(&self) -> LibraryIndexInspection {
+        let mut missing_files = Vec::new();
+        for meta in &self.config.libraries {
+            let path = self.libraries_dir.join(format!("{}.toml", meta.filename));
+            if !path.exists() {
+                missing_files.push((meta.filename.clone(), path));
+            }
+        }
+
+        let mut orphan_files = Vec::new();
+        if self.libraries_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&self.libraries_dir)
+        {
+            let indexed: HashSet<&str> = self
+                .config
+                .libraries
+                .iter()
+                .map(|l| l.filename.as_str())
+                .collect();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "toml")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && !indexed.contains(stem)
+                {
+                    orphan_files.push(path);
+                }
+            }
+        }
+
+        let primary = match self.get_primary_library() {
+            Some(meta) => {
+                let path = self.libraries_dir.join(format!("{}.toml", meta.filename));
+                if path.exists() {
+                    PrimaryState::Present {
+                        name: meta.filename.clone(),
+                    }
+                } else {
+                    PrimaryState::FileMissing {
+                        name: meta.filename.clone(),
+                        path,
+                    }
+                }
+            }
+            None => {
+                if self.config.libraries.is_empty() {
+                    PrimaryState::NoLibraries
+                } else {
+                    PrimaryState::NoPrimary {
+                        count: self.config.libraries.len(),
+                    }
+                }
+            }
+        };
+
+        LibraryIndexInspection {
+            missing_files,
+            orphan_files,
+            primary,
+        }
     }
 
     /// Creates a new snippet library file and registers it in the config.
@@ -2764,5 +2970,182 @@ command = "echo length"
         let mut device_variant = base;
         device_variant.device_id = "other-device".to_string();
         assert_ne!(base_id, deterministic_legacy_id(&device_variant, 0));
+    }
+
+    // ── Plan 009: canonical read-only resolution + shared inspection ──
+
+    fn write_index(dir: &std::path::Path, libs: &[LibraryMeta]) {
+        let config = LibraryConfig {
+            libraries: libs.to_vec(),
+            generation: 0,
+        };
+        let content = toml::to_string_pretty(&config).unwrap();
+        std::fs::write(dir.join("libraries.toml"), content).unwrap();
+    }
+
+    fn write_lib_file(libs_dir: &std::path::Path, name: &str) {
+        std::fs::write(libs_dir.join(format!("{name}.toml")), "snippets = []\n").unwrap();
+    }
+
+    #[test]
+    fn test_readonly_primary_named_all_resolution() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        let mut work = LibraryMeta::new("work");
+        work.is_primary = true;
+        work.library_id = "server-work".to_string();
+        let personal = LibraryMeta::new("personal");
+        write_index(&config_dir, &[work, personal]);
+        write_lib_file(&libs_dir, "work");
+        write_lib_file(&libs_dir, "personal");
+
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+
+        let primary = mgr.resolve_readonly_sources(None).unwrap();
+        assert_eq!(primary.len(), 1);
+        assert_eq!(primary[0].name, "work");
+        assert_eq!(primary[0].library_id, "server-work");
+        assert_eq!(primary[0].path, libs_dir.join("work.toml"),);
+
+        let named = mgr.resolve_readonly_sources(Some("personal")).unwrap();
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].name, "personal");
+
+        let mut all = mgr.resolve_readonly_sources(Some("all")).unwrap();
+        all.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].name, "personal");
+        assert_eq!(all[1].name, "work");
+    }
+
+    #[test]
+    fn test_readonly_missing_library_error() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        let mut work = LibraryMeta::new("work");
+        work.is_primary = true;
+        write_index(&config_dir, &[work]);
+        write_lib_file(&libs_dir, "work");
+
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let err = mgr.resolve_readonly_sources(Some("missing")).unwrap_err();
+        assert_eq!(err.to_string(), library_not_found("missing").to_string());
+    }
+
+    #[test]
+    fn test_readonly_resolution_creates_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        let mut work = LibraryMeta::new("work");
+        work.is_primary = true;
+        write_index(&config_dir, &[work]);
+        write_lib_file(&libs_dir, "work");
+
+        let before: Vec<_> = walk_files(&config_dir);
+        let mgr = LibraryManager::with_config_dir(config_dir.clone()).unwrap();
+        let _ = mgr.resolve_readonly_sources(None).unwrap();
+        let _ = mgr.resolve_readonly_sources(Some("all")).unwrap();
+        let _ = mgr.inspect_library_index();
+        let after: Vec<_> = walk_files(&config_dir);
+        assert_eq!(before, after);
+    }
+
+    fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn test_inspect_library_index_primary_states() {
+        // No libraries.
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(config_dir.join("libraries")).unwrap();
+        write_index(&config_dir, &[]);
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let inspection = mgr.inspect_library_index();
+        assert!(matches!(inspection.primary, PrimaryState::NoLibraries));
+        assert!(inspection.missing_files.is_empty());
+        assert!(inspection.orphan_files.is_empty());
+
+        // No primary with libraries.
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        write_index(&config_dir, &[LibraryMeta::new("a")]);
+        write_lib_file(&libs_dir, "a");
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let inspection = mgr.inspect_library_index();
+        assert!(matches!(
+            inspection.primary,
+            PrimaryState::NoPrimary { count: 1 }
+        ));
+
+        // Primary file missing.
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        let mut primary = LibraryMeta::new("gone");
+        primary.is_primary = true;
+        write_index(&config_dir, &[primary]);
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let inspection = mgr.inspect_library_index();
+        assert!(matches!(
+            inspection.primary,
+            PrimaryState::FileMissing { .. }
+        ));
+        assert_eq!(inspection.missing_files.len(), 1);
+        assert_eq!(inspection.missing_files[0].0, "gone");
+    }
+
+    #[test]
+    fn test_inspect_library_index_orphan_files() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("cfg");
+        let libs_dir = config_dir.join("libraries");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        write_index(&config_dir, &[]);
+        write_lib_file(&libs_dir, "orphan");
+        let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let inspection = mgr.inspect_library_index();
+        assert_eq!(inspection.orphan_files.len(), 1);
+    }
+
+    #[test]
+    fn test_find_orphaned_ids_shared_classifier() {
+        let active: HashSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
+        let usage = vec![
+            "b".to_string(),
+            "c".to_string(),
+            String::new(),
+            "d".to_string(),
+        ];
+        assert_eq!(
+            find_orphaned_ids(&active, &usage),
+            vec!["c".to_string(), "d".to_string()]
+        );
     }
 }

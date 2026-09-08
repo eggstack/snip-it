@@ -41,6 +41,37 @@ Metadata and configuration for multi-library support.
 - Migration from single-file to multi-library mode
 - Premade library tracking
 
+## Read-only source resolution (Plan 009)
+
+Side-effect-free library discovery lives in the library layer, not in
+callers:
+
+- `ResolvedLibrarySource` — canonical `{ name, library_id, path }` for one
+  visible library.
+- `LibraryManager::resolve_readonly_sources()` — single implementation for
+  legacy single-file handling (`None`/`"all"`/`"snippets"` → implicit
+  `snippets` library), primary (`None`), named, and `all` scopes. Never
+  calls `ensure_library_mode`; never creates directories/files or rewrites
+  metadata.
+- `readonly_library_sources()` — convenience wrapper (`new()` + resolve).
+- `library_not_found()` — canonical missing-library error shared by CLI,
+  MCP, and diagnostics.
+
+Consumers: MCP `tools.rs` (`list`/`search`/`get`) and
+`selector::resolve_selector_readonly()` (used by `snp get`). Mutating paths
+(`resolve_selector`, `get_library_path`, `init_library_manager`) keep the
+migrating behavior.
+
+## Shared index inspection (Plan 009)
+
+`LibraryManager::inspect_library_index()` returns a read-only
+`LibraryIndexInspection` (`missing_files`, `orphan_files`, `primary:
+PrimaryState`) built from existence checks and directory listing only.
+`find_orphaned_ids()` is the shared pure classifier for orphaned usage
+entries. `doctor`, `validate`, `repair`, and `status` render this shared
+state into their own diagnostic types and keep their distinct user
+semantics; no generic finding DSL or plugin framework was introduced.
+
 ## File Layout
 
 ```

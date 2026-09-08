@@ -124,19 +124,29 @@ After matching, `resolve_matches()` applies the `ResolutionPolicy`:
 - **All**: Returns all matches as `Many`. Returns `NotFound` only if zero
   matches.
 
-## Top-Level Entry Point
+## Top-Level Entry Points
 
 ```rust
 pub fn resolve_selector(selector: &SnippetSelector) -> SnipResult<SelectionResult>
+pub fn resolve_selector_readonly(selector: &SnippetSelector) -> SnipResult<SelectionResult>
 ```
 
-This is the primary API. It:
+`resolve_selector()` is the mutating API. It:
 
-1. Creates a `LibraryManager` and ensures library mode
+1. Creates a `LibraryManager` and ensures library mode (may migrate legacy
+   state)
 2. Loads libraries based on `LibraryScope`
 3. Calls `selector.resolve()` for each library
 4. Aggregates results across libraries
 5. Applies the resolution policy to the combined set
+
+`resolve_selector_readonly()` (Plan 009) is the side-effect-free counterpart
+for deterministic read paths (`snp get`, MCP). It consumes the canonical
+`library::readonly_library_sources()` resolver, so legacy single-file
+handling, primary resolution, and path construction cannot drift from the
+library layer. A `Primary` scope with no visible source preserves the
+historical "No primary library" error; an `all` scope with no visible
+libraries resolves to `NotFound`.
 
 For `LibraryScope::AllLibraries`, matches from all libraries are collected
 and the resolution policy is applied to the combined results.
@@ -163,8 +173,9 @@ or `query` produces an error.
 ### `snp get`
 
 The primary consumer. Builds a `SnippetSelector` from CLI flags and calls
-`resolve_selector()`. Supports `--json`, `--raw`, `--expanded`, `--field`,
-and `--var` for output formatting and variable expansion.
+`resolve_selector_readonly()`. Supports `--json`, `--raw`, `--expanded`, `--field`,
+and `--var` for output formatting and variable expansion. Read-only: a legacy
+single-file checkout is read in place without migration or file creation.
 
 ### `run --id`, `clip --id`, `edit --id`
 

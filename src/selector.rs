@@ -374,6 +374,91 @@ pub fn resolve_exact_target(
     resolve_selector(&selector)
 }
 
+/// Resolve a selector without triggering legacy migration or file creation.
+///
+/// Side-effect-free counterpart to [`resolve_selector`] for deterministic
+/// read paths (`snp get`, MCP). It consumes the canonical
+/// [`crate::library::readonly_library_sources`] resolver, so legacy
+/// single-file handling, primary resolution, and path construction cannot
+/// drift from the library layer. A `Primary` scope with no visible source
+/// preserves the historical "No primary library" error; an `all` scope with
+/// no visible libraries resolves to [`SelectionResult::NotFound`].
+pub fn resolve_selector_readonly(selector: &SnippetSelector) -> SnipResult<SelectionResult> {
+    let scope_arg: Option<String> = match &selector.library {
+        LibraryScope::Primary => None,
+        LibraryScope::Named(name) => Some(name.clone()),
+        LibraryScope::AllLibraries => Some("all".to_string()),
+    };
+    let sources = crate::library::readonly_library_sources(scope_arg.as_deref())?;
+
+    if sources.is_empty() {
+        match &selector.library {
+            LibraryScope::Primary => {
+                return Err(SnipError::runtime_error(
+                    "No primary library",
+                    Some("Create a library with 'snp library create <name>'"),
+                ));
+            }
+            LibraryScope::AllLibraries => return Ok(SelectionResult::NotFound),
+            LibraryScope::Named(_) => {
+                // `readonly_library_sources` already errors for unknown names;
+                // an empty result here means no visible libraries.
+                return Ok(SelectionResult::NotFound);
+            }
+        }
+    }
+
+    if sources.len() == 1 {
+        let source = &sources[0];
+        let snippets = crate::library::load_library(&source.path)?;
+        return selector.resolve(&snippets, &source.path, &source.name, &source.library_id);
+    }
+
+    let mut all_matches: Vec<SnippetMatch> = Vec::new();
+    for source in &sources {
+        let snippets = crate::library::load_library(&source.path)?;
+        let result = selector.resolve(&snippets, &source.path, &source.name, &source.library_id)?;
+        match result {
+            SelectionResult::One(m) => all_matches.push(*m),
+            SelectionResult::Many(ms) => all_matches.extend(ms),
+            _ => {}
+        }
+    }
+
+    sort_matches(&mut all_matches);
+
+    match all_matches.len() {
+        0 => Ok(SelectionResult::NotFound),
+        1 => {
+            let Some(m) = all_matches.into_iter().next() else {
+                return Ok(SelectionResult::NotFound);
+            };
+            Ok(SelectionResult::One(Box::new(m)))
+        }
+        _ => match selector.resolution {
+            ResolutionPolicy::All => Ok(SelectionResult::Many(all_matches)),
+            ResolutionPolicy::First => {
+                let Some(m) = all_matches.into_iter().next() else {
+                    return Ok(SelectionResult::NotFound);
+                };
+                Ok(SelectionResult::One(Box::new(m)))
+            }
+            ResolutionPolicy::Unique => {
+                let identities: Vec<SnippetIdentity> = all_matches
+                    .iter()
+                    .map(|m| SnippetIdentity {
+                        id: m.snippet.id.clone(),
+                        description: m.snippet.description.clone(),
+                        command: m.snippet.command.clone(),
+                        library_name: m.library_name.clone(),
+                    })
+                    .collect();
+                Ok(SelectionResult::Ambiguous(identities))
+            }
+        },
+    }
+}
+
 /// Resolve a selector across potentially multiple libraries.
 ///
 /// This is the top-level entry point for non-TUI snippet resolution.
@@ -399,14 +484,9 @@ pub fn resolve_selector(selector: &SnippetSelector) -> SnipResult<SelectionResul
             selector.resolve(&snippets, &path, &primary.filename, &lib_id)
         }
         LibraryScope::Named(name) => {
-            let lib = mgr.get_library_by_filename(name).ok_or_else(|| {
-                SnipError::runtime_error(
-                    "Library not found",
-                    Some(&format!(
-                        "Library '{name}' does not exist. Use 'snp library list' to see available libraries."
-                    )),
-                )
-            })?;
+            let lib = mgr
+                .get_library_by_filename(name)
+                .ok_or_else(|| crate::library::library_not_found(name))?;
             let path = mgr
                 .get_libraries_dir()
                 .join(format!("{}.toml", lib.filename));

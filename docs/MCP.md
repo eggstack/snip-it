@@ -28,7 +28,10 @@ are not exposed. The adapter never invokes a shell or changes snippets.
 
 Malformed TOML fails closed through the normal library loader. Legacy
 single-file mode is read as the implicit `snippets` library without triggering
-the CLI's migration write path. MCP reads do not trigger auto-sync.
+the CLI's migration write path. Library source resolution is shared with the
+CLI through the canonical `library::readonly_library_sources()` resolver, so
+legacy/primary/named/`all` handling cannot drift between MCP and `snp get`.
+MCP reads do not trigger auto-sync.
 
 ## Client registration
 

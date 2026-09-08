@@ -54,10 +54,14 @@ The source uses lettered markers (`a`–`l`) across four validation functions:
 11. **Orphaned library file** — `.toml` file in `libraries/` not registered in index
 12. **Invalid primary library** — primary library file missing, or no primary set when libraries exist
 
+These three checks consume the shared `LibraryManager::inspect_library_index()` view (Plan 009), so `validate`, `repair`, `doctor`, and `status` classify the same index state consistently. Rendering into `ValidationDiagnostic` stays local to `validate`.
+
 ### Usage and permissions checks
 
-13. **Orphaned usage entries** — usage index references a snippet ID not found in any library
+13. **Orphaned usage entries** — usage index references a snippet ID not found in any library (classified with the shared `library::find_orphaned_ids()` helper used by `repair`)
 14. **Insecure file permissions** — sensitive config files have group/other access bits set (Unix only)
+
+`validate` is fully read-only: it uses `LibraryManager::new()` plus the canonical read-only resolver and never migrates legacy state.
 
 ## Output
 

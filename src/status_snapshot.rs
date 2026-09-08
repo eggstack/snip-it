@@ -542,7 +542,16 @@ fn capture_local_summary() -> LocalSummary {
     match crate::library::LibraryManager::new() {
         Ok(mgr) => {
             let libs = mgr.list_libraries().len();
-            let primary = mgr.get_primary_library().map(|l| l.filename.clone());
+            // Shared primary classification so `status`, `doctor`, and
+            // `validate` agree on primary state. A missing primary file still
+            // reports its configured name (matching historical `status` and
+            // `doctor` behavior); `validate`/`repair` flag it as an error.
+            let primary = match &mgr.inspect_library_index().primary {
+                crate::library::PrimaryState::Present { name }
+                | crate::library::PrimaryState::FileMissing { name, .. } => Some(name.clone()),
+                crate::library::PrimaryState::NoPrimary { .. }
+                | crate::library::PrimaryState::NoLibraries => None,
+            };
             let snippets = count_snippets(&mgr);
             LocalSummary {
                 libraries: libs,

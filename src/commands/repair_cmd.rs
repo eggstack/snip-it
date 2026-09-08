@@ -375,37 +375,37 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
         }
     }
 
-    // Check primary library selection
-    match mgr.get_primary_library() {
-        Some(primary) => {
-            let primary_path = libraries_dir.join(format!("{}.toml", primary.filename));
-            if !primary_path.exists() {
-                report.items.push(RepairItem {
-                    action: RepairAction::RepairLibraryIndex,
-                    category: "primary".to_string(),
-                    problem: format!(
-                        "Primary library '{}' references missing file",
-                        primary.filename
-                    ),
-                    fix: "Promote first available library to primary".to_string(),
-                    safe: true,
-                    target_path: None,
-                });
-            }
+    // Check primary library selection via the shared index inspection so
+    // `repair` classifies the same primary state as `validate`/`doctor`.
+    // Rendering into `RepairItem` stays local to preserve repair semantics.
+    match &mgr.inspect_library_index().primary {
+        crate::library::PrimaryState::FileMissing { name, .. } => {
+            report.items.push(RepairItem {
+                action: RepairAction::RepairLibraryIndex,
+                category: "primary".to_string(),
+                problem: format!("Primary library '{name}' references missing file"),
+                fix: "Promote first available library to primary".to_string(),
+                safe: true,
+                target_path: None,
+            });
         }
-        None => {
+        crate::library::PrimaryState::NoPrimary { count } => {
             // No primary set — check if we can auto-assign
-            let libs = mgr.list_libraries();
-            if libs.len() == 1 {
+            if *count == 1 {
+                let name = mgr
+                    .list_libraries()
+                    .first()
+                    .map(|l| l.filename.clone())
+                    .unwrap_or_default();
                 report.items.push(RepairItem {
                     action: RepairAction::RepairLibraryIndex,
                     category: "primary".to_string(),
                     problem: "No primary library is set (only one library exists)".to_string(),
-                    fix: format!("Set '{}' as primary", libs[0].filename),
+                    fix: format!("Set '{name}' as primary"),
                     safe: true,
                     target_path: None,
                 });
-            } else if !libs.is_empty() {
+            } else if *count > 0 {
                 report.items.push(RepairItem {
                     action: RepairAction::RepairLibraryIndex,
                     category: "primary".to_string(),
@@ -416,18 +416,20 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                 });
             }
         }
+        crate::library::PrimaryState::Present { .. }
+        | crate::library::PrimaryState::NoLibraries => {}
     }
 
-    // Check for orphaned usage entries
+    // Check for orphaned usage entries via the shared classifier so `repair`
+    // and `validate` agree on which usage entries are orphaned.
     let usage_index = crate::usage::UsageIndex::load();
-    let active_id_set: std::collections::HashSet<&String> = active_ids.iter().collect();
-
-    let mut orphaned_count = 0;
-    for entry in usage_index.entries() {
-        if !active_id_set.contains(&entry.id) {
-            orphaned_count += 1;
-        }
-    }
+    let active_id_set: std::collections::HashSet<String> = active_ids.into_iter().collect();
+    let usage_ids: Vec<String> = usage_index
+        .entries()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    let orphaned_count = crate::library::find_orphaned_ids(&active_id_set, &usage_ids).len();
     if orphaned_count > 0 {
         report.items.push(RepairItem {
             action: RepairAction::PruneOrphanedUsage,

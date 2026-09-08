@@ -27,7 +27,7 @@ Audits the installed snp environment:
 - Reports binary version
 - Checks config directory existence and writability
 - Checks library directory existence
-- Validates primary library resolution and snippet count
+- Validates primary library resolution and snippet count (via the shared `LibraryManager::inspect_library_index()` view, so `doctor` and `validate` classify the same primary state)
 - Checks sync configuration presence and loadability
 - Checks shell availability (bash, zsh, fish)
 - Checks `snp select` and `snp new` flag availability

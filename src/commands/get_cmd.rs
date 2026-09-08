@@ -8,7 +8,7 @@
 use crate::error::{SnipError, SnipResult};
 use crate::outcome::CliOutcome;
 use crate::selector::{
-    LibraryScope, ResolutionPolicy, SelectionResult, SnippetSelector, resolve_selector,
+    LibraryScope, ResolutionPolicy, SelectionResult, SnippetSelector, resolve_selector_readonly,
 };
 use crate::utils::variables::{VariableAssignments, parse_variables, strip_escape_sequences};
 use serde::Serialize;
@@ -41,6 +41,9 @@ pub struct GetJsonOutput {
 }
 
 /// Run the `snp get` command.
+///
+/// Read-only: resolves via [`resolve_selector_readonly`] so a legacy
+/// single-file checkout is read in place without migration or file creation.
 ///
 /// # Arguments
 /// * `id` - Match by exact snippet UUID
@@ -126,8 +129,8 @@ pub fn run(
         selector = selector.with_query(q);
     }
 
-    // Resolve
-    let result = resolve_selector(&selector)?;
+    // Resolve (read-only: no legacy migration, no file creation)
+    let result = resolve_selector_readonly(&selector)?;
 
     match result {
         SelectionResult::NotFound => Ok(CliOutcome::NotFound),

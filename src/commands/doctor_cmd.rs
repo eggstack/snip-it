@@ -527,13 +527,14 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     }
 
-    // Check primary library resolution
+    // Check primary library resolution via the shared index inspection so
+    // `doctor` and `validate` classify the same primary state consistently.
+    // Rendering into `CompatibilityDiagnostic` stays local to `doctor`.
     match LibraryManager::new() {
-        Ok(mgr) => match mgr.get_primary_library() {
-            Some(primary) => {
-                let lib_path = mgr
-                    .get_libraries_dir()
-                    .join(format!("{}.toml", primary.filename));
+        Ok(mgr) => match &mgr.inspect_library_index().primary {
+            crate::library::PrimaryState::Present { name }
+            | crate::library::PrimaryState::FileMissing { name, .. } => {
+                let lib_path = mgr.get_libraries_dir().join(format!("{name}.toml"));
                 let exists = lib_path.exists();
                 let snippet_count = if exists {
                     crate::library::load_library(&lib_path)
@@ -547,15 +548,13 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     entry_index: None,
                     field: Some("primary_library".to_string()),
                     severity: DiagnosticSeverity::Info,
-                    message: format!(
-                        "Primary library '{}' ({} snippets)",
-                        primary.filename, snippet_count
-                    ),
+                    message: format!("Primary library '{name}' ({snippet_count} snippets)"),
                     suggestion: None,
                     span: None,
                 });
             }
-            None => {
+            crate::library::PrimaryState::NoPrimary { .. }
+            | crate::library::PrimaryState::NoLibraries => {
                 report.diagnostics.push(CompatibilityDiagnostic {
                     code: "compat.primary_library.missing".to_string(),
                     entry_index: None,

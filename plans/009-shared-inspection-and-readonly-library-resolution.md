@@ -1,6 +1,6 @@
 # Plan 009: Shared inspection and read-only library resolution
 
-Status: ready
+Status: complete
 
 Depends on: Plan 008
 

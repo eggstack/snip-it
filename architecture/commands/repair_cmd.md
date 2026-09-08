@@ -6,6 +6,8 @@
 
 `repair` validates configuration and library files, identifies safe repair candidates, and applies fixes only when explicitly requested. Always creates a backup before any mutations.
 
+Inspection is read-only: primary-library candidates come from the shared `LibraryManager::inspect_library_index()` view and orphaned-usage candidates from the shared `library::find_orphaned_ids()` classifier, so `repair` agrees with `validate`/`doctor` on the same state. Mutations stay behind `--apply` under the existing backup/locking/transaction rules.
+
 **File**: `src/commands/repair_cmd.rs`
 
 ## Repair Actions
