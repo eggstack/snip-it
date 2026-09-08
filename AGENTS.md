@@ -200,6 +200,11 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `doctor_cmd::DiagnosticReportFormat` and backup manifest types are re-exported from their command modules so CLI/test import paths are unchanged
 - `tests/architecture.rs` scans module directories (`library/`) as well as files
 
+### Sync retry policy (Plan 012)
+- All gRPC RPCs share one `retry_grpc_unified!` macro in `sync.rs` (no `retry_grpc!`/`retry_grpc_limited!` pair, no manual `push`/`sync` retry loops); retryability (`SyncRetryConfig::is_retryable_grpc_error`), jitter (`retry_jitter_multiplier`, [0.5, 1.5)), counters, and terminal `grpc_error_to_snip_error` mapping live in one path
+- `RetryBackoff::Standard` (2x, cap 5s) everywhere except the `Sync` RPC, which keeps its historical `RateLimitAware` special case (4x up to 120s on `ResourceExhausted`); counts/delays/timeouts unchanged
+- `None` limits (manual, register, premade) stay unbounded except transport timeouts; `Some(SyncRunLimits)` (auto-sync) still bounds each RPC and refuses backoff sleeps that would overrun the deadline, all mapping to `SyncFailureKind::Timeout`
+
 ## Keyring
 
 - `keyring = "4"` relies on its default `v1` feature set for platform stores: Apple Keychain, Windows Credential Manager, zbus Secret Service (Linux desktop). Do not build with `default-features = false` without re-enabling a store — credential persistence silently degrades to keyring's mock store.

@@ -27,7 +27,8 @@ pub struct SyncClient {
 - `list_libraries()` / `create_library()` — Library management
 - `list_premade()` / `get_premade()` / `search_premade()` — Premade libraries
 - `detect_device_conflict()` — Warn on device ID mismatch
-- `sync_with_retry()` — Custom retry for sync requests
+- `sync_with_retry()` — `Sync` RPC via the unified retry macro (`RateLimitAware`)
+- `retry_grpc_unified!` + `RetryBackoff` — Single retry/backoff/deadline policy
 
 ### Byte-Bounded Upload Batching
 
@@ -73,7 +74,17 @@ an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE new
 
 ### Retry Logic
 
-The `retry_grpc!` macro implements exponential backoff with jitter for transient failures.
+All gRPC RPCs share one `retry_grpc_unified!` macro with exponential backoff
+and jitter for transient failures (1 initial + 3 retries = 4 attempts;
+100ms initial, 2x, 5s cap, jitter [0.5, 1.5)). Retryability
+(`SyncRetryConfig::is_retryable_grpc_error`), counters, warning logging, and
+terminal `grpc_error_to_snip_error` mapping live in that single path. The
+`Sync` RPC alone uses `RetryBackoff::RateLimitAware` (4x up to 120s on
+`ResourceExhausted`); every other RPC uses `RetryBackoff::Standard`.
+`None` limits (manual, register, premade) run unbounded except for transport
+timeouts; `Some(SyncRunLimits)` (automatic sync) bounds each RPC with
+`tokio::time::timeout(remaining)` and refuses backoff sleeps that would
+overrun the deadline, mapping all expirations to `SyncFailureKind::Timeout`.
 
 Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` via
 the private `add_batch_context()` helper — a clock-skew error remains `ClockSkew` /
@@ -192,7 +203,8 @@ service SnippetSync {
 
 - `SnipError::Runtime` for sync-specific errors (sync failures, validation errors)
 - `CryptoError` for encryption/decryption errors (converted to `SnipError::Runtime` via `From`)
-- Network failures trigger retry with exponential backoff via `retry_grpc!` macro
+- Network failures trigger retry with exponential backoff via the single
+  `retry_grpc_unified!` macro
 
 ## Remote Library Recovery
 
@@ -235,7 +247,7 @@ pub struct AutoSyncPolicy {
 }
 ```
 
-**Note:** Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc!` macro).
+**Note:** Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc_unified!` macro).
 
 ### AutoSyncFailureMode
 

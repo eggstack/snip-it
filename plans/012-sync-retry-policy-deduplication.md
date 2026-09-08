@@ -1,6 +1,6 @@
 # Plan 012: Sync retry policy deduplication
 
-Status: ready
+Status: complete
 
 Depends on: Plans 008–011
 

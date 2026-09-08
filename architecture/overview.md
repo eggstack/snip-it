@@ -189,7 +189,7 @@ transmission (AES-256-GCM).
 
 **Key components**:
 - `SyncClient` — tonic gRPC client with exponential backoff retries
-- `retry_grpc!` macro — configurable retry with jitter
+- `retry_grpc_unified!` macro + `RetryBackoff` — single retry policy with jitter
 - `sync_encrypted()` — byte-bounded upload batches (3.5 MiB ceiling)
 - `sync_commands::run_sync()` — full bidirectional sync orchestration
 - `sync_failure.rs` — `FailureClass` (4 variants), lives in this layer so

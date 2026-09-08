@@ -119,47 +119,75 @@ fn retry_jitter_multiplier() -> f64 {
     0.5 + ((combined as u64 % 1000) as f64 / 1000.0)
 }
 
-/// Retry an async gRPC operation with exponential backoff and jitter.
-macro_rules! retry_grpc {
-    ($op:expr, $name:expr) => {{
-        let config = default_retry_config();
-        let mut delay_ms = config.initial_delay_ms;
-        let mut attempt = 0u32;
-        loop {
-            match $op.await {
-                Ok(val) => break Ok(val),
-                Err(e) => {
-                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
-                        || attempt >= config.max_retries
-                    {
-                        break Err(grpc_error_to_snip_error($name, &e));
-                    }
-                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
-                    tracing::warn!(
-                        "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
-                        $name,
-                        attempt + 1,
-                        config.max_retries + 1,
-                        e,
-                        actual_delay
-                    );
-                    tokio::time::sleep(Duration::from_millis(actual_delay)).await;
-                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
-                    attempt += 1;
+/// Backoff progression for the unified retry executor.
+///
+/// `Standard` reproduces the historical `retry_grpc!` / `retry_grpc_limited!`
+/// progression (`initial_delay_ms * 2`, capped at `max_delay_ms`).
+/// `RateLimitAware` preserves the `Sync`-RPC-only special case: a
+/// `ResourceExhausted` failure backs off 4x up to 120s, all other failures
+/// use the standard progression. Only `sync_with_retry` uses the aware
+/// variant; every other RPC uses `Standard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryBackoff {
+    Standard,
+    RateLimitAware,
+}
+
+impl RetryBackoff {
+    fn next_delay_ms(
+        self,
+        current_delay_ms: u64,
+        status: &tonic::Status,
+        config: &SyncRetryConfig,
+    ) -> u64 {
+        match self {
+            Self::Standard => current_delay_ms.saturating_mul(2).min(config.max_delay_ms),
+            Self::RateLimitAware => {
+                if status.code() == Code::ResourceExhausted {
+                    ((current_delay_ms as f64 * 4.0) as u64).min(120_000)
+                } else {
+                    current_delay_ms.saturating_mul(2).min(config.max_delay_ms)
                 }
             }
         }
-    }};
+    }
 }
 
-/// Retry a request while honoring the per-invocation automatic-sync deadline.
-macro_rules! retry_grpc_limited {
-    ($client:expr, $op:expr, $name:expr) => {{
+/// Single retry/backoff policy for all gRPC operations.
+///
+/// This macro is the sole implementation of retry/backoff/deadline control
+/// flow, replacing the former `retry_grpc!` / `retry_grpc_limited!` pair and
+/// the manual `push_snippets_batch` / `sync_with_retry` loops. A macro (not a
+/// generic async helper) is used because Tonic clients borrow `&mut self` per
+/// RPC; a closure-based helper would require complex lifetime machinery for
+/// no policy benefit (see Plan 012 handoff note).
+///
+/// Preserved semantics:
+/// - total attempts = 1 initial + `max_retries` retries (default 4);
+/// - retryable codes = all except `InvalidArgument`, `NotFound`,
+///   `AlreadyExists`, `PermissionDenied`, `Unauthenticated`
+///   (`SyncRetryConfig::is_retryable_grpc_error`);
+/// - exponential backoff from `initial_delay_ms` with jitter in [0.5, 1.5),
+///   progression via `RetryBackoff` (`Standard` everywhere except the
+///   `Sync` RPC, which uses `RateLimitAware` for `ResourceExhausted`);
+/// - `$limits = None` (manual sync, register, premade) runs unbounded except
+///   for the transport request timeout;
+/// - `$limits = Some` (automatic sync) bounds each RPC with
+///   `tokio::time::timeout(remaining)` and refuses backoff sleeps that would
+///   overrun the deadline, mapping all deadline expirations to
+///   `SyncFailureKind::Timeout`;
+/// - terminal transport errors map via `grpc_error_to_snip_error`.
+///
+/// Each call site still shows its operation name and request construction;
+/// only the retry/backoff/deadline control flow is shared.
+macro_rules! retry_grpc_unified {
+    ($limits:expr, $op:expr, $name:expr, $backoff:expr) => {{
         let config = default_retry_config();
+        let backoff_policy: RetryBackoff = $backoff;
         let mut delay_ms = config.initial_delay_ms;
         let mut attempt = 0u32;
         loop {
-            let response = match $client.limits.and_then(SyncRunLimits::remaining) {
+            let response = match $limits.and_then(SyncRunLimits::remaining) {
                 Some(remaining) if !remaining.is_zero() => {
                     match tokio::time::timeout(remaining, $op).await {
                         Ok(response) => response,
@@ -171,7 +199,7 @@ macro_rules! retry_grpc_limited {
                         }
                     }
                 }
-                None if $client.limits.is_none() => $op.await,
+                None if $limits.is_none() => $op.await,
                 _ => {
                     break Err(SnipError::sync_failure(
                         crate::error::SyncFailureKind::Timeout,
@@ -189,7 +217,15 @@ macro_rules! retry_grpc_limited {
                     }
                     let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
                     let delay = Duration::from_millis(actual_delay);
-                    if $client.limits.is_some_and(|limits| {
+                    tracing::warn!(
+                        "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
+                        $name,
+                        attempt + 1,
+                        config.max_retries + 1,
+                        e,
+                        actual_delay
+                    );
+                    if $limits.is_some_and(|limits| {
                         limits
                             .remaining()
                             .is_none_or(|remaining| remaining <= delay)
@@ -200,7 +236,7 @@ macro_rules! retry_grpc_limited {
                         ));
                     }
                     tokio::time::sleep(delay).await;
-                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
+                    delay_ms = backoff_policy.next_delay_ms(delay_ms, &e, &config);
                     attempt += 1;
                 }
             }
@@ -730,95 +766,27 @@ impl SyncClient {
             snippets: snippets.to_vec(),
         };
 
-        let config = default_retry_config();
-        let mut delay_ms = config.initial_delay_ms;
-        let mut attempt = 0u32;
-        loop {
-            let remaining = self.limits.and_then(SyncRunLimits::remaining);
-            if self
-                .limits
-                .is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero()))
-            {
-                return Err(SnipError::sync_failure(
-                    crate::error::SyncFailureKind::Timeout,
-                    Some("automatic sync deadline expired before PushSnippets"),
-                ));
-            }
-            let mut grpc_req = tonic::Request::new(request.clone());
-            add_api_key_metadata(&mut grpc_req, &api_key);
-            let request_future = self.client.push_snippets(grpc_req);
-            let response = match self.limits {
-                Some(_) => match remaining {
-                    Some(duration) if !duration.is_zero() => {
-                        match tokio::time::timeout(duration, request_future).await {
-                            Ok(response) => response,
-                            Err(_) => {
-                                return Err(SnipError::sync_failure(
-                                    crate::error::SyncFailureKind::Timeout,
-                                    Some("automatic sync deadline expired"),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::Timeout,
-                            Some("automatic sync deadline expired"),
-                        ));
-                    }
-                },
-                None => request_future.await,
-            };
-            match response {
-                Ok(response) => {
-                    let inner = response.into_inner();
-                    if !inner.success {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::SyncRequestFailed,
-                            Some(&inner.message),
-                        ));
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
-                        || attempt >= config.max_retries
-                    {
-                        return Err(grpc_error_to_snip_error("PushSnippets", &e));
-                    }
-                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
-                    tracing::warn!(
-                        "PushSnippets failed (attempt {}/{}): {}. Retrying in {}ms...",
-                        attempt + 1,
-                        config.max_retries + 1,
-                        e,
-                        actual_delay
-                    );
-                    let delay = Duration::from_millis(actual_delay);
-                    if self.limits.is_some_and(|limits| {
-                        limits
-                            .remaining()
-                            .is_none_or(|remaining| remaining <= delay)
-                    }) {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::Timeout,
-                            Some("automatic sync deadline expired during retry backoff"),
-                        ));
-                    }
-                    tokio::time::sleep(delay).await;
-                    delay_ms = (delay_ms * 2).min(config.max_delay_ms);
-                    attempt += 1;
-                }
-            }
+        let response = retry_grpc_unified!(
+            self.limits,
+            async {
+                let mut grpc_req = tonic::Request::new(request.clone());
+                add_api_key_metadata(&mut grpc_req, &api_key);
+                self.client.push_snippets(grpc_req).await
+            },
+            "PushSnippets",
+            RetryBackoff::Standard
+        )?;
+        let inner = response.into_inner();
+        if !inner.success {
+            return Err(SnipError::sync_failure(
+                crate::error::SyncFailureKind::SyncRequestFailed,
+                Some(&inner.message),
+            ));
         }
+        Ok(())
     }
 
-    /// Manual retry logic for sync requests.
-    ///
-    /// Note: The `retry_grpc!` macro cannot be used here because `self.client.sync()`
-    /// borrows `&mut self`, and the macro requires the operation to be a standalone
-    /// future expression. This method implements the same exponential backoff strategy.
-    /// The request is cloned on retry to avoid re-cloning on every attempt.
+    /// Retry logic for sync requests via the unified executor.
     ///
     /// `api_key` is passed explicitly rather than read from `request.api_key` so
     /// callers can leave the body field empty (avoiding leaking the key over the
@@ -829,95 +797,28 @@ impl SyncClient {
         request: SyncRequest,
         api_key: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
-        let config = default_retry_config();
-        let mut delay_ms = config.initial_delay_ms;
-        let mut attempt = 0;
         let request = std::sync::Arc::new(request);
-        loop {
-            let remaining = self.limits.and_then(SyncRunLimits::remaining);
-            if self
-                .limits
-                .is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero()))
-            {
-                return Err(SnipError::sync_failure(
-                    crate::error::SyncFailureKind::Timeout,
-                    Some("automatic sync deadline expired before retry"),
-                ));
-            }
-            let mut grpc_req = tonic::Request::new((*request).clone());
-            add_api_key_metadata(&mut grpc_req, api_key);
-            let request_future = self.client.sync(grpc_req);
-            let response = match self.limits {
-                Some(_) => match remaining {
-                    Some(duration) if !duration.is_zero() => {
-                        match tokio::time::timeout(duration, request_future).await {
-                            Ok(response) => response,
-                            Err(_) => {
-                                return Err(SnipError::sync_failure(
-                                    crate::error::SyncFailureKind::Timeout,
-                                    Some("automatic sync deadline expired"),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::Timeout,
-                            Some("automatic sync deadline expired"),
-                        ));
-                    }
-                },
-                None => request_future.await,
-            };
-            match response {
-                Ok(response) => return Ok(response.into_inner()),
-                Err(e) => {
-                    if !SyncRetryConfig::is_retryable_grpc_error(&e)
-                        || attempt >= config.max_retries
-                    {
-                        return Err(grpc_error_to_snip_error("Sync request", &e));
-                    }
-                    let is_rate_limited = e.code() == Code::ResourceExhausted;
-                    let actual_delay = (delay_ms as f64 * retry_jitter_multiplier()) as u64;
-                    tracing::warn!(
-                        "Sync request failed (attempt {}/{}): {}. Retrying in {}ms...",
-                        attempt + 1,
-                        config.max_retries + 1,
-                        e,
-                        actual_delay
-                    );
-                    let delay = Duration::from_millis(actual_delay);
-                    if self.limits.is_some_and(|limits| {
-                        limits
-                            .remaining()
-                            .is_none_or(|remaining| remaining <= delay)
-                    }) {
-                        return Err(SnipError::sync_failure(
-                            crate::error::SyncFailureKind::Timeout,
-                            Some("automatic sync deadline expired during retry backoff"),
-                        ));
-                    }
-                    tokio::time::sleep(delay).await;
-                    let backoff_multiplier = if is_rate_limited { 4.0 } else { 2.0 };
-                    let max_delay = if is_rate_limited {
-                        120_000u64
-                    } else {
-                        config.max_delay_ms
-                    };
-                    delay_ms = ((delay_ms as f64 * backoff_multiplier) as u64).min(max_delay);
-                    attempt += 1;
-                }
-            }
-        }
+        let response = retry_grpc_unified!(
+            self.limits,
+            async {
+                let mut grpc_req = tonic::Request::new((*request).clone());
+                add_api_key_metadata(&mut grpc_req, api_key);
+                self.client.sync(grpc_req).await
+            },
+            "Sync request",
+            RetryBackoff::RateLimitAware
+        )?;
+        Ok(response.into_inner())
     }
 
     /// Checks server health and returns `true` if the server is reachable.
     pub async fn health_check(&mut self) -> SnipResult<bool> {
         self.ensure_budget()?;
-        match retry_grpc_limited!(
-            self,
+        match retry_grpc_unified!(
+            self.limits,
             self.client.health(tonic::Request::new(HealthRequest {})),
-            "Health check"
+            "Health check",
+            RetryBackoff::Standard
         ) {
             Ok(response) => Ok(response.into_inner().healthy),
             Err(e) => {
@@ -948,11 +849,13 @@ impl SyncClient {
 
         let mut client = SnippetSyncClient::new(channel);
 
-        let response = retry_grpc!(
+        let response = retry_grpc_unified!(
+            None::<SyncRunLimits>,
             client.register(tonic::Request::new(RegisterRequest {
                 device_id: String::new(),
             })),
-            "Register request"
+            "Register request",
+            RetryBackoff::Standard
         )?;
 
         let response = response.into_inner();
@@ -985,8 +888,8 @@ impl SyncClient {
                     )),
                 ));
             }
-            let response = retry_grpc_limited!(
-                self,
+            let response = retry_grpc_unified!(
+                self.limits,
                 async {
                     let mut req = tonic::Request::new(ListLibrariesRequest {
                         api_key: String::new(),
@@ -996,7 +899,8 @@ impl SyncClient {
                     add_api_key_metadata(&mut req, &api_key);
                     self.client.list_libraries(req).await
                 },
-                "List libraries"
+                "List libraries",
+                RetryBackoff::Standard
             )?;
             let inner = response.into_inner();
             let count = i32::try_from(inner.libraries.len()).unwrap_or(i32::MAX);
@@ -1030,8 +934,8 @@ impl SyncClient {
         self.ensure_budget()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let name_str = name.to_string();
-        let response = retry_grpc_limited!(
-            self,
+        let response = retry_grpc_unified!(
+            self.limits,
             async {
                 let mut req = tonic::Request::new(CreateLibraryRequest {
                     api_key: String::new(),
@@ -1040,7 +944,8 @@ impl SyncClient {
                 add_api_key_metadata(&mut req, &api_key);
                 self.client.create_library(req).await
             },
-            "Create library"
+            "Create library",
+            RetryBackoff::Standard
         )?;
 
         let response = response.into_inner();
@@ -1062,7 +967,10 @@ impl SyncClient {
     /// Lists all premade libraries available on the server.
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
         let api_key = Zeroizing::new(self.settings.api_key.clone());
-        let response = retry_grpc!(
+        // Premade RPCs historically ignore the automatic-sync deadline and run
+        // unbounded (manual-only path); preserve `None` limits here.
+        let response = retry_grpc_unified!(
+            None::<SyncRunLimits>,
             async {
                 let mut req = tonic::Request::new(ListPremadeLibrariesRequest {
                     api_key: String::new(),
@@ -1070,7 +978,8 @@ impl SyncClient {
                 add_api_key_metadata(&mut req, &api_key);
                 self.client.list_premade_libraries(req).await
             },
-            "List premade libraries"
+            "List premade libraries",
+            RetryBackoff::Standard
         )?;
         let libraries = response.into_inner().libraries;
         if libraries.len() > MAX_PREMADE_LIBRARIES {
@@ -1090,7 +999,9 @@ impl SyncClient {
     pub async fn get_premade_library(&mut self, filename: &str) -> SnipResult<String> {
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let filename_str = filename.to_string();
-        let response = retry_grpc!(
+        // Preserve historical unbounded behavior for premade RPCs.
+        let response = retry_grpc_unified!(
+            None::<SyncRunLimits>,
             async {
                 let mut req = tonic::Request::new(GetPremadeLibraryRequest {
                     api_key: String::new(),
@@ -1099,7 +1010,8 @@ impl SyncClient {
                 add_api_key_metadata(&mut req, &api_key);
                 self.client.get_premade_library(req).await
             },
-            "Get premade library"
+            "Get premade library",
+            RetryBackoff::Standard
         )?;
 
         let response = response.into_inner();
@@ -1130,7 +1042,9 @@ impl SyncClient {
     ) -> SnipResult<Vec<PremadeLibrary>> {
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let query_str = query.to_string();
-        let response = retry_grpc!(
+        // Preserve historical unbounded behavior for premade RPCs.
+        let response = retry_grpc_unified!(
+            None::<SyncRunLimits>,
             async {
                 let mut req = tonic::Request::new(SearchPremadeLibrariesRequest {
                     api_key: String::new(),
@@ -1139,7 +1053,8 @@ impl SyncClient {
                 add_api_key_metadata(&mut req, &api_key);
                 self.client.search_premade_libraries(req).await
             },
-            "Search premade libraries"
+            "Search premade libraries",
+            RetryBackoff::Standard
         )?;
         let libraries = response.into_inner().libraries;
         if libraries.len() > MAX_PREMADE_LIBRARIES {
@@ -1615,6 +1530,253 @@ mod tests {
             crate::sync_failure::FailureClass::from_error(&error),
             crate::sync_failure::FailureClass::Transient
         );
+    }
+
+    #[test]
+    fn retry_jitter_stays_within_documented_bounds() {
+        for _ in 0..1000 {
+            let m = retry_jitter_multiplier();
+            assert!(
+                (0.5..1.5).contains(&m),
+                "jitter multiplier {m} outside [0.5, 1.5)"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_backoff_preserves_historical_progression() {
+        let config = SyncRetryConfig::default();
+        let unavailable = tonic::Status::unavailable("x");
+        let rate_limited = tonic::Status::resource_exhausted("rate limited");
+
+        // Standard: 2x, capped at 5s.
+        assert_eq!(
+            RetryBackoff::Standard.next_delay_ms(100, &unavailable, &config),
+            200
+        );
+        assert_eq!(
+            RetryBackoff::Standard.next_delay_ms(4000, &unavailable, &config),
+            5000
+        );
+        assert_eq!(
+            RetryBackoff::Standard.next_delay_ms(5000, &unavailable, &config),
+            5000
+        );
+        // Standard ignores the rate-limit signal.
+        assert_eq!(
+            RetryBackoff::Standard.next_delay_ms(100, &rate_limited, &config),
+            200
+        );
+
+        // RateLimitAware: 4x up to 120s for ResourceExhausted, else standard.
+        assert_eq!(
+            RetryBackoff::RateLimitAware.next_delay_ms(100, &rate_limited, &config),
+            400
+        );
+        assert_eq!(
+            RetryBackoff::RateLimitAware.next_delay_ms(30_000, &rate_limited, &config),
+            120_000
+        );
+        assert_eq!(
+            RetryBackoff::RateLimitAware.next_delay_ms(50_000, &rate_limited, &config),
+            120_000
+        );
+        assert_eq!(
+            RetryBackoff::RateLimitAware.next_delay_ms(100, &unavailable, &config),
+            200
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_non_retryable_gets_one_attempt() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            None::<SyncRunLimits>,
+            async {
+                probe.fetch_add(1, Ordering::SeqCst);
+                Err::<tonic::Response<()>, tonic::Status>(tonic::Status::invalid_argument(
+                    "bad snippet id",
+                ))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(matches!(result.unwrap_err(), SnipError::Runtime { .. }));
+    }
+
+    #[tokio::test]
+    async fn retry_retryable_reaches_configured_attempt_count() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            None::<SyncRunLimits>,
+            async {
+                probe.fetch_add(1, Ordering::SeqCst);
+                Err::<tonic::Response<()>, tonic::Status>(tonic::Status::unavailable("transient"))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        // Default config: 1 initial + 3 retries = 4 attempts.
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+        assert!(matches!(result.unwrap_err(), SnipError::Runtime { .. }));
+    }
+
+    #[tokio::test]
+    async fn retry_eventual_success_stops_retries() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            None::<SyncRunLimits>,
+            async {
+                let n = probe.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    Err::<tonic::Response<()>, tonic::Status>(tonic::Status::unavailable(
+                        "transient",
+                    ))
+                } else {
+                    Ok(tonic::Response::new(()))
+                }
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_limited_refuses_backoff_when_deadline_short() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let limits = SyncRunLimits {
+            deadline: std::time::Instant::now() + Duration::from_millis(10),
+            request_timeout: Duration::from_secs(30),
+        };
+        // Default initial backoff is 100ms with 0.5-1.5x jitter (50-150ms),
+        // which cannot fit in a 10ms budget, so the retry must be refused
+        // without sleeping.
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            Some(limits),
+            async {
+                probe.fetch_add(1, Ordering::SeqCst);
+                Err::<tonic::Response<()>, tonic::Status>(tonic::Status::unavailable("transient"))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        match result.unwrap_err() {
+            SnipError::SyncFailure { kind, detail } => {
+                assert!(matches!(kind, crate::error::SyncFailureKind::Timeout));
+                let detail = detail.expect("timeout detail");
+                assert!(detail.contains("during retry backoff"), "{detail}");
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_limited_expired_before_request_maps_to_timeout() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let limits = SyncRunLimits {
+            deadline: std::time::Instant::now(),
+            request_timeout: Duration::from_secs(30),
+        };
+        // Give the deadline a moment to pass so `remaining()` is None or zero.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            Some(limits),
+            async {
+                probe.fetch_add(1, Ordering::SeqCst);
+                Err::<tonic::Response<()>, tonic::Status>(tonic::Status::unavailable("transient"))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            result.unwrap_err(),
+            SnipError::SyncFailure {
+                kind: crate::error::SyncFailureKind::Timeout,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn retry_limited_deadline_during_rpc_maps_to_timeout() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let probe = Arc::clone(&attempts);
+        let limits = SyncRunLimits {
+            deadline: std::time::Instant::now() + Duration::from_millis(20),
+            request_timeout: Duration::from_secs(30),
+        };
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            Some(limits),
+            async {
+                probe.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Err::<tonic::Response<()>, tonic::Status>(tonic::Status::unavailable("transient"))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            result.unwrap_err(),
+            SnipError::SyncFailure {
+                kind: crate::error::SyncFailureKind::Timeout,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn retry_unbounded_manual_path_has_no_deadline_wrapper() {
+        let result: SnipResult<tonic::Response<()>> = retry_grpc_unified!(
+            None::<SyncRunLimits>,
+            async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Ok::<tonic::Response<()>, tonic::Status>(tonic::Response::new(()))
+            },
+            "test op",
+            RetryBackoff::Standard
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

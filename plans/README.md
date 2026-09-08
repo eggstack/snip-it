@@ -17,7 +17,7 @@ This directory contains active implementation plans intended for agent handoff.
 
 Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006 restored the ordinary Windows all-target/platform-smoke gate, and Plan 007 completed publication and end-to-end distribution evidence without weakening published-release immutability. That line of work is closed.
 
-## Active consolidation sequence
+## Completed consolidation sequence
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -25,7 +25,9 @@ Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006
 | [009](009-shared-inspection-and-readonly-library-resolution.md) | Shared inspection and read-only library resolution | Complete | 008 |
 | [010](010-module-boundary-and-hotspot-decomposition.md) | Module boundary and hotspot decomposition | Complete | 008–009 |
 | [011](011-selector-search-and-mcp-read-parity.md) | Selector, search, and MCP read parity | Complete | 009–010 |
-| [012](012-sync-retry-policy-deduplication.md) | Sync retry policy deduplication | Ready | 008–011 |
+| [012](012-sync-retry-policy-deduplication.md) | Sync retry policy deduplication | Complete | 008–011 |
+
+Plans 008–012 are complete. That line of work is closed.
 
 This sequence responds to the September 2026 architecture/maintenance review. Its purpose is to remove overlapping policy and improve depth in existing snippet retrieval/search behavior before any further broad feature expansion.
 

@@ -72,7 +72,8 @@ content and the final cursor are durable.
 | `merge_snippets()` | `sync_commands.rs` | Merge algorithm |
 | `encrypt_snippet()` | `sync.rs` | Encrypt snippet for server |
 | `decrypt_snippet()` | `sync.rs` | Decrypt snippet from server |
-| `sync_with_retry()` | `sync.rs` | Retry logic with exponential backoff |
+| `sync_with_retry()` | `sync.rs` | `Sync` RPC via the unified retry macro (`RateLimitAware` backoff) |
+| `retry_grpc_unified!` + `RetryBackoff` | `sync.rs` | Single retry/backoff/deadline policy for all RPCs (no duplicate macros or manual loops) |
 | `build_upload_batches()` | `sync.rs` | Byte-bounded batch splitting using Prost encoded_len |
 | `accumulate_page()` | `sync.rs` | Decrypt and accumulate server snippets from a response page |
 | `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
@@ -100,7 +101,7 @@ Tests in `sync_commands.rs` (unit tests near end of file):
 - `test_proto_snippet_excludes_usage_metadata`
 - `test_merge_preserves_local_output_when_server_wins`
 
-Tests in `sync.rs` (batching and clock skew):
+Tests in `sync.rs` (batching, clock skew, and unified retry):
 - `test_build_upload_batches_empty_list`
 - `test_build_upload_batches_single_small_item`
 - `test_build_upload_batches_fits_one_request`
@@ -114,6 +115,14 @@ Tests in `sync.rs` (batching and clock skew):
 - `test_non_clock_skew_invalid_argument_is_generic`
 - `test_request_too_large_failure_class`
 - `test_clock_skew_failure_class`
+- `retry_non_retryable_gets_one_attempt`
+- `retry_retryable_reaches_configured_attempt_count`
+- `retry_eventual_success_stops_retries`
+- `retry_limited_refuses_backoff_when_deadline_short`
+- `retry_limited_expired_before_request_maps_to_timeout`
+- `retry_limited_deadline_during_rpc_maps_to_timeout`
+- `retry_jitter_stays_within_documented_bounds`
+- `retry_backoff_preserves_historical_progression`
 
 Focused coverage also includes equal-timestamp role swaps, same-device content
 fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
