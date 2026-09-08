@@ -2,7 +2,7 @@
 
 This directory contains active implementation plans intended for agent handoff.
 
-## Active sequence
+## Completed distribution sequence
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -15,14 +15,34 @@ This directory contains active implementation plans intended for agent handoff.
 | [006](006-windows-ci-platform-closure.md) | Windows CI and platform closure | Complete | 001–005 |
 | [007](007-release-publication-and-distribution-closure.md) | Release publication and distribution closure | Complete | 006 |
 
-## Corrective closure
+Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006 restored the ordinary Windows all-target/platform-smoke gate, and Plan 007 completed publication and end-to-end distribution evidence without weakening published-release immutability. That line of work is closed.
 
-Plans 001–005 implemented the intended feature work, Plan 006 restored the ordinary Windows all-target/platform-smoke gate, and Plan 007 completed publication and end-to-end distribution evidence without weakening published-release immutability. The corrective closure is complete; no Ready/Planned corrective plan remains for this line of work.
+## Active consolidation sequence
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [008](008-cli-surface-and-outcome-consolidation.md) | CLI surface and outcome consolidation | Ready | — |
+| [009](009-shared-inspection-and-readonly-library-resolution.md) | Shared inspection and read-only library resolution | Ready | 008 |
+| [010](010-module-boundary-and-hotspot-decomposition.md) | Module boundary and hotspot decomposition | Ready | 008–009 |
+| [011](011-selector-search-and-mcp-read-parity.md) | Selector, search, and MCP read parity | Ready | 009–010 |
+| [012](012-sync-retry-policy-deduplication.md) | Sync retry policy deduplication | Ready | 008–011 |
+
+This sequence responds to the September 2026 architecture/maintenance review. Its purpose is to remove overlapping policy and improve depth in existing snippet retrieval/search behavior before any further broad feature expansion.
+
+The intended order is deliberately deletion/consolidation first:
+
+1. remove duplicate CLI schemas and unnecessary outcome translations;
+2. establish side-effect-free shared library resolution and narrowly shared inspection primitives;
+3. split large hotspot files only along existing responsibility boundaries;
+4. reuse canonical selector/search semantics in CLI and read-only MCP;
+5. deduplicate sync retry policy as a final internal cleanup.
 
 ## Execution policy
 
-Implement plans in dependency order. Each plan is intentionally scoped so a smaller implementation model can complete it without having to redesign the surrounding system. Do not expand this line of work into apt, Homebrew, Winget, container-orchestration, auto-update daemons, or production-grade fleet management.
+Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
 
-The existing `snip-sync` lifecycle primitives (`serve`, `stop`, `restart`, `croncheck`, `/health`) are the baseline. Reuse them rather than introducing a second daemon/process-control architecture.
+For Plans 008–012, preserve `snip-it` as a lightweight terminal tool. Specifically, do not use this consolidation work to introduce additional workspace crates, service/repository abstractions, dependency-injection frameworks, plugin/rule engines, databases/search indexes, generic query languages, background job systems, networked MCP, MCP mutations/execution, retry middleware frameworks, or additional CI/release hardening.
 
-When a plan is completed, update its `Status:` line and this table in the same implementation commit.
+Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
+
+The existing `snip-sync` lifecycle primitives (`serve`, `stop`, `restart`, `croncheck`, `/health`) remain the baseline. Reuse them rather than introducing a second daemon/process-control architecture.
