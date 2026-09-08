@@ -1,6 +1,6 @@
 # Plan 011: Selector, search, and MCP read parity
 
-Status: ready
+Status: complete
 
 Depends on: Plans 009–010
 

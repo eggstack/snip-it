@@ -87,7 +87,7 @@ themes/           50 Halloy TOML theme files
 - `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
 - `config/` — `sync_settings.rs` (sync settings, path resolution, keychain API key), `toml_cache.rs` (pure TOML cache + integrity helpers shared with core)
 - `error.rs` — `SnipError` enum, `SnipResult<T>`, `SyncFailureKind`
-- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`); mutating `resolve_selector` vs read-only `resolve_selector_readonly` (latter uses the canonical library resolver, no migration)
+- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`); canonical `LibraryScope::from_filter_arg`/`from_owned_arg` scope parsing, `SearchFields`/`searchable_text`/`score_fuzzy_matches`/`matches_required_tags` fuzzy contract, `exact_selector`/`resolve_exact_target` exact construction, `sort_matches`/`finish_aggregate` cross-library ordering; mutating `resolve_selector` vs read-only `resolve_selector_readonly` (latter uses the canonical library resolver, no migration)
 - `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
 - `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
 - `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
@@ -173,6 +173,12 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Exact selector construction is canonicalized via `resolve_exact_target()` in `selector.rs`.
 - Clipboard copy side effects (audit log, usage index update) are canonicalized via `copy_to_clipboard()` in `clip_cmd.rs`.
 
+### Selector/search parity (Plan 011)
+- Fuzzy field contract lives in `selector::SearchFields`/`searchable_text`: description + command always, tags by default, output/notes only when explicitly enabled (`list --search-output`, MCP `search_output`). Folders/favorite/sync metadata/credentials are never searchable.
+- `snp get --query`, `snp list --filter`, and MCP `snippets_search` share that helper plus `Relevance` ranking; MCP adds an explicit case-insensitive `tags` filter (`matches_required_tags`) rather than a query language.
+- MCP `snippet_get` supports ID (case-sensitive) / description / command (both case-insensitive, exactly one required) via `resolve_selector_readonly` with structured `not_found`/`ambiguous`. MCP stays read-only, stdio-only, non-executing, noninteractive.
+- Cross-library `all` aggregation collects per-library candidates with an `All`-policy collector then applies the caller's policy in `finish_aggregate`, so a `Unique` multi-match inside one library is not dropped.
+
 ### Selection & exit codes
 - `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CliOutcome` (stable exit codes)
 - `ProcessResult` is the per-snippet loop control (`Cancel`/`Continue`/`Done`/`Failed`) inside `run_snippet_selection`; not an exit-code layer
@@ -244,7 +250,7 @@ Remaining integration targets (`integration.rs`, the `auto_sync_*` suites,
 `scale.rs`, `security.rs`, `schema.rs`, `restore_*.rs`, `execution_outcomes.rs`,
 `mutual_exclusion.rs`, `readonly_no_recovery.rs`, `readonly_library_resolution.rs`,
 `recovery_integration.rs`,
-`selector_integration.rs`, `snip_sync_lifetime.rs`, `canary_nonexecution.rs`,
+`selector_integration.rs`, `selector_search_parity.rs`, `snip_sync_lifetime.rs`, `canary_nonexecution.rs`,
 `edit_mutation_notify.rs`, `backup_snapshot_concurrency.rs`,
 `recording_telemetry.rs`, `release4_regression.rs`, `output_contracts.rs`,
 `identity_contract.rs`, `persistence_unit.rs`, `manifest_contracts.rs`) run

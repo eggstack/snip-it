@@ -1,8 +1,17 @@
 //! Read-only MCP tool implementations.
+//!
+//! Thin JSON/protocol adapters around the canonical core helpers in
+//! [`crate::selector`]. Search text construction, tag filtering, exact-match
+//! semantics, and cross-library ordering all reuse the selector layer so MCP
+//! cannot drift from `snp get` / `snp list`. No execution, no mutation,
+//! no interactive prompting.
 
 use crate::error::{SnipError, SnipResult};
 use crate::library::{ResolvedLibrarySource, Snippet, readonly_library_sources};
-use crate::selector::{ResolutionPolicy, SelectionResult, SnippetSelector};
+use crate::selector::{
+    ResolutionPolicy, SearchFields, SelectionResult, SnippetSelector, matches_required_tags,
+    resolve_selector_readonly, searchable_text,
+};
 use crate::sort::{SnippetSort, SortOptions, rank_snippets};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -32,6 +41,13 @@ struct SearchArguments {
     query: String,
     library: Option<String>,
     limit: Option<usize>,
+    /// Explicit tag filter: when present, only snippets carrying every listed
+    /// tag (case-insensitive exact equality) are searched. More predictable
+    /// than relying on fuzzy tag-text matching alone.
+    tags: Option<Vec<String>>,
+    /// Include bounded output/notes text in fuzzy matching (same opt-in
+    /// contract as `snp list --search-output`).
+    search_output: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +55,7 @@ struct SearchArguments {
 struct GetArguments {
     id: Option<String>,
     description: Option<String>,
+    command: Option<String>,
     library: Option<String>,
 }
 
@@ -59,6 +76,11 @@ pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
     let args = parse_arguments::<SearchArguments>(arguments)?;
     let limit = bounded_limit(args.limit)?;
     let snippets = load_snippets(args.library.as_deref())?;
+    let required_tags = args.tags.unwrap_or_default();
+    let fields = SearchFields {
+        include_tags: true,
+        include_output: args.search_output.unwrap_or(false),
+    };
 
     let matcher = SkimMatcherV2::default();
     let mut source = Vec::new();
@@ -67,12 +89,18 @@ pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
         if entry.snippet.deleted {
             continue;
         }
+        if !matches_required_tags(&entry.snippet, &required_tags) {
+            continue;
+        }
         let index = source.len();
         if args.query.is_empty() {
             source.push(entry);
             continue;
         }
-        let display = format!("{} {}", entry.snippet.description, entry.snippet.command);
+        let display = searchable_text(&entry.snippet, fields);
+        if display.is_empty() {
+            continue;
+        }
         if let Some(score) = matcher.fuzzy_match(&display, &args.query) {
             scores.insert(index, score);
             source.push(entry);
@@ -101,50 +129,67 @@ pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
 
 pub fn get(arguments: Option<&Value>) -> SnipResult<Value> {
     let args = parse_arguments::<GetArguments>(arguments)?;
-    let has_id = args.id.is_some();
-    let has_description = args.description.is_some();
-    if has_id == has_description {
+    let provided = [
+        args.id.is_some(),
+        args.description.is_some(),
+        args.command.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if provided != 1 {
         return Err(invalid_params(
-            "Provide exactly one of 'id' or 'description'",
+            "Provide exactly one of 'id', 'description', or 'command'",
         ));
     }
 
-    let sources = library_sources(args.library.as_deref())?;
-    let mut matches = Vec::new();
-    for source in sources {
-        let snippets = crate::library::load_library(&source.path)?;
-        let mut selector = SnippetSelector::new(ResolutionPolicy::All);
-        if let Some(id) = &args.id {
-            selector = selector.with_id(id.clone());
-        }
-        if let Some(description) = &args.description {
-            selector = selector.with_description_exact(description.clone());
-        }
-        match selector.resolve(&snippets, &source.path, &source.name, &source.library_id)? {
-            SelectionResult::One(m) => matches.push(LoadedSnippet {
-                snippet: m.snippet,
-                library: m.library_name,
-            }),
-            SelectionResult::Many(ms) => matches.extend(ms.into_iter().map(|m| LoadedSnippet {
-                snippet: m.snippet,
-                library: m.library_name,
-            })),
-            SelectionResult::NotFound | SelectionResult::Ambiguous(_) => {}
-        }
+    let mut selector = SnippetSelector::new(ResolutionPolicy::All).with_library(
+        crate::selector::LibraryScope::from_filter_arg(args.library.as_deref()),
+    );
+    if let Some(id) = &args.id {
+        selector = selector.with_id(id.clone());
     }
-
-    matches.sort_by(|a, b| {
-        a.library
-            .to_lowercase()
-            .cmp(&b.library.to_lowercase())
-            .then_with(|| {
-                a.snippet
-                    .description
-                    .to_lowercase()
-                    .cmp(&b.snippet.description.to_lowercase())
+    if let Some(description) = &args.description {
+        selector = selector.with_description_exact(description.clone());
+    }
+    if let Some(command) = &args.command {
+        selector = selector.with_command_exact(command.clone());
+    }
+    // Canonical exact-match + cross-library ordering shared with `snp get`.
+    // `All` policy yields `Many` for ambiguity so MCP can report structured
+    // `ambiguous` with match identities; never prompts or expands variables.
+    let result = resolve_selector_readonly(&selector).map_err(|e| match e {
+        SnipError::Runtime { message, .. } if message == "Library not found" => {
+            library_not_found(args.library.as_deref().unwrap_or_default())
+        }
+        other => other,
+    })?;
+    let matches: Vec<LoadedSnippet> = match result {
+        SelectionResult::One(m) => vec![LoadedSnippet {
+            snippet: m.snippet,
+            library: m.library_name,
+        }],
+        SelectionResult::Many(ms) => ms
+            .into_iter()
+            .map(|m| LoadedSnippet {
+                snippet: m.snippet,
+                library: m.library_name,
             })
-            .then_with(|| a.snippet.id.cmp(&b.snippet.id))
-    });
+            .collect(),
+        SelectionResult::NotFound => Vec::new(),
+        SelectionResult::Ambiguous(identities) => identities
+            .into_iter()
+            .map(|identity| LoadedSnippet {
+                snippet: Snippet {
+                    id: identity.id,
+                    description: identity.description,
+                    command: identity.command,
+                    ..Default::default()
+                },
+                library: identity.library_name,
+            })
+            .collect(),
+    };
 
     match matches.as_slice() {
         [] => Ok(json!({

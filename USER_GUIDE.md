@@ -176,9 +176,11 @@ snp mcp instructions opencode
 snp mcp instructions zed
 ```
 
-`snippets_list` enumerates metadata, `snippets_search` uses snip-it's existing
-fuzzy ranking, and `snippet_get` resolves an exact ID or a unique exact
-description. Each result includes the command as text for the agent to use
+`snippets_list` enumerates metadata, `snippets_search` uses snip-it's canonical
+fuzzy ranking over description, command, and tags (with opt-in output/notes
+matching and an explicit `tags` filter), and `snippet_get` resolves an exact
+ID, unique exact description, or unique exact command — the same identity
+fields as `snp get`. Each result includes the command as text for the agent to use
 under its own execution and approval policy. `snp mcp install <client>` only
 uses official noninteractive client commands where their registration
 contract is stable; otherwise it prints a schema-specific configuration
@@ -658,10 +660,19 @@ snp edit --clear-output --filter "ssh"
 snp list --search-output --filter "sample"
 ```
 
-By default, fuzzy search matches description and command only. The
-`--search-output` flag includes the output field in fuzzy matching
-(bounded to 512 characters for scoring). Output is always included
+Fuzzy search matches description, command, and tags. The
+`--search-output` flag additionally includes the output field in fuzzy
+matching (bounded to 512 characters for scoring). Output is always included
 in JSON and CSV export regardless of this flag.
+
+#### Tag-aware search
+
+Tags participate in fuzzy matching alongside description and command, so
+`snp list --filter <tag-text>` and `snp get --query <tag-text>` can find
+snippets by their organizational metadata. For a predictable exact-tag
+restriction, MCP `snippets_search` also accepts an explicit `tags` array
+(every listed tag must be present, case-insensitive); the CLI equivalent is
+to refine the fuzzy filter.
 
 ## Variables
 

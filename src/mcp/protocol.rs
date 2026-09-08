@@ -255,13 +255,15 @@ fn tool_list() -> Value {
             },
             {
                 "name": "snippets_search",
-                "description": "Search snippet descriptions and command text using snip-it's deterministic fuzzy ranking. Read-only; commands are never executed.",
+                "description": "Search snippets using snip-it's deterministic fuzzy ranking over description, command, and tags (plus output/notes when search_output is true). Read-only; commands are never executed.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "Required fuzzy search query." },
                         "library": { "type": "string", "description": "Optional library name; use 'all' for every registered library." },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
+                        "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional explicit tag filter; only snippets carrying every listed tag (case-insensitive) are searched." },
+                        "search_output": { "type": "boolean", "description": "Include bounded output/notes text in matching (same opt-in contract as 'snp list --search-output').", "default": false },
                     },
                     "required": ["query"],
                     "additionalProperties": false,
@@ -269,17 +271,19 @@ fn tool_list() -> Value {
             },
             {
                 "name": "snippet_get",
-                "description": "Get one snippet by exact ID or a unique exact description. Read-only; the command is returned as text and never executed.",
+                "description": "Get one snippet by exact ID, unique exact description (case-insensitive), or unique exact command (case-insensitive). Read-only; the command is returned as text and never executed.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "id": { "type": "string", "description": "Exact snippet ID." },
+                        "id": { "type": "string", "description": "Exact snippet ID (case-sensitive)." },
                         "description": { "type": "string", "description": "Exact description, case-insensitive; must be unique in the selected scope." },
+                        "command": { "type": "string", "description": "Exact command text, case-insensitive; must be unique in the selected scope." },
                         "library": { "type": "string", "description": "Optional library name; use 'all' for every registered library." },
                     },
                     "oneOf": [
                         { "required": ["id"] },
                         { "required": ["description"] },
+                        { "required": ["command"] },
                     ],
                     "additionalProperties": false,
                 },

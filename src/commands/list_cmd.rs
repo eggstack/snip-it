@@ -44,8 +44,10 @@ pub enum ListFormat {
 
 /// Lists snippets from the library, optionally filtered and in a given format.
 ///
-/// When `search_output` is true, the fuzzy filter also matches against
-/// the snippet output/notes field (bounded to 512 chars for scoring).
+/// Fuzzy matching uses the canonical [`crate::selector::searchable_text`]
+/// contract: description, command, and tags always participate; the snippet
+/// output/notes field participates only when `search_output` is true
+/// (bounded to 512 chars for scoring via `OutputPresentation::for_scoring`).
 pub fn run(
     filter: Option<String>,
     config: Option<PathBuf>,
@@ -71,24 +73,9 @@ pub fn run(
     };
 
     let matcher = SkimMatcherV2::default();
-
-    let output_summaries: std::collections::HashMap<usize, String> = if search_output {
-        snippets
-            .snippets
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !s.deleted)
-            .filter_map(|(idx, s)| {
-                let summary = crate::output::OutputPresentation::new(&s.output).for_scoring();
-                if summary.is_empty() {
-                    None
-                } else {
-                    Some((idx, summary))
-                }
-            })
-            .collect()
-    } else {
-        std::collections::HashMap::new()
+    let fields = crate::selector::SearchFields {
+        include_tags: true,
+        include_output: search_output,
     };
 
     let mut fuzzy_scores = std::collections::HashMap::new();
@@ -99,16 +86,13 @@ pub fn run(
             .enumerate()
             .filter(|(_, s)| !s.deleted)
             .filter(|(idx, s)| {
-                let display = if search_output {
-                    match output_summaries.get(idx) {
-                        Some(output_summary) => {
-                            format!("{} {} {}", s.description, s.command, output_summary)
-                        }
-                        None => format!("{} {}", s.description, s.command),
-                    }
-                } else {
-                    format!("{} {}", s.description, s.command)
-                };
+                let display = crate::selector::searchable_text(s, fields);
+                if display.is_empty() {
+                    // Snippets with no searchable text (empty description,
+                    // command, tags, and — when enabled — output) can never
+                    // fuzzy-match a non-empty filter.
+                    return false;
+                }
                 if let Some(score) = matcher.fuzzy_match(&display, filter_str) {
                     fuzzy_scores.insert(*idx, score);
                     true

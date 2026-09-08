@@ -101,14 +101,70 @@ pub enum LibraryScope {
 }
 ```
 
+`LibraryScope::from_filter_arg()` / `from_owned_arg()` is the single
+definition of `--library` / MCP `library` parsing: `None` → `Primary`,
+`"all"` → `AllLibraries`, anything else → `Named`. `snp get`, exact-mode
+`run`/`clip`/`edit` (via `exact_selector()` / `resolve_exact_target()`),
+and MCP share it, so `"all"` handling cannot drift.
+
+## Searchable-field contract (Plan 011)
+
+```rust
+pub struct SearchFields {
+    pub include_tags: bool,
+    pub include_output: bool,
+}
+
+pub fn searchable_text(snippet: &Snippet, fields: SearchFields) -> String;
+pub fn score_fuzzy_matches(snippets: &[Snippet], query: &str, fields: SearchFields)
+    -> (Vec<usize>, HashMap<usize, i64>);
+pub fn matches_required_tags(snippet: &Snippet, required: &[String]) -> bool;
+```
+
+- `description` and `command` are always searched;
+- `tags` (space-joined) are searched when `include_tags` is set — the default
+  fuzzy contract (`SearchFields::fuzzy_default()`) used by `get --query`,
+  `list --filter`, and MCP `snippets_search`;
+- `output`/notes participate only when `include_output` is set
+  (`list --search-output`, MCP `search_output: true`), bounded through
+  `OutputPresentation::for_scoring()` (512 chars);
+- `folders`, `favorite`, sync metadata, credentials, and keychain data are
+  never searchable.
+
+`score_fuzzy_matches()` centralizes deleted filtering and `SkimMatcherV2`
+scoring (empty query matches every live snippet); callers rank with the
+existing `rank_snippets()` `Relevance` mode. `matches_required_tags()` backs
+MCP's explicit `tags` filter (every listed tag present, case-insensitive).
+
+## Exact-target constructor and aggregate
+
+```rust
+pub fn exact_selector(library: Option<String>, id: Option<String>,
+    description_exact: Option<String>, command_exact: Option<String>) -> SnippetSelector;
+pub fn sort_matches(matches: &mut [SnippetMatch]);
+pub fn finish_aggregate(matches: Vec<SnippetMatch>, resolution: &ResolutionPolicy)
+    -> SnipResult<SelectionResult>;
+```
+
+`exact_selector()` is the canonical builder for `run`/`clip`/`edit` exact
+paths and `snp get` exact fields (ID case-sensitive; description/command
+case-insensitive). `finish_aggregate()` is the single definition of
+cross-library ordering (library → description → ID) and policy application
+(`All` → `Many`, `First` → first, `Unique` → `Ambiguous`). Both
+`resolve_selector()` and `resolve_selector_readonly()` collect per-library
+candidates with an `All`-policy collector so a multi-match inside one library
+still contributes to the cross-library verdict (previously a `Unique`
+per-library `Ambiguous` was dropped from `all`-scope results).
+
 ## Resolution Priority
 
 Selectors are applied in strict priority order:
 
-1. **ID** (exact UUID match) — highest priority, skips all other fields
+1. **ID** (exact case-sensitive UUID match) — highest priority, skips all other fields
 2. **Exact description** (case-insensitive string comparison)
 3. **Exact command** (case-insensitive string comparison)
-4. **Query** (fuzzy match using `skim` fuzzy matcher, ranked by relevance)
+4. **Query** (fuzzy over canonical `searchable_text` with
+   `SearchFields::fuzzy_default()` — description, command, tags — ranked by relevance)
 
 Only the first applicable selector is evaluated. If `id` is set, description,
 command, and query are ignored.
@@ -180,9 +236,20 @@ single-file checkout is read in place without migration or file creation.
 ### `run --id`, `clip --id`, `edit --id`
 
 These commands check for exact selector flags before entering the TUI selection
-loop. If any exact selector is provided, they build a `SnippetSelector` with
-`ResolutionPolicy::Unique`, resolve it, and proceed directly to the action
-without opening the TUI.
+loop. If any exact selector is provided, they build the selector via the
+canonical `exact_selector()` / `resolve_exact_target()` path
+(`ResolutionPolicy::Unique`, shared `"all"` handling) and proceed directly
+to the action without opening the TUI. `snp get` exact fields reuse the same
+constructor; MCP `snippet_get` (ID / description / command) resolves through
+`resolve_selector_readonly()` with `All` policy mapped to structured
+`not_found` / `ambiguous` results.
+
+### MCP read parity (Plan 011)
+
+MCP is a thin adapter over the same helpers: `snippets_search` uses
+`searchable_text()` + `matches_required_tags()` + `Relevance` ranking, and
+`snippet_get` uses `resolve_selector_readonly()`. No execution, no mutation,
+no interactive variable expansion. See `docs/MCP.md` for the tool schemas.
 
 ## Tests
 

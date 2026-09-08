@@ -55,7 +55,7 @@ dispatch, and outcome mapping. Shared shell spellings live in
 |---------|-------|--------|-------|-------------|
 | `version` | `v` | — | No | Print version |
 | `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor |
-| `list` | `l` | `list_cmd` | No | List snippets (fuzzy filter; `--search-output` includes output in match) |
+| `list` | `l` | `list_cmd` | No | List snippets (fuzzy filter over description/command/tags; `--search-output` includes output in match) |
 | `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
 | `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |

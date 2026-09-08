@@ -79,7 +79,8 @@ The `--search-output` flag includes the output/notes field in fuzzy search match
 
 ### Behavior
 
-- Default (flag absent): fuzzy filter matches only `description` and `command`.
+- Default (flag absent): fuzzy filter matches `description`, `command`, and
+  `tags` via the canonical `selector::searchable_text()` contract.
 - With `--search-output`: fuzzy filter also matches against `output` (bounded to 512 chars for scoring).
 - Output content is sanitized for terminal display via `OutputPresentation::for_scoring()`.
 

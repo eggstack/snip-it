@@ -7,9 +7,7 @@
 
 use crate::error::{SnipError, SnipResult};
 use crate::outcome::CliOutcome;
-use crate::selector::{
-    LibraryScope, ResolutionPolicy, SelectionResult, SnippetSelector, resolve_selector_readonly,
-};
+use crate::selector::{ResolutionPolicy, SelectionResult, resolve_selector_readonly};
 use crate::utils::variables::{VariableAssignments, parse_variables, strip_escape_sequences};
 use serde::Serialize;
 
@@ -145,15 +143,14 @@ pub fn run(
         ));
     }
 
-    // Build selector
-    let lib_scope = match library {
-        Some(ref name) if name == "all" => LibraryScope::AllLibraries,
-        Some(name) => LibraryScope::Named(name),
-        None => LibraryScope::Primary,
-    };
-
-    let mut selector = SnippetSelector::new(resolution).with_library(lib_scope);
-
+    // Build selector via the canonical exact-target constructor so library
+    // `"all"` handling, ID case-sensitivity, and description/command
+    // case-insensitivity cannot drift from run/clip/edit/MCP.
+    let mut selector = crate::selector::exact_selector(library, None, None, None);
+    // `exact_selector` starts Unique; apply the requested resolution policy.
+    selector.resolution = resolution;
+    // Re-apply targeting fields (exact_selector took Nones above to keep the
+    // library-scope mapping in one place).
     if let Some(id) = id {
         selector = selector.with_id(id);
     }

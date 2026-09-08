@@ -96,7 +96,8 @@ snp mcp instructions zed
 
 Use `snp mcp install <client>` for official noninteractive registration where
 the client provides it. See [docs/MCP.md](docs/MCP.md) for the tool contract
-and client-specific setup details.
+(search covers description/command/tags with opt-in output matching; `get`
+supports exact ID/description/command) and client-specific setup details.
 
 ### From source
 

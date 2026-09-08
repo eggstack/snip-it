@@ -15,12 +15,19 @@ The initial tool set is intentionally read-only and contains exactly:
 
 - `snippets_list`: list snippets from the primary library, a named library, or
   `all`. Optional `limit` is bounded to 1,000.
-- `snippets_search`: fuzzy-search descriptions and command text using the
-  same `SkimMatcherV2` and relevance ranking used by deterministic selection.
-  `query` is required.
-- `snippet_get`: retrieve one snippet by exact `id`, or by a unique exact
-  `description` (case-insensitive). Ambiguous and missing matches are returned
-  as structured tool errors.
+- `snippets_search`: fuzzy-search using the canonical selector search
+  contract (`description`, `command`, and `tags` via `SkimMatcherV2` and
+  CLI-consistent relevance ranking). `query` is required. Optional `tags`
+  restricts results to snippets carrying every listed tag
+  (case-insensitive exact equality — more predictable than relying on fuzzy
+  tag-text matching alone). Optional `search_output: true` additionally
+  matches bounded output/notes text, the same opt-in contract as
+  `snp list --search-output`. Optional `limit` is bounded to 1,000.
+- `snippet_get`: retrieve one snippet by exact `id` (case-sensitive), unique
+  exact `description` (case-insensitive), or unique exact `command`
+  (case-insensitive) — the same identity fields and ambiguity semantics as
+  `snp get`. Exactly one of the three must be supplied. Ambiguous and missing
+  matches are returned as structured tool errors.
 
 Results include `id`, `library`, `description`, `command`, `tags`, `folders`,
 and `favorite`. Output/notes, sync metadata, credentials, and keychain data
