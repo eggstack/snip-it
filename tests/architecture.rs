@@ -9,8 +9,11 @@ use std::path::Path;
 
 /// Modules that belong to the **Domain/Core** layer.
 /// These must not depend on application, CLI, sync-client, or platform modules.
+///
+/// Entries may be files (`sort.rs`) or module directories (`library/` for
+/// `src/library/mod.rs` + siblings after Plan 010).
 const CORE_MODULES: &[&str] = &[
-    "library.rs",
+    "library/",
     "sort.rs",
     "output.rs",
     "usage.rs",
@@ -19,6 +22,10 @@ const CORE_MODULES: &[&str] = &[
 
 /// Modules that belong to the **Sync-Client** layer.
 /// These must not depend on application modules (commands, ui, logging, etc.).
+///
+/// Note: `config/` is intentionally not listed. It carries a documented
+/// cross-layer call (`save_sync_settings` → `crate::clipboard::...`) that
+/// predates Plan 010; adding it here would fail on that known exception.
 const SYNC_CLIENT_MODULES: &[&str] = &["sync.rs", "sync_commands.rs", "encryption.rs"];
 
 /// Modules that are forbidden imports from the Core layer.
@@ -51,6 +58,23 @@ fn src_dir() -> std::path::PathBuf {
 
 fn read_source(module_name: &str) -> String {
     let path = src_dir().join(module_name);
+    if path.is_dir() {
+        let mut combined = String::new();
+        let mut entries: Vec<_> = fs::read_dir(&path)
+            .unwrap_or_else(|e| panic!("Failed to list {}: {e}", path.display()))
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "rs"))
+            .collect();
+        entries.sort();
+        for entry in entries {
+            let content = fs::read_to_string(&entry)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {e}", entry.display()));
+            combined.push_str(&format!("\n// ── {} ──\n", entry.display()));
+            combined.push_str(&content);
+        }
+        return combined;
+    }
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e))
 }
 

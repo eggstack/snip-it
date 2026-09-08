@@ -23,7 +23,7 @@ Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006
 | --- | --- | --- | --- |
 | [008](008-cli-surface-and-outcome-consolidation.md) | CLI surface and outcome consolidation | Complete | — |
 | [009](009-shared-inspection-and-readonly-library-resolution.md) | Shared inspection and read-only library resolution | Complete | 008 |
-| [010](010-module-boundary-and-hotspot-decomposition.md) | Module boundary and hotspot decomposition | Ready | 008–009 |
+| [010](010-module-boundary-and-hotspot-decomposition.md) | Module boundary and hotspot decomposition | Complete | 008–009 |
 | [011](011-selector-search-and-mcp-read-parity.md) | Selector, search, and MCP read parity | Ready | 009–010 |
 | [012](012-sync-retry-policy-deduplication.md) | Sync retry policy deduplication | Ready | 008–011 |
 

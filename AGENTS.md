@@ -75,17 +75,17 @@ themes/           50 Halloy TOML theme files
 
 ### Key Source Modules (`src/`)
 
-- `main.rs` — CLI entry point, clap dispatch
+- `main.rs` — Top-level CLI composition, runtime/signal/log setup, dispatch, outcome mapping (per-command `Args` live beside their handlers)
 - `lib.rs` — Library crate (exports for integration tests)
-- `commands/` — one module per command + shared helpers in `mod.rs`
+- `commands/` — one module per command + shared helpers in `mod.rs`; `doctor_report` (rendering) and `backup_archive` (manifest/snapshot primitives) are the only split-offs; every command with CLI schema owns one canonical `*Args` struct beside its handler
 - `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
 - `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
 - `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
-- `library.rs` — Snippet/library data structures and TOML persistence; canonical read-only `ResolvedLibrarySource` resolution (`resolve_readonly_sources`/`readonly_library_sources`/`library_not_found`) and shared index inspection (`inspect_library_index`/`PrimaryState`/`find_orphaned_ids`)
+- `library/` — `model.rs` (data types, read-only resolution types, pure helpers), `persistence.rs` (load/save, ID normalization, backups), `manager.rs` (`LibraryManager`, read-only resolver); `mod.rs` re-exports preserve `crate::library::*`; canonical read-only `ResolvedLibrarySource` resolution (`resolve_readonly_sources`/`readonly_library_sources`/`library_not_found`) and shared index inspection (`inspect_library_index`/`PrimaryState`/`find_orphaned_ids`)
 - `sync.rs` — gRPC client for snip-sync server
 - `sync_commands.rs` — Sync orchestration and merge logic
 - `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
-- `config.rs` — Sync settings, path resolution, keychain API key
+- `config/` — `sync_settings.rs` (sync settings, path resolution, keychain API key), `toml_cache.rs` (pure TOML cache + integrity helpers shared with core)
 - `error.rs` — `SnipError` enum, `SnipResult<T>`, `SyncFailureKind`
 - `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`); mutating `resolve_selector` vs read-only `resolve_selector_readonly` (latter uses the canonical library resolver, no migration)
 - `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
@@ -185,9 +185,14 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - `snp data` is a compatibility alias layer, not a second schema
 
 ### Shared inspection (Plan 009)
-- Read-only resolution lives in `library.rs` (`ResolvedLibrarySource`); MCP `tools.rs` and `snp get` delegate to it — no duplicate legacy/primary/path policy
+- Read-only resolution lives in `library::model`/`manager` (re-exported at `library::`)
 - `snp get` uses `resolve_selector_readonly`; `validate` uses `LibraryManager::new()` (never `init_library_manager`); `doctor`/`validate`/`status`/`repair` share `inspect_library_index`/`find_orphaned_ids` but render into their own diagnostic types
 - Shared inspection is side-effect free: no `ensure_library_mode`, no migration, no file creation; no generic finding DSL or plugin framework
+
+### Module boundaries (Plan 010)
+- `src/library/` (`model`/`persistence`/`manager`), `src/config/` (`sync_settings`/`toml_cache`), `commands::{doctor_report,backup_archive}` — splits follow existing responsibility boundaries only; no new crates, service traits, or DI
+- `doctor_cmd::DiagnosticReportFormat` and backup manifest types are re-exported from their command modules so CLI/test import paths are unchanged
+- `tests/architecture.rs` scans module directories (`library/`) as well as files
 
 ## Keyring
 

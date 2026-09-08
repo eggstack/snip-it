@@ -2,6 +2,23 @@ use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use std::path::PathBuf;
 
+/// Canonical Clap arguments for `snp search`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct SearchArgs {
+    #[arg(short, long)]
+    pub filter: Option<String>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub sync: bool,
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Sort mode for snippet ordering
+    #[arg(long, value_enum, default_value_t = crate::sort::SnippetSort::Relevance)]
+    pub sort: crate::sort::SnippetSort,
+    /// Show favorites before other snippets
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub favorites_first: bool,
+}
+
 /// Opens the TUI snippet selector and displays the selected snippet's details.
 pub fn run(
     filter: Option<String>,

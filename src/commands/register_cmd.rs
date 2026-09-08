@@ -1,6 +1,15 @@
 use crate::config::{DEFAULT_SERVER_URL, SyncSettings, load_sync_settings, save_sync_settings};
 use crate::error::SnipResult;
 
+/// Canonical Clap arguments for `snp register`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct RegisterArgs {
+    #[arg(long, default_value = crate::config::DEFAULT_SERVER_URL)]
+    pub server: String,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub force: bool,
+}
+
 /// Registers this device with a sync server and saves the API key to the OS keychain.
 pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     if !force

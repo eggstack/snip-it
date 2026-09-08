@@ -4,6 +4,32 @@ use crate::error::SnipResult;
 use crate::library::Snippet;
 use std::path::PathBuf;
 
+/// Canonical Clap arguments for `snp clip`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct ClipArgs {
+    #[arg(short, long)]
+    pub filter: Option<String>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub sync: bool,
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Sort mode for snippet ordering
+    #[arg(long, value_enum, default_value_t = crate::sort::SnippetSort::Relevance)]
+    pub sort: crate::sort::SnippetSort,
+    /// Show favorites before other snippets
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub favorites_first: bool,
+    /// Match by exact snippet UUID (bypasses TUI)
+    #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
+    pub id: Option<String>,
+    /// Match by exact description (bypasses TUI)
+    #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
+    pub description_exact: Option<String>,
+    /// Match by exact command text (bypasses TUI)
+    #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
+    pub command_exact: Option<String>,
+}
+
 /// Copy the expanded command of a snippet to the clipboard, record the
 /// audit log entry, and update the usage index.
 ///

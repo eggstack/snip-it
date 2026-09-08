@@ -6,7 +6,9 @@
 
 `backup` creates a portable, secret-free backup snapshot of snippet libraries, metadata, and usage data. Sync credentials and API keys are excluded.
 
-**File**: `src/commands/backup_cmd.rs`
+**Files**: `src/commands/backup_cmd.rs` (`BackupArgs`, `run` orchestration),
+`src/commands/backup_archive.rs` (manifest types, path validation, snapshot
+reading, atomic staging; re-exported via `backup_cmd` for compat)
 
 ## Backup Format
 

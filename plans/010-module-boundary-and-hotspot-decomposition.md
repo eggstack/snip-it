@@ -1,6 +1,6 @@
 # Plan 010: Module boundary and hotspot decomposition
 
-Status: ready
+Status: complete
 
 Depends on: Plans 008–009
 

@@ -1,3 +1,4 @@
+use super::doctor_report::emit_human_report;
 use crate::commands::pet_analysis::{
     analyze_entry, detect_duplicates, detect_unknown_fields, parse_pet_toml, read_source_file,
 };
@@ -12,13 +13,41 @@ use crate::status_snapshot::{self, StatusDiagnostic};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Output format for the doctor report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Default)]
-pub enum DiagnosticReportFormat {
-    #[default]
-    Human,
-    Json,
+/// Canonical Clap arguments for `snp doctor`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct DoctorArgs {
+    /// Path to a pet TOML snippet file to analyze
+    #[arg(
+            long = "pet-file",
+            value_name = "PATH",
+            conflicts_with_all = ["compatibility", "library", "sync"]
+        )]
+    pub pet_file: Option<PathBuf>,
+    /// Audit the installed snp environment
+    #[arg(long, conflicts_with_all = ["pet_file", "library"])]
+    pub compatibility: bool,
+    /// Run focused sync diagnostics using the canonical status snapshot
+    #[arg(long, conflicts_with_all = ["pet_file", "library"])]
+    pub sync: bool,
+    /// Check shell init output syntax for a specific shell (bash, zsh, fish)
+    #[arg(long, value_enum)]
+    pub check_shell: Option<super::shell_cmd::ShellIntegration>,
+    /// Check a specific library file for compatibility
+    #[arg(
+            long,
+            value_name = "NAME_OR_PATH",
+            conflicts_with_all = ["pet_file", "compatibility", "sync"]
+        )]
+    pub library: Option<String>,
+    /// Treat warnings as errors
+    #[arg(long)]
+    pub strict: bool,
+    /// Report output format
+    #[arg(long, value_enum, default_value = "human")]
+    pub report: DiagnosticReportFormat,
 }
+
+pub use super::doctor_report::DiagnosticReportFormat;
 
 /// Designated warnings that `--strict` elevates to errors in pet-file analysis.
 const STRICT_WARNING_CODES: &[&str] = &[
@@ -1012,115 +1041,6 @@ command = "echo ok"
     report.total_entries = 0;
     apply_strict_elevation(&mut report);
     Ok(report)
-}
-
-/// Emit the report in human-readable format to stderr.
-fn emit_human_report(report: &DoctorReport) {
-    eprintln!();
-    eprintln!("Doctor Report");
-    eprintln!("=============");
-    if let Some(ref source) = report.source {
-        eprintln!("Source: {}", source);
-    }
-    eprintln!("Version: {}", report.tool_version);
-    eprintln!("Entries: {}", report.total_entries);
-
-    let (info_count, warn_count, error_count) = diagnostic_counts(&report.diagnostics);
-
-    if report.has_toml_error {
-        eprintln!();
-        eprintln!("TOML Error:");
-        if let Some(ref detail) = report.toml_error_detail {
-            eprintln!("  {detail}");
-        }
-    }
-
-    if error_count > 0 {
-        eprintln!();
-        eprintln!("Errors ({error_count}):");
-        for diag in &report.diagnostics {
-            if diag.severity == DiagnosticSeverity::Error {
-                eprintln!(
-                    "  [e] [{}] {}: {}",
-                    diag.entry_index.map_or("-".to_string(), |i| i.to_string()),
-                    diag.field.as_deref().unwrap_or("-"),
-                    diag.message
-                );
-                if let Some(ref suggestion) = diag.suggestion {
-                    eprintln!("        suggestion: {suggestion}");
-                }
-            }
-        }
-    }
-
-    if warn_count > 0 {
-        eprintln!();
-        eprintln!("Warnings ({warn_count}):");
-        for diag in &report.diagnostics {
-            if diag.severity == DiagnosticSeverity::Warning {
-                eprintln!(
-                    "  [w] [{}] {}: {}",
-                    diag.entry_index.map_or("-".to_string(), |i| i.to_string()),
-                    diag.field.as_deref().unwrap_or("-"),
-                    diag.message
-                );
-                if let Some(ref suggestion) = diag.suggestion {
-                    eprintln!("        suggestion: {suggestion}");
-                }
-            }
-        }
-    }
-
-    if info_count > 0 {
-        eprintln!();
-        eprintln!("Info ({info_count}):");
-        for diag in &report.diagnostics {
-            if diag.severity == DiagnosticSeverity::Info {
-                eprintln!(
-                    "  [i] [{}] {}: {}",
-                    diag.entry_index.map_or("-".to_string(), |i| i.to_string()),
-                    diag.field.as_deref().unwrap_or("-"),
-                    diag.message
-                );
-            }
-        }
-    }
-
-    if !report.duplicates.is_empty() {
-        eprintln!();
-        eprintln!("Duplicates ({}):", report.duplicates.len());
-        for dup in &report.duplicates {
-            eprintln!(
-                "  [{}] {} — {}",
-                dup.source_index, dup.description, dup.reason
-            );
-        }
-    }
-
-    if !report.normalizations.is_empty() {
-        eprintln!();
-        eprintln!("Normalizations ({}):", report.normalizations.len());
-        for norm in &report.normalizations {
-            eprintln!(
-                "  [{}] {}: '{}' -> '{}'",
-                norm.entry_index, norm.field, norm.original, norm.normalized
-            );
-        }
-    }
-
-    if !report.detected_capabilities.is_empty() {
-        eprintln!();
-        eprintln!("Supported features:");
-        for cap in &report.detected_capabilities {
-            eprintln!("  {cap}");
-        }
-    }
-
-    if let Some(ref cmd) = report.recommended_import_command {
-        eprintln!();
-        eprintln!("Suggested next command:");
-        eprintln!("  {cmd}");
-    }
 }
 
 /// Resolve a library name to a TOML file path.

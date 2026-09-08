@@ -42,8 +42,8 @@ Report findings directly (session summary or PR description) with:
 | overview | `src/main.rs`, project root |
 | cli | `src/main.rs`, `src/commands/` |
 | clipboard | `src/clipboard.rs` |
-| config | `src/config.rs`, `src/utils/config.rs` |
-| core | `src/library.rs`, `src/error.rs` |
+| config | `src/config/`, `src/utils/config.rs` |
+| core | `src/library/`, `src/error.rs` |
 | encryption | `src/encryption.rs` |
 | logging | `src/logging.rs` |
 | proto | `snip-proto/` |

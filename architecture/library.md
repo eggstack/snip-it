@@ -1,4 +1,4 @@
-# Library Module (`library.rs`)
+# Library Module (`src/library/`)
 
 ## Overview
 
@@ -73,6 +73,19 @@ state into their own diagnostic types and keep their distinct user
 semantics; no generic finding DSL or plugin framework was introduced.
 
 ## File Layout
+
+```
+src/library/
+├── mod.rs          # Re-exports preserving `crate::library::*` paths
+├── model.rs        # `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`,
+│                   #   `ResolvedLibrarySource`, `PrimaryState`,
+│                   #   `LibraryIndexInspection`, pure helpers
+├── persistence.rs  # `load_library`, `save_library`, ID normalization, backups
+├── manager.rs      # `LibraryManager`, read-only resolver
+└── tests.rs        # Unit tests for the above
+```
+
+## Config File Layout
 
 ```
 ~/.config/snp/

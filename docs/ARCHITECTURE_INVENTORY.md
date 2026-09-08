@@ -4,7 +4,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ## Module Map
 
-### Core Data (`src/library.rs`)
+### Core Data (`src/library/`)
 - `Snippets` container struct — serde `rename="snippets"` with `alias="Snippets"` (pet compat)
 - `Snippet` struct — fields: `id`, `description`, `command`, `tags` (rename=`"tag"`), `output`, `folders`, `favorite`, `created_at`, `updated_at`, `device_id`, `deleted`
 - Serde aliases on most fields enable bidirectional compatibility with pet's TOML format (`Description`, `Tags`, `Tag`, `Command`, `Output`, etc.)
@@ -126,7 +126,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - `has_unmatched_angle_bracket()` — validation check
 - Edge case: bare `<` without matching `>` is treated as literal (preserved in output)
 
-### Config (`src/config.rs`)
+### Config (`src/config/`)
 - `SyncSettings` struct — `enabled`, `server_url`, `api_key` (zeroized on drop), `device_id`, `sync_interval_minutes`, `auto_sync`, `auto_sync_debounce_seconds`, `auto_sync_failure`, `auto_sync_max_delay_seconds`, `auto_sync_timeout_seconds`, `sync_direction`, `clipboard_auto_clear_seconds`, `sync_limit`, `credential_revision`
 - API key serialization: `@keychain` marker triggers OS keychain storage via `keyring` crate
 - `Debug` impl redacts API key

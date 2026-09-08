@@ -5,10 +5,12 @@
 //! Each subcommand in the CLI has its own module with a `run()` function.
 //! This module also provides shared utilities for loading and saving snippets.
 
+pub mod backup_archive;
 pub mod backup_cmd;
 pub mod clip_cmd;
 pub mod cron_cmd;
 pub mod doctor_cmd;
+pub mod doctor_report;
 pub mod edit_cmd;
 pub mod get_cmd;
 pub mod import_cmd;

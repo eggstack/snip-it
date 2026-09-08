@@ -5,6 +5,32 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use std::path::PathBuf;
 
+/// Canonical Clap arguments for `snp list`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct ListArgs {
+    #[arg(short, long)]
+    pub filter: Option<String>,
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+    #[arg(short, long)]
+    pub library: Option<String>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    #[arg(conflicts_with = "csv")]
+    pub json: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    #[arg(conflicts_with = "json")]
+    pub csv: bool,
+    /// Include output/notes field in fuzzy search matching
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub search_output: bool,
+    /// Sort mode for snippet ordering
+    #[arg(long, value_enum, default_value_t = crate::sort::SnippetSort::Relevance)]
+    pub sort: crate::sort::SnippetSort,
+    /// Show favorites before other snippets
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub favorites_first: bool,
+}
+
 /// Output format for the `list` command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListFormat {

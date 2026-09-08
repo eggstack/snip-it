@@ -10,6 +10,64 @@ use std::process::Command;
 const TAG_PROMPT_SENTINEL: &str = "__snp_prompt_tags__";
 pub const MAX_COMMAND_STDIN_BYTES: usize = 16 * 1024 * 1024;
 
+/// Canonical Clap arguments for `snp new`.
+///
+/// Single source of truth for the `new` command schema. Field definitions
+/// mirror the pre-Plan-010 `Commands::New` inline variant verbatim.
+#[derive(Debug, Clone, clap::Args)]
+pub struct NewArgs {
+    /// Command text supplied as a positional argument.
+    #[arg(
+        value_name = "COMMAND",
+        conflicts_with_all = ["command_stdin", "multiline", "from_file", "editor"]
+    )]
+    pub command: Option<String>,
+    /// Prompt for tags, or provide comma/space-separated tags directly.
+    #[arg(
+        short,
+        long,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "__snp_prompt_tags__",
+        value_name = "TAGS"
+    )]
+    pub tags: Option<String>,
+    #[arg(
+        short,
+        long,
+        action = clap::ArgAction::SetTrue,
+        conflicts_with_all = ["command_stdin", "editor"]
+    )]
+    pub multiline: bool,
+    /// Read the command body byte-for-byte from stdin.
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        conflicts_with_all = ["command", "multiline", "from_file", "editor"]
+    )]
+    pub command_stdin: bool,
+    /// Read command body from a file.
+    #[arg(
+        long = "from-file",
+        value_name = "PATH",
+        conflicts_with_all = ["command", "command_stdin", "editor"]
+    )]
+    pub from_file: Option<PathBuf>,
+    /// Open $VISUAL (or $EDITOR) to write the command body.
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        conflicts_with_all = ["command", "command_stdin", "from_file"]
+    )]
+    pub editor: bool,
+    #[arg(short = 'd', long)]
+    pub description: Option<String>,
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+    #[arg(short, long)]
+    pub library: Option<String>,
+}
+
 /// The source of a new snippet's command body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandSource {

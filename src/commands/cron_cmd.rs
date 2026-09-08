@@ -1,6 +1,13 @@
 use crate::error::{SnipError, SnipResult};
 use std::io::{self, Write};
 
+/// Canonical Clap arguments for `snp cron`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct CronArgs {
+    #[arg(short, long, default_value = "15")]
+    pub interval: u32,
+}
+
 fn shell_escape_path(path: &str) -> String {
     if path.is_empty() {
         return "''".to_string();

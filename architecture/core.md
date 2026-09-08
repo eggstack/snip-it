@@ -4,7 +4,7 @@
 
 ## Snippet & Snippets
 
-**File**: `src/library.rs`
+**Files**: `src/library/` (`model.rs`)
 
 ### `Snippet` struct
 
@@ -55,7 +55,7 @@ Compatible with `pet` snippet manager format (supports `Description`, `Command`,
 
 ## LibraryManager
 
-**File**: `src/library.rs`
+**Files**: `src/library/` (`manager.rs`; types in `model.rs`, I/O in `persistence.rs`)
 
 Manages multiple snippet libraries:
 
@@ -127,6 +127,6 @@ SnipError::sync_failure(SyncFailureKind::ConnectFailed, Some("detail"))
 
 ## Key Files
 
-- `src/library.rs` — Snippet, Snippets, LibraryManager, load/save/backup
+- `src/library/` — Snippet, Snippets, LibraryManager, load/save/backup
 - `src/error.rs` — SnipError enum, SyncFailureKind, constructors, Display impl
 - `src/commands/mod.rs` — `load_snippets()`, `save_snippets()` (thin wrappers)

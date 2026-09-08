@@ -1,5 +1,39 @@
 use crate::error::SnipResult;
 
+/// Shell selection for `snp doctor --check-shell` and `snp shell init`.
+///
+/// Canonical Clap value enum shared by both call sites so shell spellings
+/// cannot drift between doctor diagnostics and shell integration output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ShellIntegration {
+    /// Bash shell integration
+    Bash,
+    /// Zsh shell integration
+    Zsh,
+    /// Fish shell integration
+    Fish,
+}
+
+impl ShellIntegration {
+    /// Lowercase shell name used by doctor diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Fish => "fish",
+        }
+    }
+
+    /// Corresponding code-generation shell type.
+    pub fn to_shell_type(self) -> ShellType {
+        match self {
+            Self::Bash => ShellType::Bash,
+            Self::Zsh => ShellType::Zsh,
+            Self::Fish => ShellType::Fish,
+        }
+    }
+}
+
 /// Supported shell types for integration generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellType {

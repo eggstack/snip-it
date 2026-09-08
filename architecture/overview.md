@@ -79,10 +79,10 @@ and enforced by source-scanning tests in `tests/architecture.rs`:
 ├─────────────────────────────────────────────┤
 │           Sync-Client Layer                 │
 │  sync.rs, sync_commands.rs, encryption.rs,  │
-│  sync_failure.rs, config.rs (sync settings) │
+│  sync_failure.rs, config/ (sync settings) │
 ├─────────────────────────────────────────────┤
 │           Domain / Core Layer               │
-│  library.rs, sort.rs, usage.rs, output.rs,  │
+│  library/, sort.rs, usage.rs, output.rs,    │
 │  diagnostics.rs, error.rs, selector.rs,     │
 │  utils/*                                    │
 └─────────────────────────────────────────────┘
@@ -118,7 +118,7 @@ commands manage their own behavior.
 
 ## Command Modules
 
-**Source**: `src/commands/` (24 files incl. `mod.rs`; 23 submodules)
+**Source**: `src/commands/` (26 files incl. `mod.rs`; 25 submodules)
 **Deep dives**: [commands/mod.md](commands/mod.md) and per-command files
 
 | Command | Module | Purpose |
@@ -161,9 +161,9 @@ pet file reading, field detection, import analysis.
 
 | Module | Source | Deep Dive | Purpose |
 |--------|--------|-----------|---------|
-| `library` | `src/library.rs` | [library.md](library.md) | `Snippet`, `Snippets`, `LibraryManager` — data structures and TOML persistence |
+| `library` | `src/library/` | [library.md](library.md) | `Snippet`, `Snippets`, `LibraryManager` — data structures and TOML persistence |
 | `error` | `src/error.rs` | [core.md](core.md) | `SnipError` enum, `SnipResult<T>`, `SyncFailureKind` |
-| `config` | `src/config.rs` | [config.md](config.md) | `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode`, keychain API key |
+| `config` | `src/config/` | [config.md](config.md) | `SyncSettings`, `SyncDirection`, `AutoSyncFailureMode`, keychain API key |
 | `encryption` | `src/encryption.rs` | [encryption.md](encryption.md) | AES-256-GCM + Argon2id end-to-end encryption |
 | `selector` | `src/selector.rs` | [selector.md](selector.md) | `SnippetSelector` — deterministic non-TUI snippet resolution |
 | `outcome` | `src/outcome.rs` | [outcome.md](outcome.md) | `CliOutcome` — exit codes, machine output |

@@ -11,7 +11,6 @@ use clap_complete::Shell;
 
 use snip_it::auto_sync::StartupRecoveryPolicy;
 use snip_it::commands;
-use snip_it::config;
 use snip_it::error::SnipResult;
 use snip_it::logging::{
     init_default_file_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
@@ -84,200 +83,25 @@ enum Commands {
     },
     /// Create a new snippet (n)
     #[command(alias = "n")]
-    New {
-        /// Command text supplied as a positional argument.
-        #[arg(
-            value_name = "COMMAND",
-            conflicts_with_all = ["command_stdin", "multiline", "from_file", "editor"]
-        )]
-        command: Option<String>,
-        /// Prompt for tags, or provide comma/space-separated tags directly.
-        #[arg(
-            short,
-            long,
-            action = clap::ArgAction::Set,
-            num_args = 0..=1,
-            default_missing_value = "__snp_prompt_tags__",
-            value_name = "TAGS"
-        )]
-        tags: Option<String>,
-        #[arg(
-            short,
-            long,
-            action = clap::ArgAction::SetTrue,
-            conflicts_with_all = ["command_stdin", "editor"]
-        )]
-        multiline: bool,
-        /// Read the command body byte-for-byte from stdin.
-        #[arg(
-            long,
-            action = clap::ArgAction::SetTrue,
-            conflicts_with_all = ["command", "multiline", "from_file", "editor"]
-        )]
-        command_stdin: bool,
-        /// Read command body from a file.
-        #[arg(
-            long = "from-file",
-            value_name = "PATH",
-            conflicts_with_all = ["command", "command_stdin", "editor"]
-        )]
-        from_file: Option<PathBuf>,
-        /// Open $VISUAL (or $EDITOR) to write the command body.
-        #[arg(
-            long,
-            action = clap::ArgAction::SetTrue,
-            conflicts_with_all = ["command", "command_stdin", "from_file"]
-        )]
-        editor: bool,
-        #[arg(short = 'd', long)]
-        description: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        #[arg(short, long)]
-        library: Option<String>,
-    },
+    New(commands::new_cmd::NewArgs),
     /// List all snippets (l) — never executes
     #[command(alias = "l")]
-    List {
-        #[arg(short, long)]
-        filter: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        #[arg(short, long)]
-        library: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        #[arg(conflicts_with = "csv")]
-        json: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        #[arg(conflicts_with = "json")]
-        csv: bool,
-        /// Include output/notes field in fuzzy search matching
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        search_output: bool,
-        /// Sort mode for snippet ordering
-        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
-        sort: snip_it::sort::SnippetSort,
-        /// Show favorites before other snippets
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        favorites_first: bool,
-    },
+    List(commands::list_cmd::ListArgs),
     /// Run a snippet via TUI selection (r) — executes via shell
     #[command(alias = "r")]
-    Run {
-        #[arg(short, long)]
-        filter: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync: bool,
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Sort mode for snippet ordering
-        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
-        sort: snip_it::sort::SnippetSort,
-        /// Show favorites before other snippets
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        favorites_first: bool,
-        /// Match by exact snippet UUID (bypasses TUI)
-        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
-        id: Option<String>,
-        /// Match by exact description (bypasses TUI)
-        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
-        description_exact: Option<String>,
-        /// Match by exact command text (bypasses TUI)
-        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
-        command_exact: Option<String>,
-    },
+    Run(commands::run_cmd::RunArgs),
     /// Copy a snippet to clipboard via TUI selection (c)
     #[command(alias = "c")]
-    Clip {
-        #[arg(short, long)]
-        filter: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync: bool,
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Sort mode for snippet ordering
-        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
-        sort: snip_it::sort::SnippetSort,
-        /// Show favorites before other snippets
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        favorites_first: bool,
-        /// Match by exact snippet UUID (bypasses TUI)
-        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
-        id: Option<String>,
-        /// Match by exact description (bypasses TUI)
-        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
-        description_exact: Option<String>,
-        /// Match by exact command text (bypasses TUI)
-        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
-        command_exact: Option<String>,
-    },
+    Clip(commands::clip_cmd::ClipArgs),
     /// Search for a snippet via TUI selection (s)
     #[command(alias = "s")]
-    Search {
-        #[arg(short, long)]
-        filter: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync: bool,
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Sort mode for snippet ordering
-        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
-        sort: snip_it::sort::SnippetSort,
-        /// Show favorites before other snippets
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        favorites_first: bool,
-    },
+    Search(commands::search_cmd::SearchArgs),
     /// Select a snippet and print its command to stdout (no execution)
     #[command(alias = "sel")]
-    Select {
-        #[arg(short, long)]
-        filter: Option<String>,
-        /// Initial query to pre-fill the search (alias for --filter)
-        #[arg(long)]
-        query: Option<String>,
-        #[arg(short, long)]
-        library: Option<String>,
-        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "expanded")]
-        raw: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "raw")]
-        expanded: bool,
-        /// Write selection to file instead of stdout (used by shell integration)
-        #[arg(long)]
-        output_file: Option<PathBuf>,
-        /// Sort mode for snippet ordering
-        #[arg(long, value_enum, default_value_t = snip_it::sort::SnippetSort::Relevance)]
-        sort: snip_it::sort::SnippetSort,
-        /// Show favorites before other snippets
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        favorites_first: bool,
-    },
+    Select(commands::select_cmd::SelectArgs),
     /// Edit the config file in $EDITOR (e)
     #[command(alias = "e")]
-    Edit {
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Set the output/notes field on a snippet (requires --filter)
-        #[arg(long, conflicts_with_all = ["output_stdin", "clear_output"])]
-        output: Option<String>,
-        /// Read output/notes field from stdin (requires --filter)
-        #[arg(long, conflicts_with_all = ["output", "clear_output"])]
-        output_stdin: bool,
-        /// Clear the output/notes field (requires --filter)
-        #[arg(long, conflicts_with_all = ["output", "output_stdin"])]
-        clear_output: bool,
-        /// Filter to select which snippet to edit output on (required with output flags)
-        #[arg(short, long)]
-        filter: Option<String>,
-        /// Match by exact snippet UUID (bypasses TUI for output editing)
-        #[arg(long, conflicts_with_all = ["description_exact", "command_exact"])]
-        id: Option<String>,
-        /// Match by exact description (bypasses TUI)
-        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact"])]
-        description_exact: Option<String>,
-        /// Match by exact command text (bypasses TUI)
-        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact"])]
-        command_exact: Option<String>,
-    },
+    Edit(commands::edit_cmd::EditArgs),
     /// Show keybindings
     #[command(alias = "k")]
     Keybindings,
@@ -289,18 +113,10 @@ enum Commands {
     },
     /// Setup automatic sync with cron
     #[command(alias = "cr")]
-    Cron {
-        #[arg(short, long, default_value = "15")]
-        interval: u32,
-    },
+    Cron(commands::cron_cmd::CronArgs),
     /// Register a new sync account
     #[command(alias = "reg")]
-    Register {
-        #[arg(long, default_value = crate::config::DEFAULT_SERVER_URL)]
-        server: String,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        force: bool,
-    },
+    Register(commands::register_cmd::RegisterArgs),
     /// Manage snippet libraries
     #[command(alias = "lib")]
     Library {
@@ -314,37 +130,7 @@ enum Commands {
         command: PremadeCommands,
     },
     /// Diagnose pet file compatibility, installed snp environment, or shell init syntax
-    Doctor {
-        /// Path to a pet TOML snippet file to analyze
-        #[arg(
-            long = "pet-file",
-            value_name = "PATH",
-            conflicts_with_all = ["compatibility", "library", "sync"]
-        )]
-        pet_file: Option<PathBuf>,
-        /// Audit the installed snp environment
-        #[arg(long, conflicts_with_all = ["pet_file", "library"])]
-        compatibility: bool,
-        /// Run focused sync diagnostics using the canonical status snapshot
-        #[arg(long, conflicts_with_all = ["pet_file", "library"])]
-        sync: bool,
-        /// Check shell init output syntax for a specific shell (bash, zsh, fish)
-        #[arg(long, value_enum)]
-        check_shell: Option<ShellIntegration>,
-        /// Check a specific library file for compatibility
-        #[arg(
-            long,
-            value_name = "NAME_OR_PATH",
-            conflicts_with_all = ["pet_file", "compatibility", "sync"]
-        )]
-        library: Option<String>,
-        /// Treat warnings as errors
-        #[arg(long)]
-        strict: bool,
-        /// Report output format
-        #[arg(long, value_enum, default_value = "human")]
-        report: commands::doctor_cmd::DiagnosticReportFormat,
-    },
+    Doctor(commands::doctor_cmd::DoctorArgs),
     /// Import snippets from external formats
     #[command(alias = "i")]
     Import {
@@ -387,41 +173,7 @@ enum Commands {
         command: McpCommands,
     },
     /// Retrieve a snippet deterministically (no TUI, no execution)
-    Get {
-        /// Match by exact snippet UUID
-        #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "query"])]
-        id: Option<String>,
-        /// Match by exact description (case-insensitive)
-        #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "query"])]
-        description_exact: Option<String>,
-        /// Match by exact command text (case-insensitive)
-        #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "query"])]
-        command_exact: Option<String>,
-        /// Fuzzy query match
-        #[arg(short, long, conflicts_with_all = ["id", "description_exact", "command_exact"])]
-        query: Option<String>,
-        /// Library scope (name, or "all" for all libraries)
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Output only a specific field
-        #[arg(long, value_enum)]
-        field: Option<commands::get_cmd::GetField>,
-        /// Output raw stored bytes (no variable expansion, no trailing newline)
-        #[arg(long, conflicts_with = "expanded")]
-        raw: bool,
-        /// Output with variables expanded using defaults
-        #[arg(long, conflicts_with = "raw")]
-        expanded: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-        /// Resolution policy for multiple matches
-        #[arg(long, value_enum, default_value_t = snip_it::selector::ResolutionPolicy::Unique)]
-        resolution: snip_it::selector::ResolutionPolicy,
-        /// Explicit variable assignment (repeatable: --var host=example.com --var env=prod)
-        #[arg(long = "var", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
-        vars: Option<Vec<String>>,
-    },
+    Get(commands::get_cmd::GetArgs),
     /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
     #[command(name = "auto-sync-worker", hide = true)]
     AutoSyncWorker {
@@ -479,7 +231,7 @@ enum ShellCommands {
     Init {
         /// Shell to generate integration for
         #[arg(value_enum)]
-        shell: ShellIntegration,
+        shell: commands::shell_cmd::ShellIntegration,
     },
 }
 
@@ -614,16 +366,6 @@ enum ImportSubcommands {
     },
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum ShellIntegration {
-    /// Bash shell integration
-    Bash,
-    /// Zsh shell integration
-    Zsh,
-    /// Fish shell integration
-    Fish,
-}
-
 /// Map a `RepairExitStatus` to the appropriate process exit code.
 /// Clean/DryRun/Repaired → 0 (implicit), UnsafeOnly → 10, PartialFailure → 1.
 ///
@@ -719,82 +461,55 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 snip_it::error::SnipError::runtime_error("self-replacement failed", Some(&error))
             })?;
         }
-        Some(Commands::New {
-            command,
-            tags,
-            multiline,
-            command_stdin,
-            from_file,
-            editor,
-            description,
-            config,
-            library,
-        }) => {
+        Some(Commands::New(args)) => {
             commands::new_cmd::run(
-                command,
-                description,
-                tags,
-                multiline,
-                command_stdin,
-                from_file,
-                editor,
-                config,
-                library,
+                args.command,
+                args.description,
+                args.tags,
+                args.multiline,
+                args.command_stdin,
+                args.from_file,
+                args.editor,
+                args.config,
+                args.library,
             )?;
         }
-        Some(Commands::List {
-            filter,
-            config,
-            library,
-            json,
-            csv,
-            search_output,
-            sort,
-            favorites_first,
-        }) => {
-            let format = if json {
+        Some(Commands::List(args)) => {
+            let format = if args.json {
                 commands::list_cmd::ListFormat::Json
-            } else if csv {
+            } else if args.csv {
                 commands::list_cmd::ListFormat::Csv
             } else {
                 commands::list_cmd::ListFormat::Default
             };
             let sort_opts = snip_it::sort::SortOptions {
-                mode: sort,
-                favorites_first,
+                mode: args.sort,
+                favorites_first: args.favorites_first,
             };
             commands::list_cmd::run(
-                filter,
-                config,
-                library,
+                args.filter,
+                args.config,
+                args.library,
                 format,
                 Some(sort_opts),
-                search_output,
+                args.search_output,
             )?;
         }
-        Some(Commands::Run {
-            filter,
-            sync,
-            library,
-            sort,
-            favorites_first,
-            id,
-            description_exact,
-            command_exact,
-        }) => {
-            if id.is_some() || description_exact.is_some() || command_exact.is_some() {
+        Some(Commands::Run(args)) => {
+            if args.id.is_some() || args.description_exact.is_some() || args.command_exact.is_some()
+            {
                 let result = snip_it::selector::resolve_exact_target(
-                    library,
-                    id,
-                    description_exact,
-                    command_exact,
+                    args.library,
+                    args.id,
+                    args.description_exact,
+                    args.command_exact,
                 )?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
                         let outcome = commands::run_cmd::run_exact(
                             &m.snippet,
-                            sync,
-                            sync.then_some(&RUNTIME),
+                            args.sync,
+                            args.sync.then_some(&RUNTIME),
                         )?;
                         match outcome {
                             CliOutcome::ExecutionFailed { child_code } => {
@@ -811,41 +526,37 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 return Ok(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
-                    mode: sort,
-                    favorites_first,
+                    mode: args.sort,
+                    favorites_first: args.favorites_first,
                 };
                 let outcome = commands::run_cmd::run(
-                    filter,
-                    sync,
-                    library,
+                    args.filter,
+                    args.sync,
+                    args.library,
                     Some(sort_opts),
-                    sync.then_some(&RUNTIME),
+                    args.sync.then_some(&RUNTIME),
                 )?;
                 if let CliOutcome::ExecutionFailed { child_code } = outcome {
                     std::process::exit(child_code.unwrap_or(8));
                 }
             }
         }
-        Some(Commands::Clip {
-            filter,
-            sync,
-            library,
-            sort,
-            favorites_first,
-            id,
-            description_exact,
-            command_exact,
-        }) => {
-            if id.is_some() || description_exact.is_some() || command_exact.is_some() {
+        Some(Commands::Clip(args)) => {
+            if args.id.is_some() || args.description_exact.is_some() || args.command_exact.is_some()
+            {
                 let result = snip_it::selector::resolve_exact_target(
-                    library,
-                    id,
-                    description_exact,
-                    command_exact,
+                    args.library,
+                    args.id,
+                    args.description_exact,
+                    args.command_exact,
                 )?;
                 let outcome = match result {
                     snip_it::selector::SelectionResult::One(m) => {
-                        commands::clip_cmd::run_exact(&m.snippet, sync, sync.then_some(&RUNTIME))?;
+                        commands::clip_cmd::run_exact(
+                            &m.snippet,
+                            args.sync,
+                            args.sync.then_some(&RUNTIME),
+                        )?;
                         snip_it::outcome::CliOutcome::Success
                     }
                     snip_it::selector::SelectionResult::Ambiguous(identities) => {
@@ -856,79 +567,57 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 return Ok(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
-                    mode: sort,
-                    favorites_first,
+                    mode: args.sort,
+                    favorites_first: args.favorites_first,
                 };
                 commands::clip_cmd::run(
-                    filter,
-                    sync,
-                    library,
+                    args.filter,
+                    args.sync,
+                    args.library,
                     None,
                     Some(sort_opts),
-                    sync.then_some(&RUNTIME),
+                    args.sync.then_some(&RUNTIME),
                 )?;
             }
         }
-        Some(Commands::Search {
-            filter,
-            sync,
-            library,
-            sort,
-            favorites_first,
-        }) => {
+        Some(Commands::Search(args)) => {
             let sort_opts = snip_it::sort::SortOptions {
-                mode: sort,
-                favorites_first,
+                mode: args.sort,
+                favorites_first: args.favorites_first,
             };
             commands::search_cmd::run(
-                filter,
-                sync,
-                library,
+                args.filter,
+                args.sync,
+                args.library,
                 None,
                 Some(sort_opts),
-                sync.then_some(&RUNTIME),
+                args.sync.then_some(&RUNTIME),
             )?;
         }
-        Some(Commands::Select {
-            filter,
-            query,
-            library,
-            raw,
-            expanded,
-            output_file,
-            sort,
-            favorites_first,
-        }) => {
-            let effective_filter = filter.or(query);
+        Some(Commands::Select(args)) => {
+            let effective_filter = args.filter.or(args.query);
             let sort_opts = snip_it::sort::SortOptions {
-                mode: sort,
-                favorites_first,
+                mode: args.sort,
+                favorites_first: args.favorites_first,
             };
             return commands::select_cmd::run(
                 effective_filter,
-                library,
-                raw,
-                expanded,
-                output_file,
+                args.library,
+                args.raw,
+                args.expanded,
+                args.output_file,
                 Some(sort_opts),
             );
         }
-        Some(Commands::Edit {
-            library,
-            output,
-            output_stdin,
-            clear_output,
-            filter,
-            id,
-            description_exact,
-            command_exact,
-        }) => {
-            let has_output_flags = output.is_some() || output_stdin || clear_output;
-            let has_exact = id.is_some() || description_exact.is_some() || command_exact.is_some();
+        Some(Commands::Edit(args)) => {
+            let has_output_flags = args.output.is_some() || args.output_stdin || args.clear_output;
+            let has_exact = args.id.is_some()
+                || args.description_exact.is_some()
+                || args.command_exact.is_some();
             if has_output_flags {
-                let output_value = if clear_output {
+                let output_value = if args.clear_output {
                     Some(String::new())
-                } else if output_stdin {
+                } else if args.output_stdin {
                     let mut buf = String::new();
                     std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).map_err(
                         |e| {
@@ -941,15 +630,15 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     )?;
                     Some(buf)
                 } else {
-                    output
+                    args.output
                 };
                 if has_exact {
-                    let lib_for_edit = library.clone();
+                    let lib_for_edit = args.library.clone();
                     let result = snip_it::selector::resolve_exact_target(
-                        library,
-                        id,
-                        description_exact,
-                        command_exact,
+                        args.library,
+                        args.id,
+                        args.description_exact,
+                        args.command_exact,
                     )?;
                     let outcome = match result {
                         snip_it::selector::SelectionResult::One(m) => {
@@ -967,16 +656,16 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     };
                     return Ok(outcome);
                 } else {
-                    let filter_str = filter.ok_or_else(|| {
+                    let filter_str = args.filter.ok_or_else(|| {
                         snip_it::error::SnipError::runtime_error(
                             "--filter is required when using --output, --output-stdin, or --clear-output",
                             None,
                         )
                     })?;
-                    commands::edit_cmd::run_edit_output(library, filter_str, output_value)?;
+                    commands::edit_cmd::run_edit_output(args.library, filter_str, output_value)?;
                 }
             } else {
-                commands::edit_cmd::run(library, None)?;
+                commands::edit_cmd::run(args.library, None)?;
             }
         }
         Some(Commands::Keybindings) => {
@@ -1029,11 +718,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 commands::sync_cmd::run_repair(dry_run, apply)?;
             }
         },
-        Some(Commands::Cron { interval }) => {
-            commands::cron_cmd::run(interval)?;
+        Some(Commands::Cron(args)) => {
+            commands::cron_cmd::run(args.interval)?;
         }
-        Some(Commands::Register { server, force }) => {
-            commands::register_cmd::run(server, force, &RUNTIME)?;
+        Some(Commands::Register(args)) => {
+            commands::register_cmd::run(args.server, args.force, &RUNTIME)?;
         }
         Some(Commands::Library { command }) => match command {
             LibraryCommands::List => commands::library_cmd::run_list()?,
@@ -1062,39 +751,22 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "snp", &mut std::io::stdout());
         }
-        Some(Commands::Doctor {
-            pet_file,
-            compatibility,
-            sync,
-            check_shell,
-            library,
-            strict,
-            report,
-        }) => {
-            let check_shell_str = check_shell.map(|s| match s {
-                ShellIntegration::Bash => "bash".to_string(),
-                ShellIntegration::Zsh => "zsh".to_string(),
-                ShellIntegration::Fish => "fish".to_string(),
-            });
+        Some(Commands::Doctor(args)) => {
+            let check_shell_str = args.check_shell.map(|s| s.as_str().to_string());
             let outcome = commands::doctor_cmd::run(
-                pet_file,
-                compatibility,
-                sync,
+                args.pet_file,
+                args.compatibility,
+                args.sync,
                 check_shell_str,
-                library,
-                strict,
-                report,
+                args.library,
+                args.strict,
+                args.report,
             )?;
             return Ok(outcome);
         }
         Some(Commands::Shell { command }) => match command {
             ShellCommands::Init { shell } => {
-                let shell_type = match shell {
-                    ShellIntegration::Bash => commands::shell_cmd::ShellType::Bash,
-                    ShellIntegration::Zsh => commands::shell_cmd::ShellType::Zsh,
-                    ShellIntegration::Fish => commands::shell_cmd::ShellType::Fish,
-                };
-                commands::shell_cmd::run(shell_type)?;
+                commands::shell_cmd::run(shell.to_shell_type())?;
             }
         },
         Some(Commands::Import { command }) => match command {
@@ -1164,31 +836,19 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 return handle_status(args);
             }
         },
-        Some(Commands::Get {
-            id,
-            description_exact,
-            command_exact,
-            query,
-            library,
-            field,
-            raw,
-            expanded,
-            json,
-            resolution,
-            vars,
-        }) => {
+        Some(Commands::Get(args)) => {
             let outcome = commands::get_cmd::run(
-                id,
-                description_exact,
-                command_exact,
-                query,
-                library,
-                field,
-                raw,
-                expanded,
-                json,
-                resolution,
-                vars,
+                args.id,
+                args.description_exact,
+                args.command_exact,
+                args.query,
+                args.library,
+                args.field,
+                args.raw,
+                args.expanded,
+                args.json,
+                args.resolution,
+                args.vars,
             )?;
             return Ok(outcome);
         }
@@ -1226,11 +886,11 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         // ── Read-only commands ──────────────────────────────────────
         Some(
             Commands::Version
-            | Commands::List { .. }
-            | Commands::Select { .. }
+            | Commands::List(_)
+            | Commands::Select(_)
             | Commands::Status(_)
             | Commands::Mcp { .. }
-            | Commands::Get { .. }
+            | Commands::Get(_)
             | Commands::Validate(_)
             | Commands::Backup(_)
             | Commands::Library {
@@ -1286,11 +946,11 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
 
         // ── Mutation commands: allow recovery, full logging+audit ───
         Some(
-            Commands::New { .. }
-            | Commands::Run { .. }
-            | Commands::Clip { .. }
-            | Commands::Search { .. }
-            | Commands::Edit { .. }
+            Commands::New(_)
+            | Commands::Run(_)
+            | Commands::Clip(_)
+            | Commands::Search(_)
+            | Commands::Edit(_)
             | Commands::Import { .. }
             | Commands::Repair(_)
             | Commands::Restore(_)
@@ -1304,7 +964,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         ) => (StartupRecoveryPolicy::Allow, StartupServices::Logging),
 
         // ── Explicit sync commands: suppress recovery, logging only ──
-        Some(Commands::Sync { .. } | Commands::Cron { .. } | Commands::Register { .. }) => (
+        Some(Commands::Sync { .. } | Commands::Cron(_) | Commands::Register(_)) => (
             StartupRecoveryPolicy::SuppressExplicitSync,
             StartupServices::Logging,
         ),
@@ -1319,7 +979,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         Some(
             Commands::Update { .. }
             | Commands::SelfReplace { .. }
-            | Commands::Doctor { .. }
+            | Commands::Doctor(_)
             | Commands::Completions { .. }
             | Commands::Shell { .. }
             | Commands::Keybindings,
@@ -1398,7 +1058,7 @@ mod tests {
 
     #[test]
     fn list_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::List {
+        let b = behavior(Some(&Commands::List(commands::list_cmd::ListArgs {
             filter: None,
             config: None,
             library: None,
@@ -1407,27 +1067,27 @@ mod tests {
             search_output: false,
             sort: snip_it::sort::SnippetSort::Relevance,
             favorites_first: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
 
     #[test]
     fn search_retains_mutation_capabilities() {
-        let b = behavior(Some(&Commands::Search {
+        let b = behavior(Some(&Commands::Search(commands::search_cmd::SearchArgs {
             filter: None,
             sync: false,
             library: None,
             sort: snip_it::sort::SnippetSort::Relevance,
             favorites_first: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn select_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Select {
+        let b = behavior(Some(&Commands::Select(commands::select_cmd::SelectArgs {
             filter: None,
             query: None,
             library: None,
@@ -1436,7 +1096,7 @@ mod tests {
             output_file: None,
             sort: snip_it::sort::SnippetSort::Relevance,
             favorites_first: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1453,7 +1113,7 @@ mod tests {
 
     #[test]
     fn get_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Get {
+        let b = behavior(Some(&Commands::Get(commands::get_cmd::GetArgs {
             id: None,
             description_exact: None,
             command_exact: None,
@@ -1465,7 +1125,7 @@ mod tests {
             json: false,
             resolution: snip_it::selector::ResolutionPolicy::Unique,
             vars: None,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1659,7 +1319,7 @@ mod tests {
 
     #[test]
     fn new_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::New {
+        let b = behavior(Some(&Commands::New(commands::new_cmd::NewArgs {
             command: None,
             tags: None,
             multiline: false,
@@ -1669,14 +1329,14 @@ mod tests {
             description: None,
             config: None,
             library: None,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn run_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::Run {
+        let b = behavior(Some(&Commands::Run(commands::run_cmd::RunArgs {
             filter: None,
             sync: false,
             library: None,
@@ -1685,14 +1345,14 @@ mod tests {
             id: None,
             description_exact: None,
             command_exact: None,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn clip_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::Clip {
+        let b = behavior(Some(&Commands::Clip(commands::clip_cmd::ClipArgs {
             filter: None,
             sync: false,
             library: None,
@@ -1701,14 +1361,14 @@ mod tests {
             id: None,
             description_exact: None,
             command_exact: None,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn edit_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::Edit {
+        let b = behavior(Some(&Commands::Edit(commands::edit_cmd::EditArgs {
             library: None,
             output: None,
             output_stdin: false,
@@ -1717,7 +1377,7 @@ mod tests {
             id: None,
             description_exact: None,
             command_exact: None,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
@@ -1834,17 +1494,21 @@ mod tests {
 
     #[test]
     fn cron_is_suppressed_explicit_logging() {
-        let b = behavior(Some(&Commands::Cron { interval: 15 }));
+        let b = behavior(Some(&Commands::Cron(commands::cron_cmd::CronArgs {
+            interval: 15,
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn register_is_suppressed_explicit_logging() {
-        let b = behavior(Some(&Commands::Register {
-            server: "https://example.com".to_string(),
-            force: false,
-        }));
+        let b = behavior(Some(&Commands::Register(
+            commands::register_cmd::RegisterArgs {
+                server: "https://example.com".to_string(),
+                force: false,
+            },
+        )));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressExplicitSync);
         assert_eq!(b.services, StartupServices::Logging);
     }
@@ -1874,7 +1538,7 @@ mod tests {
 
     #[test]
     fn doctor_is_suppressed_configuration_logging() {
-        let b = behavior(Some(&Commands::Doctor {
+        let b = behavior(Some(&Commands::Doctor(commands::doctor_cmd::DoctorArgs {
             pet_file: None,
             compatibility: false,
             sync: false,
@@ -1882,7 +1546,7 @@ mod tests {
             library: None,
             strict: false,
             report: commands::doctor_cmd::DiagnosticReportFormat::Human,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
         assert_eq!(b.services, StartupServices::Logging);
     }
@@ -1900,7 +1564,7 @@ mod tests {
     fn shell_is_suppressed_configuration_logging() {
         let b = behavior(Some(&Commands::Shell {
             command: ShellCommands::Init {
-                shell: ShellIntegration::Bash,
+                shell: commands::shell_cmd::ShellIntegration::Bash,
             },
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressConfiguration);
@@ -1929,7 +1593,7 @@ mod tests {
     fn read_only_commands_have_suppressed_recovery() {
         let read_only_cases: Vec<Option<Commands>> = vec![
             Some(Commands::Version),
-            Some(Commands::List {
+            Some(Commands::List(commands::list_cmd::ListArgs {
                 filter: None,
                 config: None,
                 library: None,
@@ -1938,12 +1602,12 @@ mod tests {
                 search_output: false,
                 sort: snip_it::sort::SnippetSort::Relevance,
                 favorites_first: false,
-            }),
+            })),
             Some(Commands::Status(commands::status_cmd::StatusArgs {
                 json: false,
                 sync_only: false,
             })),
-            Some(Commands::Get {
+            Some(Commands::Get(commands::get_cmd::GetArgs {
                 id: None,
                 description_exact: None,
                 command_exact: None,
@@ -1955,7 +1619,7 @@ mod tests {
                 json: false,
                 resolution: snip_it::selector::ResolutionPolicy::Unique,
                 vars: None,
-            }),
+            })),
             Some(Commands::Validate(commands::validate_cmd::ValidateArgs {
                 library: None,
                 strict: false,
@@ -1977,7 +1641,7 @@ mod tests {
     #[test]
     fn mutation_commands_allow_recovery() {
         let mutation_cases: Vec<Option<Commands>> = vec![
-            Some(Commands::New {
+            Some(Commands::New(commands::new_cmd::NewArgs {
                 command: None,
                 tags: None,
                 multiline: false,
@@ -1987,8 +1651,8 @@ mod tests {
                 description: None,
                 config: None,
                 library: None,
-            }),
-            Some(Commands::Run {
+            })),
+            Some(Commands::Run(commands::run_cmd::RunArgs {
                 filter: None,
                 sync: false,
                 library: None,
@@ -1997,8 +1661,8 @@ mod tests {
                 id: None,
                 description_exact: None,
                 command_exact: None,
-            }),
-            Some(Commands::Clip {
+            })),
+            Some(Commands::Clip(commands::clip_cmd::ClipArgs {
                 filter: None,
                 sync: false,
                 library: None,
@@ -2007,8 +1671,8 @@ mod tests {
                 id: None,
                 description_exact: None,
                 command_exact: None,
-            }),
-            Some(Commands::Edit {
+            })),
+            Some(Commands::Edit(commands::edit_cmd::EditArgs {
                 library: None,
                 output: None,
                 output_stdin: false,
@@ -2017,7 +1681,7 @@ mod tests {
                 id: None,
                 description_exact: None,
                 command_exact: None,
-            }),
+            })),
         ];
         for case in &mutation_cases {
             let b = behavior(case.as_ref());
@@ -2035,11 +1699,13 @@ mod tests {
     fn explicit_sync_commands_suppress_recovery() {
         let sync_cases: Vec<Option<Commands>> = vec![
             Some(Commands::Sync { command: None }),
-            Some(Commands::Cron { interval: 15 }),
-            Some(Commands::Register {
+            Some(Commands::Cron(commands::cron_cmd::CronArgs {
+                interval: 15,
+            })),
+            Some(Commands::Register(commands::register_cmd::RegisterArgs {
                 server: "https://example.com".to_string(),
                 force: false,
-            }),
+            })),
         ];
         for case in &sync_cases {
             let b = behavior(case.as_ref());

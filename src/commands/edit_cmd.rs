@@ -4,6 +4,34 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Canonical Clap arguments for `snp edit`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct EditArgs {
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Set the output/notes field on a snippet (requires --filter)
+    #[arg(long, conflicts_with_all = ["output_stdin", "clear_output"])]
+    pub output: Option<String>,
+    /// Read output/notes field from stdin (requires --filter)
+    #[arg(long, conflicts_with_all = ["output", "clear_output"])]
+    pub output_stdin: bool,
+    /// Clear the output/notes field (requires --filter)
+    #[arg(long, conflicts_with_all = ["output", "output_stdin"])]
+    pub clear_output: bool,
+    /// Filter to select which snippet to edit output on (required with output flags)
+    #[arg(short, long)]
+    pub filter: Option<String>,
+    /// Match by exact snippet UUID (bypasses TUI for output editing)
+    #[arg(long, conflicts_with_all = ["description_exact", "command_exact"])]
+    pub id: Option<String>,
+    /// Match by exact description (bypasses TUI)
+    #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact"])]
+    pub description_exact: Option<String>,
+    /// Match by exact command text (bypasses TUI)
+    #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact"])]
+    pub command_exact: Option<String>,
+}
+
 /// Opens the snippets library file in the user's `$EDITOR`.
 pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> {
     let path = if let Some(ref lib_name) = library {

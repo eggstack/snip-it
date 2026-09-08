@@ -1,6 +1,8 @@
 # doctor_cmd — Diagnostics and Compatibility Analysis
 
-**Source:** `src/commands/doctor_cmd.rs`
+**Sources:** `src/commands/doctor_cmd.rs` (check orchestration, `DoctorArgs`),
+`src/commands/doctor_report.rs` (`DiagnosticReportFormat`, human rendering;
+re-exported via `doctor_cmd` for CLI schema compat)
 
 ## Purpose
 

@@ -13,6 +13,44 @@ use crate::selector::{
 use crate::utils::variables::{VariableAssignments, parse_variables, strip_escape_sequences};
 use serde::Serialize;
 
+/// Canonical Clap arguments for `snp get`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct GetArgs {
+    /// Match by exact snippet UUID
+    #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "query"])]
+    pub id: Option<String>,
+    /// Match by exact description (case-insensitive)
+    #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "query"])]
+    pub description_exact: Option<String>,
+    /// Match by exact command text (case-insensitive)
+    #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "query"])]
+    pub command_exact: Option<String>,
+    /// Fuzzy query match
+    #[arg(short, long, conflicts_with_all = ["id", "description_exact", "command_exact"])]
+    pub query: Option<String>,
+    /// Library scope (name, or "all" for all libraries)
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Output only a specific field
+    #[arg(long, value_enum)]
+    pub field: Option<GetField>,
+    /// Output raw stored bytes (no variable expansion, no trailing newline)
+    #[arg(long, conflicts_with = "expanded")]
+    pub raw: bool,
+    /// Output with variables expanded using defaults
+    #[arg(long, conflicts_with = "raw")]
+    pub expanded: bool,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+    /// Resolution policy for multiple matches
+    #[arg(long, value_enum, default_value_t = crate::selector::ResolutionPolicy::Unique)]
+    pub resolution: crate::selector::ResolutionPolicy,
+    /// Explicit variable assignment (repeatable: --var host=example.com --var env=prod)
+    #[arg(long = "var", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+    pub vars: Option<Vec<String>>,
+}
+
 /// Output field selector for `snp get`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[value(rename_all = "kebab-case")]

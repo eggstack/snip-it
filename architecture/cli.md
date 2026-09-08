@@ -40,6 +40,15 @@ Top-level and `snp data ...` spellings reuse the same type, and both
 dispatch through single-path `handle_*` helpers in `src/main.rs`. `snp data`
 is a compatibility alias layer, not a second schema.
 
+Every other command with CLI schema (`new`, `list`, `run`, `clip`,
+`search`, `select`, `edit`, `get`, `doctor`, `cron`, `register`) likewise
+owns one canonical `*Args` struct beside its handler (`NewArgs`,
+`ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`, `EditArgs`,
+`GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`). `src/main.rs` keeps
+only the top-level `Commands` composition, runtime/signal/log setup,
+dispatch, and outcome mapping. Shared shell spellings live in
+`shell_cmd::ShellIntegration` (`--check-shell`, `shell init`).
+
 ## Subcommands
 
 | Command | Alias | Module | Async | Description |

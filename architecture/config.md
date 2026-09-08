@@ -45,7 +45,7 @@ Old macOS path (`~/Library/Application Support/snp/`) is automatically migrated 
 
 ## Sync Settings
 
-**File**: `src/config.rs`
+**Files**: `src/config/` (`mod.rs` re-exports, `sync_settings.rs`, `toml_cache.rs`)
 
 ### `SyncSettings` struct
 
@@ -133,11 +133,11 @@ filesystem operations are not force-cancelled.
 | `SNP_LOG` | `logging.rs` | — (per-module filter) |
 | `SNP_COMMAND_TIMEOUT` | `run_cmd.rs` | 0 (disabled) |
 | `SNP_CLIPBOARD_TIMEOUT` | `clipboard.rs` | `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | `config.rs` | `false` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | `src/config/` | `false` |
 | `SNP_SYNC_CONNECT_TIMEOUT` | `sync.rs` | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | `sync.rs` | `30` |
 
 ## Key Files
 
 - `src/utils/config.rs` — Config directory paths, macOS migration
-- `src/config.rs` — SyncSettings struct, load/save, SyncDirection
+- `src/config/` — SyncSettings struct, load/save, SyncDirection (`sync_settings.rs`); pure TOML cache + integrity helpers (`toml_cache.rs`, shared with core)

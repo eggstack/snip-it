@@ -6,6 +6,31 @@ use crate::outcome::CliOutcome;
 use std::cell::Cell;
 use std::path::PathBuf;
 
+/// Canonical Clap arguments for `snp select`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct SelectArgs {
+    #[arg(short, long)]
+    pub filter: Option<String>,
+    /// Initial query to pre-fill the search (alias for --filter)
+    #[arg(long)]
+    pub query: Option<String>,
+    #[arg(short, long)]
+    pub library: Option<String>,
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "expanded")]
+    pub raw: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "raw")]
+    pub expanded: bool,
+    /// Write selection to file instead of stdout (used by shell integration)
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
+    /// Sort mode for snippet ordering
+    #[arg(long, value_enum, default_value_t = crate::sort::SnippetSort::Relevance)]
+    pub sort: crate::sort::SnippetSort,
+    /// Show favorites before other snippets
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub favorites_first: bool,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum OutputMode {
     Raw,
