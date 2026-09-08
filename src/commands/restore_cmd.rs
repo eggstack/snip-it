@@ -19,6 +19,22 @@ pub enum RestoreMode {
     Replace,
 }
 
+/// Canonical Clap arguments for `snp restore` and `snp data restore`.
+///
+/// Single source of truth for both spellings.
+#[derive(Debug, Clone, clap::Args)]
+pub struct RestoreArgs {
+    /// Path to the backup directory
+    #[arg(value_name = "BACKUP_DIR")]
+    pub backup: PathBuf,
+    /// Restore mode
+    #[arg(long, value_enum, default_value = "merge")]
+    pub mode: RestoreMode,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// Destination permission policy for restore installation.
 ///
 /// Determines how file permissions are applied to the destination after

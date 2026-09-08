@@ -46,7 +46,7 @@ pub enum CliOutcome {
 | `Success` | 0 | |
 | `NotFound` | 3 | |
 | `Ambiguous` | 5 | |
-| `Cancelled` | 4 | Also mapped in `main.rs` for `CommandOutcome::Cancelled` |
+| `Cancelled` | 4 | `select` maps `CliOutcome::Cancelled` to exit 4 in `main.rs` |
 | `ValidationFailed` | 6 | |
 | `PersistenceFailed` | 1 | Shares code with `GENERAL_ERROR` |
 | `SyncFailed` | 7 | |
@@ -92,18 +92,17 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ## Exit-Code Mapping in `main.rs`
 
-The central exit-code mapper in `src/main.rs` (lines 1423-1445) handles two paths:
+The central exit-code mapper in `src/main.rs` handles two paths:
 
-1. **`CommandOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4, `Err(e)` → exit 1.
-2. **`CliOutcome`** path: Commands that return `CliOutcome` directly call `outcome.exit_code()` and pass it to `std::process::exit()`.
+1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1.
+2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (no `CliOutcome` variant).
 
 ```rust
 match dispatch_command(cli.command) {
-    Ok(CommandOutcome::Success) => {}
-    Ok(CommandOutcome::Cancelled) => {
-        std::process::exit(4);
+    Ok(CliOutcome::Success) => {}
+    Ok(outcome) => {
+        std::process::exit(outcome.exit_code());
     }
-    Ok(_) => {}
     Err(e) => {
         eprintln!("error: {e}");
         std::process::exit(1);

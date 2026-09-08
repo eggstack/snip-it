@@ -22,10 +22,12 @@ library — it is a standalone binary.  The public surface exists because:
 - Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`,
   `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`; protocol types
   are consumed from the separate `snip-proto` crate.
-- Root-level TUI types (`SnippetData`, `ProcessResult`, `CommandOutcome`,
+- Root-level TUI types (`SnippetData`, `ProcessResult`,
   `SelectionOutcome`) are `#[doc(hidden)]`.
 - The crate root doc comment now lists the supported API explicitly.
-- The `data` subcommand group was added (`snp data validate|backup|restore|repair|status`).
+- The `data` subcommand group is a compatibility alias layer reusing the
+  canonical `validate`/`backup`/`restore`/`repair`/`status` args
+  (`snp data validate|backup|restore|repair|status`).
 
 ---
 
@@ -52,8 +54,7 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub mod ui` | **application-internal** | TUI interface; not for external consumers |
 | `pub mod usage` | **application-internal** | Local-only usage metadata; not for external use |
 | `pub struct SnippetData` | **application-internal** | Parallel vectors for TUI display; internal glue |
-| `pub enum ProcessResult` | **application-internal** | TUI selection result; internal glue |
-| `pub enum CommandOutcome` | **application-internal** | CLI-level exit code mapping; internal glue |
+| `pub enum ProcessResult` | **application-internal** | Per-snippet TUI loop control; internal glue |
 | `pub enum SelectionOutcome` | **application-internal** | Raw TUI selection result; internal glue |
 
 ### Crate-internal (pub(crate))

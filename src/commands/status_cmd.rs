@@ -3,6 +3,18 @@ use crate::status_snapshot::{TopLevelSyncState, capture_snapshot};
 use chrono::{Local, TimeZone, Utc};
 use std::io::{self, Write};
 
+/// Canonical Clap arguments for `snp status` and `snp data status`.
+///
+/// Single source of truth for both spellings (`data status` uses
+/// `alias = "s"`).
+#[derive(Debug, Clone, clap::Args)]
+pub struct StatusArgs {
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub json: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub sync_only: bool,
+}
+
 pub fn run(json: bool, sync_only: bool) -> SnipResult<()> {
     let snapshot = capture_snapshot();
 

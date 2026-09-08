@@ -174,9 +174,15 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 - Clipboard copy side effects (audit log, usage index update) are canonicalized via `copy_to_clipboard()` in `clip_cmd.rs`.
 
 ### Selection & exit codes
-- `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CommandOutcome` (commands)
+- `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CliOutcome` (stable exit codes)
+- `ProcessResult` is the per-snippet loop control (`Cancel`/`Continue`/`Done`/`Failed`) inside `run_snippet_selection`; not an exit-code layer
 - Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0
 - Output-file execution failures (timeout/spawn) map to exit code 8
+
+### CLI surface (Plan 008)
+- `validate`, `backup`, `restore`, `repair`, `status` each have one canonical `*Args` struct beside their handler (`validate_cmd::ValidateArgs`, etc.) reused by top-level and `snp data ...` spellings
+- Both spellings dispatch via single-path `handle_*` helpers in `src/main.rs`; no duplicated validation, JSON formatting, or exit-code mapping
+- `snp data` is a compatibility alias layer, not a second schema
 
 ## Keyring
 

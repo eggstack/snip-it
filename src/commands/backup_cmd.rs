@@ -14,6 +14,30 @@ pub enum BackupFormat {
     Directory,
 }
 
+/// Canonical Clap arguments for `snp backup` and `snp data backup`.
+///
+/// Single source of truth for both spellings (`data backup` uses
+/// `alias = "b"`). Field lists must not be duplicated in `main.rs`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct BackupArgs {
+    /// Output directory (default: ~/.config/snp/backups/\{timestamp\}/)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Include usage metadata in backup
+    #[arg(long)]
+    pub include_usage: bool,
+
+    /// Include sync.toml in backup (API key redacted)
+    #[arg(long)]
+    pub include_sync_state: bool,
+    /// Backup format
+    #[arg(long, value_enum, default_value = "directory")]
+    pub format: BackupFormat,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// Known kinds of entries in a backup manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

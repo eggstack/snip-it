@@ -288,7 +288,7 @@ sync policy.
 | `snp status` | Show auto-sync and sync state as JSON or text |
 | `snp backup` | Create a checksummed snapshot of local state |
 | `snp restore` | Restore local state from a backup snapshot |
-| `snp data` | Validate, back up, restore, repair, or inspect local state |
+| `snp data` | Compatibility aliases for `validate`, `backup`, `restore`, `repair`, `status` (same implementation) |
 | `snp repair` | Validate and repair configuration and library files |
 | `snp validate` | Read-only validation of snippet data and structure |
 | `snp register` | Register with a `snip-sync` server |

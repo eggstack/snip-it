@@ -9,7 +9,6 @@ use std::sync::LazyLock;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
-use snip_it::CommandOutcome;
 use snip_it::auto_sync::StartupRecoveryPolicy;
 use snip_it::commands;
 use snip_it::config;
@@ -17,6 +16,7 @@ use snip_it::error::SnipResult;
 use snip_it::logging::{
     init_default_file_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
 };
+use snip_it::outcome::CliOutcome;
 
 mod update;
 
@@ -353,33 +353,10 @@ enum Commands {
     },
     /// Repair configuration and library files
     #[command(alias = "rp")]
-    Repair {
-        /// Show planned repairs without making changes
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        dry_run: bool,
-        /// Apply safe repairs (creates backup first)
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        apply: bool,
-        /// Repair a specific library
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Output as JSON
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-    },
+    Repair(commands::repair_cmd::RepairArgs),
     /// Validate snippet data (read-only)
     #[command(alias = "val")]
-    Validate {
-        /// Validate a specific library
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Treat warnings as errors
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        strict: bool,
-        /// Output as JSON
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-    },
+    Validate(commands::validate_cmd::ValidateArgs),
     /// Advanced data maintenance commands
     #[command(alias = "d")]
     Data {
@@ -399,43 +376,11 @@ enum Commands {
         command: ShellCommands,
     },
     /// Create a secret-free backup snapshot
-    Backup {
-        /// Output directory (default: ~/.config/snp/backups/\{timestamp\}/)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        /// Include usage metadata in backup
-        #[arg(long)]
-        include_usage: bool,
-
-        /// Include sync.toml in backup (API key redacted)
-        #[arg(long)]
-        include_sync_state: bool,
-        /// Backup format
-        #[arg(long, value_enum, default_value = "directory")]
-        format: commands::backup_cmd::BackupFormat,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Backup(commands::backup_cmd::BackupArgs),
     /// Restore from a backup snapshot
-    Restore {
-        /// Path to the backup directory
-        #[arg(value_name = "BACKUP_DIR")]
-        backup: PathBuf,
-        /// Restore mode
-        #[arg(long, value_enum, default_value = "merge")]
-        mode: commands::restore_cmd::RestoreMode,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Restore(commands::restore_cmd::RestoreArgs),
     /// Show auto-sync status (read-only)
-    Status {
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync_only: bool,
-    },
+    Status(commands::status_cmd::StatusArgs),
     /// Expose snippets to local coding agents over MCP
     Mcp {
         #[command(subcommand)]
@@ -558,71 +503,17 @@ enum McpCommands {
 enum DataCommands {
     /// Validate snippet data (read-only)
     #[command(alias = "v")]
-    Validate {
-        /// Validate a specific library
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Treat warnings as errors
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        strict: bool,
-        /// Output as JSON
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-    },
+    Validate(commands::validate_cmd::ValidateArgs),
     /// Create a secret-free backup snapshot
     #[command(alias = "b")]
-    Backup {
-        /// Output directory (default: ~/.config/snp/backups/\{timestamp\}/)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        /// Include usage metadata in backup
-        #[arg(long)]
-        include_usage: bool,
-        /// Include sync.toml in backup (API key redacted)
-        #[arg(long)]
-        include_sync_state: bool,
-        /// Backup format
-        #[arg(long, value_enum, default_value = "directory")]
-        format: commands::backup_cmd::BackupFormat,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Backup(commands::backup_cmd::BackupArgs),
     /// Restore from a backup snapshot
-    Restore {
-        /// Path to the backup directory
-        #[arg(value_name = "BACKUP_DIR")]
-        backup: PathBuf,
-        /// Restore mode
-        #[arg(long, value_enum, default_value = "merge")]
-        mode: commands::restore_cmd::RestoreMode,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Restore(commands::restore_cmd::RestoreArgs),
     /// Repair configuration and library files
-    Repair {
-        /// Show planned repairs without making changes
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        dry_run: bool,
-        /// Apply safe repairs (creates backup first)
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        apply: bool,
-        /// Repair a specific library
-        #[arg(short, long)]
-        library: Option<String>,
-        /// Output as JSON
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-    },
+    Repair(commands::repair_cmd::RepairArgs),
     /// Show auto-sync status (read-only)
     #[command(alias = "s")]
-    Status {
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        json: bool,
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        sync_only: bool,
-    },
+    Status(commands::status_cmd::StatusArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -765,18 +656,49 @@ fn report_ambiguous(
     snip_it::outcome::CliOutcome::Ambiguous
 }
 
-fn finish_exact_outcome(outcome: snip_it::outcome::CliOutcome) -> SnipResult<CommandOutcome> {
-    match outcome {
-        snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
-        snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-        snip_it::outcome::CliOutcome::ExecutionFailed { child_code } => {
-            Ok(CommandOutcome::ExecutionFailed { child_code })
-        }
-        other => Ok(CommandOutcome::Exit(other.exit_code())),
-    }
+/// Single-path handler for `validate` (top-level and `data` spellings).
+///
+/// Both spellings share `ValidateArgs`, so this is the only validation,
+/// JSON formatting, and exit-code mapping for the operation.
+fn handle_validate(args: commands::validate_cmd::ValidateArgs) -> SnipResult<CliOutcome> {
+    commands::validate_cmd::run(args.library, args.strict, args.json)
 }
 
-fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
+/// Single-path handler for `backup` (top-level and `data` spellings).
+fn handle_backup(args: commands::backup_cmd::BackupArgs) -> SnipResult<CliOutcome> {
+    commands::backup_cmd::run(
+        args.output,
+        args.include_usage,
+        args.include_sync_state,
+        args.format,
+        args.json,
+    )?;
+    Ok(CliOutcome::Success)
+}
+
+/// Single-path handler for `restore` (top-level and `data` spellings).
+fn handle_restore(args: commands::restore_cmd::RestoreArgs) -> SnipResult<CliOutcome> {
+    commands::restore_cmd::run(args.backup, args.mode, args.json)?;
+    Ok(CliOutcome::Success)
+}
+
+/// Single-path handler for `repair` (top-level and `data` spellings).
+///
+/// `UnsafeOnly` (exit 10) and `PartialFailure` (exit 1) exit directly via
+/// `exit_on_repair_status`; clean/dry-run/repaired map to `Success`.
+fn handle_repair(args: commands::repair_cmd::RepairArgs) -> SnipResult<CliOutcome> {
+    let status = commands::repair_cmd::run(args.dry_run, args.apply, args.library, args.json)?;
+    exit_on_repair_status(status);
+    Ok(CliOutcome::Success)
+}
+
+/// Single-path handler for `status` (top-level and `data` spellings).
+fn handle_status(args: commands::status_cmd::StatusArgs) -> SnipResult<CliOutcome> {
+    commands::status_cmd::run(args.json, args.sync_only)?;
+    Ok(CliOutcome::Success)
+}
+
+fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
     match cli {
         None => {
             return commands::run_cmd::run(None, false, None, None, None);
@@ -875,7 +797,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                             sync.then_some(&RUNTIME),
                         )?;
                         match outcome {
-                            CommandOutcome::ExecutionFailed { child_code } => {
+                            CliOutcome::ExecutionFailed { child_code } => {
                                 std::process::exit(child_code.unwrap_or(8));
                             }
                             _ => snip_it::outcome::CliOutcome::Success,
@@ -886,7 +808,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     }
                     _ => snip_it::outcome::CliOutcome::NotFound,
                 };
-                return finish_exact_outcome(outcome);
+                return Ok(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -899,7 +821,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     Some(sort_opts),
                     sync.then_some(&RUNTIME),
                 )?;
-                if let CommandOutcome::ExecutionFailed { child_code } = outcome {
+                if let CliOutcome::ExecutionFailed { child_code } = outcome {
                     std::process::exit(child_code.unwrap_or(8));
                 }
             }
@@ -931,7 +853,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                     }
                     _ => snip_it::outcome::CliOutcome::NotFound,
                 };
-                return finish_exact_outcome(outcome);
+                return Ok(outcome);
             } else {
                 let sort_opts = snip_it::sort::SortOptions {
                     mode: sort,
@@ -1043,7 +965,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                         }
                         _ => snip_it::outcome::CliOutcome::NotFound,
                     };
-                    return finish_exact_outcome(outcome);
+                    return Ok(outcome);
                 } else {
                     let filter_str = filter.ok_or_else(|| {
                         snip_it::error::SnipError::runtime_error(
@@ -1101,7 +1023,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             }
             Some(SyncCommands::DiscardPending { force, generation }) => {
                 let outcome = commands::sync_cmd::run_discard_pending(force, generation)?;
-                return finish_exact_outcome(outcome);
+                return Ok(outcome);
             }
             Some(SyncCommands::Repair { dry_run, apply }) => {
                 commands::sync_cmd::run_repair(dry_run, apply)?;
@@ -1163,7 +1085,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 strict,
                 report,
             )?;
-            return finish_exact_outcome(outcome);
+            return Ok(outcome);
         }
         Some(Commands::Shell { command }) => match command {
             ShellCommands::Init { shell } => {
@@ -1205,37 +1127,20 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 commands::import_cmd::run_import_pet(options)?;
             }
         },
-        Some(Commands::Repair {
-            dry_run,
-            apply,
-            library,
-            json,
-        }) => {
-            let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
-            exit_on_repair_status(status);
+        Some(Commands::Repair(args)) => {
+            return handle_repair(args);
         }
-        Some(Commands::Validate {
-            library,
-            strict,
-            json,
-        }) => {
-            let outcome = commands::validate_cmd::run(library, strict, json)?;
-            finish_exact_outcome(outcome)?;
+        Some(Commands::Validate(args)) => {
+            return handle_validate(args);
         }
-        Some(Commands::Backup {
-            output,
-            include_usage,
-            include_sync_state,
-            format,
-            json,
-        }) => {
-            commands::backup_cmd::run(output, include_usage, include_sync_state, format, json)?;
+        Some(Commands::Backup(args)) => {
+            return handle_backup(args);
         }
-        Some(Commands::Restore { backup, mode, json }) => {
-            commands::restore_cmd::run(backup, mode, json)?;
+        Some(Commands::Restore(args)) => {
+            return handle_restore(args);
         }
-        Some(Commands::Status { json, sync_only }) => {
-            commands::status_cmd::run(json, sync_only)?;
+        Some(Commands::Status(args)) => {
+            return handle_status(args);
         }
         Some(Commands::Mcp { command }) => match command {
             McpCommands::Serve => snip_it::mcp::serve()?,
@@ -1243,37 +1148,20 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             McpCommands::Install { client } => snip_it::mcp::install(client)?,
         },
         Some(Commands::Data { command }) => match command {
-            DataCommands::Validate {
-                library,
-                strict,
-                json,
-            } => {
-                let outcome = commands::validate_cmd::run(library, strict, json)?;
-                finish_exact_outcome(outcome)?;
+            DataCommands::Validate(args) => {
+                return handle_validate(args);
             }
-            DataCommands::Backup {
-                output,
-                include_usage,
-                include_sync_state,
-                format,
-                json,
-            } => {
-                commands::backup_cmd::run(output, include_usage, include_sync_state, format, json)?;
+            DataCommands::Backup(args) => {
+                return handle_backup(args);
             }
-            DataCommands::Restore { backup, mode, json } => {
-                commands::restore_cmd::run(backup, mode, json)?;
+            DataCommands::Restore(args) => {
+                return handle_restore(args);
             }
-            DataCommands::Repair {
-                dry_run,
-                apply,
-                library,
-                json,
-            } => {
-                let status = commands::repair_cmd::run(dry_run, apply, library, json)?;
-                exit_on_repair_status(status);
+            DataCommands::Repair(args) => {
+                return handle_repair(args);
             }
-            DataCommands::Status { json, sync_only } => {
-                commands::status_cmd::run(json, sync_only)?;
+            DataCommands::Status(args) => {
+                return handle_status(args);
             }
         },
         Some(Commands::Get {
@@ -1302,13 +1190,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
                 resolution,
                 vars,
             )?;
-            return match outcome {
-                snip_it::outcome::CliOutcome::Success => Ok(CommandOutcome::Success),
-                snip_it::outcome::CliOutcome::Cancelled => Ok(CommandOutcome::Cancelled),
-                _ => {
-                    std::process::exit(outcome.exit_code());
-                }
-            };
+            return Ok(outcome);
         }
         Some(Commands::AutoSyncWorker { state_dir }) => {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
@@ -1322,7 +1204,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CommandOutcome> {
             }
         }
     }
-    Ok(CommandOutcome::Success)
+    Ok(CliOutcome::Success)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1346,11 +1228,11 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             Commands::Version
             | Commands::List { .. }
             | Commands::Select { .. }
-            | Commands::Status { .. }
+            | Commands::Status(_)
             | Commands::Mcp { .. }
             | Commands::Get { .. }
-            | Commands::Validate { .. }
-            | Commands::Backup { .. }
+            | Commands::Validate(_)
+            | Commands::Backup(_)
             | Commands::Library {
                 command: LibraryCommands::List | LibraryCommands::Show { .. },
             },
@@ -1360,40 +1242,44 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
         ),
 
         // ── Dry-run / read-only modes of otherwise-mutating commands ─
-        Some(
-            Commands::Restore {
-                mode: commands::restore_cmd::RestoreMode::DryRun,
-                ..
-            }
-            | Commands::Import {
-                command: ImportSubcommands::Pet { dry_run: true, .. },
-            }
-            | Commands::Repair { dry_run: true, .. },
-        ) => (
+        Some(Commands::Restore(args))
+            if args.mode == commands::restore_cmd::RestoreMode::DryRun =>
+        {
+            (
+                StartupRecoveryPolicy::SuppressReadOnly,
+                StartupServices::Minimal,
+            )
+        }
+        Some(Commands::Repair(args)) if args.dry_run => (
+            StartupRecoveryPolicy::SuppressReadOnly,
+            StartupServices::Minimal,
+        ),
+        Some(Commands::Import {
+            command: ImportSubcommands::Pet { dry_run: true, .. },
+        }) => (
             StartupRecoveryPolicy::SuppressReadOnly,
             StartupServices::Minimal,
         ),
 
         // ── Data subcommand group ───────────────────────────────────
         Some(Commands::Data { command }) => match command {
-            DataCommands::Validate { .. }
-            | DataCommands::Status { .. }
-            | DataCommands::Backup { .. } => (
+            DataCommands::Validate(_) | DataCommands::Status(_) | DataCommands::Backup(_) => (
                 StartupRecoveryPolicy::SuppressReadOnly,
                 StartupServices::Minimal,
             ),
-            DataCommands::Restore {
-                mode: commands::restore_cmd::RestoreMode::DryRun,
-                ..
-            } => (
+            DataCommands::Restore(args)
+                if args.mode == commands::restore_cmd::RestoreMode::DryRun =>
+            {
+                (
+                    StartupRecoveryPolicy::SuppressReadOnly,
+                    StartupServices::Minimal,
+                )
+            }
+            DataCommands::Repair(args) if args.dry_run => (
                 StartupRecoveryPolicy::SuppressReadOnly,
                 StartupServices::Minimal,
             ),
-            DataCommands::Repair { dry_run: true, .. } => (
-                StartupRecoveryPolicy::SuppressReadOnly,
-                StartupServices::Minimal,
-            ),
-            DataCommands::Repair { .. } | DataCommands::Restore { .. } => {
+            DataCommands::Repair(_) | DataCommands::Restore(_) => {
                 (StartupRecoveryPolicy::Allow, StartupServices::Logging)
             }
         },
@@ -1406,8 +1292,8 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             | Commands::Search { .. }
             | Commands::Edit { .. }
             | Commands::Import { .. }
-            | Commands::Repair { .. }
-            | Commands::Restore { .. }
+            | Commands::Repair(_)
+            | Commands::Restore(_)
             | Commands::Premade { .. }
             | Commands::Library {
                 command:
@@ -1467,24 +1353,12 @@ fn main() {
     }
 
     match dispatch_command(cli.command) {
-        Ok(CommandOutcome::Success) => {}
-        Ok(CommandOutcome::Cancelled) => {
+        Ok(CliOutcome::Success) => {}
+        Ok(outcome) => {
             if behavior.services != StartupServices::Minimal {
                 log_shutdown_info();
             }
-            std::process::exit(4);
-        }
-        Ok(CommandOutcome::ExecutionFailed { child_code }) => {
-            if behavior.services != StartupServices::Minimal {
-                log_shutdown_info();
-            }
-            std::process::exit(child_code.unwrap_or(8));
-        }
-        Ok(CommandOutcome::Exit(code)) => {
-            if behavior.services != StartupServices::Minimal {
-                log_shutdown_info();
-            }
-            std::process::exit(code);
+            std::process::exit(outcome.exit_code());
         }
         Err(e) => {
             eprintln!("error: {e}");
@@ -1493,7 +1367,6 @@ fn main() {
             }
             std::process::exit(1);
         }
-        _ => unreachable!("all CommandOutcome variants are matched"),
     }
 
     if behavior.services != StartupServices::Minimal {
@@ -1570,10 +1443,10 @@ mod tests {
 
     #[test]
     fn status_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Status {
+        let b = behavior(Some(&Commands::Status(commands::status_cmd::StatusArgs {
             json: false,
             sync_only: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1599,24 +1472,26 @@ mod tests {
 
     #[test]
     fn validate_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Validate {
-            library: None,
-            strict: false,
-            json: false,
-        }));
+        let b = behavior(Some(&Commands::Validate(
+            commands::validate_cmd::ValidateArgs {
+                library: None,
+                strict: false,
+                json: false,
+            },
+        )));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
 
     #[test]
     fn backup_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Backup {
+        let b = behavior(Some(&Commands::Backup(commands::backup_cmd::BackupArgs {
             output: None,
             include_usage: false,
             include_sync_state: false,
             format: commands::backup_cmd::BackupFormat::Directory,
             json: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1643,11 +1518,13 @@ mod tests {
 
     #[test]
     fn restore_dryrun_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Restore {
-            backup: PathBuf::from("/tmp/backup"),
-            mode: commands::restore_cmd::RestoreMode::DryRun,
-            json: false,
-        }));
+        let b = behavior(Some(&Commands::Restore(
+            commands::restore_cmd::RestoreArgs {
+                backup: PathBuf::from("/tmp/backup"),
+                mode: commands::restore_cmd::RestoreMode::DryRun,
+                json: false,
+            },
+        )));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1672,12 +1549,12 @@ mod tests {
 
     #[test]
     fn repair_dryrun_is_minimal_readonly() {
-        let b = behavior(Some(&Commands::Repair {
+        let b = behavior(Some(&Commands::Repair(commands::repair_cmd::RepairArgs {
             dry_run: true,
             apply: false,
             library: None,
             json: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
     }
@@ -1687,11 +1564,11 @@ mod tests {
     #[test]
     fn data_validate_is_minimal_readonly() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Validate {
+            command: DataCommands::Validate(commands::validate_cmd::ValidateArgs {
                 library: None,
                 strict: false,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
@@ -1700,10 +1577,10 @@ mod tests {
     #[test]
     fn data_status_is_minimal_readonly() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Status {
+            command: DataCommands::Status(commands::status_cmd::StatusArgs {
                 json: false,
                 sync_only: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
@@ -1712,13 +1589,13 @@ mod tests {
     #[test]
     fn data_backup_is_minimal_readonly() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Backup {
+            command: DataCommands::Backup(commands::backup_cmd::BackupArgs {
                 output: None,
                 include_usage: false,
                 include_sync_state: false,
                 format: commands::backup_cmd::BackupFormat::Directory,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
@@ -1727,11 +1604,11 @@ mod tests {
     #[test]
     fn data_restore_dryrun_is_minimal_readonly() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Restore {
+            command: DataCommands::Restore(commands::restore_cmd::RestoreArgs {
                 backup: PathBuf::from("/tmp/b"),
                 mode: commands::restore_cmd::RestoreMode::DryRun,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
@@ -1740,12 +1617,12 @@ mod tests {
     #[test]
     fn data_repair_dryrun_is_minimal_readonly() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Repair {
+            command: DataCommands::Repair(commands::repair_cmd::RepairArgs {
                 dry_run: true,
                 apply: false,
                 library: None,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
         assert_eq!(b.services, StartupServices::Minimal);
@@ -1754,12 +1631,12 @@ mod tests {
     #[test]
     fn data_repair_mutation_is_allowed() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Repair {
+            command: DataCommands::Repair(commands::repair_cmd::RepairArgs {
                 dry_run: false,
                 apply: true,
                 library: None,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
@@ -1768,11 +1645,11 @@ mod tests {
     #[test]
     fn data_restore_mutation_is_allowed() {
         let b = behavior(Some(&Commands::Data {
-            command: DataCommands::Restore {
+            command: DataCommands::Restore(commands::restore_cmd::RestoreArgs {
                 backup: PathBuf::from("/tmp/b"),
                 mode: commands::restore_cmd::RestoreMode::Merge,
                 json: false,
-            },
+            }),
         }));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
@@ -1865,23 +1742,25 @@ mod tests {
 
     #[test]
     fn repair_mutation_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::Repair {
+        let b = behavior(Some(&Commands::Repair(commands::repair_cmd::RepairArgs {
             dry_run: false,
             apply: true,
             library: None,
             json: false,
-        }));
+        })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
 
     #[test]
     fn restore_mutation_is_allowed_logging_and_audit() {
-        let b = behavior(Some(&Commands::Restore {
-            backup: PathBuf::from("/tmp/b"),
-            mode: commands::restore_cmd::RestoreMode::Merge,
-            json: false,
-        }));
+        let b = behavior(Some(&Commands::Restore(
+            commands::restore_cmd::RestoreArgs {
+                backup: PathBuf::from("/tmp/b"),
+                mode: commands::restore_cmd::RestoreMode::Merge,
+                json: false,
+            },
+        )));
         assert_eq!(b.recovery, StartupRecoveryPolicy::Allow);
         assert_eq!(b.services, StartupServices::Logging);
     }
@@ -2060,10 +1939,10 @@ mod tests {
                 sort: snip_it::sort::SnippetSort::Relevance,
                 favorites_first: false,
             }),
-            Some(Commands::Status {
+            Some(Commands::Status(commands::status_cmd::StatusArgs {
                 json: false,
                 sync_only: false,
-            }),
+            })),
             Some(Commands::Get {
                 id: None,
                 description_exact: None,
@@ -2077,11 +1956,11 @@ mod tests {
                 resolution: snip_it::selector::ResolutionPolicy::Unique,
                 vars: None,
             }),
-            Some(Commands::Validate {
+            Some(Commands::Validate(commands::validate_cmd::ValidateArgs {
                 library: None,
                 strict: false,
                 json: false,
-            }),
+            })),
         ];
         for case in &read_only_cases {
             let b = behavior(case.as_ref());

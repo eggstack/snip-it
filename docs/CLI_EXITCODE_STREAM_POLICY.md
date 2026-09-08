@@ -28,7 +28,7 @@ verified reference is [`docs/EXIT_CODES.md`](EXIT_CODES.md).
 Selection semantics: `run_snippet_selection()` returns `SelectionOutcome`
 (Selected or Cancelled). For `run`, `clip`, and `search`, cancellation is
 treated as normal completion (exit 0). For `snp select`, cancellation maps
-to exit 4 via `CommandOutcome::Cancelled` at the CLI boundary in `main.rs`.
+to exit 4 via `CliOutcome::Cancelled` at the CLI boundary in `main.rs`.
 
 ### Stream Usage (stdout vs stderr)
 
@@ -93,8 +93,8 @@ flags. Without flags, output uses the default relevance ordering.
   cancel), 1 on `SnipError` (all error variants).
 - **Output file**: Rejects symlinks and directories with exit 1. On cancellation,
   the output file is removed if it exists and is a regular file.
-- **Return type**: `SnipResult<CommandOutcome>` — `CommandOutcome::Success` or
-  `CommandOutcome::Cancelled`. Exit code 4 is mapped at the CLI boundary in
+- **Return type**: `SnipResult<CliOutcome>` — `CliOutcome::Success` or
+  `CliOutcome::Cancelled`. Exit code 4 is mapped at the CLI boundary in
   `main.rs`.
 - **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
   Sorting affects the TUI display order. The `--query` (alias `--filter`)
@@ -325,7 +325,7 @@ The shipped mapping instead distinguishes `AMBIGUOUS` (5), `VALIDATION_FAILED`
 **Note**: `run_snippet_selection()` returns `SelectionOutcome` (Selected or
 Cancelled). For existing commands (`run`, `clip`, `search`), cancellation is
 treated as normal completion (exit 0). For `snp select`, cancellation
-maps to exit 4 via `CommandOutcome::Cancelled`, which is returned to the CLI
+maps to exit 4 via `CliOutcome::Cancelled`, which is returned to the CLI
 boundary in `main.rs`. Ctrl+C in the TUI (normal mode) also maps to
 `SelectionOutcome::Cancelled` → exit 4 for `select`.
 

@@ -9,6 +9,24 @@ use crate::usage::UsageIndex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// Canonical Clap arguments for `snp validate` and `snp data validate`.
+///
+/// This is the single source of truth for both spellings. Top-level
+/// (`alias = "val"`) and `data` (`alias = "v"`) variants reuse this type
+/// so field lists cannot drift.
+#[derive(Debug, Clone, clap::Args)]
+pub struct ValidateArgs {
+    /// Validate a specific library
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Treat warnings as errors
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub strict: bool,
+    /// Output as JSON
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub json: bool,
+}
+
 /// Severity level for validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Severity {

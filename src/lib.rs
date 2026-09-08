@@ -120,28 +120,11 @@ impl ProcessResult {
     }
 }
 
-/// Top-level outcome returned by command implementations for exit-code mapping.
-#[non_exhaustive]
-#[doc(hidden)]
-pub enum CommandOutcome {
-    /// Command completed successfully.
-    Success,
-    /// User cancelled the selection.
-    Cancelled,
-    /// Snippet execution failed (child exit, signal, timeout, spawn failure).
-    ExecutionFailed {
-        /// The child process exit code, if available.
-        child_code: Option<i32>,
-    },
-    /// Terminal outcome carrying an already-mapped process exit code.
-    Exit(i32),
-}
-
 /// Internal outcome of the shared snippet-selection TUI loop.
 ///
-/// This is distinct from `CommandOutcome`: `SelectionOutcome` is the raw
-/// result of the TUI interaction, while `CommandOutcome` is the CLI-level
-/// semantic result mapped to exit codes in `main.rs`.
+/// This is the raw result of the TUI interaction. Command implementations
+/// map it directly to [`outcome::CliOutcome`] (the stable public CLI result)
+/// in `main.rs` without an intermediate command-outcome layer.
 #[non_exhaustive]
 #[doc(hidden)]
 pub enum SelectionOutcome {

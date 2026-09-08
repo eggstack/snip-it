@@ -13,7 +13,7 @@ pub fn run(
     library: Option<String>,
     sort_opts: Option<SortOptions>,
     runtime: Option<&tokio::runtime::Runtime>,
-) -> SnipResult<CommandOutcome>
+) -> SnipResult<CliOutcome>
 ```
 
 ## Flow

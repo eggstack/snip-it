@@ -319,7 +319,7 @@ pub fn run(
     library: Option<String>,
     sort_opts: Option<crate::sort::SortOptions>,
     runtime: Option<&tokio::runtime::Runtime>,
-) -> SnipResult<crate::CommandOutcome> {
+) -> SnipResult<crate::outcome::CliOutcome> {
     let outcome = run_snippet_selection(
         filter,
         library,
@@ -331,13 +331,13 @@ pub fn run(
     )?;
     match outcome {
         crate::SelectionOutcome::ExecutionFailed { exit_code } => {
-            Ok(crate::CommandOutcome::ExecutionFailed {
+            Ok(crate::outcome::CliOutcome::ExecutionFailed {
                 child_code: exit_code,
             })
         }
         // run treats cancellation as exit 0 (per documented contract)
-        crate::SelectionOutcome::Cancelled => Ok(crate::CommandOutcome::Success),
-        crate::SelectionOutcome::Selected => Ok(crate::CommandOutcome::Success),
+        crate::SelectionOutcome::Cancelled => Ok(crate::outcome::CliOutcome::Success),
+        crate::SelectionOutcome::Selected => Ok(crate::outcome::CliOutcome::Success),
     }
 }
 
@@ -346,7 +346,7 @@ pub fn run_exact(
     snippet: &Snippet,
     do_sync: bool,
     runtime: Option<&tokio::runtime::Runtime>,
-) -> SnipResult<crate::CommandOutcome> {
+) -> SnipResult<crate::outcome::CliOutcome> {
     let runtime = if do_sync {
         Some(runtime.ok_or_else(|| {
             crate::error::SnipError::runtime_error(
@@ -359,7 +359,7 @@ pub fn run_exact(
     };
     let result = process_snippet(snippet, false)?;
     if let crate::ProcessResult::Failed { exit_code, .. } = result {
-        return Ok(crate::CommandOutcome::ExecutionFailed {
+        return Ok(crate::outcome::CliOutcome::ExecutionFailed {
             child_code: exit_code,
         });
     }
@@ -369,7 +369,7 @@ pub fn run_exact(
     {
         tracing::warn!(error = %e, "post-run explicit sync failed");
     }
-    Ok(crate::CommandOutcome::Success)
+    Ok(crate::outcome::CliOutcome::Success)
 }
 
 #[cfg(test)]

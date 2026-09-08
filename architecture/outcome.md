@@ -84,20 +84,22 @@ process exit code by calling `outcome.exit_code()` on success, or mapping
 ```
 SnippetSelection (TUI layer)
     ↓
-SelectionOutcome (lib layer)
-    ↓
-CommandOutcome (command layer)
+SelectionOutcome (lib layer: Selected / Cancelled / ExecutionFailed)
     ↓
 CliOutcome (public exit code layer)
 ```
 
 - `SnippetSelection` is the TUI-level selection result (Selected, Cancelled, etc.)
-- `SelectionOutcome` wraps snippet data with selection context
-- `CommandOutcome` captures the result of a command operation
+- `SelectionOutcome` is the raw TUI-loop result preserved because it models UI-only state
+- `ProcessResult` is the per-snippet loop control (`Cancel`/`Continue`/`Done`/`Failed`) inside `run_snippet_selection`; not an exit-code layer
 - `CliOutcome` is the final typed outcome for exit-code mapping
 
-Commands convert their internal outcomes to `CliOutcome` before returning.
-This ensures all commands share the same exit code semantics.
+Commands convert their internal outcomes to `CliOutcome` directly before
+returning. There is no intermediate command-outcome layer. `main.rs`
+maps `Ok(CliOutcome)` to `outcome.exit_code()` (with `Success` → no exit)
+and `Err(SnipError)` to exit 1. `repair` uses `exit_on_repair_status`
+for its `UnsafeOnly` (10) / `PartialFailure` (1) cases, which have no
+`CliOutcome` variant.
 
 ## Non-Exhaustive
 

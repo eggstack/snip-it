@@ -1,8 +1,8 @@
-use crate::CommandOutcome;
 use crate::SelectionOutcome;
 use crate::commands::run_snippet_selection;
 use crate::error::SnipResult;
 use crate::library::Snippet;
+use crate::outcome::CliOutcome;
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -48,7 +48,7 @@ pub fn run(
     expanded: bool,
     output_file: Option<PathBuf>,
     sort_opts: Option<crate::sort::SortOptions>,
-) -> SnipResult<CommandOutcome> {
+) -> SnipResult<CliOutcome> {
     let mode = if expanded {
         OutputMode::Expanded
     } else {
@@ -74,7 +74,7 @@ pub fn run(
     )?;
 
     match (selection_outcome, cancelled.get(), selected_command.take()) {
-        (SelectionOutcome::Cancelled, _, _) | (_, true, _) => Ok(CommandOutcome::Cancelled),
+        (SelectionOutcome::Cancelled, _, _) | (_, true, _) => Ok(CliOutcome::Cancelled),
         (SelectionOutcome::ExecutionFailed { .. }, _, _) => {
             Err(crate::error::SnipError::runtime_error(
                 "Internal contract error",
@@ -93,7 +93,7 @@ pub fn run(
             } else {
                 println!("{command}");
             }
-            Ok(CommandOutcome::Success)
+            Ok(CliOutcome::Success)
         }
         (SelectionOutcome::Selected, false, None) => Err(crate::error::SnipError::runtime_error(
             "Internal contract error",

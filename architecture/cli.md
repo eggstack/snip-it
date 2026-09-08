@@ -28,10 +28,17 @@ hook remains installed before parsing so TUI terminal cleanup is still protected
 ### Command Dispatch
 
 ```rust
-fn dispatch_command(cli: Commands) -> SnipResult<()>
+fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome>
 ```
 
 All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `run()` function, except `premade_cmd` and `library_cmd` which use subcommand-dispatched functions (`run_list`, `run_get`, etc.).
+
+`validate`, `backup`, `restore`, `repair`, and `status` each have one
+canonical Clap `Args` struct beside their handler
+(`ValidateArgs`, `BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`).
+Top-level and `snp data ...` spellings reuse the same type, and both
+dispatch through single-path `handle_*` helpers in `src/main.rs`. `snp data`
+is a compatibility alias layer, not a second schema.
 
 ## Subcommands
 
@@ -59,7 +66,7 @@ All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `r
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
 | `status` | — | `status_cmd` | No | Show auto-sync status |
-| `data` | `d` | `DataCommands` | No | Advanced data maintenance subcommand group (`validate`, `backup`, `restore`, `repair`, `status`) |
+| `data` | `d` | `DataCommands` | No | Compatibility alias layer reusing the canonical `validate`/`backup`/`restore`/`repair`/`status` args (`validate`→`v`, `backup`→`b`, `status`→`s`) |
 | `update` | — | `update_cmd` | No | Check for and install an update |
 | `shell` | — | `shell_cmd` | No | Generate interactive shell integration |
 | `completions` | — | `completions_cmd` | No | Generate shell completions |

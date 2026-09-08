@@ -11,6 +11,26 @@ use crate::library::LibraryManager;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Canonical Clap arguments for `snp repair` and `snp data repair`.
+///
+/// Single source of truth for both spellings. Top-level uses
+/// `alias = "rp"`; the `data` spelling has no alias.
+#[derive(Debug, Clone, clap::Args)]
+pub struct RepairArgs {
+    /// Show planned repairs without making changes
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub dry_run: bool,
+    /// Apply safe repairs (creates backup first)
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub apply: bool,
+    /// Repair a specific library
+    #[arg(short, long)]
+    pub library: Option<String>,
+    /// Output as JSON
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub json: bool,
+}
+
 /// Typed repair action categories for safe, structured repair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepairAction {

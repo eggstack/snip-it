@@ -1,6 +1,6 @@
 # Plan 008: CLI surface and outcome consolidation
 
-Status: ready
+Status: complete
 
 Depends on: none
 
