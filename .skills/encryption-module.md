@@ -17,10 +17,9 @@ Memory cost is set to `1 << 14` (16 MiB). OWASP recommends a minimum of 19 MiB (
 ## Key Derivation
 
 ```rust
-// Uses hash_password with string-encoded salt
-let hash = argon2.hash_password(api_key.as_bytes(), &salt_string)?;
-let hash_output = hash.hash.ok_or_else(...)?;
-let hash_bytes = hash_output.as_bytes();
+// Uses hash_password_into with raw salt bytes (argon2 0.6 KDF API)
+let mut key_bytes = [0u8; 32];
+argon2.hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)?;
 ```
 
 The derived key is wrapped in `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop`.

@@ -23,7 +23,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, Generate, KeyInit},
 };
-use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+use argon2::Argon2;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -172,9 +172,6 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         }
     }
 
-    let salt_string = SaltString::encode_b64(salt)
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Salt encoding failed: {e}")))?;
-
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
@@ -187,22 +184,10 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         .map_err(|e| CryptoError::KeyDerivationFailed(format!("Invalid Argon2 params: {e}")))?,
     );
 
-    let hash = argon2
-        .hash_password(api_key.as_bytes(), &salt_string)
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Hashing failed: {e}")))?;
-
-    let hash_output = hash
-        .hash
-        .ok_or_else(|| CryptoError::KeyDerivationFailed("No hash output".to_string()))?;
-
-    let hash_bytes = hash_output.as_bytes();
-    if hash_bytes.len() < 32 {
-        return Err(CryptoError::KeyDerivationFailed(
-            "Argon2 output too short for AES-256 key".to_string(),
-        ));
-    }
     let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&hash_bytes[..32]);
+    argon2
+        .hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)
+        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Hashing failed: {e}")))?;
 
     // Cache the derived key for future use with the same (api_key, salt)
     if let Ok(mut cache) = KEY_CACHE.lock() {

@@ -53,10 +53,9 @@ pub struct EncryptedPayload {
 fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey>
 ```
 
-1. Encode salt as base64 `SaltString`
-2. Create Argon2id instance with fixed params
-3. Hash API key with salt → 32-byte output
-4. Return as `DerivedKey` (zeroized on drop)
+1. Create Argon2id instance with fixed params
+2. Derive 32-byte key via `hash_password_into` (argon2 0.6 KDF API) with raw salt bytes
+3. Return as `DerivedKey` (zeroized on drop)
 
 ## Encrypt / Decrypt
 
