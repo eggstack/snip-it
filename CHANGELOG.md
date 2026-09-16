@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.9] - 2026-09-16
+
+### Changed
+- **Argon2 0.5 → 0.6** (`snip-it` 1.3.9, `snip-sync` 0.1.6):
+  password-hash 0.6 breaking changes adapted — server uses
+  `hash_password_with_salt` with raw bytes and `phc::PasswordHash`,
+  client KDF uses `hash_password_into` directly. Stored PHC hashes and
+  encrypted payloads verify byte-identically across the upgrade.
+
 ### Fixed
 - **Pipe-to-shell bootstrap**: `curl .../packaging/install.sh | bash` no
   longer fails with `BASH_SOURCE[0]: unbound variable` under `set -u`; the
@@ -303,6 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.3.9]: https://github.com/eggstack/snip-it/releases/tag/v1.3.9
 [1.3.8]: https://github.com/eggstack/snip-it/releases/tag/v1.3.8
 [1.3.7]: https://github.com/eggstack/snip-it/releases/tag/v1.3.7
 [1.3.6]: https://github.com/eggstack/snip-it/releases/tag/v1.3.6
