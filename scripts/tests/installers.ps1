@@ -8,7 +8,7 @@ $InstallerPath = Join-Path $ScriptDir '../../packaging/install.ps1'
 # $MyInvocation.InvocationName -ne '.' in install.ps1).
 . $InstallerPath
 
-$script: failures = 0
+$script:failures = 0
 
 function Assert-Equal([string]$Expected, [string]$Actual, [string]$Label) {
     if ($Expected -ne $Actual) {
