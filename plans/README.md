@@ -15,7 +15,15 @@ This directory contains active implementation plans intended for agent handoff.
 | [006](006-windows-ci-platform-closure.md) | Windows CI and platform closure | Complete | 001–005 |
 | [007](007-release-publication-and-distribution-closure.md) | Release publication and distribution closure | Complete | 006 |
 
-Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006 restored the ordinary Windows all-target/platform-smoke gate, and Plan 007 completed publication and end-to-end distribution evidence without weakening published-release immutability. That line of work is closed.
+Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006 restored the ordinary Windows all-target/platform-smoke gate, and Plan 007 completed publication and end-to-end distribution evidence without weakening published-release immutability. That historical sequence remains closed.
+
+## Active distribution corrective follow-up
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [013](013-snp-binary-publication-and-installer-corrective-closure.md) | snp binary publication and installer corrective closure | Ready | 001, 002, 007 |
+
+Plan 013 is a narrow post-closure correction prompted by the remaining public distribution asymmetry: the shared release workflow already builds and validates the five-target `snp` matrix, but the current public `v1.3.7` release predates that workflow and has no attached client binaries, while the public consumer smoke is hard-coded to `snip-sync`. The plan does not reopen or redesign the release architecture. It requires the next legitimate `snip-it` release to provide public `snp` assets, makes consumer smoke symmetric across the independently versioned components, and completes deterministic Bash/PowerShell installer failure-mode coverage.
 
 ## Completed consolidation sequence
 
@@ -44,6 +52,8 @@ The intended order is deliberately deletion/consolidation first:
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
 
 For Plans 008–012, preserve `snip-it` as a lightweight terminal tool. Specifically, do not use this consolidation work to introduce additional workspace crates, service/repository abstractions, dependency-injection frameworks, plugin/rule engines, databases/search indexes, generic query languages, background job systems, networked MCP, MCP mutations/execution, retry middleware frameworks, or additional CI/release hardening.
+
+For Plan 013, preserve the existing single release workflow and component-specific tag/version namespaces. Do not duplicate the release matrix or retrofit binaries onto an already-published historical release. The correction should be achieved through symmetric consumer/install testing and the next legitimate `snip-it` release.
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
 
