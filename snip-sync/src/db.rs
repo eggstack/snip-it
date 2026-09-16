@@ -1,6 +1,6 @@
 use argon2::{
     Algorithm, Argon2, Params, Version,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use base64::Engine;
 use chrono::Utc;
@@ -62,9 +62,6 @@ fn hash_api_key(api_key: &str) -> DbResult<String> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
         .map_err(|e| DbError::Internal(format!("Failed to generate salt: {}", e)))?;
-    let salt_b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(salt_bytes);
-    let salt = SaltString::from_b64(&salt_b64)
-        .map_err(|e| DbError::Internal(format!("Failed to create salt: {}", e)))?;
     let params = Params::new(
         ARGON2_MEMORY_KIB,
         ARGON2_ITERATIONS,
@@ -74,7 +71,7 @@ fn hash_api_key(api_key: &str) -> DbResult<String> {
     .map_err(|e| DbError::Internal(format!("Invalid Argon2 params: {}", e)))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let hash = argon2
-        .hash_password(api_key.as_bytes(), &salt)
+        .hash_password_with_salt(api_key.as_bytes(), &salt_bytes)
         .map_err(|e| DbError::Internal(format!("Failed to hash API key: {}", e)))?
         .to_string();
     Ok(hash)

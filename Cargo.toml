@@ -116,7 +116,7 @@ tonic = { version = "0.14", default-features = false, features = ["codegen", "ch
 prost = "0.14"
 snip-proto = { version = "0.1.3", path = "snip-proto" }
 aes-gcm = "0.11"
-argon2 = "0.5"
+argon2 = "0.6"
 base64 = "0.22"
 
 regex = "1.11"

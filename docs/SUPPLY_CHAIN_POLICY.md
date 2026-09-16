@@ -176,7 +176,7 @@ The following direct dependencies are critical to the project's security and fun
 | Crate | Version | Purpose | Security Relevance |
 |-------|---------|---------|-------------------|
 | `aes-gcm` | 0.11 | AES-256-GCM authenticated encryption | Encrypts snippet payloads at rest and in transit |
-| `argon2` | 0.5 | Argon2id key derivation | Derives encryption keys from API keys |
+| `argon2` | 0.6 | Argon2id key derivation | Derives encryption keys from API keys |
 | `keyring` | 4 | OS keychain integration | Stores API keys securely in platform keychain |
 | `zeroize` | 1 | Zeroing memory for secrets | Ensures sensitive buffers are wiped after use |
 | `tonic` | 0.14 | gRPC framework (client + server) | Transport layer for sync protocol |
