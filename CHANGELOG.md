@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.8] - 2026-09-16
+
 ### Fixed
 - **Bootstrap installer verification fails closed**: `packaging/install.sh`
   now explicitly returns a hard failure when checksum/identity verification
@@ -293,6 +295,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync error propagation to callers
 - Premade sync returns error on failure
 
+[1.3.8]: https://github.com/eggstack/snip-it/releases/tag/v1.3.8
 [1.3.7]: https://github.com/eggstack/snip-it/releases/tag/v1.3.7
 [1.3.6]: https://github.com/eggstack/snip-it/releases/tag/v1.3.6
 [1.3.1]: https://github.com/eggstack/snip-it/releases/tag/v1.3.1
