@@ -200,7 +200,10 @@ verify_candidate() {
         return 1
     }
     actual="$(checksum_file "$candidate")"
-    [[ "${actual,,}" == "${expected,,}" ]] || {
+    # Portable case-insensitive compare: macOS /bin/bash is Bash 3.2 and
+    # does not support ${var,,} expansion. checksum_file already lowercases
+    # via awk, but normalize both sides explicitly for robustness.
+    [[ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]] || {
         install_error "SHA-256 mismatch for $asset"
         return 1
     }
@@ -420,6 +423,10 @@ main() {
     done
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# When piped (curl ... | bash) BASH_SOURCE is empty; default to $0 so the
+# documented pipe-to-shell bootstrap runs instead of failing under set -u.
+# When sourced for tests BASH_SOURCE[0] is this file while $0 is the caller,
+# so the entry point is correctly skipped.
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
     main "$@"
 fi

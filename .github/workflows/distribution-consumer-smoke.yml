@@ -252,7 +252,7 @@ jobs:
             throw 'Expected an x86_64 Windows runner'
           }
           $log = Join-Path $env:RUNNER_TEMP 'install-snp.log'
-          & ./packaging/install.ps1 -Component Snp -Version $env:SNP_VERSION 2>&1 | Tee-Object -FilePath $log
+          & ./packaging/install.ps1 -Component Snp -Version $env:SNP_VERSION *>&1 | Tee-Object -FilePath $log
           if (Select-String -Path $log -Pattern 'Cargo fallback' -Quiet) {
             throw 'Installer used Cargo fallback'
           }
@@ -276,7 +276,7 @@ jobs:
             throw 'Expected an x86_64 Windows runner'
           }
           $log = Join-Path $env:RUNNER_TEMP 'install-server.log'
-          & ./packaging/install.ps1 -Component Server -Version $env:SYNC_VERSION 2>&1 | Tee-Object -FilePath $log
+          & ./packaging/install.ps1 -Component Server -Version $env:SYNC_VERSION *>&1 | Tee-Object -FilePath $log
           if (Select-String -Path $log -Pattern 'Cargo fallback' -Quiet) {
             throw 'Installer used Cargo fallback'
           }
