@@ -187,6 +187,37 @@ It rejects unsupported tag shapes, tags that do not point at `HEAD`, and tags
 whose component manifest version differs from the tag version. The workflow
 performs the same checks before any build starts.
 
+## Distribution consumer smoke
+
+After a component release is published, prove the public bootstrap path with
+the component-symmetric consumer workflow. It exercises the documented
+installers as an external consumer would: isolated home/config, no Cargo
+fallback on prebuilt hosts, executable presence, and exact `version` identity.
+
+```bash
+# Pinned snp proof (Linux x86_64 + ARM64, macOS Intel + ARM64, Windows x86_64)
+gh workflow run "Distribution consumer smoke" --ref main \
+  -f snp_version=X.Y.Z
+
+# Pinned snip-sync proof
+gh workflow run "Distribution consumer smoke" --ref main \
+  -f snip_sync_version=A.B.C
+
+# Both components in one run (independent versions, no shared version)
+gh workflow run "Distribution consumer smoke" --ref main \
+  -f snp_version=X.Y.Z -f snip_sync_version=A.B.C
+
+# Exact README unpinned snp bootstrap on Linux x86_64 + ARM64
+gh workflow run "Distribution consumer smoke" --ref main \
+  -f snp_version=X.Y.Z -f test_unpinned_snp=true
+```
+
+At least one of `snp_version`, `snip_sync_version`, or `test_unpinned_snp=true`
+must be supplied. The unpinned job runs the exact README default command
+(`curl .../packaging/install.sh | bash`), resolves the current `snip-it`
+stable version from crates.io, and requires a binary-first install without
+Cargo fallback.
+
 ## Version immutability
 
 - crates.io versions are **immutable**.

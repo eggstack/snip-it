@@ -29,12 +29,31 @@ function Get-CratesBase {
     return $CratesBaseDefault
 }
 
-function Get-Target {
-    $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-    switch ($architecture.ToString()) {
+function Get-TargetForArchitecture([string]$Architecture) {
+    switch ($Architecture) {
         'X64' { return 'x86_64-pc-windows-msvc' }
         'Arm64' { return 'aarch64-pc-windows-msvc' }
         default { return 'source-only' }
+    }
+}
+
+function Get-Target {
+    $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    return Get-TargetForArchitecture $architecture.ToString()
+}
+
+function Test-SourceOnlyTarget([string]$Target) {
+    return ($Target -eq 'source-only' -or $Target -eq 'aarch64-pc-windows-msvc')
+}
+
+function Get-AssetName([string]$Name, [string]$Target) {
+    return "$(Get-Binary $Name)-$Target.exe"
+}
+
+function Assert-ComponentVersion([string]$Name, [string]$SelectedVersion) {
+    if ($SelectedVersion) { Test-StableVersion $SelectedVersion }
+    if ($Name -eq 'Both' -and $SelectedVersion) {
+        throw '-Version is ambiguous with -Component Both; install each component separately'
     }
 }
 
@@ -112,14 +131,15 @@ function Assert-BinaryIdentity([string]$Candidate, [string]$Asset,
 
 function Get-CargoCandidate([string]$Name, [string]$SelectedVersion, [string]$Root, [string]$Target) {
     $Package = Get-Package $Name
+    $Binary = Get-Binary $Name
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         throw "No prebuilt binary exists for target '$Target'. Install Rust/Cargo and run: cargo install $Package --version '=$SelectedVersion' --locked"
     }
     & cargo install $Package --version "=$SelectedVersion" --locked --root $Root
     if ($LASTEXITCODE -ne 0) { throw "Cargo failed to build $Package $SelectedVersion" }
-    $Candidate = Join-Path $Root "bin\$(Get-Binary $Name).exe"
+    $Candidate = Join-Path $Root "bin\$Binary.exe"
     if (-not (Test-Path -LiteralPath $Candidate)) { throw "Cargo did not produce $Candidate" }
-    Assert-BinaryIdentity $Candidate $Binary $Name $SelectedVersion
+    Assert-BinaryIdentity $Candidate "$Binary-$Target.exe" $Name $SelectedVersion
     return $Candidate
 }
 
@@ -172,12 +192,12 @@ function Install-Component([string]$Name, [string]$RequestedVersion) {
     New-Item -ItemType Directory -Path $Temp | Out-Null
     try {
         $Candidate = $null
-        if ($Target -eq 'source-only' -or $Target -eq 'aarch64-pc-windows-msvc') {
+        if (Test-SourceOnlyTarget $Target) {
             Write-Host "$Binary ${SelectedVersion}: target $Target is source-only; using Cargo fallback."
             $Candidate = Get-CargoCandidate $Name $SelectedVersion (Join-Path $Temp 'cargo-root') $Target
         }
         else {
-            $Asset = "$Binary-$Target.exe"
+            $Asset = Get-AssetName $Name $Target
             $Tag = Get-Tag $Name $SelectedVersion
             $Candidate = Join-Path $Temp $Asset
             $Checksum = "$Candidate.sha256"
@@ -209,15 +229,17 @@ function Install-Component([string]$Name, [string]$RequestedVersion) {
     }
 }
 
-if ($Version) { Test-StableVersion $Version }
-if ($Component -eq 'Both' -and $Version) {
-    throw '-Version is ambiguous with -Component Both; install each component separately'
-}
+# Dot-sourcing loads the pure helpers without running installation so the
+# focused contract suite can import this file. Direct execution runs the
+# installer entry point below.
+if ($MyInvocation.InvocationName -ne '.') {
+    Assert-ComponentVersion $Component $Version
 
-if ($Component -eq 'Both') {
-    Install-Component 'Snp' $null
-    Install-Component 'Server' $null
-}
-else {
-    Install-Component $Component $Version
+    if ($Component -eq 'Both') {
+        Install-Component 'Snp' $null
+        Install-Component 'Server' $null
+    }
+    else {
+        Install-Component $Component $Version
+    }
 }

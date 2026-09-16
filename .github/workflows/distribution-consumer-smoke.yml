@@ -3,25 +3,68 @@ name: Distribution consumer smoke
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Published snip-sync version to consume
-        required: true
-        default: 0.1.5
+      snp_version:
+        description: Published snip-it (snp) version to consume (X.Y.Z, empty to skip)
+        required: false
+        default: ''
         type: string
+      snip_sync_version:
+        description: Published snip-sync version to consume (A.B.C, empty to skip)
+        required: false
+        default: ''
+        type: string
+      test_unpinned_snp:
+        description: Also exercise the exact README unpinned snp bootstrap
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
+  validate-inputs:
+    name: Validate smoke inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require at least one component or unpinned proof
+        shell: bash
+        env:
+          SNP_VERSION: ${{ inputs.snp_version }}
+          SYNC_VERSION: ${{ inputs.snip_sync_version }}
+          UNPINNED: ${{ inputs.test_unpinned_snp }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SNP_VERSION}" && -z "${SYNC_VERSION}" && "${UNPINNED}" != 'true' ]]; then
+            echo 'Supply at least one of snp_version, snip_sync_version, or test_unpinned_snp.' >&2
+            exit 1
+          fi
+          if [[ -n "${SNP_VERSION}" ]]; then
+            [[ "${SNP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "Invalid snp_version '${SNP_VERSION}'; expected X.Y.Z" >&2
+              exit 1
+            }
+          fi
+          if [[ -n "${SYNC_VERSION}" ]]; then
+            [[ "${SYNC_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "Invalid snip_sync_version '${SYNC_VERSION}'; expected A.B.C" >&2
+              exit 1
+            }
+          fi
+
   unix-x64:
     name: Unix bootstrap (Linux x86_64)
+    needs: validate-inputs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      VERSION: ${{ inputs.version }}
+      SNP_VERSION: ${{ inputs.snp_version }}
+      SYNC_VERSION: ${{ inputs.snip_sync_version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install public x86_64 release asset
+      - name: Install public snp release asset
+        if: ${{ inputs.snp_version != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -33,19 +76,40 @@ jobs:
           export HOME="$isolated_home"
           export XDG_CONFIG_HOME="$isolated_config"
           export PATH="$isolated_home/.local/bin:$PATH"
-          bash packaging/install.sh --server --version "$VERSION" 2>&1 | tee "$RUNNER_TEMP/install.log"
-          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install.log"
-          test "$(snip-sync version 2>&1)" = "snip-sync $VERSION"
+          bash packaging/install.sh --version "$SNP_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-snp.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-snp.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $SNP_VERSION"
+      - name: Install public snip-sync release asset
+        if: ${{ inputs.snip_sync_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$SYNC_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-server.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-server.log"
+          test -x "$isolated_home/.local/bin/snip-sync"
+          test "$(snip-sync version 2>&1)" = "snip-sync $SYNC_VERSION"
 
   unix-arm64:
     name: Unix bootstrap (Linux ARM64)
+    needs: validate-inputs
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     env:
-      VERSION: ${{ inputs.version }}
+      SNP_VERSION: ${{ inputs.snp_version }}
+      SYNC_VERSION: ${{ inputs.snip_sync_version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install public ARM64 release asset
+      - name: Install public snp release asset
+        if: ${{ inputs.snp_version != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -57,27 +121,162 @@ jobs:
           export HOME="$isolated_home"
           export XDG_CONFIG_HOME="$isolated_config"
           export PATH="$isolated_home/.local/bin:$PATH"
-          bash packaging/install.sh --server --version "$VERSION" 2>&1 | tee "$RUNNER_TEMP/install.log"
-          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install.log"
-          test "$(snip-sync version 2>&1)" = "snip-sync $VERSION"
+          bash packaging/install.sh --version "$SNP_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-snp.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-snp.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $SNP_VERSION"
+      - name: Install public snip-sync release asset
+        if: ${{ inputs.snip_sync_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$SYNC_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-server.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-server.log"
+          test -x "$isolated_home/.local/bin/snip-sync"
+          test "$(snip-sync version 2>&1)" = "snip-sync $SYNC_VERSION"
+
+  macos-x64:
+    name: Unix bootstrap (macOS x86_64)
+    needs: validate-inputs
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      SNP_VERSION: ${{ inputs.snp_version }}
+      SYNC_VERSION: ${{ inputs.snip_sync_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install public snp release asset
+        if: ${{ inputs.snp_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = x86_64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --version "$SNP_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-snp.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-snp.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $SNP_VERSION"
+      - name: Install public snip-sync release asset
+        if: ${{ inputs.snip_sync_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = x86_64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$SYNC_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-server.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-server.log"
+          test -x "$isolated_home/.local/bin/snip-sync"
+          test "$(snip-sync version 2>&1)" = "snip-sync $SYNC_VERSION"
+
+  macos-arm64:
+    name: Unix bootstrap (macOS ARM64)
+    needs: validate-inputs
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      SNP_VERSION: ${{ inputs.snp_version }}
+      SYNC_VERSION: ${{ inputs.snip_sync_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install public snp release asset
+        if: ${{ inputs.snp_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --version "$SNP_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-snp.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-snp.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $SNP_VERSION"
+      - name: Install public snip-sync release asset
+        if: ${{ inputs.snip_sync_version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          isolated_home="$RUNNER_TEMP/snip-it-home"
+          isolated_config="$RUNNER_TEMP/snip-it-config"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          bash packaging/install.sh --server --version "$SYNC_VERSION" 2>&1 | tee "$RUNNER_TEMP/install-server.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-server.log"
+          test -x "$isolated_home/.local/bin/snip-sync"
+          test "$(snip-sync version 2>&1)" = "snip-sync $SYNC_VERSION"
 
   windows-x64:
     name: Windows bootstrap (x86_64)
+    needs: validate-inputs
     runs-on: windows-latest
     timeout-minutes: 10
     env:
-      VERSION: ${{ inputs.version }}
+      SNP_VERSION: ${{ inputs.snp_version }}
+      SYNC_VERSION: ${{ inputs.snip_sync_version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install public Windows release asset
+      - name: Install public snp release asset
+        if: ${{ inputs.snp_version != '' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
             throw 'Expected an x86_64 Windows runner'
           }
-          $log = Join-Path $env:RUNNER_TEMP 'install.log'
-          & ./packaging/install.ps1 -Component Server -Version $env:VERSION 2>&1 | Tee-Object -FilePath $log
+          $log = Join-Path $env:RUNNER_TEMP 'install-snp.log'
+          & ./packaging/install.ps1 -Component Snp -Version $env:SNP_VERSION 2>&1 | Tee-Object -FilePath $log
+          if (Select-String -Path $log -Pattern 'Cargo fallback' -Quiet) {
+            throw 'Installer used Cargo fallback'
+          }
+          $installed = Join-Path $env:LOCALAPPDATA 'snip-it\snp.exe'
+          if (-not (Test-Path -LiteralPath $installed)) {
+            $installed = Join-Path $env:ProgramFiles 'snip-it\snp.exe'
+          }
+          if (-not (Test-Path -LiteralPath $installed)) {
+            throw 'Installed snp binary was not found'
+          }
+          $identity = (& $installed version 2>&1 | Out-String).Trim()
+          if ($identity -ne "snp $env:SNP_VERSION") {
+            throw "Unexpected installed identity: $identity"
+          }
+      - name: Install public snip-sync release asset
+        if: ${{ inputs.snip_sync_version != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
+            throw 'Expected an x86_64 Windows runner'
+          }
+          $log = Join-Path $env:RUNNER_TEMP 'install-server.log'
+          & ./packaging/install.ps1 -Component Server -Version $env:SYNC_VERSION 2>&1 | Tee-Object -FilePath $log
           if (Select-String -Path $log -Pattern 'Cargo fallback' -Quiet) {
             throw 'Installer used Cargo fallback'
           }
@@ -89,6 +288,68 @@ jobs:
             throw 'Installed snip-sync binary was not found'
           }
           $identity = (& $installed version 2>&1 | Out-String).Trim()
-          if ($identity -ne "snip-sync $env:VERSION") {
+          if ($identity -ne "snip-sync $env:SYNC_VERSION") {
             throw "Unexpected installed identity: $identity"
           }
+
+  unix-unpinned-x64:
+    name: Unpinned README bootstrap (Linux x86_64)
+    needs: validate-inputs
+    if: ${{ inputs.test_unpinned_snp == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise exact README default snp bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          isolated_home="$RUNNER_TEMP/snip-it-home-unpinned"
+          isolated_config="$RUNNER_TEMP/snip-it-config-unpinned"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          expected="$(curl -fsSL --user-agent 'snip-it-installer' https://crates.io/api/v1/crates/snip-it \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); v=d["crate"].get("max_stable_version") or d["crate"]["max_version"]; print(v)')"
+          [[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Could not resolve stable snip-it version from crates.io: '$expected'" >&2
+            exit 1
+          }
+          curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash 2>&1 | tee "$RUNNER_TEMP/install-unpinned.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-unpinned.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $expected"
+
+  unix-unpinned-arm64:
+    name: Unpinned README bootstrap (Linux ARM64)
+    needs: validate-inputs
+    if: ${{ inputs.test_unpinned_snp == true }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise exact README default snp bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+          isolated_home="$RUNNER_TEMP/snip-it-home-unpinned"
+          isolated_config="$RUNNER_TEMP/snip-it-config-unpinned"
+          mkdir -p "$isolated_home" "$isolated_config"
+          export HOME="$isolated_home"
+          export XDG_CONFIG_HOME="$isolated_config"
+          export PATH="$isolated_home/.local/bin:$PATH"
+          expected="$(curl -fsSL --user-agent 'snip-it-installer' https://crates.io/api/v1/crates/snip-it \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); v=d["crate"].get("max_stable_version") or d["crate"]["max_version"]; print(v)')"
+          [[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Could not resolve stable snip-it version from crates.io: '$expected'" >&2
+            exit 1
+          }
+          curl -fsSL https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.sh | bash 2>&1 | tee "$RUNNER_TEMP/install-unpinned.log"
+          ! grep -qi 'Cargo fallback' "$RUNNER_TEMP/install-unpinned.log"
+          test -x "$isolated_home/.local/bin/snp"
+          test "$(snp version 2>&1)" = "snp $expected"

@@ -60,3 +60,7 @@ jobs:
         run: cargo check --workspace --all-targets
       - name: CLI/platform smoke
         run: cargo test --test platform_smoke --features test-support
+      - name: PowerShell installer contract
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/tests/installers.ps1

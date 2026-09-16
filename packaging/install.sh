@@ -278,7 +278,7 @@ install_component() {
                 install_error "checksum download failed for $asset; refusing Cargo fallback"
                 return 1
             fi
-            verify_candidate "$candidate" "$checksum" "$asset"
+            verify_candidate "$candidate" "$checksum" "$asset" || return 1
         else
             local download_status=$?
             if [[ "$download_status" == 44 ]]; then

@@ -15,6 +15,9 @@ bash scripts/release-check.sh dry-run snip-it
 # Production seam proof — verifies test-only env vars are inactive in production builds
 bash scripts/ci/test-production-seams.sh
 
+# PowerShell installer contract (Windows CI runs this; requires pwsh)
+pwsh -NoProfile -File scripts/tests/installers.ps1
+
 # Single integration test target
 cargo test --test platform_smoke
 ```

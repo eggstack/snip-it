@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Bootstrap installer verification fails closed**: `packaging/install.sh`
+  now explicitly returns a hard failure when checksum/identity verification
+  rejects a downloaded candidate instead of relying on `set -e` propagation.
+  Integrity/identity failures still never trigger Cargo fallback.
+- **PowerShell installer testability**: `packaging/install.ps1` exposes its
+  target/asset/source-only/version helpers as pure functions and skips the
+  install entry point when dot-sourced, so the new
+  `scripts/tests/installers.ps1` contract suite can verify mapping, checksum,
+  identity, fallback-boundary, destination, and `Both` ambiguity behavior
+  without performing an install. `Get-CargoCandidate` now resolves its binary
+  name explicitly.
 - **Delta-sync watermark off-by-one** (snip-sync): incremental queries now use
   `updated_at >= since` so a snippet written in the same second as the previous
   sync's watermark is no longer skipped by every later incremental sync.
