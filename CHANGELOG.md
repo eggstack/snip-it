@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Pipe-to-shell bootstrap**: `curl .../packaging/install.sh | bash` no
+  longer fails with `BASH_SOURCE[0]: unbound variable` under `set -u`; the
+  entry-point guard treats an empty `BASH_SOURCE` as direct execution.
+- **macOS bootstrap checksum compare**: `packaging/install.sh` no longer uses
+  `${var,,}` expansion (unsupported by the system Bash 3.2 on macOS);
+  SHA-256 comparison uses portable `tr`-based case normalization.
+
 ## [1.3.8] - 2026-09-16
 
 ### Fixed

@@ -1,6 +1,6 @@
 # Plan 013: snp binary publication and installer corrective closure
 
-Status: Ready
+Status: complete
 
 Depends on: Plans 001, 002, and 007 (complete)
 
@@ -362,3 +362,66 @@ The most important architectural instruction is: **do not implement `snp` binary
 Prefer parameterizing the existing consumer-smoke workflow over copying jobs. Prefer local fixture HTTP responses over internet-dependent edge-case tests. Keep platform-specific installer assertions narrow and deterministic. The only tests that should require a real public GitHub Release are the explicit distribution consumer smokes after the next legitimate `snp` release.
 
 If implementation uncovers an actual defect in `release-binaries.yml`, fix that defect narrowly and document it in this plan's completion record. Otherwise leave that workflow's component selection, matrix, checksum contract, draft attachment behavior, and published-release immutability unchanged.
+
+## Completion record
+
+Completed: 2026-09-16.
+
+Parts A-C landed first and ordinary CI stayed green before any publication
+work. Part D then shipped the next legitimate `snip-it` patch (`1.3.8`,
+covering accumulated `Unreleased` fixes) through the normal manual flow:
+local `release-check.sh verify`, `dry-run snip-it`, manual
+`cargo publish -p snip-it`, crates.io visibility wait, exact `v1.3.8` tag on
+the manifest-version commit. Part E ran the component-symmetric consumer
+smoke plus the exact README unpinned bootstrap against the public release.
+
+Evidence:
+
+- `snip-it 1.3.8` published to crates.io; `v1.3.8` tag pushed to the exact
+  manifest commit. `v1.3.7` was never mutated or retagged.
+- [Release binaries run 35134474103](https://github.com/eggstack/snip-it/actions/runs/35134474103)
+  (tag-push `attach` path) built all five targets, verified identity/help,
+  checksums, and the complete asset set, then attached the draft. The
+  [published v1.3.8 release](https://github.com/eggstack/snip-it/releases/tag/v1.3.8)
+  contains all ten public files: `snp-x86_64-unknown-linux-gnu`,
+  `snp-aarch64-unknown-linux-gnu`, `snp-x86_64-apple-darwin`,
+  `snp-aarch64-apple-darwin`, `snp-x86_64-pc-windows-msvc.exe`, each with a
+  verified `.sha256` sidecar. No version numbers in asset filenames.
+- [Consumer smoke run 35135460655](https://github.com/eggstack/snip-it/actions/runs/35135460655)
+  (`snp_version=1.3.8`, `snip_sync_version=0.1.5`, `test_unpinned_snp=true`)
+  passed all eight jobs: Linux x86_64 + ARM64, macOS Intel + Apple Silicon,
+  and Windows x86_64 pinned proofs for **both** independently versioned
+  components (exact `snp 1.3.8` / `snip-sync 0.1.5` identity, no Cargo
+  fallback), plus the exact README `curl ... | bash` unpinned `snp`
+  bootstrap on Linux x86_64 and ARM64 resolving crates.io `1.3.8` to a
+  binary-first install.
+- `bash scripts/check.sh` and `bash scripts/release-check.sh verify` were
+  green before publication; ordinary Linux/macOS/Windows CI is green after.
+- `scripts/tests/installers.sh` now deterministically covers the Plan 002
+  failure-mode contract (404 fallback; non-404/missing-checksum/malformed/
+  mismatch/wrong-identity/wrong-version hard failures with explicit
+  no-fallback proof via a stubbed Cargo seam; valid install; source-only;
+  independent `--both` tags; PATH warnings) on a local Python-stdlib fixture
+  server. `scripts/tests/installers.ps1` (run on Windows CI) covers the ten
+  required PowerShell checks. ARMv7 Linux and Windows ARM64 remain
+  source-only.
+
+Concrete defects found and fixed during implementation (no redesign):
+
+- `packaging/install.sh` now fails closed with an explicit `return 1` when
+  `verify_candidate` rejects a download instead of relying on `set -e`
+  propagation.
+- Pipe-to-shell bootstrap (`curl ... | bash`) no longer dies with
+  `BASH_SOURCE[0]: unbound variable` under `set -u`; the entry-point guard
+  defaults an empty `BASH_SOURCE` to `$0`.
+- macOS consumer runs exposed `${var,,}` lowercase expansion, which the
+  system Bash 3.2 on `macos-15-intel`/`macos-15` does not support; checksum
+  comparison now uses portable `tr`-based normalization.
+- Windows consumer steps capture all PowerShell streams (`*>&1`) so the
+  `Write-Host` installer output actually reaches the `Tee-Object` log the
+  Cargo-fallback assertion inspects.
+
+`release-binaries.yml` required no functional redesign: one shared workflow,
+unchanged five-target matrix, unchanged component/tag namespaces and
+published-release immutability, no new dependencies. Plans 001, 002, and 007
+were left untouched as historical records.

@@ -21,9 +21,15 @@ Plans 001–005 implemented the intended distribution/MCP feature work, Plan 006
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [013](013-snp-binary-publication-and-installer-corrective-closure.md) | snp binary publication and installer corrective closure | Ready | 001, 002, 007 |
+| [013](013-snp-binary-publication-and-installer-corrective-closure.md) | snp binary publication and installer corrective closure | Complete | 001, 002, 007 |
 
-Plan 013 is a narrow post-closure correction prompted by the remaining public distribution asymmetry: the shared release workflow already builds and validates the five-target `snp` matrix, but the current public `v1.3.7` release predates that workflow and has no attached client binaries, while the public consumer smoke is hard-coded to `snip-sync`. The plan does not reopen or redesign the release architecture. It requires the next legitimate `snip-it` release to provide public `snp` assets, makes consumer smoke symmetric across the independently versioned components, and completes deterministic Bash/PowerShell installer failure-mode coverage.
+Plan 013 is complete: `snip-it 1.3.8` is published with all five public `snp`
+binaries plus checksums (historical `v1.3.7` left untouched), the consumer
+smoke exercises both independently versioned components across Linux
+x86_64/ARM64, macOS Intel/Apple Silicon, and Windows x86_64 plus the exact
+README unpinned bootstrap, and the Bash/PowerShell installer failure-mode
+contracts are covered deterministically. The correction was achieved without
+a second release workflow, matrix duplication, or new dependencies.
 
 ## Completed consolidation sequence
 
