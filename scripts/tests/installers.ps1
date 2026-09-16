@@ -12,21 +12,21 @@ $script:failures = 0
 
 function Assert-Equal([string]$Expected, [string]$Actual, [string]$Label) {
     if ($Expected -ne $Actual) {
-        Write-Host "FAIL: $Label: expected '$Expected', got '$Actual'"
+        Write-Host ("FAIL: " + $Label + ": expected '" + $Expected + "', got '" + $Actual + "'")
         $script:failures += 1
     }
 }
 
 function Assert-True([bool]$Condition, [string]$Label) {
     if (-not $Condition) {
-        Write-Host "FAIL: $Label: expected true"
+        Write-Host ("FAIL: " + $Label + ": expected true")
         $script:failures += 1
     }
 }
 
 function Assert-False([bool]$Condition, [string]$Label) {
     if ($Condition) {
-        Write-Host "FAIL: $Label: expected false"
+        Write-Host ("FAIL: " + $Label + ": expected false")
         $script:failures += 1
     }
 }
@@ -34,12 +34,12 @@ function Assert-False([bool]$Condition, [string]$Label) {
 function Expect-Throw([scriptblock]$Block, [string]$Needle, [string]$Label) {
     try {
         & $Block
-        Write-Host "FAIL: $Label: expected throw, succeeded"
+        Write-Host ("FAIL: " + $Label + ": expected throw, succeeded")
         $script:failures += 1
     }
     catch {
-        if ($Needle -and ($_.Exception.Message -notlike "*$Needle*")) {
-            Write-Host "FAIL: $Label: throw '$($_.Exception.Message)' did not contain '$Needle'"
+        if ($Needle -and ($_.Exception.Message -notlike ("*" + $Needle + "*"))) {
+            Write-Host ("FAIL: " + $Label + ": throw '" + $_.Exception.Message + "' did not contain '" + $Needle + "'")
             $script:failures += 1
         }
     }
