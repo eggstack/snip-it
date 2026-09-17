@@ -370,7 +370,8 @@ Workspace/all-features result:
     all 57 targets ok, 0 failed (1158 lib + 139 server + all integration)
 scripts/check.sh result: pass (through multi-batch sync contracts)
 production-seams result: pass
-GitHub Actions result: recorded post-push (see plans/README.md note)
+GitHub Actions result: success — CI run 35249729558 on commit 8924208
+    (Linux correctness + macos/windows platform smoke, all green)
 Unexpected scope/dependency changes: none. No manifest, lockfile,
     snip-sync, installer, workflow, or dependency changes. Fixture gained
     only chunk_size/chunk_delay fields, a slow_drip() constructor, and a
