@@ -257,7 +257,7 @@ Self-hosted Rust gRPC server using tonic + axum (HTTP).
 | `paths.rs` | Path resolution for server state |
 | `process.rs` | Legacy PID parsing and stop/restart compatibility |
 | `editor.rs` | Server-side config editing |
-| `update.rs` | Server update command and package-manager integration |
+| `update.rs` | Server update command and package-manager integration (external `curl` transport, retained per the Plan 014 size gate) |
 | `test_helpers.rs` | Test-only helpers (gated on `test-helpers` feature) |
 | `test_observer.rs` | Test-only event capture |
 
@@ -319,7 +319,7 @@ Built with `ratatui` + `crossterm`. Single-loop event-driven architecture.
 | `logging` | `src/logging.rs` | [logging.md](logging.md) | Structured logging (`tracing`), audit trail, panic handler |
 | `process_file_lock` | `src/process_file_lock.rs` | — | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
 | `status_snapshot` | `src/status_snapshot.rs` | [status.md](status.md) | Status snapshot and diagnostic codes |
-| `update` | `src/update.rs` | — | Cargo/Homebrew update checking and installation |
+| `update` | `src/update.rs` | — | Cargo/Homebrew update checking and installation (in-process eggfetch-core transport) |
 
 Full utility inventory: [utils.md](utils.md).
 

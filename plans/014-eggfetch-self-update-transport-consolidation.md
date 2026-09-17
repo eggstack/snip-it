@@ -1,6 +1,6 @@
 # Plan 014: eggfetch self-update transport consolidation
 
-Status: ready for implementation
+Status: complete
 
 Depends on: Plan 004 (complete)
 
@@ -520,24 +520,93 @@ Do not use this plan to:
 
 ## Completion notes
 
-Fill this section during implementation before setting `Status: complete`.
+Completed 2026-09-17 on `main`. The migration landed split, as the plan
+allows: `snp` uses eggfetch-core in-process; `snip-sync` retains its
+`curl` adapter with an intentional-split comment at the top of
+`snip-sync/src/update.rs`.
 
 ```text
-Baseline commit:
-Eggfetch version/profile:
+Baseline commit: 302287cf4c9ada01dd664bcbd4710f3daff7e0b8
+Eggfetch version/profile: eggfetch-core =0.1.5, default-features = false,
+    features = ["http1", "tls-rustls", "tls-native-roots"];
+    futures-util 0.3, default-features = false, features = ["alloc"]
+    (StreamExt::next for the streamed binary path; "alloc" suffices)
 
-snp before bytes:
-snp after bytes:
-snp delta bytes / %:
-snp decision:
+snp before bytes: 6248720
+snp after bytes: 6970568
+snp delta bytes / %: +721848 / +11.55%
+snp decision: KEEP with explicit report (over the 10% trigger, which the
+    plan defines as an inspection trigger, not an automatic failure).
+    Cause is the embedded rustls/TLS stack replacing the external curl
+    process; no accidental features (verified via cargo tree: http2 in the
+    graph comes from pre-existing tonic, json/tracing from axum/sqlx/tower).
 
-snip-sync before bytes:
-snip-sync after bytes:
-snip-sync delta bytes / %:
-snip-sync decision:
+snip-sync before bytes: 3833152
+snip-sync after bytes: 5407400 (eggfetch trial build; reverted)
+snip-sync delta bytes / %: +1574248 / +41.07%
+snip-sync decision: REVERT to the existing curl adapter per the plan's
+    >10% rule. Rebuilt after revert reproduces 3833152 bytes exactly.
+    The split is recorded in snip-sync/src/update.rs module docs so a
+    future cleanup does not "fix" it blindly.
 
-Unexpected dependency/features:
-Trust/profile decision:
-Proxy compatibility note:
+Unexpected dependency/features: none. eggfetch-core enables only
+    http1/tls-rustls/tls-native-roots (+hyper-rustls); no http2, http3,
+    json, compression, cookies, proxy, multipart, tracing, or test-util.
+Trust/profile decision: keep tls-native-roots. A WebPKI-only trial build
+    of snp produced a byte-identical 6970568 binary on Linux aarch64, so
+    there is no size incentive to give up native-root trust semantics.
+Proxy compatibility note: unchanged. Neither the old curl adapter (no
+    proxy flags were passed) nor the documented updater contract relied on
+    proxy environment parsing; no eggfetch proxy feature was enabled.
 Verification commands/results:
+    cargo fmt --all -- --check — pass
+    cargo clippy --workspace --all-targets -- -D warnings — pass
+    cargo clippy -p snip-it --features test-support --all-targets/--tests — pass
+    cargo clippy -p snip-sync --features test-helpers --all-targets/--tests — pass
+    cargo clippy --workspace --all-targets --all-features — pass
+    cargo test --workspace --lib --all-features — 1158 + 139 pass
+    cargo test -p snip-it --features test-support --bin snp — 63 pass
+        (13 new transport_tests + existing updater tests)
+    cargo test -p snip-sync --features test-helpers --bin snip-sync — pass
+        (pre-existing updater tests; eggfetch trial suite removed with revert)
+    bash scripts/check.sh — pass (installer contract, fmt, clippy, unit,
+        platform smoke, destination permissions, auto-sync closure +
+        concurrency, multi-batch sync)
+    bash scripts/ci/test-production-seams.sh — pass
+    cargo test --workspace --all-features -- --test-threads=1 — all pass
+    cargo build --release -p snip-it --bin snp — 6970568 (kept)
+    cargo build --release -p snip-sync --bin snip-sync — 3833152 (restored)
 ```
+
+Acceptance mapping: (1) `snp update` uses eggfetch-core 0.1.5 narrow
+profile, no curl — yes (`tests/architecture.rs` pins it). (2) `snip-sync`
+migrates only within the gate — it did not; curl retained and documented.
+(3) retained curl path documented as measured tradeoff — yes, module docs +
+AGENTS.md. (4) production HTTPS-only every hop — yes, `check_url_scheme`
+at loop top plus `redirect_target` pre-request validation. (5) downgrade
+rejected before plaintext request — yes, counter-proven in
+`https_to_http_redirect_rejected_before_target_request`. (6) test HTTP
+injection works — yes, `build_allow_http` + fixture suite. (7)(8) 1 MiB /
+256 MiB bounds, streaming without buffering — yes, per-request
+`max_decoded_body_size` + `bytes_stream` chunk loop. (9) no usable
+partial on failure — yes, classify-before-create plus remove-on-error,
+both asserted. (10) 404 distinguishable — yes, `FetchError::NotFound`
+preserved. (11) Cargo fallback still 404-asset-only — yes, caller
+boundary unchanged and covered by
+`missing_asset_falls_back_while_checksum_404_hard_fails`. (12) Plan 004
+policy unchanged — yes. (13) `snp` reuses `RUNTIME` — yes. (14)
+`snip-sync` stays sync-`main` — yes (reverted; the trial runtime block
+was removed with it). (15) no accidental features — yes. (16) no new
+crate/framework — yes. (17) works with no curl on PATH — yes by
+construction for `snp` (no curl invocation remains; architecture test
+pins it). (18) measurements recorded — above. (19) verification green —
+above. (20) release/install/platform behavior green — check.sh green.
+
+Explicit non-transport deviation from the suggested order: the snip-sync
+eggfetch trial (steps 7–11) was implemented and measured, then reverted
+rather than kept, exactly as the size gate prescribes. The trial's
+transport test suite was removed with the revert; the retained curl
+adapter is covered by its pre-existing tests plus the architecture-doc
+record. D15 has no PATH-mutating runtime test by design: emptying PATH
+process-wide is racy against parallel subprocess-spawning unit tests, so
+the no-curl property is pinned by source scan instead.

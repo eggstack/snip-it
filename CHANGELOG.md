@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Self-update transport (Plan 014)**: `snp update` now fetches release
+  metadata and binaries in-process through `eggfetch-core` 0.1.5
+  (HTTP/1.1 + Rustls native roots, HTTPS-only manual redirects, 1 MiB
+  metadata / 256 MiB streamed-binary bounds, 404-only Cargo fallback)
+  instead of shelling out to external `curl`; no `curl` executable is
+  needed for `snp` self-update. `snip-sync update` intentionally keeps
+  the `curl` adapter: embedding the TLS/HTTP stack grew the server
+  binary +41% in controlled same-toolchain release builds, past the
+  plan's 10% material-growth gate.
+
 ## [1.3.9] - 2026-09-16
 
 ### Changed

@@ -53,13 +53,19 @@ The intended order is deliberately deletion/consolidation first:
 4. reuse canonical selector/search semantics in CLI and read-only MCP;
 5. deduplicate sync retry policy as a final internal cleanup.
 
-## Active updater transport consolidation
+## Completed updater transport consolidation
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [014](014-eggfetch-self-update-transport-consolidation.md) | eggfetch self-update transport consolidation | Ready | 004 |
+| [014](014-eggfetch-self-update-transport-consolidation.md) | eggfetch self-update transport consolidation | Complete | 004 |
 
-Plan 014 is a narrow maintenance follow-up. It evaluates replacing the duplicated external `curl` transport in `snp update` and `snip-sync update` with `eggfetch-core` 0.1.5 while preserving Plan 004's release selection, HTTPS, 404-only fallback, integrity, candidate validation, and replacement policy. It explicitly treats binary footprint as an acceptance constraint: `snp` may migrate independently, while `snip-sync` may retain its existing curl adapter if controlled release builds show material server-binary growth.
+Plan 014 is complete with a measurement-driven split: `snp update` now
+uses in-process `eggfetch-core` 0.1.5 (narrow H1/Rustls/native-root
+profile, +11.5% reported and kept), while `snip-sync update` retains its
+external `curl` adapter (+41% in controlled builds, past the 10% gate).
+The split, measurements, and trust-profile decision are recorded in the
+plan's completion notes; the retained `curl` path is documented as an
+intentional tradeoff, not unfinished work.
 
 ## Execution policy
 

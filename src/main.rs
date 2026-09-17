@@ -449,9 +449,11 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
             println!("snp {}", env!("CARGO_PKG_VERSION"));
         }
         Some(Commands::Update { dry_run, locked }) => {
-            update::run(dry_run, locked).map_err(|error| {
-                snip_it::error::SnipError::runtime_error("update failed", Some(&error))
-            })?;
+            RUNTIME
+                .block_on(update::run(dry_run, locked))
+                .map_err(|error| {
+                    snip_it::error::SnipError::runtime_error("update failed", Some(&error))
+                })?;
         }
         Some(Commands::SelfReplace {
             candidate,

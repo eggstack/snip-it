@@ -10,10 +10,12 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use futures_util::StreamExt;
 
 const CRATES_API_URL: &str = "https://crates.io/api/v1/crates/{crate}";
 const RELEASE_BASE_URL: &str = "https://github.com/eggstack/snip-it/releases/download";
@@ -75,13 +77,13 @@ enum FetchError {
     Failed(String),
 }
 
-pub fn run(dry_run: bool, _locked: bool) -> Result<(), String> {
+pub async fn run(dry_run: bool, _locked: bool) -> Result<(), String> {
     let executable = current_executable()?;
     let method = detect_install_method(&executable, &CLIENT);
     let current = current_version()?;
 
     println!("Checking for snp updates ({method})...");
-    let latest = latest_crates_version(CLIENT.crate_name)?;
+    let latest = latest_crates_version(CLIENT.crate_name).await?;
     if latest <= current {
         println!("snp {current} is already up to date.");
         return Ok(());
@@ -103,7 +105,7 @@ pub fn run(dry_run: bool, _locked: bool) -> Result<(), String> {
     let target = host_target(std::env::consts::OS, std::env::consts::ARCH);
     let (candidate, source) = match target {
         Some(HostTarget::Prebuilt(target)) => {
-            match download_candidate(CLIENT, &latest, target, workdir.path())? {
+            match download_candidate(CLIENT, &latest, target, workdir.path()).await? {
                 DownloadedCandidate::Ready(path) => (path, "GitHub release binary"),
                 DownloadedCandidate::MissingAsset => {
                     println!("No prebuilt asset is published for {target}; using Cargo fallback.");
@@ -233,10 +235,10 @@ fn homebrew_formula_prefix(formula: &str) -> Option<PathBuf> {
     })
 }
 
-fn latest_crates_version(crate_name: &str) -> Result<Version, String> {
+async fn latest_crates_version(crate_name: &str) -> Result<Version, String> {
     let template = update_endpoint("SNIP_UPDATE_CRATES_API_URL", CRATES_API_URL);
     let url = template.replace("{crate}", crate_name);
-    let body = fetch_bytes(&url).map_err(fetch_error_message)?;
+    let body = fetch_bytes(&url).await.map_err(fetch_error_message)?;
     let response: CratesResponse = serde_json::from_slice(&body)
         .map_err(|e| format!("could not parse crates.io response: {e}"))?;
     let version = Version::parse(&response.crate_info.max_version).map_err(|e| {
@@ -270,117 +272,242 @@ fn release_base_url() -> String {
     update_endpoint("SNIP_UPDATE_RELEASE_BASE_URL", RELEASE_BASE_URL)
 }
 
-fn validate_https_url(url: &str) -> Result<(), FetchError> {
-    #[cfg(feature = "test-support")]
-    if url.starts_with("http://") {
-        return Ok(());
+/// Maximum redirects followed for one logical fetch. GitHub/crates.io update
+/// endpoints do not need deep chains; the bound contains loops and bad
+/// endpoints rather than implementing browser policy.
+const MAX_REDIRECTS: usize = 10;
+/// Wall-clock bound for one complete logical fetch, including redirect
+/// traversal and final body consumption. This is the parity point with the
+/// former `curl --max-time 60`: a redirect chain must not receive a fresh
+/// budget per hop, and a streamed download must not run indefinitely after
+/// response headers arrive.
+const FETCH_OVERALL_TIMEOUT: Duration = Duration::from_secs(60);
+const FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const FETCH_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Whether plaintext HTTP update endpoints are accepted in this build.
+/// Production builds accept HTTPS only; the `test-support` feature widens the
+/// policy so fixture servers can be injected without TLS.
+fn build_allow_http() -> bool {
+    cfg!(feature = "test-support")
+}
+
+fn scheme_allowed(url: &str, allow_http: bool) -> bool {
+    if allow_http && url.starts_with("http://") {
+        return true;
     }
-    if !url.starts_with("https://") {
-        return Err(FetchError::Failed(format!(
+    url.starts_with("https://")
+}
+
+fn check_url_scheme(url: &str, allow_http: bool) -> Result<(), FetchError> {
+    if scheme_allowed(url, allow_http) {
+        Ok(())
+    } else {
+        Err(FetchError::Failed(format!(
             "insecure or unsupported URL scheme rejected: {url}"
-        )));
+        )))
     }
+}
+
+/// Build the updater HTTP client.
+///
+/// HTTP/1.1 only (selected Cargo features), native-root TLS with packaged
+/// WebPKI fallback, no automatic decompression (release bytes must stay
+/// byte-for-byte), no automatic redirects (the adapter validates every hop
+/// against the scheme policy itself), and no retries — the updater must not
+/// hide transport/release defects.
+fn update_http_client() -> eggfetch_core::Client {
+    http_client_with(FETCH_CONNECT_TIMEOUT, FETCH_READ_TIMEOUT)
+}
+
+fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client {
+    eggfetch_core::Client::builder()
+        .user_agent("snip-it-update")
+        .automatic_decompression(false)
+        .follow_redirects(false)
+        .timeout(
+            eggfetch_core::Timeout::builder()
+                .connect(connect)
+                .read(read)
+                .build(),
+        )
+        .build()
+}
+
+fn is_redirect_status(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn redirect_location(response: &eggfetch_core::Response) -> Result<String, FetchError> {
+    response
+        .headers()
+        .get("location")
+        .ok_or_else(|| FetchError::Failed("redirect response is missing a Location header".into()))?
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| FetchError::Failed("redirect Location header is not valid UTF-8".into()))
+}
+
+/// Resolve the next hop for a redirect response and validate it against the
+/// scheme policy BEFORE any further network I/O. Relative `Location` values
+/// resolve against the response URL via type inference, so this module needs
+/// no direct `url` dependency.
+fn redirect_target(
+    response: &eggfetch_core::Response,
+    location: &str,
+    allow_http: bool,
+) -> Result<String, FetchError> {
+    let resolved = response
+        .url()
+        .join(location)
+        .map_err(|e| FetchError::Failed(format!("invalid redirect location {location:?}: {e}")))?;
+    let target: String = resolved.into();
+    check_url_scheme(&target, allow_http)?;
+    Ok(target)
+}
+
+/// GET with safe redirect handling: eggfetch automatic redirects stay
+/// disabled so every hop passes the scheme policy before it is requested.
+async fn safe_get(
+    client: &eggfetch_core::Client,
+    initial_url: &str,
+    max_body_bytes: usize,
+    allow_http: bool,
+    overall_timeout: Duration,
+) -> Result<eggfetch_core::Response, FetchError> {
+    let fetch = async {
+        let mut current = initial_url.to_owned();
+        for _ in 0..=MAX_REDIRECTS {
+            check_url_scheme(&current, allow_http)?;
+            let response = client
+                .get(&current)
+                .map_err(|e| FetchError::Failed(format!("invalid update URL {current:?}: {e}")))?
+                .max_decoded_body_size(max_body_bytes)
+                .send()
+                .await
+                .map_err(|e| transport_error("update request failed", e))?;
+            if !is_redirect_status(response.status().as_u16()) {
+                return Ok(response);
+            }
+            let location = redirect_location(&response)?;
+            current = redirect_target(&response, &location, allow_http)?;
+        }
+        Err(FetchError::Failed(format!(
+            "too many redirects (>{MAX_REDIRECTS}) while fetching update"
+        )))
+    };
+    match tokio::time::timeout(overall_timeout, fetch).await {
+        Err(_) => Err(FetchError::Failed(format!(
+            "update request timed out after {} seconds",
+            overall_timeout.as_secs()
+        ))),
+        Ok(result) => result,
+    }
+}
+
+fn transport_error(context: &str, error: eggfetch_core::Error) -> FetchError {
+    if matches!(error, eggfetch_core::Error::DecodedBodyTooLarge) {
+        return FetchError::Failed(format!("{context} exceeds the size limit: {error}"));
+    }
+    FetchError::Failed(format!("{context}: {error}"))
+}
+
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
+    let client = update_http_client();
+    fetch_bytes_with(
+        &client,
+        url,
+        MAX_METADATA_BYTES as usize,
+        build_allow_http(),
+        FETCH_OVERALL_TIMEOUT,
+    )
+    .await
+}
+
+async fn fetch_bytes_with(
+    client: &eggfetch_core::Client,
+    url: &str,
+    max_body_bytes: usize,
+    allow_http: bool,
+    overall_timeout: Duration,
+) -> Result<Vec<u8>, FetchError> {
+    let mut response = safe_get(client, url, max_body_bytes, allow_http, overall_timeout).await?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => response
+            .bytes()
+            .await
+            .map(|body| body.to_vec())
+            .map_err(|e| transport_error("could not read update metadata", e)),
+        404 => Err(FetchError::NotFound),
+        _ => Err(FetchError::Failed(format!(
+            "HTTP {status} while fetching update metadata"
+        ))),
+    }
+}
+
+async fn fetch_file(url: &str, path: &Path) -> Result<(), FetchError> {
+    let client = update_http_client();
+    fetch_file_with(
+        &client,
+        url,
+        path,
+        MAX_BINARY_BYTES as usize,
+        build_allow_http(),
+        FETCH_OVERALL_TIMEOUT,
+    )
+    .await
+}
+
+async fn fetch_file_with(
+    client: &eggfetch_core::Client,
+    url: &str,
+    path: &Path,
+    max_body_bytes: usize,
+    allow_http: bool,
+    overall_timeout: Duration,
+) -> Result<(), FetchError> {
+    let mut response = safe_get(client, url, max_body_bytes, allow_http, overall_timeout).await?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => {}
+        404 => return Err(FetchError::NotFound),
+        _ => {
+            return Err(FetchError::Failed(format!(
+                "HTTP {status} while downloading update binary"
+            )));
+        }
+    }
+    // The destination is created only after the final status is classified,
+    // so 404/5xx responses never truncate or create the staging file.
+    let mut stream = response
+        .bytes_stream()
+        .map_err(|e| FetchError::Failed(format!("could not stream update binary: {e}")))?;
+    let mut output = File::create(path)
+        .map_err(|e| FetchError::Failed(format!("could not create staging file: {e}")))?;
+    if let Err(error) = stream_binary_to_file(&mut stream, &mut output).await {
+        drop(output);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    drop(output);
     Ok(())
 }
 
-fn curl_protocol() -> &'static str {
-    #[cfg(feature = "test-support")]
-    {
-        "=http,https"
+/// Stream one final 2xx body to disk without buffering the whole release
+/// asset in memory. Ordinary blocking writes are sufficient for a one-shot
+/// updater; no async file I/O is introduced.
+async fn stream_binary_to_file(
+    stream: &mut eggfetch_core::BoxBytesStream,
+    output: &mut File,
+) -> Result<(), FetchError> {
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| transport_error("could not download update binary", e))?;
+        output
+            .write_all(&chunk)
+            .map_err(|e| FetchError::Failed(format!("could not write staging file: {e}")))?;
     }
-    #[cfg(not(feature = "test-support"))]
-    {
-        "=https"
-    }
-}
-
-fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    validate_https_url(url)?;
-    let output = Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--location",
-            "--proto",
-            curl_protocol(),
-            "--tlsv1.2",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "60",
-            "--max-filesize",
-            &MAX_METADATA_BYTES.to_string(),
-            "--user-agent",
-            "snip-it-update",
-            "--write-out",
-            "\n%{http_code}",
-            url,
-        ])
-        .output()
-        .map_err(|e| FetchError::Failed(format!("could not run curl: {e}")))?;
-    if output.stdout.len() < 4 {
-        return Err(FetchError::Failed(format!(
-            "curl returned no HTTP status ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let status_start = output.stdout.len() - 3;
-    let status = String::from_utf8_lossy(&output.stdout[status_start..])
-        .parse::<u16>()
-        .map_err(|_| FetchError::Failed("curl returned an invalid HTTP status".into()))?;
-    let body = &output.stdout[..status_start - 1];
-    match status {
-        200..=299 => Ok(body.to_vec()),
-        404 => Err(FetchError::NotFound),
-        _ => Err(FetchError::Failed(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))),
-    }
-}
-
-fn fetch_file(url: &str, path: &Path) -> Result<(), FetchError> {
-    validate_https_url(url)?;
-    let output_path = path
-        .to_str()
-        .ok_or_else(|| FetchError::Failed("staging path is not UTF-8".into()))?;
-    let output = Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--location",
-            "--proto",
-            curl_protocol(),
-            "--tlsv1.2",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "60",
-            "--max-filesize",
-            &MAX_BINARY_BYTES.to_string(),
-            "--user-agent",
-            "snip-it-update",
-            "--output",
-            output_path,
-            "--write-out",
-            "%{http_code}",
-            url,
-        ])
-        .output()
-        .map_err(|e| FetchError::Failed(format!("could not run curl: {e}")))?;
-    let status = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u16>()
-        .map_err(|_| FetchError::Failed("curl returned an invalid HTTP status".into()))?;
-    match status {
-        200..=299 => Ok(()),
-        404 => Err(FetchError::NotFound),
-        _ => Err(FetchError::Failed(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))),
-    }
+    Ok(())
 }
 
 fn fetch_error_message(error: FetchError) -> String {
@@ -412,12 +539,13 @@ fn asset_name(package: Package, target: &str) -> String {
     format!("{}-{target}{suffix}", package.binary_name)
 }
 
+#[derive(Debug)]
 enum DownloadedCandidate {
     Ready(PathBuf),
     MissingAsset,
 }
 
-fn download_candidate(
+async fn download_candidate(
     package: Package,
     version: &Version,
     target: &str,
@@ -429,7 +557,7 @@ fn download_candidate(
     let binary_url = format!("{base}/{tag}/{asset}");
     let checksum_url = format!("{binary_url}.sha256");
     let candidate = staging.join(&asset);
-    match fetch_file(&binary_url, &candidate) {
+    match fetch_file(&binary_url, &candidate).await {
         Err(FetchError::NotFound) => return Ok(DownloadedCandidate::MissingAsset),
         Err(error) => {
             return Err(format!(
@@ -439,7 +567,7 @@ fn download_candidate(
         }
         Ok(()) => {}
     }
-    let checksum = fetch_bytes(&checksum_url).map_err(|error| {
+    let checksum = fetch_bytes(&checksum_url).await.map_err(|error| {
         format!(
             "could not download checksum for {asset}: {}",
             fetch_error_message(error)
@@ -894,5 +1022,614 @@ mod tests {
             return InstallMethod::Cargo;
         }
         InstallMethod::Direct
+    }
+
+    /// Plan 014 transport tests. These use the `test-support` endpoint
+    /// injection seam to point the updater at a tiny standard-library HTTP
+    /// fixture (no mock framework, no second HTTP client). Each fixture
+    /// serves plain HTTP on loopback; production-policy cases pass
+    /// `allow_http = false` explicitly so the HTTPS-only rule is proven
+    /// against live fixtures without needing TLS test certificates.
+    #[cfg(feature = "test-support")]
+    mod transport_tests {
+        use super::*;
+        use std::collections::HashMap;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::thread;
+
+        const TEST_OVERALL: Duration = Duration::from_secs(10);
+
+        struct Reply {
+            status: u16,
+            headers: Vec<(String, String)>,
+            body: Vec<u8>,
+            delay: Duration,
+        }
+
+        fn ok(body: &[u8]) -> Reply {
+            Reply {
+                status: 200,
+                headers: Vec::new(),
+                body: body.to_vec(),
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn status_only(status: u16) -> Reply {
+            Reply {
+                status,
+                headers: Vec::new(),
+                body: Vec::new(),
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn reason_phrase(status: u16) -> &'static str {
+            match status {
+                200 => "OK",
+                301 => "Moved Permanently",
+                302 => "Found",
+                303 => "See Other",
+                307 => "Temporary Redirect",
+                308 => "Permanent Redirect",
+                401 => "Unauthorized",
+                403 => "Forbidden",
+                404 => "Not Found",
+                500 => "Internal Server Error",
+                _ => "Unknown",
+            }
+        }
+
+        /// Minimal single-threaded HTTP/1.1 fixture. Routes are matched on
+        /// the request path (query stripped) and every hit is counted so
+        /// tests can prove a target was never contacted.
+        struct Fixture {
+            base_url: String,
+            counts: Arc<Mutex<HashMap<String, usize>>>,
+            shutdown: Arc<AtomicBool>,
+            thread: Option<thread::JoinHandle<()>>,
+        }
+
+        impl Fixture {
+            fn start<H>(make_handler: impl FnOnce(String) -> H) -> Self
+            where
+                H: Fn(&str) -> Reply + Send + Sync + 'static,
+            {
+                let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
+                let port = listener.local_addr().expect("fixture addr").port();
+                listener.set_nonblocking(true).expect("nonblocking");
+                let base_url = format!("http://127.0.0.1:{port}");
+                let handler: Arc<dyn Fn(&str) -> Reply + Send + Sync> =
+                    Arc::new(make_handler(base_url.clone()));
+                let counts = Arc::new(Mutex::new(HashMap::new()));
+                let shutdown = Arc::new(AtomicBool::new(false));
+                let counts_loop = Arc::clone(&counts);
+                let shutdown_loop = Arc::clone(&shutdown);
+                let thread = thread::spawn(move || {
+                    while !shutdown_loop.load(Ordering::Relaxed) {
+                        match listener.accept() {
+                            Ok((stream, _)) => {
+                                handle_connection(stream, &handler, &counts_loop);
+                            }
+                            Err(_) => thread::sleep(Duration::from_millis(5)),
+                        }
+                    }
+                });
+                Self {
+                    base_url,
+                    counts,
+                    shutdown,
+                    thread: Some(thread),
+                }
+            }
+
+            fn url(&self, path: &str) -> String {
+                format!("{}{}", self.base_url, path)
+            }
+
+            fn count(&self, path: &str) -> usize {
+                self.counts
+                    .lock()
+                    .expect("fixture counts")
+                    .get(path)
+                    .copied()
+                    .unwrap_or(0)
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                self.shutdown.store(true, Ordering::Relaxed);
+                if let Some(thread) = self.thread.take() {
+                    let _ = thread.join();
+                }
+            }
+        }
+
+        fn handle_connection(
+            mut stream: TcpStream,
+            handler: &Arc<dyn Fn(&str) -> Reply + Send + Sync>,
+            counts: &Arc<Mutex<HashMap<String, usize>>>,
+        ) {
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        request.extend_from_slice(&chunk[..n]);
+                        if request.windows(4).any(|w| w == b"\r\n\r\n") || request.len() > 65_536 {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let text = String::from_utf8_lossy(&request);
+            let target = text
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/");
+            let route = target.split('?').next().unwrap_or("/").to_owned();
+            counts
+                .lock()
+                .expect("fixture counts")
+                .entry(route.clone())
+                .and_modify(|hits| *hits += 1)
+                .or_insert(1);
+            let reply = handler(&route);
+            if !reply.delay.is_zero() {
+                thread::sleep(reply.delay);
+            }
+            let mut head = format!(
+                "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                reply.status,
+                reason_phrase(reply.status),
+                reply.body.len()
+            );
+            for (name, value) in &reply.headers {
+                head.push_str(&format!("{name}: {value}\r\n"));
+            }
+            head.push_str("\r\n");
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&reply.body);
+            let _ = stream.flush();
+        }
+
+        #[tokio::test]
+        async fn initial_production_http_url_rejected_before_network_io() {
+            let fixture = Fixture::start(|_| |_: &str| ok(b"must never be served"));
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/counted"),
+                MAX_METADATA_BYTES as usize,
+                false,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("production policy must reject plaintext HTTP");
+            assert!(
+                matches!(error, FetchError::Failed(_)),
+                "unexpected error: {error:?}"
+            );
+            assert_eq!(
+                fixture.count("/counted"),
+                0,
+                "rejected URL must never be requested"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_feature_http_fixture_url_accepted() {
+            let fixture = Fixture::start(|_| |_: &str| ok(b"hello-bytes"));
+            let client = update_http_client();
+            let body = fetch_bytes_with(
+                &client,
+                &fixture.url("/hello"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect("test policy must accept HTTP fixtures");
+            assert_eq!(body, b"hello-bytes");
+            assert_eq!(fixture.count("/hello"), 1);
+        }
+
+        #[tokio::test]
+        async fn metadata_body_over_limit_fails() {
+            assert_eq!(MAX_METADATA_BYTES, 1024 * 1024);
+            let big = vec![0x41u8; MAX_METADATA_BYTES as usize + 16];
+            let fixture = Fixture::start(|_| move |_: &str| ok(&big));
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/big"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("metadata over 1 MiB must fail");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("exceeds the size limit"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("oversize body must not map to NotFound"),
+            }
+        }
+
+        #[tokio::test]
+        async fn binary_streams_to_disk() {
+            let body: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+            let fixture = Fixture::start(|_| move |_: &str| ok(&body));
+            let directory = tempfile::tempdir().unwrap();
+            let staging = directory.path().join("snp-test-binary");
+            assert!(!staging.exists());
+            let client = update_http_client();
+            fetch_file_with(
+                &client,
+                &fixture.url("/bin"),
+                &staging,
+                MAX_BINARY_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect("binary download must stream to disk");
+            let expected: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+            assert_eq!(fs::read(&staging).unwrap(), expected);
+        }
+
+        #[tokio::test]
+        async fn binary_over_limit_fails_without_partial() {
+            assert_eq!(MAX_BINARY_BYTES, 256 * 1024 * 1024);
+            // The streaming limit mechanism is exercised with a small bound;
+            // the production 256 MiB bound itself is asserted above.
+            let big = vec![0x42u8; 128 * 1024];
+            let fixture = Fixture::start(|_| move |_: &str| ok(&big));
+            let directory = tempfile::tempdir().unwrap();
+            let staging = directory.path().join("snp-test-binary");
+            let client = update_http_client();
+            let error = fetch_file_with(
+                &client,
+                &fixture.url("/bigbin"),
+                &staging,
+                64 * 1024,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("binary over the limit must fail");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("exceeds the size limit"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("oversize body must not map to NotFound"),
+            }
+            assert!(
+                !staging.exists(),
+                "failed download must not leave a usable partial candidate"
+            );
+        }
+
+        #[tokio::test]
+        async fn not_found_maps_to_not_found_without_creating_staging_file() {
+            let fixture = Fixture::start(|_| |_: &str| status_only(404));
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/metadata"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("metadata 404 must fail");
+            assert!(
+                matches!(error, FetchError::NotFound),
+                "unexpected error: {error:?}"
+            );
+            let directory = tempfile::tempdir().unwrap();
+            let staging = directory.path().join("snp-test-binary");
+            let error = fetch_file_with(
+                &client,
+                &fixture.url("/binary"),
+                &staging,
+                MAX_BINARY_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("binary 404 must fail");
+            assert!(
+                matches!(error, FetchError::NotFound),
+                "unexpected error: {error:?}"
+            );
+            assert!(
+                !staging.exists(),
+                "a 404 must not create or truncate the staging file"
+            );
+        }
+
+        #[tokio::test]
+        async fn missing_asset_falls_back_while_checksum_404_hard_fails() {
+            let fixture = Fixture::start(|_| {
+                |path: &str| {
+                    if path.ends_with(".sha256") {
+                        return status_only(404);
+                    }
+                    if path.contains("v9.9.8") {
+                        return status_only(404);
+                    }
+                    ok(b"fake-binary")
+                }
+            });
+            unsafe {
+                std::env::set_var("SNIP_UPDATE_RELEASE_BASE_URL", &fixture.base_url);
+            }
+            let staging = tempfile::tempdir().unwrap();
+            let target = "x86_64-unknown-linux-gnu";
+            let missing =
+                download_candidate(CLIENT, &Version::new(9, 9, 8), target, staging.path()).await;
+            assert!(
+                matches!(missing, Ok(DownloadedCandidate::MissingAsset)),
+                "binary asset 404 must stay on the Cargo fallback path, got {missing:?}"
+            );
+            let checksum_missing =
+                download_candidate(CLIENT, &Version::new(9, 9, 9), target, staging.path()).await;
+            let message = checksum_missing.expect_err("checksum 404 must be a hard failure");
+            assert!(
+                message.contains("could not download checksum"),
+                "unexpected message: {message}"
+            );
+            unsafe {
+                std::env::remove_var("SNIP_UPDATE_RELEASE_BASE_URL");
+            }
+        }
+
+        #[tokio::test]
+        async fn http_error_statuses_are_hard_failures() {
+            let fixture = Fixture::start(|_| {
+                |path: &str| match path {
+                    "/denied" => status_only(401),
+                    "/forbidden" => status_only(403),
+                    "/boom" => status_only(500),
+                    _ => status_only(404),
+                }
+            });
+            let client = update_http_client();
+            for (path, expected) in [("/denied", 401), ("/forbidden", 403), ("/boom", 500)] {
+                let error = fetch_bytes_with(
+                    &client,
+                    &fixture.url(path),
+                    MAX_METADATA_BYTES as usize,
+                    true,
+                    TEST_OVERALL,
+                )
+                .await
+                .unwrap_err();
+                match error {
+                    FetchError::Failed(message) => {
+                        assert!(
+                            message.contains(&format!("HTTP {expected}")),
+                            "unexpected message: {message}"
+                        );
+                    }
+                    FetchError::NotFound => {
+                        panic!("HTTP {expected} must not map to NotFound")
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn timeout_is_hard_failure() {
+            let fixture = Fixture::start(|_| {
+                |_: &str| Reply {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: b"late".to_vec(),
+                    delay: Duration::from_secs(5),
+                }
+            });
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/slow"),
+                1024,
+                true,
+                Duration::from_millis(300),
+            )
+            .await
+            .expect_err("overall timeout must fail");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("timeout must not map to NotFound"),
+            }
+            let impatient = http_client_with(Duration::from_secs(10), Duration::from_millis(100));
+            let error = fetch_bytes_with(
+                &impatient,
+                &fixture.url("/slow"),
+                1024,
+                true,
+                Duration::from_secs(3),
+            )
+            .await
+            .expect_err("read timeout must fail");
+            assert!(
+                matches!(error, FetchError::Failed(_)),
+                "timeout must be a hard failure, got {error:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn relative_redirect_resolves() {
+            let fixture = Fixture::start(|_| {
+                |path: &str| match path {
+                    "/start" => Reply {
+                        status: 302,
+                        headers: vec![("Location".to_owned(), "/target".to_owned())],
+                        body: Vec::new(),
+                        delay: Duration::ZERO,
+                    },
+                    "/target" => ok(b"redirected-body"),
+                    _ => status_only(404),
+                }
+            });
+            let client = update_http_client();
+            let body = fetch_bytes_with(
+                &client,
+                &fixture.url("/start"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect("relative redirect must resolve");
+            assert_eq!(body, b"redirected-body");
+            assert_eq!(fixture.count("/target"), 1);
+        }
+
+        #[tokio::test]
+        async fn https_redirect_target_accepted_under_production_policy() {
+            assert!(scheme_allowed("https://example.test/x", false));
+            assert!(!scheme_allowed("http://example.test/x", false));
+            assert!(!scheme_allowed("ftp://example.test/x", false));
+            assert!(scheme_allowed("http://127.0.0.1:9/x", true));
+            let fixture = Fixture::start(|_| {
+                |_: &str| Reply {
+                    status: 302,
+                    headers: vec![(
+                        "Location".to_owned(),
+                        "https://example.test/other".to_owned(),
+                    )],
+                    body: Vec::new(),
+                    delay: Duration::ZERO,
+                }
+            });
+            let client = update_http_client();
+            let response = client
+                .get(&fixture.url("/hop"))
+                .expect("fixture URL must parse")
+                .send()
+                .await
+                .expect("fixture hop must be served");
+            assert_eq!(response.status().as_u16(), 302);
+            let location = redirect_location(&response).expect("Location must parse");
+            assert_eq!(location, "https://example.test/other");
+            let next = redirect_target(&response, &location, false)
+                .expect("HTTPS target must pass the production gate");
+            assert_eq!(next, "https://example.test/other");
+        }
+
+        #[tokio::test]
+        async fn https_to_http_redirect_rejected_before_target_request() {
+            let fixture = Fixture::start(|base| {
+                move |path: &str| match path {
+                    "/downgrade" => Reply {
+                        status: 302,
+                        headers: vec![("Location".to_owned(), format!("{base}/counted"))],
+                        body: Vec::new(),
+                        delay: Duration::ZERO,
+                    },
+                    "/counted" => ok(b"plaintext"),
+                    _ => status_only(404),
+                }
+            });
+            let client = update_http_client();
+            // Obtain a live redirect response under the test policy, then run
+            // the loop's exact redirect gate with the production policy.
+            let response = client
+                .get(&fixture.url("/downgrade"))
+                .expect("fixture URL must parse")
+                .send()
+                .await
+                .expect("fixture hop must be served");
+            assert_eq!(response.status().as_u16(), 302);
+            let location = redirect_location(&response).expect("Location must parse");
+            let rejected = redirect_target(&response, &location, false);
+            assert!(
+                matches!(rejected, Err(FetchError::Failed(_))),
+                "downgrade target must be rejected, got {rejected:?}"
+            );
+            assert_eq!(
+                fixture.count("/counted"),
+                0,
+                "plaintext redirect target must never be requested"
+            );
+            // The full production-policy fetch rejects before any I/O at all.
+            let downgrade_before = fixture.count("/downgrade");
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/downgrade"),
+                1024,
+                false,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("production policy must reject the HTTP fetch");
+            assert!(
+                matches!(error, FetchError::Failed(_)),
+                "unexpected error: {error:?}"
+            );
+            assert_eq!(
+                fixture.count("/downgrade"),
+                downgrade_before,
+                "rejected fetch must not issue further requests"
+            );
+            assert_eq!(fixture.count("/counted"), 0);
+        }
+
+        #[tokio::test]
+        async fn redirect_loop_rejected() {
+            let fixture = Fixture::start(|_| {
+                |_: &str| Reply {
+                    status: 302,
+                    headers: vec![("Location".to_owned(), "/loop".to_owned())],
+                    body: Vec::new(),
+                    delay: Duration::ZERO,
+                }
+            });
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/loop"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect_err("redirect loop must fail");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("too many redirects"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("redirect loop must not map to NotFound"),
+            }
+        }
     }
 }

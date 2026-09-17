@@ -159,3 +159,35 @@ fn internal_modules_are_not_pub_in_lib_rs() {
         violations.join("\n")
     );
 }
+
+/// Plan 014: `snp` self-update HTTP is handled in-process through
+/// eggfetch-core, so `src/update.rs` must not shell out to an external
+/// `curl` executable (the updater works with no `curl` on PATH). The
+/// remaining subprocess uses there are Cargo, Homebrew, candidate
+/// verification, and Windows replacement.
+///
+/// `snip-sync/src/update.rs` is intentionally excluded: it retains the
+/// `curl` adapter as a measured footprint tradeoff (see its module docs),
+/// so a source scan must not flag it.
+#[test]
+fn snp_updater_does_not_shell_out_to_curl() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = Path::new(&manifest_dir).join("src/update.rs");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+    let mut violations = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("//!") {
+            continue;
+        }
+        if trimmed.contains("\"curl\"") || trimmed.contains("curl_protocol") {
+            violations.push(format!("src/update.rs:{}: {trimmed}", index + 1));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "snp updater must not shell out to curl:\n{}",
+        violations.join("\n")
+    );
+}

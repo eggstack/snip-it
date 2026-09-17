@@ -103,7 +103,7 @@ themes/           50 Halloy TOML theme files
 - `usage.rs` — Local usage metadata (not synced)
 - `clipboard.rs` — Clipboard backend with auto-clear
 - `diagnostics.rs` — `snp doctor` diagnostics engine
-- `update.rs` — Self-update support
+- `update.rs` — Self-update support (`snp`: in-process `eggfetch-core` 0.1.5 transport with HTTPS-only manual redirects, 1 MiB metadata / 256 MiB streamed-binary bounds, 404-only Cargo fallback; `RUNTIME.block_on` at dispatch. `snip-sync` keeps external `curl` per the Plan 014 size gate — see its module docs)
 - `logging.rs` — Structured logging and audit trail
 
 ## Critical Gotchas
@@ -127,6 +127,9 @@ Linux process start tokens use `/proc/<pid>/stat` field 22 (`starttime`). Unix `
 
 ### No command filtering (by design)
 Snippet commands execute as-is — no sanitization. Intentional for power users.
+
+### Self-update transport split (Plan 014)
+`snp update` uses in-process `eggfetch-core` (`=0.1.5`, `http1` + `tls-rustls` + `tls-native-roots` only; no http2/json/compression/cookies/proxy/multipart/tracing/test-util). `snip-sync update` intentionally retains the external-`curl` adapter: embedding the TLS stack grew the server binary +41% in controlled release builds (past the 10% gate), while `snp` grew +11.5% (reported, kept). Do not "consolidate" the server adapter without re-running the measurement. Updater transport tests live inline in `src/update.rs` (`transport_tests`, `test-support` feature) with a std-only loopback fixture; `tests/architecture.rs` pins the no-`curl` property.
 
 ### AGENTS.override.md
 Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.
@@ -162,7 +165,7 @@ Contains session-specific pitfall notes and plan review findings. Consult it for
 
 ## Async & Runtime
 
-- Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`).
+- Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`, `update`).
 - Local-only commands (`select`, `list`, `get`, `validate`, `backup`, `new`, `edit`, `keybindings`, `completions`, `shell`, `doctor`, `status`, `repair`, `restore`, `import`) do not initialize the Tokio runtime.
 - `run_snippet_selection` accepts `Option<&tokio::runtime::Runtime>` — pass `None` when `do_sync` is false, `Some(&RUNTIME)` when true.
 - The auto-sync detached helper uses `Builder::new_current_thread()` instead of `new_multi_thread()`.
