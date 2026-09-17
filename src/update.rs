@@ -368,41 +368,36 @@ fn redirect_target(
 
 /// GET with safe redirect handling: eggfetch automatic redirects stay
 /// disabled so every hop passes the scheme policy before it is requested.
+///
+/// This helper owns redirect traversal only. It must not define the total
+/// wall-clock lifetime of the operation: the caller applies one total
+/// wall-clock timeout around redirect traversal and complete final-body
+/// consumption (see `fetch_bytes_with` / `fetch_file_with`).
 async fn safe_get(
     client: &eggfetch_core::Client,
     initial_url: &str,
     max_body_bytes: usize,
     allow_http: bool,
-    overall_timeout: Duration,
 ) -> Result<eggfetch_core::Response, FetchError> {
-    let fetch = async {
-        let mut current = initial_url.to_owned();
-        for _ in 0..=MAX_REDIRECTS {
-            check_url_scheme(&current, allow_http)?;
-            let response = client
-                .get(&current)
-                .map_err(|e| FetchError::Failed(format!("invalid update URL {current:?}: {e}")))?
-                .max_decoded_body_size(max_body_bytes)
-                .send()
-                .await
-                .map_err(|e| transport_error("update request failed", e))?;
-            if !is_redirect_status(response.status().as_u16()) {
-                return Ok(response);
-            }
-            let location = redirect_location(&response)?;
-            current = redirect_target(&response, &location, allow_http)?;
+    let mut current = initial_url.to_owned();
+    for _ in 0..=MAX_REDIRECTS {
+        check_url_scheme(&current, allow_http)?;
+        let response = client
+            .get(&current)
+            .map_err(|e| FetchError::Failed(format!("invalid update URL {current:?}: {e}")))?
+            .max_decoded_body_size(max_body_bytes)
+            .send()
+            .await
+            .map_err(|e| transport_error("update request failed", e))?;
+        if !is_redirect_status(response.status().as_u16()) {
+            return Ok(response);
         }
-        Err(FetchError::Failed(format!(
-            "too many redirects (>{MAX_REDIRECTS}) while fetching update"
-        )))
-    };
-    match tokio::time::timeout(overall_timeout, fetch).await {
-        Err(_) => Err(FetchError::Failed(format!(
-            "update request timed out after {} seconds",
-            overall_timeout.as_secs()
-        ))),
-        Ok(result) => result,
+        let location = redirect_location(&response)?;
+        current = redirect_target(&response, &location, allow_http)?;
     }
+    Err(FetchError::Failed(format!(
+        "too many redirects (>{MAX_REDIRECTS}) while fetching update"
+    )))
 }
 
 fn transport_error(context: &str, error: eggfetch_core::Error) -> FetchError {
@@ -431,18 +426,31 @@ async fn fetch_bytes_with(
     allow_http: bool,
     overall_timeout: Duration,
 ) -> Result<Vec<u8>, FetchError> {
-    let mut response = safe_get(client, url, max_body_bytes, allow_http, overall_timeout).await?;
-    let status = response.status().as_u16();
-    match status {
-        200..=299 => response
-            .bytes()
-            .await
-            .map(|body| body.to_vec())
-            .map_err(|e| transport_error("could not read update metadata", e)),
-        404 => Err(FetchError::NotFound),
-        _ => Err(FetchError::Failed(format!(
-            "HTTP {status} while fetching update metadata"
+    // One total wall-clock timeout around redirect traversal and complete
+    // final-body consumption. Body reads must stay inside this budget: steady
+    // progress within the eggfetch read inactivity timeout must not extend
+    // the operation past the overall deadline.
+    let operation = async {
+        let mut response = safe_get(client, url, max_body_bytes, allow_http).await?;
+        let status = response.status().as_u16();
+        match status {
+            200..=299 => response
+                .bytes()
+                .await
+                .map(|body| body.to_vec())
+                .map_err(|e| transport_error("could not read update metadata", e)),
+            404 => Err(FetchError::NotFound),
+            _ => Err(FetchError::Failed(format!(
+                "HTTP {status} while fetching update metadata"
+            ))),
+        }
+    };
+    match tokio::time::timeout(overall_timeout, operation).await {
+        Err(_) => Err(FetchError::Failed(format!(
+            "update request timed out after {} seconds",
+            overall_timeout.as_secs()
         ))),
+        Ok(result) => result,
     }
 }
 
@@ -467,31 +475,56 @@ async fn fetch_file_with(
     allow_http: bool,
     overall_timeout: Duration,
 ) -> Result<(), FetchError> {
-    let mut response = safe_get(client, url, max_body_bytes, allow_http, overall_timeout).await?;
-    let status = response.status().as_u16();
-    match status {
-        200..=299 => {}
-        404 => return Err(FetchError::NotFound),
-        _ => {
-            return Err(FetchError::Failed(format!(
-                "HTTP {status} while downloading update binary"
-            )));
+    // One total wall-clock timeout around redirect traversal, staging-file
+    // creation, and every streamed body chunk/write. A transfer that keeps
+    // making progress still fails once the overall budget expires, and the
+    // cancelled operation must not leave a partial staging file behind.
+    let operation = async {
+        let mut response = safe_get(client, url, max_body_bytes, allow_http).await?;
+        let status = response.status().as_u16();
+        match status {
+            200..=299 => {}
+            404 => return Err(FetchError::NotFound),
+            _ => {
+                return Err(FetchError::Failed(format!(
+                    "HTTP {status} while downloading update binary"
+                )));
+            }
         }
-    }
-    // The destination is created only after the final status is classified,
-    // so 404/5xx responses never truncate or create the staging file.
-    let mut stream = response
-        .bytes_stream()
-        .map_err(|e| FetchError::Failed(format!("could not stream update binary: {e}")))?;
-    let mut output = File::create(path)
-        .map_err(|e| FetchError::Failed(format!("could not create staging file: {e}")))?;
-    if let Err(error) = stream_binary_to_file(&mut stream, &mut output).await {
+        // The destination is created only after the final status is classified,
+        // so 404/5xx responses never truncate or create the staging file.
+        let mut stream = response
+            .bytes_stream()
+            .map_err(|e| FetchError::Failed(format!("could not stream update binary: {e}")))?;
+        let mut output = File::create(path)
+            .map_err(|e| FetchError::Failed(format!("could not create staging file: {e}")))?;
+        if let Err(error) = stream_binary_to_file(&mut stream, &mut output).await {
+            drop(output);
+            remove_partial_staging_file(path);
+            return Err(error);
+        }
         drop(output);
-        let _ = fs::remove_file(path);
-        return Err(error);
+        Ok(())
+    };
+    match tokio::time::timeout(overall_timeout, operation).await {
+        Err(_) => {
+            // The deadline fired while the inner future was dropped; the
+            // staging file may already hold partial bytes.
+            remove_partial_staging_file(path);
+            Err(FetchError::Failed(format!(
+                "update request timed out after {} seconds",
+                overall_timeout.as_secs()
+            )))
+        }
+        Ok(result) => result,
     }
-    drop(output);
-    Ok(())
+}
+
+/// Best-effort removal of a partial binary staging file. Failed, oversized,
+/// transport-error, write-error, or timed-out downloads must not leave a
+/// usable partial candidate.
+fn remove_partial_staging_file(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 /// Stream one final 2xx body to disk without buffering the whole release
@@ -1037,7 +1070,7 @@ mod tests {
         use std::net::{TcpListener, TcpStream};
         use std::sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         };
         use std::thread;
 
@@ -1048,6 +1081,12 @@ mod tests {
             headers: Vec<(String, String)>,
             body: Vec<u8>,
             delay: Duration,
+            /// Slow-drip streaming: when nonzero, headers go out immediately
+            /// and the body is written in chunks of this size with
+            /// `chunk_delay` slept between chunks (the first chunk is sent
+            /// immediately). Zero means the whole body is written at once.
+            chunk_size: usize,
+            chunk_delay: Duration,
         }
 
         fn ok(body: &[u8]) -> Reply {
@@ -1056,6 +1095,8 @@ mod tests {
                 headers: Vec::new(),
                 body: body.to_vec(),
                 delay: Duration::ZERO,
+                chunk_size: 0,
+                chunk_delay: Duration::ZERO,
             }
         }
 
@@ -1065,6 +1106,23 @@ mod tests {
                 headers: Vec::new(),
                 body: Vec::new(),
                 delay: Duration::ZERO,
+                chunk_size: 0,
+                chunk_delay: Duration::ZERO,
+            }
+        }
+
+        /// A 200 response whose body needs materially longer than the test's
+        /// overall timeout at the given inter-chunk pace. The gaps stay well
+        /// inside the client's read inactivity timeout, so only the overall
+        /// wall-clock budget can fail the transfer.
+        fn slow_drip(body: &[u8], chunk_size: usize, chunk_delay: Duration) -> Reply {
+            Reply {
+                status: 200,
+                headers: Vec::new(),
+                body: body.to_vec(),
+                delay: Duration::ZERO,
+                chunk_size,
+                chunk_delay,
             }
         }
 
@@ -1090,6 +1148,7 @@ mod tests {
         struct Fixture {
             base_url: String,
             counts: Arc<Mutex<HashMap<String, usize>>>,
+            chunks_sent: Arc<AtomicUsize>,
             shutdown: Arc<AtomicBool>,
             thread: Option<thread::JoinHandle<()>>,
         }
@@ -1106,14 +1165,16 @@ mod tests {
                 let handler: Arc<dyn Fn(&str) -> Reply + Send + Sync> =
                     Arc::new(make_handler(base_url.clone()));
                 let counts = Arc::new(Mutex::new(HashMap::new()));
+                let chunks_sent = Arc::new(AtomicUsize::new(0));
                 let shutdown = Arc::new(AtomicBool::new(false));
                 let counts_loop = Arc::clone(&counts);
+                let chunks_loop = Arc::clone(&chunks_sent);
                 let shutdown_loop = Arc::clone(&shutdown);
                 let thread = thread::spawn(move || {
                     while !shutdown_loop.load(Ordering::Relaxed) {
                         match listener.accept() {
                             Ok((stream, _)) => {
-                                handle_connection(stream, &handler, &counts_loop);
+                                handle_connection(stream, &handler, &counts_loop, &chunks_loop);
                             }
                             Err(_) => thread::sleep(Duration::from_millis(5)),
                         }
@@ -1122,6 +1183,7 @@ mod tests {
                 Self {
                     base_url,
                     counts,
+                    chunks_sent,
                     shutdown,
                     thread: Some(thread),
                 }
@@ -1139,6 +1201,13 @@ mod tests {
                     .copied()
                     .unwrap_or(0)
             }
+
+            /// Number of slow-drip body chunks written so far. Lets a test
+            /// prove body progress was underway before the overall deadline
+            /// fired, rather than asserting on elapsed time alone.
+            fn chunks_sent(&self) -> usize {
+                self.chunks_sent.load(Ordering::Relaxed)
+            }
         }
 
         impl Drop for Fixture {
@@ -1154,6 +1223,7 @@ mod tests {
             mut stream: TcpStream,
             handler: &Arc<dyn Fn(&str) -> Reply + Send + Sync>,
             counts: &Arc<Mutex<HashMap<String, usize>>>,
+            chunks_sent: &Arc<AtomicUsize>,
         ) {
             stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
             let mut request = Vec::new();
@@ -1200,7 +1270,22 @@ mod tests {
             }
             head.push_str("\r\n");
             let _ = stream.write_all(head.as_bytes());
-            let _ = stream.write_all(&reply.body);
+            if reply.chunk_size == 0 || reply.chunk_delay.is_zero() {
+                let _ = stream.write_all(&reply.body);
+            } else {
+                // Slow-drip body: headers are already on the wire and
+                // Content-Length still advertises the full body, so the
+                // client keeps reading inside its read inactivity timeout
+                // while the total transfer outlasts the overall budget.
+                for chunk in reply.body.chunks(reply.chunk_size) {
+                    if stream.write_all(chunk).is_err() {
+                        break;
+                    }
+                    let _ = stream.flush();
+                    chunks_sent.fetch_add(1, Ordering::Relaxed);
+                    thread::sleep(reply.chunk_delay);
+                }
+            }
             let _ = stream.flush();
         }
 
@@ -1446,6 +1531,8 @@ mod tests {
                     headers: Vec::new(),
                     body: b"late".to_vec(),
                     delay: Duration::from_secs(5),
+                    chunk_size: 0,
+                    chunk_delay: Duration::ZERO,
                 }
             });
             let client = update_http_client();
@@ -1484,6 +1571,82 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn metadata_slow_drip_body_still_hits_overall_timeout() {
+            // 20 x 100-byte chunks at 100 ms gaps need ~2 s overall. The gaps
+            // stay far inside the client's read inactivity timeout, so steady
+            // body progress must still fail once the overall budget expires.
+            let body = vec![0x43u8; 2000];
+            let fixture = Fixture::start(|_| {
+                move |_: &str| slow_drip(&body, 100, Duration::from_millis(100))
+            });
+            let client = update_http_client();
+            let error = fetch_bytes_with(
+                &client,
+                &fixture.url("/slow-drip"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                Duration::from_millis(300),
+            )
+            .await
+            .expect_err("slow-drip body must hit the overall timeout");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("overall timeout must not map to NotFound"),
+            }
+            assert!(
+                fixture.chunks_sent() >= 1,
+                "body progress must have been underway before the deadline"
+            );
+        }
+
+        #[tokio::test]
+        async fn binary_slow_drip_body_hits_overall_timeout_without_partial() {
+            // Same slow-drip shape through the streamed binary path: headers
+            // arrive and at least one chunk is on the wire before the
+            // deadline, the transfer still aborts, and no staging file
+            // survives the timeout cancellation.
+            let body = vec![0x44u8; 2000];
+            let fixture = Fixture::start(|_| {
+                move |_: &str| slow_drip(&body, 100, Duration::from_millis(100))
+            });
+            let directory = tempfile::tempdir().unwrap();
+            let staging = directory.path().join("snp-test-binary");
+            let client = update_http_client();
+            let error = fetch_file_with(
+                &client,
+                &fixture.url("/slow-bin"),
+                &staging,
+                MAX_BINARY_BYTES as usize,
+                true,
+                Duration::from_millis(300),
+            )
+            .await
+            .expect_err("slow-drip binary must hit the overall timeout");
+            match error {
+                FetchError::Failed(message) => {
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected message: {message}"
+                    );
+                }
+                FetchError::NotFound => panic!("overall timeout must not map to NotFound"),
+            }
+            assert!(
+                fixture.chunks_sent() >= 1,
+                "at least one body chunk must have been sent before the deadline"
+            );
+            assert!(
+                !staging.exists(),
+                "timed-out download must not leave a usable partial candidate"
+            );
+        }
+
+        #[tokio::test]
         async fn relative_redirect_resolves() {
             let fixture = Fixture::start(|_| {
                 |path: &str| match path {
@@ -1492,6 +1655,8 @@ mod tests {
                         headers: vec![("Location".to_owned(), "/target".to_owned())],
                         body: Vec::new(),
                         delay: Duration::ZERO,
+                        chunk_size: 0,
+                        chunk_delay: Duration::ZERO,
                     },
                     "/target" => ok(b"redirected-body"),
                     _ => status_only(404),
@@ -1526,6 +1691,8 @@ mod tests {
                     )],
                     body: Vec::new(),
                     delay: Duration::ZERO,
+                    chunk_size: 0,
+                    chunk_delay: Duration::ZERO,
                 }
             });
             let client = update_http_client();
@@ -1552,6 +1719,8 @@ mod tests {
                         headers: vec![("Location".to_owned(), format!("{base}/counted"))],
                         body: Vec::new(),
                         delay: Duration::ZERO,
+                        chunk_size: 0,
+                        chunk_delay: Duration::ZERO,
                     },
                     "/counted" => ok(b"plaintext"),
                     _ => status_only(404),
@@ -1609,6 +1778,8 @@ mod tests {
                     headers: vec![("Location".to_owned(), "/loop".to_owned())],
                     body: Vec::new(),
                     delay: Duration::ZERO,
+                    chunk_size: 0,
+                    chunk_delay: Duration::ZERO,
                 }
             });
             let client = update_http_client();

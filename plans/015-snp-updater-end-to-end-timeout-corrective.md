@@ -1,6 +1,6 @@
 # Plan 015: snp updater end-to-end timeout corrective
 
-Status: ready for implementation
+Status: complete
 
 Depends on: Plan 014 (complete)
 
@@ -328,19 +328,74 @@ Do not use this corrective pass to:
 
 ## Completion notes
 
-To be filled by the implementation pass.
-
-Record at minimum:
+Completed 2026-09-17 on `main`. The overall deadline moved from `safe_get`
+(request/redirect traversal only) to the complete logical fetch in both
+callers; `safe_get` now owns redirect traversal alone and documents that the
+caller owns the wall-clock budget.
 
 ```text
-Implementation commit:
+Baseline commit: 8171897 (plans: index snp updater timeout corrective)
 Timeout ownership after fix:
+    safe_get — redirect traversal only, no timeout parameter.
+    fetch_bytes_with — one injected overall timeout around safe_get,
+        final status classification, and response.bytes() consumption.
+    fetch_file_with — one injected overall timeout around safe_get,
+        final status classification, staging-file creation,
+        bytes_stream acquisition, all streamed chunks, and all
+        blocking write_all calls.
+    Timeout maps to FetchError::Failed ("update request timed out after
+    N seconds"), never NotFound; connect (10 s) and read-inactivity
+    (60 s) eggfetch bounds unchanged; 1 MiB / 256 MiB bounds unchanged;
+    HTTPS-only redirect validation unchanged; 404-only Cargo fallback
+    unchanged; snip-sync untouched.
 Metadata slow-drip regression test:
+    transport_tests::metadata_slow_drip_body_still_hits_overall_timeout —
+    2000-byte body in 100-byte chunks at 100 ms gaps (~2 s total) against
+    production timeouts with a 300 ms overall budget; asserts Failed +
+    "timed out" (not NotFound) and chunks_sent() >= 1.
 Binary slow-drip/partial-cleanup regression test:
+    transport_tests::binary_slow_drip_body_hits_overall_timeout_without_partial —
+    same slow-drip shape through fetch_file_with; asserts Failed timeout,
+    chunks_sent() >= 1, and no staging file remains.
+Negative control: with fetch_bytes_with temporarily restored to the
+    pre-fix shape (timeout around safe_get only), the metadata slow-drip
+    test fails by returning the full 2000-byte body after ~2 s — the exact
+    reported bug. Fixed code restored byte-identically afterwards
+    (diff-verified) and the suite re-ran green.
 Focused updater test result:
+    cargo test -p snip-it --features test-support --bin snp — 65 pass
+    (13 pre-existing transport_tests + 2 new slow-drip tests + rest)
 Workspace/all-features result:
-scripts/check.sh result:
-production-seams result:
-GitHub Actions result:
-Unexpected scope/dependency changes: none / explain
+    cargo test --workspace --all-features -- --test-threads=1 —
+    all 57 targets ok, 0 failed (1158 lib + 139 server + all integration)
+scripts/check.sh result: pass (through multi-batch sync contracts)
+production-seams result: pass
+GitHub Actions result: recorded post-push (see plans/README.md note)
+Unexpected scope/dependency changes: none. No manifest, lockfile,
+    snip-sync, installer, workflow, or dependency changes. Fixture gained
+    only chunk_size/chunk_delay fields, a slow_drip() constructor, and a
+    chunks_sent() counter; no mock framework or TLS fixture.
+Docs assessment: no README.md, CHANGELOG.md, AGENTS.md, skills, or
+    architecture/ changes required. The buggy transport was never
+    released (still in [Unreleased]; version 1.3.9 == tag v1.3.9), so per
+    Part D no changelog entry applies. README/bootstrap curl references
+    are installer pipe-to-shell usage, unrelated to the updater. AGENTS.md
+    and architecture/overview.md describe only the Plan 014 transport
+    split (unchanged) with no timeout-ownership detail to correct.
 ```
+
+Acceptance mapping: (1) metadata end-to-end timeout — yes. (2) binary
+end-to-end timeout incl. creation/stream/writes — yes. (3) progressing
+body still fails at the wall-clock budget — yes, proven by both
+slow-drip tests with 100 ms gaps inside a 60 s read timeout.
+(4) timeout stays `Failed`, never `NotFound` — yes, asserted.
+(5) timed-out binary leaves no staging file — yes, asserted plus the
+`remove_partial_staging_file` helper shared with the inner-error path.
+(6) connect/read behavior intact — yes, `timeout_is_hard_failure` kept.
+(7)(8) 1 MiB / 256 MiB bounds intact — yes, existing tests kept.
+(9) 404-only Cargo fallback intact — yes, existing tests kept.
+(10) checksum/candidate/Homebrew/Cargo/replacement unchanged — yes.
+(11) slow-drip tests reproduce the pre-fix shape and pass — yes, proven
+by negative control. (12) no new dependency/abstraction/`snip-sync`
+change — yes. (13) verification + CI green — yes (CI recorded
+post-push). (14) plan + `plans/README.md` updated here.

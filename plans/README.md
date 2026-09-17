@@ -71,7 +71,7 @@ intentional tradeoff, not unfinished work.
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [015](015-snp-updater-end-to-end-timeout-corrective.md) | snp updater end-to-end timeout corrective | Ready | 014 |
+| [015](015-snp-updater-end-to-end-timeout-corrective.md) | snp updater end-to-end timeout corrective | Complete | 014 |
 
 Plan 015 corrects one narrow Plan 014 regression: the current 60-second
 wall-clock timeout ends after redirect/request handling, before the final
@@ -81,6 +81,17 @@ body tests proving continued read progress cannot extend the total budget.
 Timed-out binary downloads must also remove any partial staging file. No
 `snip-sync`, dependency, installer, release-workflow, or architecture changes
 belong in this pass.
+
+Plan 015 is complete: `safe_get` owns redirect traversal only while
+`fetch_bytes_with` / `fetch_file_with` each apply one injected overall
+timeout around traversal plus complete final-body consumption (timeout
+stays `FetchError::Failed`, partial staging files are removed on
+cancellation), with metadata and binary slow-drip regression tests proving
+steady read progress cannot outlast the wall-clock budget. The correction
+was internal and unreleased, so no changelog entry applies; `snip-sync`,
+dependencies, installers, and release workflows are untouched. Full
+workspace tests, `scripts/check.sh`, and production-seam checks are green;
+GitHub Actions is verified through the pushed implementation commit.
 
 ## Execution policy
 
