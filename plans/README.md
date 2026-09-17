@@ -53,6 +53,14 @@ The intended order is deliberately deletion/consolidation first:
 4. reuse canonical selector/search semantics in CLI and read-only MCP;
 5. deduplicate sync retry policy as a final internal cleanup.
 
+## Active updater transport consolidation
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [014](014-eggfetch-self-update-transport-consolidation.md) | eggfetch self-update transport consolidation | Ready | 004 |
+
+Plan 014 is a narrow maintenance follow-up. It evaluates replacing the duplicated external `curl` transport in `snp update` and `snip-sync update` with `eggfetch-core` 0.1.5 while preserving Plan 004's release selection, HTTPS, 404-only fallback, integrity, candidate validation, and replacement policy. It explicitly treats binary footprint as an acceptance constraint: `snp` may migrate independently, while `snip-sync` may retain its existing curl adapter if controlled release builds show material server-binary growth.
+
 ## Execution policy
 
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
@@ -60,6 +68,8 @@ Implement plans in dependency order. Each plan is scoped so a smaller implementa
 For Plans 008–012, preserve `snip-it` as a lightweight terminal tool. Specifically, do not use this consolidation work to introduce additional workspace crates, service/repository abstractions, dependency-injection frameworks, plugin/rule engines, databases/search indexes, generic query languages, background job systems, networked MCP, MCP mutations/execution, retry middleware frameworks, or additional CI/release hardening.
 
 For Plan 013, preserve the existing single release workflow and component-specific tag/version namespaces. Do not duplicate the release matrix or retrofit binaries onto an already-published historical release. The correction should be achieved through symmetric consumer/install testing and the next legitimate `snip-it` release.
+
+For Plan 014, preserve HTTPS-only production redirect behavior, bounded metadata/binary transfers, 404-only Cargo fallback classification, and the lightweight `snip-sync` footprint. Do not turn the migration into a general HTTP abstraction, shared updater crate, broad eggfetch feature enablement, or async-main rewrite. The plan's controlled binary-size gate is authoritative for whether the server updater migrates.
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
 
