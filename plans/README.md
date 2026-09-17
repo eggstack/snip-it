@@ -67,6 +67,21 @@ The split, measurements, and trust-profile decision are recorded in the
 plan's completion notes; the retained `curl` path is documented as an
 intentional tradeoff, not unfinished work.
 
+## Active updater corrective follow-up
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [015](015-snp-updater-end-to-end-timeout-corrective.md) | snp updater end-to-end timeout corrective | Ready | 014 |
+
+Plan 015 corrects one narrow Plan 014 regression: the current 60-second
+wall-clock timeout ends after redirect/request handling, before the final
+response body is consumed. The corrective pass moves the total deadline
+around the complete metadata or streamed-binary operation and adds slow-drip
+body tests proving continued read progress cannot extend the total budget.
+Timed-out binary downloads must also remove any partial staging file. No
+`snip-sync`, dependency, installer, release-workflow, or architecture changes
+belong in this pass.
+
 ## Execution policy
 
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
@@ -76,6 +91,8 @@ For Plans 008–012, preserve `snip-it` as a lightweight terminal tool. Specific
 For Plan 013, preserve the existing single release workflow and component-specific tag/version namespaces. Do not duplicate the release matrix or retrofit binaries onto an already-published historical release. The correction should be achieved through symmetric consumer/install testing and the next legitimate `snip-it` release.
 
 For Plan 014, preserve HTTPS-only production redirect behavior, bounded metadata/binary transfers, 404-only Cargo fallback classification, and the lightweight `snip-sync` footprint. Do not turn the migration into a general HTTP abstraction, shared updater crate, broad eggfetch feature enablement, or async-main rewrite. The plan's controlled binary-size gate is authoritative for whether the server updater migrates.
+
+For Plan 015, preserve the Plan 014 transport and dependency decisions exactly. Limit implementation to moving the overall `snp` fetch deadline so it covers redirect traversal plus complete final-body consumption, guaranteeing partial-file cleanup on timeout cancellation, and adding deterministic slow-body regression tests. Do not touch `snip-sync`, dependency versions/features, installers, release workflows, proxy behavior, retries, or runtime architecture.
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
 
