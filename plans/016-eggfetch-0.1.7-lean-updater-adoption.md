@@ -908,7 +908,9 @@ scripts/check.sh result: pass (`=== All checks passed ===`: installers,
     auto_sync_closure, auto_sync_concurrency, sync_multibatch)
 production-seams result: pass
     (`bash scripts/ci/test-production-seams.sh`: all seam tests passed)
-GitHub Actions result: (verified through the pushed commit; see below)
+GitHub Actions result: pass (CI run 35400092370 for the implementation
+    commit: Linux correctness, macOS platform smoke, and Windows platform
+    smoke all success)
 docs/changelog updated: CHANGELOG.md Unreleased (0.1.7 lean profile +
     -2.8% size note), AGENTS.md updater bullet, tests/architecture.rs
     (lean-profile + delegated timeout pins), this plan + plans/README.md.
