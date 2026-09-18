@@ -84,10 +84,15 @@ pub fn invalidate_toml_cache(path: &std::path::Path) {
     // atomically replaced (canonical path vs parent+filename fallback).
     // Remove the alternative form as well so a stale entry does not survive
     // an invalidation done via the other string form.
+    // Paths without a filename (e.g. `/`, trailing `..`) have no stable
+    // filename join; skip the alt key to avoid colliding cache keys.
     let alt_key = path
-        .parent()
-        .and_then(|parent| parent.canonicalize().ok())
-        .map(|cp| cp.join(path.file_name().unwrap_or_default()))
+        .file_name()
+        .and_then(|file_name| {
+            path.parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .map(|cp| cp.join(file_name))
+        })
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     if !alt_key.is_empty() && alt_key != key {
@@ -105,10 +110,16 @@ pub(crate) fn toml_cache_key(path: &std::path::Path) -> String {
     if let Ok(canonical) = path.canonicalize() {
         return canonical.to_string_lossy().into_owned();
     }
+    // Paths without a filename (e.g. `/`, trailing `..`) must not join an
+    // empty filename onto the parent — that would collide with the parent
+    // directory key. Fall back to the raw path instead.
+    let Some(file_name) = path.file_name() else {
+        return path.to_path_buf().to_string_lossy().into_owned();
+    };
     if let Some(parent) = path.parent()
         && let Ok(canonical_parent) = parent.canonicalize()
     {
-        let candidate = canonical_parent.join(path.file_name().unwrap_or_default());
+        let candidate = canonical_parent.join(file_name);
         if let Ok(canonical_candidate) = candidate.canonicalize() {
             return canonical_candidate.to_string_lossy().into_owned();
         }

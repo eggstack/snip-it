@@ -75,9 +75,17 @@ fn link_server_library(lib: &Library, mgr: &mut LibraryManager, print_linked: bo
                         eprintln!("    Failed to create backup: {e}");
                         return false;
                     }
-                    // Move local snippets to the backup library
-                    let local_snippets =
-                        crate::library::load_library(&lib_path).unwrap_or_default();
+                    // Move local snippets to the backup library.
+                    // Fail closed on malformed input: never back up an empty
+                    // library over a corrupt original (see sync_commands
+                    // recovery-marker handling).
+                    let local_snippets = match crate::library::load_library(&lib_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("    Failed to load local library for backup: {e}");
+                            return false;
+                        }
+                    };
                     let backup_path = mgr.get_libraries_dir().join(format!("{new_name}.toml"));
                     if let Err(e) = crate::library::save_library(&backup_path, &local_snippets) {
                         eprintln!("    Failed to save backup: {e}");
@@ -297,15 +305,17 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
             let observed_gen = observed_generation.unwrap_or(0);
             match &sync_result {
                 Ok(()) => {
-                    let _ = crate::auto_sync::status::record_success(
+                    if let Err(e) = crate::auto_sync::status::record_success(
                         &state_dir,
                         observed_gen,
                         "foreground sync completed",
-                    );
+                    ) {
+                        tracing::warn!(error = %e, "failed to record sync success status");
+                    }
                 }
                 Err(e) => {
                     let failure_class = crate::auto_sync::policy::FailureClass::from_error(e);
-                    let _ = crate::auto_sync::status::record_failure(
+                    if let Err(status_err) = crate::auto_sync::status::record_failure(
                         &state_dir,
                         observed_gen,
                         failure_class,
@@ -314,7 +324,9 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                         0,
                         &e.to_string(),
                         crate::auto_sync::status::compute_config_fingerprint(&sync_settings),
-                    );
+                    ) {
+                        tracing::warn!(error = %status_err, "failed to record sync failure status");
+                    }
                 }
             }
 
@@ -563,17 +575,22 @@ pub fn run_retry(library: Option<String>, runtime: &tokio::runtime::Runtime) -> 
     let observed_gen = observed_generation.unwrap_or(0);
     match &sync_result {
         Ok(()) => {
-            let _ = crate::auto_sync::status::record_success(
+            if let Err(e) = crate::auto_sync::status::record_success(
                 &state_dir,
                 observed_gen,
                 "retry sync completed",
-            );
-            let _ =
-                crate::auto_sync::pending::clear_if_generation_matches(&state_dir, observed_gen);
+            ) {
+                tracing::warn!(error = %e, "failed to record retry success status");
+            }
+            if let Err(e) =
+                crate::auto_sync::pending::clear_if_generation_matches(&state_dir, observed_gen)
+            {
+                tracing::warn!(error = %e, "failed to clear pending after retry sync");
+            }
         }
         Err(e) => {
             let failure_class = crate::auto_sync::policy::FailureClass::from_error(e);
-            let _ = crate::auto_sync::status::record_failure(
+            if let Err(status_err) = crate::auto_sync::status::record_failure(
                 &state_dir,
                 observed_gen,
                 failure_class,
@@ -582,7 +599,9 @@ pub fn run_retry(library: Option<String>, runtime: &tokio::runtime::Runtime) -> 
                 0,
                 &e.to_string(),
                 crate::auto_sync::status::compute_config_fingerprint(&sync_settings),
-            );
+            ) {
+                tracing::warn!(error = %status_err, "failed to record retry failure status");
+            }
         }
     }
 
@@ -721,20 +740,30 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
         crate::auto_sync::status::StatusRead::Valid(_) => {}
     }
 
-    for path in std::fs::read_dir(&state_dir).ok().into_iter().flatten() {
-        let entry = match path {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with("snp-sync-tmp.") || name_str.starts_with(".quarantine.") {
-            actions.push(RepairAction {
-                artifact: format!("temp: {name_str}"),
-                action: "remove orphaned temp file".to_string(),
-                reason: "orphaned temporary file".to_string(),
-                applied: false,
-            });
+    match std::fs::read_dir(&state_dir) {
+        Ok(entries) => {
+            for path in entries {
+                let entry = match path {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skipping unreadable state entry during repair scan");
+                        continue;
+                    }
+                };
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("snp-sync-tmp.") || name_str.starts_with(".quarantine.") {
+                    actions.push(RepairAction {
+                        artifact: format!("temp: {name_str}"),
+                        action: "remove orphaned temp file".to_string(),
+                        reason: "orphaned temporary file".to_string(),
+                        applied: false,
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = %state_dir.display(), "failed to scan state dir for repair");
         }
     }
 
@@ -806,14 +835,22 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
     if action.artifact == "status" {
         let status_path = crate::auto_sync::status::status_path(state_dir);
         if status_path.exists() {
-            let _ = std::fs::create_dir_all(&quarantine_dir);
+            if let Err(e) = std::fs::create_dir_all(&quarantine_dir) {
+                tracing::warn!(error = %e, "failed to create quarantine dir for corrupt status");
+            }
             let dest = quarantine_dir.join(crate::auto_sync::status::STATUS_FILE_NAME);
-            let _ = std::fs::copy(&status_path, &dest);
-            let _ = std::fs::remove_file(&status_path);
+            if let Err(e) = std::fs::copy(&status_path, &dest) {
+                tracing::warn!(error = %e, "failed to quarantine corrupt status file");
+            }
+            if let Err(e) = std::fs::remove_file(&status_path) {
+                tracing::warn!(error = %e, "failed to remove corrupt status file after quarantine");
+            }
         }
         if action.action.contains("recreate") {
             let default_status = crate::auto_sync::status::AutoSyncStatus::default();
-            let _ = crate::auto_sync::status::write_status(state_dir, &default_status);
+            if let Err(e) = crate::auto_sync::status::write_status(state_dir, &default_status) {
+                tracing::warn!(error = %e, "failed to recreate status file after quarantine");
+            }
         }
     } else if action.artifact.starts_with("temp:") {
         let name = action
@@ -821,8 +858,10 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
             .strip_prefix("temp: ")
             .unwrap_or(&action.artifact);
         let path = state_dir.join(name);
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
+        if path.exists()
+            && let Err(e) = std::fs::remove_file(&path)
+        {
+            tracing::warn!(error = %e, path = %path.display(), "failed to remove orphaned temp file");
         }
     } else if action.action.contains("fix permissions") {
         #[cfg(unix)]
@@ -837,7 +876,10 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
             } else {
                 state_dir.join(&action.artifact)
             };
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!(error = %e, path = %path.display(), "failed to harden repair artifact permissions");
+            }
         }
     }
 

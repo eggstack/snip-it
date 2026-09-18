@@ -1067,7 +1067,9 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                 use std::io::Write;
                 file.write_all(content.as_bytes())
                     .map_err(|e| SnipError::io_error("write lock record", lock_path.clone(), e))?;
-                let _ = file.sync_all();
+                if let Err(e) = file.sync_all() {
+                    tracing::warn!(error = %e, "failed to sync transaction lock record");
+                }
                 return Ok(TransactionLock { lock_path, info });
             }
             Err(e)
@@ -1241,7 +1243,14 @@ pub(crate) fn prune_quarantine_files(dir: &Path, prefix: &str, max_age: std::tim
         return;
     };
     let now = std::time::SystemTime::now();
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::debug!(error = %e, "skipping unreadable quarantine entry");
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(name_str) = name.to_str() else {
             continue;
@@ -2042,11 +2051,13 @@ pub fn apply_original_metadata(path: &Path, metadata: &OriginalFileMetadata) -> 
     #[cfg(not(unix))]
     {
         // On Windows, readonly behavior is tested where relevant.
-        if let Some(readonly) = metadata.readonly {
-            if let Ok(perms) = fs::metadata(path).map(|m| m.permissions()) {
-                let mut perms = perms;
-                perms.set_readonly(readonly);
-                let _ = fs::set_permissions(path, perms);
+        if let Some(readonly) = metadata.readonly
+            && let Ok(perms) = fs::metadata(path).map(|m| m.permissions())
+        {
+            let mut perms = perms;
+            perms.set_readonly(readonly);
+            if let Err(e) = fs::set_permissions(path, perms) {
+                tracing::debug!(error = %e, path = %path.display(), "failed to restore readonly flag");
             }
         }
     }

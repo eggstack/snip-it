@@ -131,7 +131,9 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 file.write_all(content.as_bytes()).map_err(|e| {
                     SnipError::io_error("write local-data lock record", lock_path.clone(), e)
                 })?;
-                let _ = file.sync_all();
+                if let Err(e) = file.sync_all() {
+                    tracing::warn!(error = %e, "failed to sync local-data lock record");
+                }
                 return Ok(LocalDataLock { lock_path, info });
             }
             Err(e)

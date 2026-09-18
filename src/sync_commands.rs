@@ -356,7 +356,14 @@ fn check_and_complete_recovery_markers(
         }
     };
 
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "skipping unreadable libraries entry during recovery scan");
+                continue;
+            }
+        };
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "sync_recovery") {
             let Some(stem) = path.file_stem() else {
@@ -1252,7 +1259,7 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
 
 /// Runs a sync with the default settings (bidirectional, all libraries).
 pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
-    let settings = crate::config::load_sync_settings().unwrap_or_default();
+    let settings = crate::config::load_sync_settings()?;
     run_sync(&settings, None, false, false, runtime)
 }
 

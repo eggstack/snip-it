@@ -185,7 +185,9 @@ pub fn write_status(state_dir: &Path, status: &AutoSyncStatus) -> Result<(), Str
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(error = %e, path = %path.display(), "failed to harden status file permissions");
+        }
     }
 
     Ok(())
@@ -231,7 +233,14 @@ pub fn record_success(
     message: &str,
 ) -> Result<(), String> {
     let now_ms = unix_now_ms();
-    let mut status = read_status(state_dir).unwrap_or_default();
+    let mut status = match read_status_typed(state_dir) {
+        StatusRead::Valid(s) => s,
+        StatusRead::Missing => AutoSyncStatus::default(),
+        StatusRead::Corrupt(msg) => {
+            tracing::warn!(error = %msg, "auto-sync status is corrupt; recording fresh success");
+            AutoSyncStatus::default()
+        }
+    };
 
     status.pending_generation = pending_generation;
     status.last_attempt_generation = pending_generation;
@@ -260,7 +269,14 @@ pub fn record_failure(
     config_fingerprint: u64,
 ) -> Result<(), String> {
     let now_ms = unix_now_ms();
-    let mut status = read_status(state_dir).unwrap_or_default();
+    let mut status = match read_status_typed(state_dir) {
+        StatusRead::Valid(s) => s,
+        StatusRead::Missing => AutoSyncStatus::default(),
+        StatusRead::Corrupt(msg) => {
+            tracing::warn!(error = %msg, "auto-sync status is corrupt; recording fresh failure");
+            AutoSyncStatus::default()
+        }
+    };
 
     status.pending_generation = pending_generation;
     status.last_attempt_generation = pending_generation;

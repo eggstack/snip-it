@@ -726,8 +726,14 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
     if libraries_dir.exists() {
         for entry in fs::read_dir(&libraries_dir)
             .map_err(|e| SnipError::io_error("read libraries dir", libraries_dir.clone(), e))?
-            .filter_map(|e| e.ok())
         {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unreadable library entry during pre-restore backup");
+                    continue;
+                }
+            };
             let file_name = entry.file_name();
             let src = entry.path();
             if src.extension().is_some_and(|ext| ext == "toml") {

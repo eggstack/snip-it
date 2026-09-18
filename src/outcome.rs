@@ -347,12 +347,24 @@ mod tests {
 
     #[test]
     fn test_all_exit_codes_are_distinct() {
+        // PersistenceFailed intentionally shares GENERAL_ERROR (1) for backward
+        // compat (see EXIT_CODES.md); all other codes must be distinct.
+        assert_eq!(
+            CliOutcome::PersistenceFailed.exit_code(),
+            exit_code::GENERAL_ERROR
+        );
+        assert_eq!(
+            CliOutcome::ValidationFailed.exit_code(),
+            exit_code::VALIDATION_FAILED
+        );
+        assert_eq!(CliOutcome::SyncFailed.exit_code(), exit_code::SYNC_FAILED);
         let codes = [
             CliOutcome::Success.exit_code(),
             CliOutcome::NotFound.exit_code(),
             CliOutcome::Ambiguous.exit_code(),
             CliOutcome::Cancelled.exit_code(),
             CliOutcome::ValidationFailed.exit_code(),
+            CliOutcome::SyncFailed.exit_code(),
             CliOutcome::ExecutionFailed { child_code: None }.exit_code(),
             CliOutcome::ConflictOrRefused.exit_code(),
         ];

@@ -1380,7 +1380,18 @@ pub(crate) fn build_upload_batches(
                 ));
             }
             // Remove the overflow snippet and finalize the prior batch.
-            let overflow = current_batch.pop().expect("current batch is non-empty");
+            // The batch just received a push, so it is logically non-empty;
+            // handle the impossible empty case as a typed error, not a panic.
+            let Some(overflow) = current_batch.pop() else {
+                debug_assert!(
+                    !current_batch.is_empty(),
+                    "batch just pushed, must be non-empty"
+                );
+                return Err(SnipError::sync_failure(
+                    SyncFailureKind::SyncRequestFailed,
+                    Some("batch underflow while splitting upload batches"),
+                ));
+            };
             batches.push(current_batch);
             current_batch = vec![overflow];
             current_encoded_size = base_encoded_size + snippet_encoded_size;

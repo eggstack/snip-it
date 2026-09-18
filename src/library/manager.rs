@@ -179,6 +179,7 @@ impl LibraryManager {
 
     /// Migrates the legacy single-file `snippets.toml` into a library subdirectory.
     pub fn migrate_from_single_file(&mut self) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         let legacy_path = Self::get_legacy_snippets_path();
 
@@ -360,6 +361,7 @@ impl LibraryManager {
     /// The first library created is automatically marked as primary.
     /// Returns the path to the newly created library file.
     pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         validate_library_name(filename)
             .map_err(|(msg, detail)| SnipError::runtime_error(msg, Some(detail)))?;
@@ -414,6 +416,7 @@ snippets = []
     /// If the deleted library was primary, another library is promoted.
     /// Config is saved before file deletion for crash safety.
     pub fn delete_library(&mut self, filename: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         let config_before_delete = self.config.clone();
         let (was_primary, deleted_was_server) = self
@@ -483,6 +486,7 @@ snippets = []
 
     /// Sets the given library as primary, unmarking all others.
     pub fn set_primary(&mut self, filename: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if !self
             .config
@@ -506,6 +510,7 @@ snippets = []
 
     /// Updates the server-side library ID for a local library.
     pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = library_id.to_string();
@@ -518,6 +523,7 @@ snippets = []
 
     /// Links a local library to a server-side library.
     pub fn link_server_library(&mut self, filename: &str, server_id: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = server_id.to_string();
@@ -536,6 +542,7 @@ snippets = []
         server_id: &str,
         last_sync: Option<i64>,
     ) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id = server_id.to_string();
@@ -550,6 +557,7 @@ snippets = []
 
     /// Clears server linkage metadata for a local library.
     pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.library_id.clear();
@@ -563,6 +571,7 @@ snippets = []
 
     /// Registers an existing library file that is not yet tracked in the config.
     pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         validate_library_name(filename)
             .map_err(|(title, detail)| SnipError::runtime_error(title, Some(detail)))?;
@@ -589,6 +598,7 @@ snippets = []
 
     /// Updates the last-sync timestamp for a library.
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         if let Some(lib) = self.get_library_by_filename_mut(filename) {
             lib.last_sync = Some(timestamp);
@@ -608,6 +618,18 @@ snippets = []
         crate::local_data::acquire_local_data_lock(&transaction_dir)
     }
 
+    /// Refuse config mutation when interrupted transactions await recovery.
+    ///
+    /// Must run before any in-memory mutation so a refused call leaves
+    /// `self` clean for retry after `snp repair`.
+    fn gate_mutation(&self) -> SnipResult<()> {
+        let transaction_dir = self.config_dir.join(".transaction");
+        crate::transaction::gate_mutation_on_interrupted_transactions(
+            &self.config_dir,
+            &transaction_dir,
+        )
+    }
+
     /// Creates or links a library imported from the sync server.
     ///
     /// If a library with the same filename already exists, its server ID is updated.
@@ -617,6 +639,7 @@ snippets = []
         server_name: &str,
         server_id: &str,
     ) -> SnipResult<PathBuf> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         let filename = server_name.to_lowercase().replace(' ', "-");
 

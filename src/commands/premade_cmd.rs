@@ -223,7 +223,17 @@ pub fn run_update(name: String, runtime: &tokio::runtime::Runtime) -> SnipResult
 
     let old_content = if mgr.premade_exists(&name) {
         let premade_path = mgr.get_premade_dir().join(format!("{name}.toml"));
-        std::fs::read_to_string(&premade_path).unwrap_or_default()
+        match std::fs::read_to_string(&premade_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                return Err(crate::error::SnipError::io_error(
+                    "read premade cache",
+                    premade_path,
+                    e,
+                ));
+            }
+        }
     } else {
         String::new()
     };

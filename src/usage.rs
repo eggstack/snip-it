@@ -129,7 +129,13 @@ impl UsageIndex {
             Ok(d) => d,
             Err(_) => return Self::default(),
         };
-        toml::from_str::<UsageIndex>(&data).unwrap_or_default()
+        match toml::from_str::<UsageIndex>(&data) {
+            Ok(idx) => idx,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "usage index is corrupt; resetting to empty");
+                Self::default()
+            }
+        }
     }
 
     fn save_to(&self, path: &Path) -> SnipResult<()> {
