@@ -11,6 +11,7 @@
 pub mod atomic;
 pub mod config;
 pub mod process;
+pub mod redact;
 pub mod shell_keywords;
 pub mod tempfile_guard;
 pub mod toml_helpers;

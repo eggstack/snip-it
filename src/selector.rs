@@ -9,7 +9,39 @@
 
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippet, Snippets};
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+
+/// Shared fuzzy matcher for one-off (non-TUI) search paths.
+///
+/// `SkimMatcherV2` is reusable across calls; sharing one instance avoids
+/// rebuilding its internal tables on every query. The TUI keeps its own
+/// `static MATCHER` (`ui` module) since it tunes different options.
+static SHARED_MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
+
+/// Borrow the shared [`SkimMatcherV2`] for one-off fuzzy searches.
+pub(crate) fn shared_fuzzy_matcher() -> &'static SkimMatcherV2 {
+    &SHARED_MATCHER
+}
+
+/// ASCII case-insensitive substring check without allocating lowered copies.
+///
+/// Used on hot filter paths where per-snippet `to_lowercase()` showed up as
+/// O(n) allocations per query.
+pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.as_bytes();
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
 
 /// Library scope for snippet resolution.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -137,9 +169,8 @@ pub fn score_fuzzy_matches(
     fields: SearchFields,
 ) -> (Vec<usize>, std::collections::HashMap<usize, i64>) {
     use fuzzy_matcher::FuzzyMatcher;
-    use fuzzy_matcher::skim::SkimMatcherV2;
 
-    let matcher = SkimMatcherV2::default();
+    let matcher = shared_fuzzy_matcher();
     let mut indices = Vec::new();
     let mut scores = std::collections::HashMap::new();
     if query.is_empty() {
@@ -167,17 +198,16 @@ pub fn score_fuzzy_matches(
 }
 
 /// Returns `true` when `snippet` carries every tag in `required`
-/// (case-insensitive exact tag equality).
+/// (case-insensitive exact tag equality, ASCII-folded without allocating).
 pub fn matches_required_tags(snippet: &crate::library::Snippet, required: &[String]) -> bool {
     if required.is_empty() {
         return true;
     }
     required.iter().all(|want| {
-        let want_lower = want.to_lowercase();
         snippet
             .tags
             .iter()
-            .any(|have| have.to_lowercase() == want_lower)
+            .any(|have| have.eq_ignore_ascii_case(want))
     })
 }
 
@@ -363,23 +393,21 @@ impl SnippetSelector {
             };
         }
 
-        // 2. Exact description (case-insensitive)
+        // 2. Exact description (case-insensitive, ASCII-folded)
         if let Some(ref desc) = self.description_exact {
-            let desc_lower = desc.to_lowercase();
             let matches: Vec<&Snippet> = active
                 .iter()
-                .filter(|s| s.description.to_lowercase() == desc_lower)
+                .filter(|s| s.description.eq_ignore_ascii_case(desc))
                 .copied()
                 .collect();
             return self.resolve_matches(matches, lib_path, lib_name, lib_id);
         }
 
-        // 3. Exact command (case-insensitive)
+        // 3. Exact command (case-insensitive, ASCII-folded)
         if let Some(ref cmd) = self.command_exact {
-            let cmd_lower = cmd.to_lowercase();
             let matches: Vec<&Snippet> = active
                 .iter()
-                .filter(|s| s.command.to_lowercase() == cmd_lower)
+                .filter(|s| s.command.eq_ignore_ascii_case(cmd))
                 .copied()
                 .collect();
             return self.resolve_matches(matches, lib_path, lib_name, lib_id);
@@ -485,18 +513,16 @@ impl SnippetSelector {
 }
 
 /// Sort snippet matches deterministically: library name → description → snippet ID.
+///
+/// `sort_by_cached_key` evaluates each lowercase key once (O(n) allocations)
+/// instead of re-lowercasing both sides on every comparison.
 pub fn sort_matches(matches: &mut [SnippetMatch]) {
-    matches.sort_by(|a, b| {
-        a.library_name
-            .to_lowercase()
-            .cmp(&b.library_name.to_lowercase())
-            .then_with(|| {
-                a.snippet
-                    .description
-                    .to_lowercase()
-                    .cmp(&b.snippet.description.to_lowercase())
-            })
-            .then_with(|| a.snippet.id.cmp(&b.snippet.id))
+    matches.sort_by_cached_key(|m| {
+        (
+            m.library_name.to_lowercase(),
+            m.snippet.description.to_lowercase(),
+            m.snippet.id.clone(),
+        )
     });
 }
 

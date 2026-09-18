@@ -155,13 +155,19 @@ fn handle_message<W: Write>(
                     None,
                 );
             }
-            write_result(output, id.expect("request ID is present"), tool_list())
+            let Some(id) = id else {
+                return write_error(output, None, INVALID_REQUEST, "Invalid Request", None);
+            };
+            write_result(output, id, tool_list())
         }
         "tools/call" => {
             if is_notification {
                 return Ok(());
             }
-            call_tool(params, id.expect("request ID is present"), output)
+            match id {
+                Some(id) => call_tool(params, id, output),
+                None => write_error(output, None, INVALID_REQUEST, "Invalid Request", None),
+            }
         }
         _ => {
             if is_notification {
@@ -222,9 +228,12 @@ fn initialize<W: Write>(
     }
 
     state.initialized = true;
+    let Some(id) = id else {
+        return write_error(output, None, INVALID_REQUEST, "Invalid Request", None);
+    };
     write_result(
         output,
-        id.expect("initialize request ID is present"),
+        id,
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": {} },

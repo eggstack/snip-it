@@ -162,7 +162,9 @@ pub fn clear_pending_after_explicit_sync(observed_generation: Option<u64>, sync_
     let Some(generation) = observed_generation else {
         return;
     };
-    let _ = worker::clear_after_explicit_sync(&state_dir, generation, sync_succeeded);
+    if let Err(error) = worker::clear_after_explicit_sync(&state_dir, generation, sync_succeeded) {
+        tracing::warn!(%error, generation, "failed to clear pending after explicit sync");
+    }
 }
 
 /// Reads the current pending generation, if any. Callers should capture
@@ -170,9 +172,13 @@ pub fn clear_pending_after_explicit_sync(observed_generation: Option<u64>, sync_
 /// `clear_pending_after_explicit_sync` along with whether sync succeeded.
 pub fn observe_pending_generation() -> Option<u64> {
     let state_dir = derive_state_dir();
-    worker::observed_pending_generation(&state_dir)
-        .ok()
-        .flatten()
+    match worker::observed_pending_generation(&state_dir) {
+        Ok(generation) => generation,
+        Err(error) => {
+            tracing::warn!(%error, "failed to read pending auto-sync generation");
+            None
+        }
+    }
 }
 
 /// Semantic startup recovery policy for each CLI subcommand.

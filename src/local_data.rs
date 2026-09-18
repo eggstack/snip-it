@@ -48,6 +48,25 @@ pub struct LocalDataLockInfo {
     pub start_token: Option<String>,
 }
 
+/// Whether a lock-file I/O error kind should be treated as transient lock
+/// contention (retry) rather than a hard failure.
+///
+/// On Windows a just-deleted file can briefly surface `PermissionDenied`
+/// while in a pending-delete state, so it retries like `AlreadyExists`.
+/// On Unix a `PermissionDenied` here is a genuine misconfiguration (e.g.
+/// wrong mode on the lock directory) and must fail fast instead of spinning
+/// in the contention loop for ~30 s.
+#[cfg(windows)]
+fn is_transient_lock_contention(kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::PermissionDenied
+}
+
+/// Unix has no pending-delete aliasing: permission errors fail fast.
+#[cfg(not(windows))]
+fn is_transient_lock_contention(_kind: std::io::ErrorKind) -> bool {
+    false
+}
+
 /// Short-lived exclusive lock on local configuration data.
 ///
 /// Held during backup snapshot capture and local TOML mutations to prevent
@@ -141,7 +160,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 // On Windows, a just-deleted file can briefly return
                 // PermissionDenied when in a pending-delete state.
                 // Treat it the same as AlreadyExists.
-                || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                || is_transient_lock_contention(e.kind()) =>
             {
                 // Lock exists — read and classify the owner.
                 // Handle TOCTOU: another writer may have removed the lock
@@ -151,7 +170,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                     Err(e)
                         if e.kind() == std::io::ErrorKind::NotFound
                         // On Windows, a pending-delete file may be unreadable.
-                        || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                        || is_transient_lock_contention(e.kind()) =>
                     {
                         // Lock was removed or is in a transient state — loop back and retry.
                         std::thread::sleep(std::time::Duration::from_millis(1));

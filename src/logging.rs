@@ -595,31 +595,60 @@ mod tests {
 
     #[test]
     fn test_sentinel_secret_not_in_audit_log_entry() {
-        let secrets = &[
-            "sk-test-api-key-12345",
-            "Bearer token ABCDEF",
-            "password=secret123",
-            "credential: xoxb-secret",
-            "API_KEY=ak_live_12345",
-        ];
-        let dir = tempfile::TempDir::new().unwrap();
-        let log_path = dir.path().join("audit.log");
-
-        for secret in secrets {
-            use std::io::Write;
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .unwrap();
-            writeln!(file, "normal log line with {secret} embedded").unwrap();
+        // RAII guard: `audit_log()` resolves its path from XDG_CONFIG_HOME,
+        // so point it at a TempDir and restore the previous value on drop
+        // (even on assertion panic) to avoid leaking env mutation into
+        // parallel lib tests.
+        struct XdgGuard {
+            old: Option<std::ffi::OsString>,
+        }
+        impl XdgGuard {
+            fn point_at(dir: &std::path::Path) -> Self {
+                let old = std::env::var_os("XDG_CONFIG_HOME");
+                unsafe {
+                    std::env::set_var("XDG_CONFIG_HOME", dir);
+                }
+                Self { old }
+            }
+        }
+        impl Drop for XdgGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    match &self.old {
+                        Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                        None => std::env::remove_var("XDG_CONFIG_HOME"),
+                    }
+                }
+            }
         }
 
-        let contents = fs::read_to_string(&log_path).unwrap();
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 5, "must have 5 log lines");
+        let secret = "sk-test-sentinel-secret-abc123";
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = XdgGuard::point_at(dir.path());
 
-        for line in &lines {
+        // The description is user-authored free text and may contain
+        // secrets; `audit_log` must persist `[omitted]`, never the text.
+        let snippet = crate::library::Snippet {
+            id: "sentinel-id".to_string(),
+            description: format!("runbook with password={secret} embedded"),
+            command: "echo hi".to_string(),
+            device_id: "sentinel-device".to_string(),
+            ..Default::default()
+        };
+        audit_log("test-action", &snippet, Some("sentinel-library"))
+            .expect("audit_log should succeed");
+
+        let log_path = dir.path().join("snp").join("audit.log");
+        let contents = fs::read_to_string(&log_path).expect("audit log should exist");
+        assert!(
+            contents.contains("[omitted]"),
+            "audit entry must contain the [omitted] description placeholder: {contents}"
+        );
+        assert!(
+            !contents.contains(secret),
+            "audit entry must not contain the sentinel secret: {contents}"
+        );
+        for line in contents.lines() {
             assert!(
                 !line.contains('\x1b'),
                 "audit log line must not contain ANSI escape sequences: {line}"

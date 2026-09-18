@@ -14,7 +14,6 @@ use crate::selector::{
 };
 use crate::sort::{SnippetSort, SortOptions, rank_snippets};
 use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -82,7 +81,7 @@ pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
         include_output: args.search_output.unwrap_or(false),
     };
 
-    let matcher = SkimMatcherV2::default();
+    let matcher = crate::selector::shared_fuzzy_matcher();
     let mut source = Vec::new();
     let mut scores = HashMap::new();
     for entry in snippets {

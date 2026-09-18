@@ -204,6 +204,22 @@ fn parent_dir_sync(parent: &Path, durability: Durability) -> Option<bool> {
     }
 }
 
+/// Whether a parent-directory fsync failure may be downgraded to a warning.
+///
+/// Test-only seam for filesystems that reject directory fsync (FUSE,
+/// certain container mounts). Gated on `test-support` like the other test
+/// seams so production builds always fail closed on durability errors.
+#[cfg(feature = "test-support")]
+fn allow_dir_fsync_failure() -> bool {
+    std::env::var_os("SNP_ALLOW_DIR_FSYNC_FAILURE").is_some_and(|v| v == "1")
+}
+
+/// Production builds never honor the fsync-failure opt-out.
+#[cfg(not(feature = "test-support"))]
+fn allow_dir_fsync_failure() -> bool {
+    false
+}
+
 fn sync_parent_dir(
     parent: &Path,
     target: &Path,
@@ -215,11 +231,11 @@ fn sync_parent_dir(
     ) {
         match parent_dir_sync_durable(parent) {
             Ok(()) => return Ok(Some(true)),
-            Err(e) if std::env::var_os("SNP_ALLOW_DIR_FSYNC_FAILURE").is_some_and(|v| v == "1") => {
+            Err(e) if allow_dir_fsync_failure() => {
                 tracing::warn!(
                     path = %target.display(),
                     error = %e,
-                    "parent directory fsync failed; continuing due to SNP_ALLOW_DIR_FSYNC_FAILURE=1"
+                    "parent directory fsync failed; continuing with reduced durability"
                 );
                 return Ok(Some(false));
             }

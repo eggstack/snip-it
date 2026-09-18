@@ -760,16 +760,20 @@ impl SyncClient {
     ) -> SnipResult<()> {
         self.ensure_budget()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
-        let request = PushSnippetsRequest {
-            api_key: String::new(),
-            library_id: library_id.to_string(),
-            snippets: snippets.to_vec(),
-        };
-
+        // Build the request inside the retry body from the borrowed slice:
+        // a failed attempt consumes its owned message, so cloning the full
+        // multi-MiB batch up front would pay one extra deep copy on the
+        // success path (one `to_vec` + one `clone` instead of one `to_vec`).
+        let library_id = library_id.to_string();
         let response = retry_grpc_unified!(
             self.limits,
             async {
-                let mut grpc_req = tonic::Request::new(request.clone());
+                let request = PushSnippetsRequest {
+                    api_key: String::new(),
+                    library_id: library_id.clone(),
+                    snippets: snippets.to_vec(),
+                };
+                let mut grpc_req = tonic::Request::new(request);
                 add_api_key_metadata(&mut grpc_req, &api_key);
                 self.client.push_snippets(grpc_req).await
             },

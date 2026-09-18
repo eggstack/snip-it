@@ -395,7 +395,7 @@ fn inner_acquire(path: &Path, purpose: &str) -> Result<ProcessFileLock, ProcessF
 
 #[cfg(unix)]
 fn is_lock_busy_error(code: Option<i32>) -> bool {
-    matches!(code, Some(value) if value == libc::EWOULDBLOCK || value == libc::EAGAIN)
+    matches!(code, Some(value) if value == libc::EWOULDBLOCK || value == libc::EAGAIN || value == libc::EACCES)
 }
 
 fn publish_identity(file: &mut File, identity: &LockIdentity) -> std::io::Result<()> {
@@ -523,6 +523,7 @@ mod tests {
     fn eagain_and_ewouldblock_are_lock_contention() {
         assert!(is_lock_busy_error(Some(libc::EAGAIN)));
         assert!(is_lock_busy_error(Some(libc::EWOULDBLOCK)));
+        assert!(is_lock_busy_error(Some(libc::EACCES)));
         assert!(!is_lock_busy_error(Some(libc::EINTR)));
     }
 

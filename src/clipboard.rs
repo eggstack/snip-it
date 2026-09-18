@@ -116,6 +116,11 @@ where
 {
     let timeout = get_clipboard_timeout();
     let (tx, rx) = mpsc::channel();
+    // Fire-and-forget by design: on timeout the worker handle is dropped
+    // (detached) and the thread exits on its own once the clipboard
+    // operation completes; its result is discarded. At most one thread per
+    // timed-out user-invoked operation can be outstanding, so accumulation
+    // is bounded by user action rate, not by a retry loop.
     thread::spawn(move || {
         let result = f();
         let _ = tx.send(result);

@@ -183,14 +183,20 @@ impl fmt::Display for SnipError {
                 args,
                 source,
             } => {
+                // Args may carry secrets (e.g. `Authorization: Bearer …`
+                // headers); redact at the Display layer since callers print
+                // or log the rendered error. `logging::redact_command`
+                // covers the log path; this covers every other consumer.
+                let command = crate::utils::redact::redact_secrets(command);
                 let args_display: Vec<String> = args
                     .iter()
                     .map(|a| {
-                        if a.chars().count() > 40 {
-                            let truncated: String = a.chars().take(37).collect();
+                        let redacted = crate::utils::redact::redact_secrets(a);
+                        if redacted.chars().count() > 40 {
+                            let truncated: String = redacted.chars().take(37).collect();
                             format!("{truncated}...")
                         } else {
-                            a.clone()
+                            redacted
                         }
                     })
                     .collect();
@@ -361,6 +367,34 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("git"));
         assert!(msg.contains("status"));
+    }
+
+    #[test]
+    fn test_command_error_display_redacts_secrets() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "command not found");
+        let err = SnipError::command_error(
+            "curl",
+            vec![
+                "-H".to_string(),
+                "Authorization: Bearer hunter2-sentinel".to_string(),
+                "https://user:s3cret-sentinel@example.com/x".to_string(),
+            ],
+            io_err,
+        );
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("hunter2-sentinel"),
+            "Display must not leak bearer token: {msg}"
+        );
+        assert!(
+            !msg.contains("s3cret-sentinel"),
+            "Display must not leak URL credentials: {msg}"
+        );
+        assert!(
+            msg.contains("[REDACTED]"),
+            "secret should be redacted: {msg}"
+        );
+        assert!(msg.contains("curl"), "command name must survive: {msg}");
     }
 
     #[test]

@@ -133,7 +133,24 @@ impl UsageIndex {
             Ok(idx) => idx,
             Err(e) => {
                 tracing::warn!(error = %e, path = %path.display(), "usage index is corrupt; resetting to empty");
+                Self::backup_corrupt_file(path);
                 Self::default()
+            }
+        }
+    }
+
+    /// Best-effort forensic backup of a corrupt usage file before it is
+    /// reset and overwritten by the next save.
+    ///
+    /// Usage history is low-value data, so a single sibling backup
+    /// (overwritten on repeat corruption) is enough — unlike the library
+    /// fail-closed path, loading never refuses to proceed.
+    fn backup_corrupt_file(path: &Path) {
+        let backup = path.with_extension("toml.corrupt.bak");
+        match fs::copy(path, &backup) {
+            Ok(_) => tracing::warn!(backup = %backup.display(), "backed up corrupt usage index"),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "failed to back up corrupt usage index")
             }
         }
     }
@@ -221,6 +238,22 @@ mod tests {
             idx.entries.is_empty(),
             "corrupt file should fail open to empty index"
         );
+    }
+
+    #[test]
+    fn corrupt_file_is_backed_up_before_reset() {
+        let dir = temp_dir();
+        let path = dir.path().join("usage.toml");
+        fs::write(&path, "{{{{invalid toml").unwrap();
+
+        let _ = UsageIndex::load_from(&path);
+
+        let backup = dir.path().join("usage.toml.corrupt.bak");
+        assert!(
+            backup.exists(),
+            "corrupt usage file should be backed up before reset"
+        );
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "{{{{invalid toml");
     }
 
     #[test]

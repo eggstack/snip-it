@@ -373,20 +373,24 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
     ) {
         Ok(()) => match pending::clear_if_generation_matches(state_dir, generation) {
             Ok(pending::ConditionalClearResult::Cleared) => {
-                let _ = status::record_success(
+                if let Err(error) = status::record_success(
                     state_dir,
                     generation,
                     "canonical sync acknowledged; pending cleared",
-                );
+                ) {
+                    tracing::warn!(%error, generation, "failed to persist auto-sync success");
+                }
                 emit_sync_completed(generation, true, "pending_cleared");
                 WorkerOutcome::Success
             }
             Ok(pending::ConditionalClearResult::GenerationChanged { current }) => {
-                let _ = status::record_success(
+                if let Err(error) = status::record_success(
                     state_dir,
                     generation,
                     "canonical sync acknowledged; newer generation preserved",
-                );
+                ) {
+                    tracing::warn!(%error, generation, "failed to persist auto-sync success");
+                }
                 tracing::info!(
                     generation,
                     current,
@@ -396,11 +400,13 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
                 WorkerOutcome::Success
             }
             Ok(pending::ConditionalClearResult::Missing) => {
-                let _ = status::record_success(
+                if let Err(error) = status::record_success(
                     state_dir,
                     generation,
                     "canonical sync completed; pending was already cleared",
-                );
+                ) {
+                    tracing::warn!(%error, generation, "failed to persist auto-sync success");
+                }
                 emit_sync_completed(generation, true, "pending_already_missing");
                 WorkerOutcome::Success
             }
@@ -428,7 +434,7 @@ fn record_sync_failure(
 ) -> WorkerOutcome {
     let consecutive = next_consecutive_failures(state_dir);
     let backoff = transient_backoff(consecutive);
-    let _ = status::record_failure(
+    if let Err(error) = status::record_failure(
         state_dir,
         generation,
         class,
@@ -437,7 +443,9 @@ fn record_sync_failure(
         unix_now_ms().saturating_add(backoff.as_millis() as u64),
         message,
         current_config_fingerprint(),
-    );
+    ) {
+        tracing::warn!(%error, generation, "failed to persist auto-sync failure");
+    }
     emit_sync_completed(generation, false, class.as_code());
     WorkerOutcome::Failed
 }

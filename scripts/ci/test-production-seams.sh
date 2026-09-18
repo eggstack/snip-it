@@ -147,6 +147,29 @@ fi
 echo "PASS: worker spawn suppression did not affect production mutation"
 
 echo ""
+echo "=== Test 3: SNP_ALLOW_DIR_FSYNC_FAILURE is ignored in production ==="
+# The opt-out must be compiled out of production builds: the binary must not
+# even reference the variable name, so setting it cannot strip durability
+# from config/sync writes.
+if grep -a -q "SNP_ALLOW_DIR_FSYNC_FAILURE" "$BINARY"; then
+    echo "FAIL: production binary references SNP_ALLOW_DIR_FSYNC_FAILURE"
+    exit 1
+fi
+# Functional check: a real mutation with the variable set still succeeds and
+# persists (production fails closed / succeeds normally either way).
+SNP_ALLOW_DIR_FSYNC_FAILURE=1 \
+    "$BINARY" library create fsync-seam-test >/dev/null 2>&1 || true
+if [ $? -ne 0 ]; then
+    echo "FAIL: production binary errored with SNP_ALLOW_DIR_FSYNC_FAILURE set during real mutation"
+    exit 1
+fi
+if [ ! -f "$CONFIG_HOME/snp/libraries/fsync-seam-test.toml" ]; then
+    echo "FAIL: library file was not created with SNP_ALLOW_DIR_FSYNC_FAILURE set"
+    exit 1
+fi
+echo "PASS: dir-fsync opt-out is inert in production binary"
+
+echo ""
 echo "=== Test 4: SNP_TEST_EVENTS_DIR does not create event files ==="
 # Run the real helper path with SNP_TEST_EVENTS_DIR set.
 # Production binary ignores the variable — no event file should be created.

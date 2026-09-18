@@ -1244,7 +1244,12 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         }
     }
 
-    merged_snippets.sort_by_key(|b| {
+    // `sort_by_cached_key` computes each snippet's version key once (O(n)
+    // hashes). The previous `sort_by_key` closure re-ran the full SHA-256
+    // fingerprint on every comparison (O(n log n) hashes per sync).
+    // `(Reverse(updated_at), Reverse(key))` collapses to `Reverse(key)`
+    // because `updated_at` is the key's first field.
+    merged_snippets.sort_by_cached_key(|b| {
         (
             std::cmp::Reverse(b.updated_at),
             std::cmp::Reverse(local_version_key(b)),

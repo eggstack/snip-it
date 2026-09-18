@@ -164,15 +164,14 @@ pub fn run_edit_output(
     // Find the snippets matching the filter. Substring matching can easily
     // hit several snippets, and this path mutates a local-only field —
     // guessing would silently edit the wrong snippet's output.
-    let filter_lower = filter.to_lowercase();
     let matching: Vec<usize> = snippets
         .snippets
         .iter()
         .enumerate()
         .filter(|(_, s)| !s.deleted)
         .filter(|(_, s)| {
-            s.description.to_lowercase().contains(&filter_lower)
-                || s.command.to_lowercase().contains(&filter_lower)
+            crate::selector::contains_ignore_ascii_case(&s.description, &filter)
+                || crate::selector::contains_ignore_ascii_case(&s.command, &filter)
         })
         .map(|(i, _)| i)
         .collect();

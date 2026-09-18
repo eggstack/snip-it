@@ -12,7 +12,6 @@
 use crate::auto_sync::policy::FailureClass;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STATUS_FILE_NAME: &str = "auto-sync-status.toml";
@@ -23,19 +22,9 @@ const MAX_MESSAGE_LEN: usize = 512;
 /// Schema version for forward-compatible migration.
 const SCHEMA_VERSION: u32 = 1;
 
-static SECRET_ASSIGNMENT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        r#"(?i)((?:api[_-]?key|token|password|passwd|secret|credential|authorization)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s&;]+)"#,
-    )
-    .expect("secret assignment pattern is valid")
-});
-static BEARER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"(?i)\b(Bearer)\s+[^\s"']+"#).expect("bearer pattern is valid")
-});
-static URL_CREDENTIALS_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@"#)
-        .expect("URL credential pattern is valid")
-});
+// Single canonical definition lives in `crate::utils::redact`; re-exported
+// here so existing `status::redact_secrets` paths keep working.
+pub(crate) use crate::utils::redact::redact_secrets;
 
 /// Durable auto-sync status.
 ///
@@ -308,19 +297,6 @@ fn sanitize_message(msg: &str) -> String {
         .collect()
 }
 
-/// Redact potential secrets from a message string.
-///
-/// Strips API keys, bearer tokens, and URLs with embedded credentials.
-/// Uses simple pattern matching — this is best-effort redaction, not a
-/// security boundary.
-pub(crate) fn redact_secrets(msg: &str) -> String {
-    let result = SECRET_ASSIGNMENT_RE.replace_all(msg, "$1[REDACTED]");
-    let result = BEARER_RE.replace_all(&result, "$1 [REDACTED]");
-    URL_CREDENTIALS_RE
-        .replace_all(&result, "$1[REDACTED]@")
-        .into_owned()
-}
-
 fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -395,7 +371,9 @@ pub fn release_deferral_on_config_change(state_dir: &Path, current_fingerprint: 
     status.consecutive_failures = 0;
     status.next_attempt_at_unix_ms = 0;
     status.config_fingerprint = current_fingerprint;
-    let _ = write_status(state_dir, &status);
+    if let Err(error) = write_status(state_dir, &status) {
+        tracing::warn!(%error, "failed to persist released auto-sync deferral");
+    }
     true
 }
 

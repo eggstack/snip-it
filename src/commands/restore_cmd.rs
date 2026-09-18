@@ -99,7 +99,9 @@ impl DestinationClass {
                 if let Ok(meta) = fs::metadata(path) {
                     let mut perms = meta.permissions();
                     perms.set_readonly(readonly);
-                    let _ = fs::set_permissions(path, perms);
+                    fs::set_permissions(path, perms).map_err(|e| {
+                        SnipError::io_error("set destination permissions", path.to_path_buf(), e)
+                    })?;
                 }
             }
         }

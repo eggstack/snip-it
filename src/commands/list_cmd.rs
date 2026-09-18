@@ -2,7 +2,6 @@ use crate::commands::{get_library_path, load_snippets};
 use crate::error::SnipResult;
 use crossterm::style::{Color, Stylize, style};
 use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use std::path::PathBuf;
 
 /// Canonical Clap arguments for `snp list`.
@@ -72,7 +71,7 @@ pub fn run(
         crate::library::load_library(&lib_path)?
     };
 
-    let matcher = SkimMatcherV2::default();
+    let matcher = crate::selector::shared_fuzzy_matcher();
     let fields = crate::selector::SearchFields {
         include_tags: true,
         include_output: search_output,
@@ -113,17 +112,26 @@ pub fn run(
     // Apply sort if specified
     if let Some(ref opts) = sort_opts {
         let indices: Vec<usize> = filtered.iter().map(|(i, _)| *i).collect();
-        let usage_idx = crate::usage::UsageIndex::load();
-        let usage_data: Vec<crate::usage::UsageData> = snippets
-            .snippets
-            .iter()
-            .map(|s| usage_idx.get_usage(&s.id))
-            .collect();
+        // Usage data only affects LastUsed/MostUsed ordering; skip the
+        // file read+parse for every other sort mode.
+        let usage_data: Option<Vec<crate::usage::UsageData>> = match opts.mode {
+            crate::sort::SnippetSort::LastUsed | crate::sort::SnippetSort::MostUsed => {
+                let usage_idx = crate::usage::UsageIndex::load();
+                Some(
+                    snippets
+                        .snippets
+                        .iter()
+                        .map(|s| usage_idx.get_usage(&s.id))
+                        .collect(),
+                )
+            }
+            _ => None,
+        };
         let sorted_indices = crate::sort::rank_snippets(
             &indices,
             &snippets.snippets,
             filter.is_some().then_some(&fuzzy_scores),
-            Some(&usage_data),
+            usage_data.as_deref(),
             opts,
         );
         let rank_map: std::collections::HashMap<usize, usize> = sorted_indices

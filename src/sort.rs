@@ -69,11 +69,13 @@ struct RankedSnippet {
     /// Index into the caller's snippet slice.
     index: usize,
     /// Normalized (lowercased) description for deterministic alphabetical
-    /// tie-breaking.
-    desc_lower: String,
-    /// Normalized (lowercased) command for deterministic alphabetical
-    /// tie-breaking.
-    cmd_lower: String,
+    /// tie-breaking. Computed only when the sort mode can observe it
+    /// (`Relevance` skips it entirely) to avoid O(n) allocations for
+    /// timestamp/usage orderings.
+    desc_lower: Option<String>,
+    /// Normalized (lowercased) command. Computed only for `Command` mode,
+    /// the sole mode that compares it.
+    cmd_lower: Option<String>,
     /// `true` if the snippet is a favorite.
     favorite: bool,
     /// `updated_at` timestamp (epoch seconds).
@@ -121,10 +123,16 @@ pub fn rank_snippets(
             let s = &snippets[idx];
             let u = usage.and_then(|u| u.get(idx)).cloned().unwrap_or_default();
             let fuzzy_score = fuzzy_scores.and_then(|m| m.get(&idx).copied());
+            // `desc_lower` feeds `Description` mode and the description
+            // tie-break (both skipped under `Relevance`); `cmd_lower` feeds
+            // `Command` mode only.
+            let desc_lower =
+                (opts.mode != SnippetSort::Relevance).then(|| s.description.to_lowercase());
+            let cmd_lower = (opts.mode == SnippetSort::Command).then(|| s.command.to_lowercase());
             RankedSnippet {
                 index: idx,
-                desc_lower: s.description.to_lowercase(),
-                cmd_lower: s.command.to_lowercase(),
+                desc_lower,
+                cmd_lower,
                 favorite: s.favorite,
                 updated_at: s.updated_at,
                 created_at: s.created_at,
