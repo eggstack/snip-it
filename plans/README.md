@@ -97,18 +97,19 @@ GitHub Actions is verified through the pushed implementation commit.
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [016](016-eggfetch-0.1.7-lean-updater-adoption.md) | eggfetch 0.1.7 lean updater adoption | Ready | 014, 015 |
+| [016](016-eggfetch-0.1.7-lean-updater-adoption.md) | eggfetch 0.1.7 lean updater adoption | Complete | 014, 015 |
 
-Plan 016 upgrades the already-adopted `snp` transport from pinned
-`eggfetch-core` 0.1.5 to 0.1.7 and uses the new lean standard-route boundary
-instead of the broad `http1` compatibility alias. The intended profile is
-`standard-http1 + redirects + tls-rustls + tls-native-roots`: eggfetch owns
-strict bounded redirects and the absolute request/body `Timeout.total`, so
-snip-it can delete the manual redirect state machine and Plan 015's duplicate
-outer Tokio timeout while preserving initial HTTPS validation, body limits,
-404-only Cargo fallback, and partial-file cleanup. The pass includes controlled
-0.1.5/full-0.1.7/lean-0.1.7 size measurements. `snip-sync` remains on curl;
-its Plan 014 +41% server-size result is not reopened by this plan.
+Plan 016 is complete: the already-adopted `snp` transport moved from pinned
+`eggfetch-core` 0.1.5 to 0.1.7 on the lean standard-route profile
+`standard-http1 + redirects + tls-rustls + tls-native-roots`. Eggfetch owns
+strict bounded redirects (`RedirectPolicy::strict(10)`) and the absolute
+request/body `Timeout.total`; the manual redirect state machine and Plan
+015's duplicate outer Tokio timeout are deleted while initial HTTPS
+validation, body limits, 404-only Cargo fallback, and partial-file cleanup
+are preserved. Controlled same-toolchain release measurements: 0.1.5 baseline
+6,973,056 bytes, full-0.1.7 control 6,973,056 bytes, lean-0.1.7 final
+6,776,320 bytes (-196,736 / -2.82%). `snip-sync` remains on curl; its Plan
+014 +41% server-size result was not reopened.
 
 ## Execution policy
 

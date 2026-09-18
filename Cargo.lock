@@ -876,20 +876,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "deltae"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1020,20 +1006,16 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "eggfetch-core"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8415bc169d247e90aa25890b37b45275f3e4449e6aeda0946c022aa3e4713fc1"
+checksum = "57df99c2c3ebe8e42076fb934fff214b66320cc531e2ea5967067a3a74eab226"
 dependencies = [
- "base64 0.22.1",
  "bytes",
- "dashmap",
  "futures-core",
  "futures-util",
- "getrandom 0.2.17",
  "http",
  "http-body",
  "http-body-util",
- "httpdate",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -1422,12 +1404,6 @@ dependencies = [
  "tokio-util",
  "tracing",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"

@@ -129,8 +129,9 @@ unicode-width = "0.2"
 shell-words = "1.1"
 tempfile = "3.10"
 flate2 = "1"
-eggfetch-core = { version = "=0.1.5", default-features = false, features = [
-    "http1",
+eggfetch-core = { version = "=0.1.7", default-features = false, features = [
+    "standard-http1",
+    "redirects",
     "tls-rustls",
     "tls-native-roots",
 ] }

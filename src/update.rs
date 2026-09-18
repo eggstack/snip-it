@@ -274,13 +274,16 @@ fn release_base_url() -> String {
 
 /// Maximum redirects followed for one logical fetch. GitHub/crates.io update
 /// endpoints do not need deep chains; the bound contains loops and bad
-/// endpoints rather than implementing browser policy.
+/// endpoints rather than implementing browser policy. Enforced by eggfetch's
+/// strict redirect policy (see `update_redirect_policy`).
 const MAX_REDIRECTS: usize = 10;
-/// Wall-clock bound for one complete logical fetch, including redirect
+/// Wall-clock bound for one complete logical request, including redirect
 /// traversal and final body consumption. This is the parity point with the
 /// former `curl --max-time 60`: a redirect chain must not receive a fresh
 /// budget per hop, and a streamed download must not run indefinitely after
-/// response headers arrive.
+/// response headers arrive. Owned by eggfetch's native `Timeout.total`, which
+/// is one absolute deadline from logical request start through final
+/// response-body EOF (it does not reset when a body chunk arrives).
 const FETCH_OVERALL_TIMEOUT: Duration = Duration::from_secs(60);
 const FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FETCH_READ_TIMEOUT: Duration = Duration::from_secs(60);
@@ -309,13 +312,24 @@ fn check_url_scheme(url: &str, allow_http: bool) -> Result<(), FetchError> {
     }
 }
 
+/// The updater's redirect policy: follow bounded redirects but reject an
+/// HTTPS -> HTTP downgrade before second-hop I/O.
+///
+/// Kept as a tiny inspectable helper so tests can prove the updater selects
+/// the strict policy (follow + depth bound + downgrade denial) without
+/// re-testing eggfetch's own redirect engine. The initial-URL scheme guard
+/// (`check_url_scheme`) still applies before any request: this policy governs
+/// redirect hops, not the initial URL allow-list.
+fn update_redirect_policy() -> eggfetch_core::RedirectPolicy {
+    eggfetch_core::RedirectPolicy::strict(MAX_REDIRECTS)
+}
+
 /// Build the updater HTTP client.
 ///
-/// HTTP/1.1 only (selected Cargo features), native-root TLS with packaged
-/// WebPKI fallback, no automatic decompression (release bytes must stay
-/// byte-for-byte), no automatic redirects (the adapter validates every hop
-/// against the scheme policy itself), and no retries — the updater must not
-/// hide transport/release defects.
+/// Lean standard HTTP/1.1 route (selected Cargo features), native-root TLS
+/// with packaged WebPKI fallback, no automatic decompression (release bytes
+/// must stay byte-for-byte), strict bounded redirects owned by eggfetch, and
+/// no retries — the updater must not hide transport/release defects.
 fn update_http_client() -> eggfetch_core::Client {
     http_client_with(FETCH_CONNECT_TIMEOUT, FETCH_READ_TIMEOUT)
 }
@@ -324,7 +338,7 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
     eggfetch_core::Client::builder()
         .user_agent("snip-it-update")
         .automatic_decompression(false)
-        .follow_redirects(false)
+        .redirect_policy(update_redirect_policy())
         .timeout(
             eggfetch_core::Timeout::builder()
                 .connect(connect)
@@ -334,75 +348,49 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
         .build()
 }
 
-fn is_redirect_status(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
-fn redirect_location(response: &eggfetch_core::Response) -> Result<String, FetchError> {
-    response
-        .headers()
-        .get("location")
-        .ok_or_else(|| FetchError::Failed("redirect response is missing a Location header".into()))?
-        .to_str()
-        .map(str::to_owned)
-        .map_err(|_| FetchError::Failed("redirect Location header is not valid UTF-8".into()))
-}
-
-/// Resolve the next hop for a redirect response and validate it against the
-/// scheme policy BEFORE any further network I/O. Relative `Location` values
-/// resolve against the response URL via type inference, so this module needs
-/// no direct `url` dependency.
-fn redirect_target(
-    response: &eggfetch_core::Response,
-    location: &str,
-    allow_http: bool,
-) -> Result<String, FetchError> {
-    let resolved = response
-        .url()
-        .join(location)
-        .map_err(|e| FetchError::Failed(format!("invalid redirect location {location:?}: {e}")))?;
-    let target: String = resolved.into();
-    check_url_scheme(&target, allow_http)?;
-    Ok(target)
-}
-
-/// GET with safe redirect handling: eggfetch automatic redirects stay
-/// disabled so every hop passes the scheme policy before it is requested.
+/// One request dispatch through eggfetch's redirect handling.
 ///
-/// This helper owns redirect traversal only. It must not define the total
-/// wall-clock lifetime of the operation: the caller applies one total
-/// wall-clock timeout around redirect traversal and complete final-body
-/// consumption (see `fetch_bytes_with` / `fetch_file_with`).
-async fn safe_get(
+/// Validates the initial scheme before any network I/O, then sends a single
+/// GET: eggfetch follows redirects under `update_redirect_policy` and the
+/// per-request native `Timeout.total` spans redirect traversal through final
+/// body consumption. Request-level timeout values are per-field overrides,
+/// so the client-level connect/read defaults are retained.
+async fn fetch_response(
     client: &eggfetch_core::Client,
     initial_url: &str,
     max_body_bytes: usize,
     allow_http: bool,
+    overall_timeout: Duration,
 ) -> Result<eggfetch_core::Response, FetchError> {
-    let mut current = initial_url.to_owned();
-    for _ in 0..=MAX_REDIRECTS {
-        check_url_scheme(&current, allow_http)?;
-        let response = client
-            .get(&current)
-            .map_err(|e| FetchError::Failed(format!("invalid update URL {current:?}: {e}")))?
-            .max_decoded_body_size(max_body_bytes)
-            .send()
-            .await
-            .map_err(|e| transport_error("update request failed", e))?;
-        if !is_redirect_status(response.status().as_u16()) {
-            return Ok(response);
-        }
-        let location = redirect_location(&response)?;
-        current = redirect_target(&response, &location, allow_http)?;
-    }
-    Err(FetchError::Failed(format!(
-        "too many redirects (>{MAX_REDIRECTS}) while fetching update"
-    )))
+    check_url_scheme(initial_url, allow_http)?;
+    client
+        .get(initial_url)
+        .map_err(|e| FetchError::Failed(format!("invalid update URL {initial_url:?}: {e}")))?
+        .max_decoded_body_size(max_body_bytes)
+        .timeout(
+            eggfetch_core::Timeout::builder()
+                .total(overall_timeout)
+                .build(),
+        )
+        .send()
+        .await
+        .map_err(|e| transport_error("update request failed", e))
 }
 
 fn transport_error(context: &str, error: eggfetch_core::Error) -> FetchError {
     if matches!(error, eggfetch_core::Error::DecodedBodyTooLarge) {
         return FetchError::Failed(format!("{context} exceeds the size limit: {error}"));
+    }
+    if matches!(
+        error,
+        eggfetch_core::Error::Timeout {
+            phase: eggfetch_core::TimeoutPhase::Total,
+            ..
+        }
+    ) {
+        return FetchError::Failed(format!(
+            "{context} timed out: overall request deadline exceeded: {error}"
+        ));
     }
     FetchError::Failed(format!("{context}: {error}"))
 }
@@ -426,31 +414,23 @@ async fn fetch_bytes_with(
     allow_http: bool,
     overall_timeout: Duration,
 ) -> Result<Vec<u8>, FetchError> {
-    // One total wall-clock timeout around redirect traversal and complete
-    // final-body consumption. Body reads must stay inside this budget: steady
-    // progress within the eggfetch read inactivity timeout must not extend
-    // the operation past the overall deadline.
-    let operation = async {
-        let mut response = safe_get(client, url, max_body_bytes, allow_http).await?;
-        let status = response.status().as_u16();
-        match status {
-            200..=299 => response
-                .bytes()
-                .await
-                .map(|body| body.to_vec())
-                .map_err(|e| transport_error("could not read update metadata", e)),
-            404 => Err(FetchError::NotFound),
-            _ => Err(FetchError::Failed(format!(
-                "HTTP {status} while fetching update metadata"
-            ))),
-        }
-    };
-    match tokio::time::timeout(overall_timeout, operation).await {
-        Err(_) => Err(FetchError::Failed(format!(
-            "update request timed out after {} seconds",
-            overall_timeout.as_secs()
+    // The native request `Timeout.total` (see `fetch_response`) is the single
+    // owner of the overall wall-clock deadline: it spans redirect traversal
+    // and complete final-body consumption, so steady body progress within the
+    // read inactivity timeout still cannot extend the operation past it.
+    let mut response =
+        fetch_response(client, url, max_body_bytes, allow_http, overall_timeout).await?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => response
+            .bytes()
+            .await
+            .map(|body| body.to_vec())
+            .map_err(|e| transport_error("could not read update metadata", e)),
+        404 => Err(FetchError::NotFound),
+        _ => Err(FetchError::Failed(format!(
+            "HTTP {status} while fetching update metadata"
         ))),
-        Ok(result) => result,
     }
 }
 
@@ -475,49 +455,38 @@ async fn fetch_file_with(
     allow_http: bool,
     overall_timeout: Duration,
 ) -> Result<(), FetchError> {
-    // One total wall-clock timeout around redirect traversal, staging-file
-    // creation, and every streamed body chunk/write. A transfer that keeps
-    // making progress still fails once the overall budget expires, and the
-    // cancelled operation must not leave a partial staging file behind.
-    let operation = async {
-        let mut response = safe_get(client, url, max_body_bytes, allow_http).await?;
-        let status = response.status().as_u16();
-        match status {
-            200..=299 => {}
-            404 => return Err(FetchError::NotFound),
-            _ => {
-                return Err(FetchError::Failed(format!(
-                    "HTTP {status} while downloading update binary"
-                )));
-            }
+    // The native request `Timeout.total` (see `fetch_response`) is the single
+    // owner of the overall wall-clock deadline: it spans redirect traversal,
+    // staging-file creation, and every streamed body chunk/write. A transfer
+    // that keeps making progress still fails once the budget expires, and the
+    // failed operation must not leave a partial staging file behind
+    // (a native total timeout surfaces as a stream error below).
+    let mut response =
+        fetch_response(client, url, max_body_bytes, allow_http, overall_timeout).await?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => {}
+        404 => return Err(FetchError::NotFound),
+        _ => {
+            return Err(FetchError::Failed(format!(
+                "HTTP {status} while downloading update binary"
+            )));
         }
-        // The destination is created only after the final status is classified,
-        // so 404/5xx responses never truncate or create the staging file.
-        let mut stream = response
-            .bytes_stream()
-            .map_err(|e| FetchError::Failed(format!("could not stream update binary: {e}")))?;
-        let mut output = File::create(path)
-            .map_err(|e| FetchError::Failed(format!("could not create staging file: {e}")))?;
-        if let Err(error) = stream_binary_to_file(&mut stream, &mut output).await {
-            drop(output);
-            remove_partial_staging_file(path);
-            return Err(error);
-        }
-        drop(output);
-        Ok(())
-    };
-    match tokio::time::timeout(overall_timeout, operation).await {
-        Err(_) => {
-            // The deadline fired while the inner future was dropped; the
-            // staging file may already hold partial bytes.
-            remove_partial_staging_file(path);
-            Err(FetchError::Failed(format!(
-                "update request timed out after {} seconds",
-                overall_timeout.as_secs()
-            )))
-        }
-        Ok(result) => result,
     }
+    // The destination is created only after the final status is classified,
+    // so 404/5xx responses never truncate or create the staging file.
+    let mut stream = response
+        .bytes_stream()
+        .map_err(|e| FetchError::Failed(format!("could not stream update binary: {e}")))?;
+    let mut output = File::create(path)
+        .map_err(|e| FetchError::Failed(format!("could not create staging file: {e}")))?;
+    if let Err(error) = stream_binary_to_file(&mut stream, &mut output).await {
+        drop(output);
+        remove_partial_staging_file(path);
+        return Err(error);
+    }
+    drop(output);
+    Ok(())
 }
 
 /// Best-effort removal of a partial binary staging file. Failed, oversized,
@@ -1676,42 +1645,41 @@ mod tests {
             assert_eq!(fixture.count("/target"), 1);
         }
 
-        #[tokio::test]
-        async fn https_redirect_target_accepted_under_production_policy() {
+        #[test]
+        fn redirect_policy_is_strict() {
+            // Redirect traversal is delegated to eggfetch: prove the updater
+            // selects the strict policy (follow + depth bound + downgrade
+            // denial) rather than re-testing eggfetch's own redirect engine.
+            // Downgrade rejection itself is qualified by eggfetch 0.1.7; a
+            // local TLS fixture is deliberately not added here.
+            let policy = update_redirect_policy();
+            assert!(policy.follow, "updater must follow redirects");
+            assert_eq!(
+                policy.max_redirects, MAX_REDIRECTS,
+                "updater must bound redirect depth at MAX_REDIRECTS"
+            );
+            assert_eq!(
+                policy.downgrade,
+                eggfetch_core::RedirectDowngradePolicy::Deny,
+                "updater must reject HTTPS -> HTTP downgrades"
+            );
+        }
+
+        #[test]
+        fn initial_scheme_gate_still_owns_production_https_only() {
             assert!(scheme_allowed("https://example.test/x", false));
             assert!(!scheme_allowed("http://example.test/x", false));
             assert!(!scheme_allowed("ftp://example.test/x", false));
             assert!(scheme_allowed("http://127.0.0.1:9/x", true));
-            let fixture = Fixture::start(|_| {
-                |_: &str| Reply {
-                    status: 302,
-                    headers: vec![(
-                        "Location".to_owned(),
-                        "https://example.test/other".to_owned(),
-                    )],
-                    body: Vec::new(),
-                    delay: Duration::ZERO,
-                    chunk_size: 0,
-                    chunk_delay: Duration::ZERO,
-                }
-            });
-            let client = update_http_client();
-            let response = client
-                .get(&fixture.url("/hop"))
-                .expect("fixture URL must parse")
-                .send()
-                .await
-                .expect("fixture hop must be served");
-            assert_eq!(response.status().as_u16(), 302);
-            let location = redirect_location(&response).expect("Location must parse");
-            assert_eq!(location, "https://example.test/other");
-            let next = redirect_target(&response, &location, false)
-                .expect("HTTPS target must pass the production gate");
-            assert_eq!(next, "https://example.test/other");
+            assert!(check_url_scheme("https://example.test/x", false).is_ok());
+            assert!(check_url_scheme("http://example.test/x", false).is_err());
         }
 
         #[tokio::test]
-        async fn https_to_http_redirect_rejected_before_target_request() {
+        async fn absolute_http_redirect_resolves_under_test_policy() {
+            // Strict downgrade policy only rejects HTTPS -> HTTP; an
+            // all-HTTP loopback chain stays usable and proves hop traversal
+            // is delegated to eggfetch through the snip-it adapter.
             let fixture = Fixture::start(|base| {
                 move |path: &str| match path {
                     "/downgrade" => Reply {
@@ -1727,28 +1695,24 @@ mod tests {
                 }
             });
             let client = update_http_client();
-            // Obtain a live redirect response under the test policy, then run
-            // the loop's exact redirect gate with the production policy.
-            let response = client
-                .get(&fixture.url("/downgrade"))
-                .expect("fixture URL must parse")
-                .send()
-                .await
-                .expect("fixture hop must be served");
-            assert_eq!(response.status().as_u16(), 302);
-            let location = redirect_location(&response).expect("Location must parse");
-            let rejected = redirect_target(&response, &location, false);
-            assert!(
-                matches!(rejected, Err(FetchError::Failed(_))),
-                "downgrade target must be rejected, got {rejected:?}"
-            );
-            assert_eq!(
-                fixture.count("/counted"),
-                0,
-                "plaintext redirect target must never be requested"
-            );
-            // The full production-policy fetch rejects before any I/O at all.
-            let downgrade_before = fixture.count("/downgrade");
+            let body = fetch_bytes_with(
+                &client,
+                &fixture.url("/downgrade"),
+                MAX_METADATA_BYTES as usize,
+                true,
+                TEST_OVERALL,
+            )
+            .await
+            .expect("absolute test-policy redirect must resolve");
+            assert_eq!(body, b"plaintext");
+            assert_eq!(fixture.count("/counted"), 1);
+        }
+
+        #[tokio::test]
+        async fn production_policy_rejects_initial_http_before_network_io() {
+            let fixture = Fixture::start(|_| |_: &str| ok(b"must never be served"));
+            let client = update_http_client();
+            let before = fixture.count("/downgrade");
             let error = fetch_bytes_with(
                 &client,
                 &fixture.url("/downgrade"),
@@ -1764,10 +1728,9 @@ mod tests {
             );
             assert_eq!(
                 fixture.count("/downgrade"),
-                downgrade_before,
+                before,
                 "rejected fetch must not issue further requests"
             );
-            assert_eq!(fixture.count("/counted"), 0);
         }
 
         #[tokio::test]

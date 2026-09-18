@@ -191,3 +191,66 @@ fn snp_updater_does_not_shell_out_to_curl() {
         violations.join("\n")
     );
 }
+
+/// Plan 016: the `snp` updater pins `eggfetch-core =0.1.7` on the lean
+/// `standard-http1 + redirects` profile, delegates redirect traversal to
+/// `RedirectPolicy::strict` and the logical request/body deadline to native
+/// `Timeout.total`. The superseded Plan 014/015 machinery — the manual
+/// redirect loop and the duplicate outer Tokio timeout — must not return.
+#[test]
+fn snp_updater_pins_lean_eggfetch_profile() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = Path::new(&manifest_dir).join("Cargo.toml");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+    assert!(
+        source.contains("eggfetch-core = { version = \"=0.1.7\""),
+        "snp updater must pin eggfetch-core =0.1.7"
+    );
+    assert!(
+        source.contains("\"standard-http1\""),
+        "snp updater must use the lean standard-http1 profile, not the broad http1 alias"
+    );
+    assert!(
+        source.contains("\"redirects\""),
+        "snp updater must enable the redirects feature for strict redirect handling"
+    );
+}
+
+#[test]
+fn snp_updater_delegates_redirects_and_total_timeout() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = Path::new(&manifest_dir).join("src/update.rs");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+    assert!(
+        source.contains("RedirectPolicy::strict"),
+        "snp updater must delegate redirect traversal to RedirectPolicy::strict"
+    );
+    let mut violations = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("//!") {
+            continue;
+        }
+        if trimmed.contains("tokio::time::timeout") {
+            violations.push(format!("src/update.rs:{}: {trimmed}", index + 1));
+        }
+        for helper in [
+            "fn safe_get",
+            "fn is_redirect_status",
+            "fn redirect_location",
+            "fn redirect_target",
+            "follow_redirects(false)",
+        ] {
+            if trimmed.contains(helper) {
+                violations.push(format!("src/update.rs:{}: {trimmed}", index + 1));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "snp updater must not retain the manual redirect loop or outer Tokio timeout:\n{}",
+        violations.join("\n")
+    );
+}

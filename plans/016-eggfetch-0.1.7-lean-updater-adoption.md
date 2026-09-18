@@ -1,6 +1,6 @@
 # Plan 016: eggfetch-core 0.1.7 lean updater adoption
 
-Status: ready for implementation
+Status: complete
 
 Depends on: Plan 014 (complete), Plan 015 (complete)
 
@@ -854,28 +854,70 @@ Do not use this plan to:
 
 ## Completion notes
 
-To be filled by the implementation pass.
-
-Record at minimum:
-
 ```text
-Implementation commit:
-eggfetch-core version:
-final eggfetch features:
-0.1.5 current baseline bytes:
-0.1.7 full-http1 control bytes:
-0.1.7 lean+redirects final bytes:
-final delta bytes / %:
-feature-tree observations:
-manual redirect helpers removed: yes/no + reason
-outer Tokio total wrapper removed: yes/no + reason
-native total slow-drip metadata result:
-native total slow-drip binary/cleanup result:
-focused updater test result:
-workspace/all-features result:
-scripts/check.sh result:
-production-seams result:
-GitHub Actions result:
-docs/changelog updated:
-unexpected deviations:
+Implementation commit: (this commit; see git log for the Plan 016 message)
+eggfetch-core version: =0.1.7
+final eggfetch features: standard-http1, redirects, tls-rustls,
+    tls-native-roots (default-features = false)
+0.1.5 current baseline bytes: 6973056 (profile A: =0.1.5 http1 profile,
+    same toolchain/host/profile, `cargo build --release -p snip-it --bin snp`)
+0.1.7 full-http1 control bytes: 6973056 (profile B: =0.1.7 http1 profile;
+    delta 0 vs A)
+0.1.7 lean+redirects final bytes: 6776320 (profile C: intended production
+    profile; delta -196736 / -2.82% vs A)
+final delta bytes / %: -196736 / -2.82% (shrink; far inside the +128 KiB /
+    +2% investigation gate, so no fallback diagnosis was needed)
+feature-tree observations: `cargo tree -e features -i eggfetch-core` shows
+    standard-http1, transport-http1, standard-route, high-level-url,
+    redirects, tls-rustls (+hyper-rustls), tls-native-roots. Absent from the
+    eggfetch selection: advanced-routing, logical-retry, basic-auth, proxy,
+    http2, http3, json, compression-*, cookies, multipart, tracing,
+    test-util.
+manual redirect helpers removed: yes (`is_redirect_status`,
+    `redirect_location`, `redirect_target`, manual for-loop in `safe_get`
+    deleted; replaced by one `fetch_response` dispatch through eggfetch's
+    strict redirect handling). Initial-URL HTTPS guard (`check_url_scheme` /
+    `scheme_allowed`) kept: strict policy governs hops, not the initial URL.
+outer Tokio total wrapper removed: yes (both
+    `tokio::time::timeout(overall_timeout, ...)` wrappers deleted from
+    `fetch_bytes_with` / `fetch_file_with`). One native request
+    `Timeout.total` per logical request now owns the deadline; client keeps
+    connect (10 s) + read (60 s) phase limits and request-level `total`
+    merges per-field without resetting them. Root Tokio `time` feature kept:
+    `src/sync.rs` still uses `tokio::time` directly, so removal was not
+    applicable (per Part A3).
+native total slow-drip metadata result: pass
+    (`metadata_slow_drip_body_still_hits_overall_timeout`: 20x100-byte
+    chunks at 100 ms gaps, 300 ms total budget, fails with "timed out",
+    body progress proven via chunks_sent >= 1, no outer Tokio timeout)
+native total slow-drip binary/cleanup result: pass
+    (`binary_slow_drip_body_hits_overall_timeout_without_partial`: same
+    shape through the streamed path, stream error mapped from native Total
+    timeout, staging path absent afterwards)
+focused updater test result: 21 passed (`cargo test -p snip-it --features
+    test-support --bin snp update::`); full bin suite 67 passed. Includes
+    strict-policy config test, relative + absolute redirect integration,
+    redirect-loop depth failure, 1 MiB / streamed-limit bounds, 404-only
+    fallback vs checksum-404 hard failure, and production-seam HTTP
+    rejection before I/O
+workspace/all-features result: pass
+    (`cargo test --workspace --all-features -- --test-threads=1`: every
+    target ok, 0 failed; scanned for FAILED/error lines, none found)
+scripts/check.sh result: pass (`=== All checks passed ===`: installers,
+    fmt, clippy, lib, platform_smoke, destination_permissions,
+    auto_sync_closure, auto_sync_concurrency, sync_multibatch)
+production-seams result: pass
+    (`bash scripts/ci/test-production-seams.sh`: all seam tests passed)
+GitHub Actions result: (verified through the pushed commit; see below)
+docs/changelog updated: CHANGELOG.md Unreleased (0.1.7 lean profile +
+    -2.8% size note), AGENTS.md updater bullet, tests/architecture.rs
+    (lean-profile + delegated timeout pins), this plan + plans/README.md.
+    Plan 014/015 historical text untouched. README.md needed no change
+    (no version-specific updater wording). No skill/architecture deep-dive
+    described the 0.1.5 profile, so no pruning applied there.
+unexpected deviations: none. Profile B measured byte-identical to profile A
+    (6973056), so the full -2.8% saving is attributable to the lean
+    standard-route boundary (dropping advanced-routing, logical-retry, and
+    basic-auth). `futures-util` direct dependency retained (`StreamExt`
+    still used by `stream_binary_to_file`). `snip-sync` untouched on curl.
 ```
