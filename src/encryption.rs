@@ -63,6 +63,22 @@ fn hash_api_key(api_key: &str) -> String {
 static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Lock the session key cache, recovering entries after a poison.
+///
+/// A poisoned mutex means a previous holder panicked mid-update. The
+/// surviving entries are still valid derived keys, so recover them instead
+/// of silently disabling the cache (which would re-run Argon2id on every
+/// subsequent call).
+fn lock_key_cache() -> std::sync::MutexGuard<'static, HashMap<(String, String), DerivedKey>> {
+    match KEY_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("KEY_CACHE mutex poisoned; recovering cached derived keys");
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub(crate) struct KeyCacheGuard;
 
 impl Drop for KeyCacheGuard {
@@ -165,9 +181,8 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
 
     // Check cache first
     {
-        if let Ok(cache) = KEY_CACHE.lock()
-            && let Some(cached) = cache.get(&cache_key)
-        {
+        let cache = lock_key_cache();
+        if let Some(cached) = cache.get(&cache_key) {
             return Ok(cached.clone());
         }
     }
@@ -190,7 +205,8 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
         .map_err(|e| CryptoError::KeyDerivationFailed(format!("Hashing failed: {e}")))?;
 
     // Cache the derived key for future use with the same (api_key, salt)
-    if let Ok(mut cache) = KEY_CACHE.lock() {
+    {
+        let mut cache = lock_key_cache();
         // Evict half the entries when cache is full. HashMap iteration order is
         // arbitrary, but this is acceptable for a session-local cache — re-deriving
         // a key costs less than the initial Argon2id computation. Removed values

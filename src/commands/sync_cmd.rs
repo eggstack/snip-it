@@ -774,19 +774,28 @@ pub fn run_repair(dry_run: bool, apply: bool) -> SnipResult<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(path) {
-                    let mode = meta.permissions().mode() & 0o777;
-                    if mode != 0o600 {
-                        actions.push(RepairAction {
-                            artifact: path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
-                            action: format!("fix permissions: {mode:#o} -> 0o600"),
-                            reason: "restrictive permissions".to_string(),
-                            applied: false,
-                        });
+                match std::fs::metadata(path) {
+                    Ok(meta) => {
+                        let mode = meta.permissions().mode() & 0o777;
+                        if mode != 0o600 {
+                            actions.push(RepairAction {
+                                artifact: path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                                action: format!("fix permissions: {mode:#o} -> 0o600"),
+                                reason: "restrictive permissions".to_string(),
+                                applied: false,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "failed to stat status file; permission repair skipped for this file"
+                        );
                     }
                 }
             }
@@ -839,11 +848,28 @@ fn apply_repair_action(state_dir: &std::path::Path, action: &RepairAction) -> Sn
                 tracing::warn!(error = %e, "failed to create quarantine dir for corrupt status");
             }
             let dest = quarantine_dir.join(crate::auto_sync::status::STATUS_FILE_NAME);
-            if let Err(e) = std::fs::copy(&status_path, &dest) {
-                tracing::warn!(error = %e, "failed to quarantine corrupt status file");
-            }
-            if let Err(e) = std::fs::remove_file(&status_path) {
-                tracing::warn!(error = %e, "failed to remove corrupt status file after quarantine");
+            match std::fs::copy(&status_path, &dest) {
+                Ok(_) => {
+                    // Best-effort dir fsync so the quarantine copy is durable
+                    // before the original is removed.
+                    #[cfg(unix)]
+                    match std::fs::File::open(&quarantine_dir) {
+                        Ok(dir) => {
+                            if let Err(e) = dir.sync_all() {
+                                tracing::warn!(error = %e, "failed to fsync quarantine dir");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to open quarantine dir for fsync");
+                        }
+                    }
+                    if let Err(e) = std::fs::remove_file(&status_path) {
+                        tracing::warn!(error = %e, "failed to remove corrupt status file after quarantine");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to quarantine corrupt status file; original preserved");
+                }
             }
         }
         if action.action.contains("recreate") {

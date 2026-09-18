@@ -362,14 +362,23 @@ fn inner_acquire(path: &Path, purpose: &str) -> Result<ProcessFileLock, ProcessF
     // Tighten permissions on Unix so the persistent file is private.
     #[cfg(unix)]
     {
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(path, perms) {
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                if let Err(e) = std::fs::set_permissions(path, perms) {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "failed to tighten lock file permissions to 0600"
+                    );
+                }
+            }
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
                     path = %path.display(),
-                    "failed to tighten lock file permissions to 0600"
+                    "failed to stat lock file; permissions not tightened"
                 );
             }
         }

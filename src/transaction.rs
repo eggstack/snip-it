@@ -2385,8 +2385,23 @@ fn sync_parent_dir(path: &Path) {
     };
     #[cfg(unix)]
     {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
+        match fs::File::open(parent) {
+            Ok(dir) => {
+                if let Err(e) = dir.sync_all() {
+                    tracing::warn!(
+                        error = %e,
+                        path = %parent.display(),
+                        "failed to fsync parent directory; directory entry may not be durable"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %parent.display(),
+                    "failed to open parent directory for fsync; directory entry may not be durable"
+                );
+            }
         }
     }
     #[cfg(not(unix))]

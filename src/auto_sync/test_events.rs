@@ -81,9 +81,18 @@ pub fn emit(
     let mut line = serde_json::to_string(&record).unwrap_or_default();
     line.push('\n');
 
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = f.write_all(line.as_bytes());
-        let _ = f.flush();
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(line.as_bytes()) {
+                tracing::warn!(error = %e, "failed to write test event telemetry");
+            }
+            if let Err(e) = f.flush() {
+                tracing::warn!(error = %e, "failed to flush test event telemetry");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to open test event sink");
+        }
     }
 }
 

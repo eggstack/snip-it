@@ -55,29 +55,32 @@ pub fn get_config_path(config: &Option<PathBuf>) -> SnipResult<PathBuf> {
 
     match config {
         Some(path) => {
-            if path.is_file() {
-                Ok(path.clone())
-            } else if path.exists() {
-                Err(SnipError::runtime_error(
+            // Single `metadata` call (follows symlinks, like `is_file`/`exists`)
+            // so a concurrent delete/replace cannot misclassify the error.
+            match fs::metadata(path) {
+                Ok(meta) if meta.is_file() => Ok(path.clone()),
+                Ok(_) => Err(SnipError::runtime_error(
                     "Config path is not a file",
                     Some(&format!(
                         "'{}' exists but is not a regular file",
                         path.display()
                     )),
-                ))
-            } else {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| SnipError::io_error("create directory", parent, e))?;
-                }
-                match OpenOptions::new().write(true).create_new(true).open(path) {
-                    Ok(_) => {}
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists && path.is_file() => {}
-                    Err(e) => {
-                        return Err(SnipError::io_error("create config file", path.clone(), e));
+                )),
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)
+                            .map_err(|e| SnipError::io_error("create directory", parent, e))?;
                     }
+                    match OpenOptions::new().write(true).create_new(true).open(path) {
+                        Ok(_) => {}
+                        Err(e) if e.kind() == ErrorKind::AlreadyExists && path.is_file() => {}
+                        Err(e) => {
+                            return Err(SnipError::io_error("create config file", path.clone(), e));
+                        }
+                    }
+                    Ok(path.clone())
                 }
-                Ok(path.clone())
+                Err(e) => Err(SnipError::io_error("stat config path", path.clone(), e)),
             }
         }
         None => Ok(crate::utils::config::get_snippets_path()),

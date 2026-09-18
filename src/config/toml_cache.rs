@@ -42,6 +42,11 @@ struct TomlMetadata {
     file_index: u64,
     #[cfg(windows)]
     volume_serial: u64,
+    /// Whether the Windows file identity was read successfully. When false,
+    /// the entry must bypass the cache — a synthesized `(0, 0)` identity is
+    /// shared by every unreadable file and could serve stale foreign content.
+    #[cfg(windows)]
+    identity_ok: bool,
 }
 
 pub(crate) struct TomlCache {
@@ -140,7 +145,16 @@ fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMeta
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     #[cfg(windows)]
-    let (file_index, volume_serial) = windows_file_identity(file).unwrap_or((0, 0));
+    let (file_index, volume_serial, identity_ok) = match windows_file_identity(file) {
+        Some((file_index, volume_serial)) => (file_index, volume_serial, true),
+        None => {
+            tracing::warn!(
+                path = %path.display(),
+                "failed to read Windows file identity; bypassing TOML cache for this read"
+            );
+            (0, 0, false)
+        }
+    };
 
     Ok(TomlMetadata {
         mtime,
@@ -160,6 +174,8 @@ fn toml_metadata(file: &fs::File, path: &std::path::Path) -> SnipResult<TomlMeta
         file_index,
         #[cfg(windows)]
         volume_serial,
+        #[cfg(windows)]
+        identity_ok,
     })
 }
 
@@ -236,6 +252,18 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
 
     let cache = lock_toml_cache();
     let path_metadata = toml_path_metadata(path)?;
+    #[cfg(windows)]
+    if !path_metadata.identity_ok {
+        // Identity unknown: never consult or populate the cache with a
+        // synthesized shared identity. Read through directly.
+        drop(cache);
+        let mut file = fs::File::open(path)
+            .map_err(|e| SnipError::io_error("open toml file", path.to_path_buf(), e))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .map_err(|e| SnipError::io_error("read toml file", path.to_path_buf(), e))?;
+        return Ok(content);
+    }
     if let Some(entry) = cache.entries.get(&key)
         && entry.mtime == path_metadata.mtime
         && entry.mtime_nanos == path_metadata.mtime_nanos
@@ -273,6 +301,13 @@ pub fn cached_read_toml(path: &std::path::Path) -> SnipResult<String> {
         let after = toml_metadata(&file, path)?;
         if before != after {
             continue;
+        }
+        // On Windows the before/after identity reads can fail even when the
+        // initial stat succeeded; never cache an entry with unknown identity.
+        // `content` was read from a stable snapshot, so return it directly.
+        #[cfg(windows)]
+        if !after.identity_ok {
+            return Ok(content);
         }
 
         let mut cache = lock_toml_cache();

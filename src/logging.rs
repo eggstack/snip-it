@@ -130,7 +130,9 @@ pub fn init_logging(config: &LogConfig) -> Result<(), SnipError> {
         .with(env_filter)
         .with(file_layer);
 
-    let _ = subscriber.try_init();
+    if let Err(e) = subscriber.try_init() {
+        eprintln!("Warning: failed to initialize logging subscriber: {e}");
+    }
 
     *LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
 

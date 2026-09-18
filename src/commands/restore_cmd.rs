@@ -96,12 +96,25 @@ impl DestinationClass {
         #[cfg(not(unix))]
         {
             if let Some(readonly) = metadata.readonly {
-                if let Ok(meta) = fs::metadata(path) {
-                    let mut perms = meta.permissions();
-                    perms.set_readonly(readonly);
-                    fs::set_permissions(path, perms).map_err(|e| {
-                        SnipError::io_error("set destination permissions", path.to_path_buf(), e)
-                    })?;
+                match fs::metadata(path) {
+                    Ok(meta) => {
+                        let mut perms = meta.permissions();
+                        perms.set_readonly(readonly);
+                        fs::set_permissions(path, perms).map_err(|e| {
+                            SnipError::io_error(
+                                "set destination permissions",
+                                path.to_path_buf(),
+                                e,
+                            )
+                        })?;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "failed to stat destination; readonly flag not restored"
+                        );
+                    }
                 }
             }
         }

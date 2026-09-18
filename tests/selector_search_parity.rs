@@ -554,5 +554,26 @@ fn stable_limit_and_ranking_parity() {
     // Both deploy snippets share the description; order follows relevance
     // then stable tie-breaks — assert exact count and set equality with MCP.
     assert_eq!(cli_descriptions.len(), full.len());
+    let mcp_search = server.call(
+        26,
+        "snippets_search",
+        json!({ "query": "deploy", "library": "work" }),
+    );
+    let mut mcp_keys: Vec<String> = tool_content(&mcp_search)["snippets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            format!(
+                "{}||{}",
+                item["description"].as_str().unwrap(),
+                item["command"].as_str().unwrap()
+            )
+        })
+        .collect();
+    mcp_keys.sort();
+    let mut cli_sorted = cli_descriptions.clone();
+    cli_sorted.sort();
+    assert_eq!(cli_sorted, mcp_keys);
     server.finish();
 }

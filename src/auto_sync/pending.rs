@@ -193,7 +193,7 @@ fn parse_on_disk(contents: &str) -> Result<PendingOnDisk, PendingError> {
             on_disk.created_at_unix_ms,
             &on_disk.snapshot,
             on_disk.source_transaction_id.as_deref(),
-        );
+        )?;
         if on_disk.integrity != expected {
             return Err(PendingError::IntegrityMismatch {
                 expected: on_disk.integrity.clone(),
@@ -206,12 +206,8 @@ fn parse_on_disk(contents: &str) -> Result<PendingOnDisk, PendingError> {
     if let Ok(v1) = toml::from_str::<LegacyPendingOnDiskV1>(contents) {
         tracing::debug!("migrating legacy pending marker v1 to v2");
         let snapshot = PendingSnapshot::Mutation { kind: v1.kind };
-        return Ok(build_pending_on_disk(
-            1,
-            v1.created_at_unix_ms,
-            snapshot,
-            None,
-        ));
+        let migrated = build_pending_on_disk(1, v1.created_at_unix_ms, snapshot, None)?;
+        return Ok(migrated);
     }
 
     Err(PendingError::Deserialize(
@@ -390,7 +386,7 @@ fn write_pending_state_with_txn(
         created_at_ms,
         snapshot.clone(),
         source_transaction_id,
-    );
+    )?;
     let serialized = toml::to_string_pretty(&on_disk).map_err(PendingError::Serialize)?;
     crate::utils::atomic::atomic_write_bytes(
         path,
@@ -412,22 +408,22 @@ fn build_pending_on_disk(
     created_at_ms: u64,
     snapshot: PendingSnapshot,
     source_transaction_id: Option<String>,
-) -> PendingOnDisk {
+) -> Result<PendingOnDisk, PendingError> {
     let integrity = compute_integrity(
         SCHEMA_VERSION,
         generation,
         created_at_ms,
         &snapshot,
         source_transaction_id.as_deref(),
-    );
-    PendingOnDisk {
+    )?;
+    Ok(PendingOnDisk {
         schema: SCHEMA_VERSION,
         generation,
         created_at_unix_ms: created_at_ms,
         snapshot,
         source_transaction_id,
         integrity,
-    }
+    })
 }
 
 /// Computes CRC32 integrity over all behavior-driving fields, including the
@@ -442,19 +438,20 @@ fn compute_integrity(
     created_at_ms: u64,
     snapshot: &PendingSnapshot,
     source_transaction_id: Option<&str>,
-) -> String {
+) -> Result<String, PendingError> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&schema.to_le_bytes());
     bytes.extend_from_slice(&generation.to_le_bytes());
     bytes.extend_from_slice(&created_at_ms.to_le_bytes());
-    if let Ok(snapshot_bytes) = serialize_snapshot(snapshot) {
-        bytes.extend_from_slice(&snapshot_bytes);
-    }
+    // Fail closed: a snapshot that cannot be serialized must never yield a
+    // valid-looking hash over the remaining fields (integrity downgrade).
+    let snapshot_bytes = serialize_snapshot(snapshot)?;
+    bytes.extend_from_slice(&snapshot_bytes);
     if let Some(txn_id) = source_transaction_id {
         bytes.extend_from_slice(txn_id.as_bytes());
     }
     let hash = crc32(&bytes);
-    format!("crc32:{hash:08x}")
+    Ok(format!("crc32:{hash:08x}"))
 }
 
 fn parse(contents: &str) -> Result<PendingState, PendingError> {
@@ -490,14 +487,23 @@ fn restrict_permissions(#[cfg_attr(not(unix), allow(unused_variables))] path: &P
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(path, perms) {
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                if let Err(e) = std::fs::set_permissions(path, perms) {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "Failed to restrict pending marker permissions; file may be world-readable"
+                    );
+                }
+            }
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
                     path = %path.display(),
-                    "Failed to restrict pending marker permissions; file may be world-readable"
+                    "Failed to stat pending marker; permissions not tightened, file may be world-readable"
                 );
             }
         }
@@ -689,6 +695,7 @@ created_at_unix_ms = 1700000000000"#;
                 &migrated.snapshot,
                 migrated.source_transaction_id.as_deref(),
             )
+            .unwrap()
         );
     }
 

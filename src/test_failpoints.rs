@@ -71,7 +71,13 @@ pub fn mutation_barrier(point: &str) {
     if std::fs::read_to_string(&expected).ok().as_deref() != Some(point) {
         return;
     }
-    let _ = std::fs::write(root.join("entered"), point);
+    let _ = std::fs::write(root.join("entered"), point).inspect_err(|e| {
+        tracing::warn!(
+            error = %e,
+            point = point,
+            "failed to signal mutation barrier entry; harness may time out"
+        );
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !root.join("release").exists() {
         if std::time::Instant::now() > deadline {

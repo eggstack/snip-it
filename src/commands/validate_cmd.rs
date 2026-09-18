@@ -311,6 +311,17 @@ fn validate_library(
                 }
             }
         }
+    } else {
+        diags(
+            report,
+            &lib_display,
+            Some(lib_path),
+            None,
+            "W-DUP-CHECK-SKIPPED",
+            Severity::Warning,
+            Repairability::Manual,
+            "Same-ID divergent-content check skipped: raw TOML re-parse failed".to_string(),
+        );
     }
 
     // g. Exact duplicate entries (same description + command)
@@ -457,13 +468,44 @@ fn validate_usage(report: &mut ValidationReport, _mgr: &LibraryManager) {
     // Collect all active snippet IDs across all visible libraries via the
     // canonical read-only resolver (no migration, no writes).
     let mut active_ids: HashSet<String> = HashSet::new();
-    if let Ok(sources) = crate::library::readonly_library_sources(Some("all")) {
-        for source in &sources {
-            if let Ok(snippets) = crate::library::load_library(&source.path) {
-                for s in &snippets.snippets {
-                    active_ids.insert(s.id.clone());
+    match crate::library::readonly_library_sources(Some("all")) {
+        Ok(sources) => {
+            for source in &sources {
+                match crate::library::load_library(&source.path) {
+                    Ok(snippets) => {
+                        for s in &snippets.snippets {
+                            active_ids.insert(s.id.clone());
+                        }
+                    }
+                    Err(e) => {
+                        diags(
+                            report,
+                            &source.name,
+                            Some(&source.path),
+                            None,
+                            "W-LIB-UNREADABLE",
+                            Severity::Warning,
+                            Repairability::Manual,
+                            format!(
+                                "Library '{}' could not be read ({e}); excluded from usage-orphan check",
+                                source.name
+                            ),
+                        );
+                    }
                 }
             }
+        }
+        Err(e) => {
+            diags(
+                report,
+                "<usage>",
+                None,
+                None,
+                "W-LIB-INDEX-UNREADABLE",
+                Severity::Warning,
+                Repairability::Manual,
+                format!("Library index could not be read ({e}); usage-orphan check skipped"),
+            );
         }
     }
 
