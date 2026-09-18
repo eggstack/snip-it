@@ -1,325 +1,69 @@
 # AGENTS.md
 
-## Build & Test Commands
+## Verify (authoritative)
 
 ```bash
-# Focused developer verification (same as Linux CI) — fmt, clippy, unit tests, selected integration tests
-bash scripts/check.sh
-
-# Manual pre-release verification (requires clean working tree)
-bash scripts/release-check.sh verify
-
-# Per-crate publish dry-run (manual)
-bash scripts/release-check.sh dry-run snip-it
-
-# Production seam proof — verifies test-only env vars are inactive in production builds
-bash scripts/ci/test-production-seams.sh
-
-# PowerShell installer contract (Windows CI runs this; requires pwsh)
-pwsh -NoProfile -File scripts/tests/installers.ps1
-
-# Single integration test target
-cargo test --test platform_smoke
+bash scripts/check.sh   # same as Linux CI: installers.sh, fmt, clippy, lib + focused integration
+bash scripts/release-check.sh verify   # manual pre-release, requires clean tree
+bash scripts/release-check.sh dry-run snip-it   # per-crate publish dry-run (snip-proto|snip-sync|snip-it)
+bash scripts/ci/test-production-seams.sh   # test-only env vars inactive in prod builds
 ```
 
-### Lint & Format
-
 ```bash
-# Lint (warnings are errors) — use --all-targets, NOT --all-features;
-# test-support and test-helpers are enabled only for specific test targets
-cargo clippy --workspace --all-targets -- -D warnings
-
-# Format check / auto-format
-cargo fmt --all -- --check
-cargo fmt
-```
-
-### Running Tests
-
-```bash
-# Unit tests only (parallel — each test uses isolated TempDir)
-cargo test --workspace --lib
-
-# All tests including integration (serial)
-cargo test --workspace --all-features -- --test-threads=1
-
-# snip-sync tests (needs test-helpers feature)
+cargo fmt --all -- --check   # or: cargo fmt
+cargo clippy --workspace --all-targets -- -D warnings   # NOT --all-features; test-only code lints via explicit targets below
+cargo test --workspace --lib   # parallel-safe (isolated TempDir per test)
+cargo test --test <name> --features test-support [-- --test-threads=1]   # single integration target; copy flags from check.sh
+cargo test --workspace --all-features -- --test-threads=1   # full suite, serial
 cargo test -p snip-sync --features test-helpers
 ```
 
-**Key gotcha:** Only 3 integration tests require `--features test-support` to compile: `repair_transactions`, `process_lock_concurrency`, and `local_data_lock_barriers`. All other integration tests compile without the feature.
+- `check.sh` passes `--features test-support` to all focused targets (`platform_smoke`, `destination_permissions`, `auto_sync_closure`, plus `-- --test-threads=1` for `auto_sync_concurrency`, `sync_multibatch`). Only `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers` (plus the `process_lock_helper` bin) gate compilation on it (see `required-features` in `Cargo.toml`).
+- Integration/PTY/lock/barrier tests are serial: always `--test-threads=1` for `pty_integration` (real pty pairs), `*_concurrency`, `sync_multibatch`, `*_barriers`, `repair_transactions`. Deep crash/restore/manifest suites run only in `release-check.sh verify`, not CI.
+- Windows CI runs `pwsh -NoProfile -File scripts/tests/installers.ps1` (needs `pwsh`); Linux `check.sh` runs the bash equivalent.
 
-**Key gotcha:** PTY tests (`pty_integration.rs`) use real terminal pairs — always pass `--test-threads=1`.
+## Toolchain & platform
 
-## Toolchain & Environment
+- Rust 1.94, edition 2024 (`rust-toolchain.toml`); `rustfmt.toml`: `max_width=100`, 4-space, Unix newlines.
+- `.cargo/config.toml` sets Windows MSVC link `/STACK:8388608` — the large `Commands` enum overflows the 1 MB default. Do not remove.
+- Linux needs `libdbus-1-dev`, `pkg-config`, OpenSSL headers (CI installs the first two).
+- `clippy.toml` relaxes `too-many-arguments` (10) and type complexity (350) — don't "fix" violations against default thresholds.
 
-- **Rust 1.94**, edition 2024 (not 2021). See `rust-toolchain.toml`.
-- `rustfmt.toml`: `max_width=100`, 4-space indent, Unix newlines, `edition = "2024"`.
-- `.cargo/config.toml` raises the Windows thread stack to 8 MB — the large `Commands` enum overflows the 1 MB default. Do not remove.
-- Linux needs `libdbus-1-dev pkg-config` installed (CI installs them); tonic TLS also needs OpenSSL headers on Linux.
+## Layout
 
-## Release & Branching
+- `snip-it/` binary `snp` (`src/main.rs`); `snip-proto/` protobuf + checked-in tonic stubs; `snip-sync/` server (gRPC + axum); `tests/` (~50 targets); `scripts/check.sh`, `release-check.sh`; `themes/` Halloy TOML.
+- `src/`: `commands/` (one module per command, canonical `*Args` beside handler; `snp data` is an alias, single-path `handle_*` in `main.rs`), `library/` (`model`/`persistence`/`manager`, canonical read-only resolver + `inspect_library_index`), `selector.rs` (fuzzy `SearchFields`/`searchable_text` + `resolve_exact_target`; mutating `resolve_selector` vs side-effect-free `resolve_selector_readonly`), `sync.rs` (gRPC client, single `retry_grpc_unified!` macro), `sync_commands.rs` (merge), `transaction.rs` + `local_data.rs` + `process_file_lock.rs` (journal + lock hierarchy), `auto_sync/` (detached `auto-sync-worker`, same `SyncExecutionLock` as manual sync), `mcp/` (read-only, stdio-only, non-executing), `ui/` (ratatui), `config/` (`sync_settings`/`toml_cache`), `update.rs`, `error.rs` (`SnipError`/`SnipResult`, no credentials), `outcome.rs` (`CliOutcome` → exit codes, see `docs/EXIT_CODES.md`).
+- Tests use `TempDir` + `XDG_CONFIG_HOME` override, `sqlite::memory:` for servers, `tests/support/` (`TestEnvironment`, `RecordingServer`, `EventSink`); never touch real config/keychain/ports. `SNP_ALLOW_PLAINTEXT_API_KEY=true` on all test commands — never remove that seam. `set_var` in tests needs `unsafe` (edition 2024).
 
-- Publishing to crates.io is manual and local — no publish workflow exists; CI has no crates.io token.
-- Publish in dependency order: `snip-proto` → `snip-sync` → `snip-it`. If `snip-proto` changes, bump its version in both dependents.
-- Topic branches squash-merge into `main`; commits: imperative mood, first line under 72 chars.
-- Version bumps + `CHANGELOG.md` update go together in one PR (see `CONTRIBUTING.md`, `RELEASING.md`).
+## Generated code — never edit
 
-## Project Structure
+- `src/ui/_generated_bundled_themes.rs` ← `python3 scripts/build_themes.py`.
+- `snip-proto/src/snip_proto.rs` is checked in; `protoc` needed only for an explicit regen after editing `proto/sync.proto`.
 
-```
-snip-it/          Main crate — binary "snp" (src/main.rs)
-snip-proto/       Protobuf definitions, tonic-generated gRPC code
-snip-sync/        Sync server (gRPC + HTTP/axum)
-tests/            Integration tests (~45 files)
-scripts/          check.sh, release-check.sh, ci/ helpers
-themes/           50 Halloy TOML theme files
-```
+## Gotchas that break builds or corrupt state
 
-### Key Source Modules (`src/`)
+- `gate_mutation_on_interrupted_transactions()` before every local mutation. One journal = auto-rollback; multiple/incomplete = refuse, direct to `snp repair`. Journals live in `<config>/.transaction/`; transaction APIs take `.transaction`, pending-marker APIs take the state dir.
+- Kernel locks are authoritative: `flock`/`LockFileEx` for auto-sync locks and server singleton. `Drop` releases without unlinking; lock files may hold stale metadata. `kill(pid,0)`: only `ESRCH` proves absence (`EPERM`/unknown = live). Linux start tokens use `/proc/<pid>/stat` field 22.
+- Save path does NOT post-process `toml::to_string_pretty`. Golden corpus (tabs, trailing spaces, CRLF) must survive save/load; `write_schema_version` must use `toml::Table`, not `toml::Value`, to preserve array-of-tables.
+- `sync.rs` RPCs take `&mut self`; the retry macro expands inline so `self.client.<rpc>()` reborrows work. Do not reintroduce a closure-based generic retry helper (fails with "captured variable cannot escape `FnMut`").
+- `snp update` uses in-process `eggfetch-core =0.1.5` (`http1`+`tls-rustls`+`tls-native-roots` only); `snip-sync update` keeps external `curl` (embedding TLS grew the server +41% past the 10% gate). `tests/architecture.rs` pins the no-`curl` property; transport tests live in `src/update.rs` (`test-support`) with a std-only loopback fixture.
+- Tokio: global `RUNTIME` only for async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`, `update`); local-only commands never init it. `run_snippet_selection` takes `Option<&Runtime>` (`None` when `do_sync` false). Detached worker uses `new_current_thread()`; keep client's `rt-multi-thread` feature. Keep `keyring = "4"` default features (platform stores) or persistence silently falls back to mock store.
+- Do not sanitize snippet commands (by design); removing CLI flags is breaking (deprecate first); Argon2 parameter changes break all existing encrypted payloads (version first); `commands/mod.rs` (`load/save_snippets`, `run_snippet_selection`) and `ui/mod.rs` re-exports affect all TUI commands; clipboard side effects go through `copy_to_clipboard()` in `clip_cmd.rs`.
+- `AGENTS.override.md` has session pitfall notes — consult it.
 
-- `main.rs` — Top-level CLI composition, runtime/signal/log setup, dispatch, outcome mapping (per-command `Args` live beside their handlers)
-- `lib.rs` — Library crate (exports for integration tests)
-- `commands/` — one module per command + shared helpers in `mod.rs`; `doctor_report` (rendering) and `backup_archive` (manifest/snapshot primitives) are the only split-offs; every command with CLI schema owns one canonical `*Args` struct beside its handler
-- `auto_sync/` — Auto-sync subsystem (execution_lock, lock, mod, notification, pending, pending_lock, policy, schedule, status, test_events, worker)
-- `ui/` — TUI (ratatui + crossterm), theme system, syntax highlighting
-- `utils/` — Config paths, TOML helpers, atomic writes (`atomic.rs`)
-- `library/` — `model.rs` (data types, read-only resolution types, pure helpers), `persistence.rs` (load/save, ID normalization, backups), `manager.rs` (`LibraryManager`, read-only resolver); `mod.rs` re-exports preserve `crate::library::*`; canonical read-only `ResolvedLibrarySource` resolution (`resolve_readonly_sources`/`readonly_library_sources`/`library_not_found`) and shared index inspection (`inspect_library_index`/`PrimaryState`/`find_orphaned_ids`)
-- `sync.rs` — gRPC client for snip-sync server
-- `sync_commands.rs` — Sync orchestration and merge logic
-- `encryption.rs` — AES-256-GCM + Argon2id end-to-end encryption
-- `config/` — `sync_settings.rs` (sync settings, path resolution, keychain API key), `toml_cache.rs` (pure TOML cache + integrity helpers shared with core)
-- `error.rs` — `SnipError` enum, `SnipResult<T>`, `SyncFailureKind`
-- `selector.rs` — Shared snippet selector model (`SnippetSelector`, `ResolutionPolicy`); canonical `LibraryScope::from_filter_arg`/`from_owned_arg` scope parsing, `SearchFields`/`searchable_text`/`score_fuzzy_matches`/`matches_required_tags` fuzzy contract, `exact_selector`/`resolve_exact_target` exact construction, `sort_matches`/`finish_aggregate` cross-library ordering; mutating `resolve_selector` vs read-only `resolve_selector_readonly` (latter uses the canonical library resolver, no migration)
-- `outcome.rs` — CLI outcome types and exit-code mapping (`CliOutcome`)
-- `transaction.rs` — Transaction boundary with journal, lock, begin/commit/rollback
-- `process_file_lock.rs` — Kernel-backed cross-process file lock (`flock`/`LockFileEx`)
-- `local_data.rs` — `LocalDataLock`, `<config>/.transaction` derivation, lock hierarchy
-- `migration.rs` — Schema versioning (`SchemaVersion`, idempotent TOML migrations)
-- `sync_failure.rs` — `FailureClass` (4 variants) + legacy status-code compat
-- `status_snapshot.rs` — Read-only auto-sync `StatusSnapshot` behind `snp status`
-- `sort.rs` — Snippet sort/rank modes shared by TUI and list
-- `output.rs` — Output-file execution pipeline
-- `usage.rs` — Local usage metadata (not synced)
-- `clipboard.rs` — Clipboard backend with auto-clear
-- `diagnostics.rs` — `snp doctor` diagnostics engine
-- `update.rs` — Self-update support (`snp`: in-process `eggfetch-core` 0.1.5 transport with HTTPS-only manual redirects, 1 MiB metadata / 256 MiB streamed-binary bounds, 404-only Cargo fallback; `RUNTIME.block_on` at dispatch. `snip-sync` keeps external `curl` per the Plan 014 size gate — see its module docs)
-- `logging.rs` — Structured logging and audit trail
+## Sync & persistence invariants
 
-## Critical Gotchas
+- Conflict: `(updated_at, device_id, SHA-256(synced fields))`; never role-dependent server-wins. Deletion beats live content even with an older timestamp (no resurrection). `output`/`folders`/`favorite` are local-only, excluded from the fingerprint; `output` is not in `ProtoSnippet`, `snp edit --output` requires `--filter`.
+- Uploads byte-bounded via Prost `encoded_len()` (client 3.5 MiB < server 4 MiB gRPC limit); `PushSnippets` idempotent by snippet identity; multi-batch errors preserve the original `SyncFailureKind` via `add_batch_context()`.
+- Scheduling errors are typed — never collapse pending-read/spawn failures into `NoPending`/`SpawnNow`/success. Pending generations are monotonic (lower generation = corrupt, preserve marker, no spawn), except lower-generation + strictly newer timestamp = marker cleared and re-recorded, adopt as new work.
+- Malformed library/`libraries.toml` fails closed (best-effort backup + error, never synthesize writable empty); missing/empty files give defaults. Missing-library recovery uses atomic `<library>.sync_recovery` state: preserve corrupt markers, one normalized remote-name match only, fail on ambiguity, remove marker only after relink + retry sync are durable, linkage + `last_sync` reset in one save.
+- Search parity: `snp get --query`, `snp list --filter`, MCP `snippets_search` share `selector::searchable_text` (description + command always, tags by default, output/notes only with `list --search-output` / `search_output`); folders/favorite/sync metadata/credentials never searchable. MCP `snippet_get`: ID (case-sensitive) / description / command (case-insensitive), exactly one required.
+- Tests assert exact counts (not `>= 1`), prove server-side effects, verify pending-clear ordering; helper emits JSON-lines lifecycle events only when `SNP_TEST_EVENTS_DIR` is set.
 
-### Generated code
-`src/ui/_generated_bundled_themes.rs` is generated explicitly by `python3 scripts/build_themes.py`. Never edit it directly. Protobuf code in `snip-proto/src/snip_proto.rs` is checked in and regenerated only as an explicit maintainer operation after changing `snip-proto/proto/sync.proto`; normal builds do not require `protoc`.
+## Release & branches
 
-### TOML backslash escape handling
-The save path does NOT post-process `toml::to_string_pretty` output. The golden command corpus includes tabs, trailing spaces, and CRLF that must survive the full save/load pipeline. See `src/utils/toml_helpers.rs`.
+- Publish is manual local, no CI token/workflow publishes: order `snip-proto` → `snip-sync` → `snip-it`; proto changes require bumping its version in both dependents. Version bump + `CHANGELOG.md` in one PR (`CONTRIBUTING.md`, `RELEASING.md`). Topic branches squash-merge to `main`; imperative mood, first line <72 chars.
 
-### Single-helper execution lock
-The detached `auto-sync-worker` holds `SyncExecutionLock` for the entire bounded cycle and runs `sync_commands::run_sync_with_limits` directly. Manual sync and cron acquire the same lock.
+## Pointers (don't duplicate)
 
-### Kernel-backed process file locks
-All auto-sync locks and the `snip-sync` server singleton use `flock` (Unix) / `LockFileEx` (Windows). The kernel alone is authoritative — persistent lock files may contain stale metadata. `Drop` releases the lock without unlinking the file.
-
-Linux process start tokens use `/proc/<pid>/stat` field 22 (`starttime`). Unix `kill(pid, 0)` probes treat `EPERM` and unknown errors as a live process; only `ESRCH` proves absence.
-
-### Mutation gate
-`gate_mutation_on_interrupted_transactions()` must be called before any local mutating operation. Single journal = auto-rollback; multiple/incomplete = refuse and direct to `snp repair`.
-
-### No command filtering (by design)
-Snippet commands execute as-is — no sanitization. Intentional for power users.
-
-### Self-update transport split (Plan 014)
-`snp update` uses in-process `eggfetch-core` (`=0.1.5`, `http1` + `tls-rustls` + `tls-native-roots` only; no http2/json/compression/cookies/proxy/multipart/tracing/test-util). `snip-sync update` intentionally retains the external-`curl` adapter: embedding the TLS stack grew the server binary +41% in controlled release builds (past the 10% gate), while `snp` grew +11.5% (reported, kept). Do not "consolidate" the server adapter without re-running the measurement. Updater transport tests live inline in `src/update.rs` (`transport_tests`, `test-support` feature) with a std-only loopback fixture; `tests/architecture.rs` pins the no-`curl` property.
-
-### AGENTS.override.md
-Contains session-specific pitfall notes and plan review findings. Consult it for implementation guidance.
-
-## Sync & Persistence Invariants
-
-### Conflict resolution
-- Live snippet conflicts use `(updated_at, device_id, SHA-256(synced fields))`; never reintroduce role-dependent `>=` server-wins behavior.
-- Deletion wins over live content, including when the live copy has a later timestamp. This is intentional no-resurrection behavior, not pure LWW.
-- `output`, `folders`, and `favorite` are local-only and must not enter the conflict fingerprint.
-- `output` is local-only — not synced, not in `ProtoSnippet`. `snp edit --output` requires `--filter`.
-
-### Sync uploads
-- Sync uploads are byte-bounded using Prost `encoded_len()`. The client ceiling defaults to 3.5 MiB (below the server's 4 MiB gRPC limit).
-- `PushSnippets` is idempotent by snippet identity — retrying an already-accepted batch is safe.
-- Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via `add_batch_context()`.
-
-### Auto-sync scheduling
-- `schedule_sync`, `schedule_and_spawn`, and `schedule_existing_pending` return typed local scheduling errors. Pending-read and worker-spawn failures must never be collapsed into `NoPending`, `SpawnNow`, or a successful notification.
-- Pending generations are monotonic. A lower generation observed during debounce or preflight is corrupt state: preserve the marker, log the failure, and do not spawn sync work. Exception: a lower generation with a strictly newer creation timestamp means the marker was cleared by an explicit sync and re-recorded from scratch — debounce adopts it as new work instead of failing.
-
-### Transaction boundaries
-- `restore` uses `begin_transaction` / `advance_to_backups_durable` / `advance_to_committing` / `advance_to_committed_local` / `commit_transaction` / `rollback_transaction`.
-- `gate_mutation_on_interrupted_transactions` checks for journal-based interrupted state only.
-
-### Persistence validation
-- Malformed library TOML (`load_library()`) and `libraries.toml` (`LibraryManager::new()`) fail closed: best-effort backup + `SnipError` return, never synthesized empty writable library/config.
-- Missing/empty files produce valid defaults; malformed files produce backup + error.
-
-### Sync recovery
-- Missing-library recovery uses atomic `<library>.sync_recovery` TOML state. Preserve corrupt markers, reuse exactly one normalized remote-name match, fail on ambiguity, and remove a marker only after relink and retry sync are durable.
-- Recovery linkage and `last_sync` reset must be persisted in one `LibraryManager` save.
-
-## Async & Runtime
-
-- Global `RUNTIME: LazyLock<Runtime>` — only initialized by async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`, `update`).
-- Local-only commands (`select`, `list`, `get`, `validate`, `backup`, `new`, `edit`, `keybindings`, `completions`, `shell`, `doctor`, `status`, `repair`, `restore`, `import`) do not initialize the Tokio runtime.
-- `run_snippet_selection` accepts `Option<&tokio::runtime::Runtime>` — pass `None` when `do_sync` is false, `Some(&RUNTIME)` when true.
-- The auto-sync detached helper uses `Builder::new_current_thread()` instead of `new_multi_thread()`.
-- The client retains `tokio`'s `rt-multi-thread` feature because the production detached auto-sync worker creates its own multi-thread runtime; do not prune it.
-
-## Error Handling & CLI Surface
-
-- `SnipError` enum (`src/error.rs`), `SnipResult<T> = Result<T, SnipError>`. `SnipError` never carries credentials or API keys.
-- `FailureClass` (`src/sync_failure.rs`) has 4 variants: `Transient`, `Configuration`, `LocalFailure`, `Internal`.
-- `SnipError` variants map to stable exit codes via `CliOutcome` → `exit_code::*`; see `docs/EXIT_CODES.md`.
-- Exact selector construction is canonicalized via `resolve_exact_target()` in `selector.rs`.
-- Clipboard copy side effects (audit log, usage index update) are canonicalized via `copy_to_clipboard()` in `clip_cmd.rs`.
-
-### Selector/search parity (Plan 011)
-- Fuzzy field contract lives in `selector::SearchFields`/`searchable_text`: description + command always, tags by default, output/notes only when explicitly enabled (`list --search-output`, MCP `search_output`). Folders/favorite/sync metadata/credentials are never searchable.
-- `snp get --query`, `snp list --filter`, and MCP `snippets_search` share that helper plus `Relevance` ranking; MCP adds an explicit case-insensitive `tags` filter (`matches_required_tags`) rather than a query language.
-- MCP `snippet_get` supports ID (case-sensitive) / description / command (both case-insensitive, exactly one required) via `resolve_selector_readonly` with structured `not_found`/`ambiguous`. MCP stays read-only, stdio-only, non-executing, noninteractive.
-- Cross-library `all` aggregation collects per-library candidates with an `All`-policy collector then applies the caller's policy in `finish_aggregate`, so a `Unique` multi-match inside one library is not dropped.
-
-### Selection & exit codes
-- `SnippetSelection` (TUI) → `SelectionOutcome` (lib) → `CliOutcome` (stable exit codes)
-- `ProcessResult` is the per-snippet loop control (`Cancel`/`Continue`/`Done`/`Failed`) inside `run_snippet_selection`; not an exit-code layer
-- Cancellation maps to exit code 4 for `select`; `run`/`clip`/`search` treat cancellation as exit 0
-- Output-file execution failures (timeout/spawn) map to exit code 8
-
-### CLI surface (Plan 008)
-- `validate`, `backup`, `restore`, `repair`, `status` each have one canonical `*Args` struct beside their handler (`validate_cmd::ValidateArgs`, etc.) reused by top-level and `snp data ...` spellings
-- Both spellings dispatch via single-path `handle_*` helpers in `src/main.rs`; no duplicated validation, JSON formatting, or exit-code mapping
-- `snp data` is a compatibility alias layer, not a second schema
-
-### Shared inspection (Plan 009)
-- Read-only resolution lives in `library::model`/`manager` (re-exported at `library::`)
-- `snp get` uses `resolve_selector_readonly`; `validate` uses `LibraryManager::new()` (never `init_library_manager`); `doctor`/`validate`/`status`/`repair` share `inspect_library_index`/`find_orphaned_ids` but render into their own diagnostic types
-- Shared inspection is side-effect free: no `ensure_library_mode`, no migration, no file creation; no generic finding DSL or plugin framework
-
-### Module boundaries (Plan 010)
-- `src/library/` (`model`/`persistence`/`manager`), `src/config/` (`sync_settings`/`toml_cache`), `commands::{doctor_report,backup_archive}` — splits follow existing responsibility boundaries only; no new crates, service traits, or DI
-- `doctor_cmd::DiagnosticReportFormat` and backup manifest types are re-exported from their command modules so CLI/test import paths are unchanged
-- `tests/architecture.rs` scans module directories (`library/`) as well as files
-
-### Sync retry policy (Plan 012)
-- All gRPC RPCs share one `retry_grpc_unified!` macro in `sync.rs` (no `retry_grpc!`/`retry_grpc_limited!` pair, no manual `push`/`sync` retry loops); retryability (`SyncRetryConfig::is_retryable_grpc_error`), jitter (`retry_jitter_multiplier`, [0.5, 1.5)), counters, and terminal `grpc_error_to_snip_error` mapping live in one path
-- `RetryBackoff::Standard` (2x, cap 5s) everywhere except the `Sync` RPC, which keeps its historical `RateLimitAware` special case (4x up to 120s on `ResourceExhausted`); counts/delays/timeouts unchanged
-- `None` limits (manual, register, premade) stay unbounded except transport timeouts; `Some(SyncRunLimits)` (auto-sync) still bounds each RPC and refuses backoff sleeps that would overrun the deadline, all mapping to `SyncFailureKind::Timeout`
-
-## Keyring
-
-- `keyring = "4"` relies on its default `v1` feature set for platform stores: Apple Keychain, Windows Credential Manager, zbus Secret Service (Linux desktop). Do not build with `default-features = false` without re-enabling a store — credential persistence silently degrades to keyring's mock store.
-- Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true`; never remove that seam from test commands.
-
-## Configuration Files
-
-- `~/.config/snp/snippets.toml` — main storage (or per-library in `libraries/`)
-- `~/.config/snp/sync.toml` — sync settings
-- `~/.config/snp/libraries.toml` — library metadata
-- `~/.config/snp/libraries/*.toml` — individual library files
-- `~/.config/snp/premade/*.toml` — downloaded premade libraries
-- `~/.config/snp/themes/*.toml` — Halloy-compatible theme files
-- `~/.config/snp/themes.toml` — active theme selection
-- `~/.config/snp/usage.toml` — local usage metadata (not synced)
-- `~/.config/snp/auto-sync-status.toml` — durable sync status (not synced, private)
-- `~/.config/snp/auto-sync-pending.toml` — pending mutation marker
-- `~/.config/snp/.transaction/` — transaction journals, locks, durable backups, staged files
-- `~/.config/snp/backups/` — backup snapshots
-
-## Testing Notes
-
-- Integration tests use `TempDir` with `XDG_CONFIG_HOME` env override
-- Server tests use `sqlite::memory:` for isolation
-- `tests/support/` provides reusable infrastructure: `TestEnvironment`, `RecordingServer`, `EventSink`
-- Tests never use the developer's real config, keychain, or ports
-- `SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on all test commands
-- Golden command corpus: 24 edge cases verifying exact-text preservation
-
-### Test Classification
-
-| Class | Execution | Targets |
-|-------|-----------|---------|
-| Unit/pure | parallel | `cargo test --workspace --lib` — parsing, sorting, batching, serialization |
-| CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
-| Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
-| Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
-| Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
-| Multi-batch sync | serial target | `sync_multibatch.rs` — also runs in `check.sh` with `--test-threads=1` |
-| PTY | serial target | `pty_integration.rs` — real terminal pairs |
-| Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
-| Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
-| Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
-| Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
-| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
-
-Remaining integration targets (`integration.rs`, the `auto_sync_*` suites,
-`scale.rs`, `security.rs`, `schema.rs`, `restore_*.rs`, `execution_outcomes.rs`,
-`mutual_exclusion.rs`, `readonly_no_recovery.rs`, `readonly_library_resolution.rs`,
-`recovery_integration.rs`,
-`selector_integration.rs`, `selector_search_parity.rs`, `snip_sync_lifetime.rs`, `canary_nonexecution.rs`,
-`edit_mutation_notify.rs`, `backup_snapshot_concurrency.rs`,
-`recording_telemetry.rs`, `release4_regression.rs`, `output_contracts.rs`,
-`identity_contract.rs`, `persistence_unit.rs`, `manifest_contracts.rs`) run
-under the standard full-suite invocation:
-`cargo test --workspace --all-features -- --test-threads=1`.
-
-### Deterministic test assertions
-Tests must use exact counts (not `>= 1`), prove server-side state effects, and verify pending clear ordering. Auto-sync closure cases live in `tests/auto_sync_closure.rs`; sync-boundary cases live in `tests/sync_integration.rs` and `tests/sync_contracts.rs`.
-
-### Test event emission
-The helper emits lifecycle events when `SNP_TEST_EVENTS_DIR` is set (JSON-lines). See `tests/support/event_sink.rs` (test-side) and `src/auto_sync/test_events.rs` (production).
-
-## Reference Docs
-
-### Skills Index
-
-| Skill | File | Key Content |
-|-------|------|-------------|
-| Architecture review | `.skills/architecture-review.md` | Review process, key files, verification checklists |
-| Encryption | `.skills/encryption-module.md` | AES-256-GCM + Argon2id, key cache, payload format, security properties |
-| Keychain | `.skills/keychain-integration.md` | OS keychain storage pattern, migration, platform notes |
-| Remediation | `.skills/remediation-patterns.md` | Atomic writes, transactions, durability classes, repair patterns |
-| Server | `.skills/server-module.md` | snip-sync server architecture, env vars, gRPC endpoints |
-| Sync | `.skills/sync-module.md` | Sync flow, merge strategy, failure classification, recovery commands |
-| Transactions & auto-sync | `.skills/transactions-and-auto-sync.md` | Journal state machine, lock hierarchy, mutation gate, pending generations, worker contracts |
-| UI | `.skills/ui-module.md` | TUI module structure, theme system, syntax highlighting |
-
-### Architecture Index
-
-| Topic | File |
-|-------|------|
-| Bird's-eye view | `architecture/overview.md` |
-| Auto-sync | `architecture/auto_sync.md` |
-| Sync protocol | `architecture/sync.md` |
-| Persistence | `architecture/persistence.md` |
-| Server | `architecture/server.md` |
-| TUI | `architecture/tui.md` |
-| CLI | `architecture/cli.md` |
-| Outcome/exit codes | `architecture/outcome.md` |
-| Selector | `architecture/selector.md` |
-| Sort/ranking | `architecture/sort.md` |
-| Status | `architecture/status.md` |
-| Encryption | `architecture/encryption.md` |
-| Config | `architecture/config.md` |
-| Core data model | `architecture/core.md` |
-| Library | `architecture/library.md` |
-| Logging | `architecture/logging.md` |
-| Protobuf | `architecture/proto.md` |
-| Clipboard | `architecture/clipboard.md` |
-| Usage | `architecture/usage.md` |
-| Output | `architecture/output.md` |
-| Utilities | `architecture/utils.md` |
-| Per-command deep-dives | `architecture/commands/*.md` (one per command module) |
-| Utils deep-dives | `architecture/utils/*.md` (atomic, config, shell_keywords, tempfile_guard, toml_helpers, variables) |
-| UI modules | `architecture/ui.md` |
-| Test infra | `architecture/test-infrastructure.md` |
-
-Docs under `docs/` split into evergreen references (EXIT_CODES,
-PERSISTENCE_INVENTORY, THREAT_MODEL, COMMAND_CONTRACTS, etc.) and
-historical snapshots (SECURITY_AUDIT, FEATURE_BOUNDARIES) — check the
-header before treating a claim as current contract.
+- `AGENTS.override.md`, `architecture/` (per-command deep-dives), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
