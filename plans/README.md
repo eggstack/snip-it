@@ -93,6 +93,23 @@ dependencies, installers, and release workflows are untouched. Full
 workspace tests, `scripts/check.sh`, and production-seam checks are green;
 GitHub Actions is verified through the pushed implementation commit.
 
+## Active updater dependency adoption
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [016](016-eggfetch-0.1.7-lean-updater-adoption.md) | eggfetch 0.1.7 lean updater adoption | Ready | 014, 015 |
+
+Plan 016 upgrades the already-adopted `snp` transport from pinned
+`eggfetch-core` 0.1.5 to 0.1.7 and uses the new lean standard-route boundary
+instead of the broad `http1` compatibility alias. The intended profile is
+`standard-http1 + redirects + tls-rustls + tls-native-roots`: eggfetch owns
+strict bounded redirects and the absolute request/body `Timeout.total`, so
+snip-it can delete the manual redirect state machine and Plan 015's duplicate
+outer Tokio timeout while preserving initial HTTPS validation, body limits,
+404-only Cargo fallback, and partial-file cleanup. The pass includes controlled
+0.1.5/full-0.1.7/lean-0.1.7 size measurements. `snip-sync` remains on curl;
+its Plan 014 +41% server-size result is not reopened by this plan.
+
 ## Execution policy
 
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
@@ -104,6 +121,8 @@ For Plan 013, preserve the existing single release workflow and component-specif
 For Plan 014, preserve HTTPS-only production redirect behavior, bounded metadata/binary transfers, 404-only Cargo fallback classification, and the lightweight `snip-sync` footprint. Do not turn the migration into a general HTTP abstraction, shared updater crate, broad eggfetch feature enablement, or async-main rewrite. The plan's controlled binary-size gate is authoritative for whether the server updater migrates.
 
 For Plan 015, preserve the Plan 014 transport and dependency decisions exactly. Limit implementation to moving the overall `snp` fetch deadline so it covers redirect traversal plus complete final-body consumption, guaranteeing partial-file cleanup on timeout cancellation, and adding deterministic slow-body regression tests. Do not touch `snip-sync`, dependency versions/features, installers, release workflows, proxy behavior, retries, or runtime architecture.
+
+For Plan 016, adopt eggfetch 0.1.7 as a deletion/footprint pass rather than a broad networking expansion. Prefer `standard-http1 + redirects + tls-rustls + tls-native-roots`; keep the initial production HTTPS guard, delegate hop handling to `RedirectPolicy::strict`, delegate the logical request/body deadline to native `Timeout.total`, and remove the superseded local redirect/outer-timeout machinery only after the existing regression tests pass. Do not enable advanced routing, retry, Basic auth, proxy, HTTP2/3, JSON, compression, cookies, multipart, tracing, or test-util. Keep `snip-sync` on its measured curl path and record controlled A/B/C `snp` size/feature results before closing the plan.
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
 
