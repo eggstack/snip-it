@@ -111,6 +111,22 @@ are preserved. Controlled same-toolchain release measurements: 0.1.5 baseline
 6,776,320 bytes (-196,736 / -2.82%). `snip-sync` remains on curl; its Plan
 014 +41% server-size result was not reopened.
 
+
+## Active eggfetch 0.2.0 adoption
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [017](017-eggfetch-0.2.0-updater-adoption-and-server-requalification.md) | eggfetch 0.2.0 updater adoption and server requalification | Ready | 016 |
+
+Plan 017 adopts the coordinated `eggfetch-core 0.2.0` release for the
+already-migrated `snp update` path without changing its lean feature profile
+or transport policy. The required path is a narrow exact-version/lockfile
+bump plus existing updater and platform qualification. The plan also permits
+one controlled measurement-only `snip-sync` trial against the current lean
+profile because the retained-curl decision was measured against the older
+0.1.5 full HTTP profile; the server remains on curl unless the fresh trial is
+<=10% growth and preserves the existing lightweight architecture.
+
 ## Execution policy
 
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
