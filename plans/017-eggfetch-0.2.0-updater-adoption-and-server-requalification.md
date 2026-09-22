@@ -642,7 +642,8 @@ scripts/check.sh: pass (`=== All checks passed ===`; installer contract,
     closure/concurrency, and multi-batch sync all passed)
 production seams: pass (`scripts/ci/test-production-seams.sh`; all five
     production-only test seams passed)
-GitHub Actions: pending push and remote verification
+GitHub Actions: pass, CI run 35699400547; Linux correctness, macOS platform
+    smoke, and Windows platform smoke all passed
 
 snip-sync requalification performed: yes
 snip-sync curl baseline bytes: 3,833,152
