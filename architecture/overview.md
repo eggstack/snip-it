@@ -257,7 +257,7 @@ Self-hosted Rust gRPC server using tonic + axum (HTTP).
 | `paths.rs` | Path resolution for server state |
 | `process.rs` | Legacy PID parsing and stop/restart compatibility |
 | `editor.rs` | Server-side config editing |
-| `update.rs` | Server update command and package-manager integration (external `curl` transport, retained per the Plan 014 size gate) |
+| `update.rs` | Server update command and package-manager integration (external `curl` transport, retained after the Plan 017 0.2.0 lean-profile size gate) |
 | `test_helpers.rs` | Test-only helpers (gated on `test-helpers` feature) |
 | `test_observer.rs` | Test-only event capture |
 

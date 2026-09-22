@@ -30,7 +30,7 @@ snip-sync/
 ├── src/server_lock.rs  # Kernel-backed server singleton lock (flock/LockFileEx)
 ├── src/test_helpers.rs # In-process test server support
 ├── src/test_observer.rs# Test-only request telemetry (no secrets)
-└── src/update.rs       # Cargo update support
+└── src/update.rs       # Binary update support (external curl; retained after the Plan 017 size gate)
 ```
 
 ### Process lifecycle
@@ -107,3 +107,8 @@ cargo test -p snip-sync --features test-helpers
 ```
 
 Current coverage: 18 tests in `db.rs` plus integration tests via `test-helpers` feature.
+
+The server updater intentionally shells out to external `curl`. Plan 017
+requalified the alternative lean `eggfetch-core 0.2.0` profile: the release
+binary grew from 3,833,152 to 5,145,224 bytes (+34.23%), exceeding the 10%
+gate, so the curl split remains deliberate.

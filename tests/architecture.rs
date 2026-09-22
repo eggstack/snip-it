@@ -192,7 +192,7 @@ fn snp_updater_does_not_shell_out_to_curl() {
     );
 }
 
-/// Plan 016: the `snp` updater pins `eggfetch-core =0.1.7` on the lean
+/// Plan 017: the `snp` updater pins `eggfetch-core =0.2.0` on the lean
 /// `standard-http1 + redirects` profile, delegates redirect traversal to
 /// `RedirectPolicy::strict` and the logical request/body deadline to native
 /// `Timeout.total`. The superseded Plan 014/015 machinery — the manual
@@ -204,8 +204,8 @@ fn snp_updater_pins_lean_eggfetch_profile() {
     let source = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
     assert!(
-        source.contains("eggfetch-core = { version = \"=0.1.7\""),
-        "snp updater must pin eggfetch-core =0.1.7"
+        source.contains("eggfetch-core = { version = \"=0.2.0\""),
+        "snp updater must pin eggfetch-core =0.2.0"
     );
     assert!(
         source.contains("\"standard-http1\""),

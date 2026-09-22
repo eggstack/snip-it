@@ -8,19 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Self-update transport (Plan 014, adopted to 0.1.7 by Plan 016)**:
-  `snp update` now fetches release metadata and binaries in-process
-  through `eggfetch-core` 0.1.7 (lean `standard-http1` + `redirects` +
-  Rustls native roots, strict bounded redirects and the absolute
-  request/body `Timeout.total` owned by eggfetch, 1 MiB metadata /
-  256 MiB streamed-binary bounds, 404-only Cargo fallback) instead of
-  shelling out to external `curl`; no `curl` executable is needed for
-  `snp` self-update. The lean profile shrank the controlled
-  same-toolchain release binary ~193 KiB (-2.8%) versus the 0.1.5
-  `http1` build. `snip-sync update` intentionally keeps the `curl`
-  adapter: embedding the TLS/HTTP stack grew the server binary +41% in
-  controlled same-toolchain release builds, past the plan's 10%
-  material-growth gate.
+- **Self-update transport (Plan 017; supersedes the Plan 016 version bump)**:
+  `snp update` now pins `eggfetch-core` 0.2.0 on the unchanged lean
+  `standard-http1` + `redirects` + Rustls native-roots profile. Strict
+  bounded redirects, the native request/body `Timeout.total`, 1 MiB metadata /
+  256 MiB streamed-binary bounds, and 404-only Cargo fallback remain
+  unchanged. A fresh same-host release build stayed byte-identical at
+  6,776,320 bytes. The `snip-sync` updater remains on external `curl`:
+  its fresh 0.2.0 lean-profile trial grew the server binary 34.23%, past the
+  10% material-growth gate.
 
 ## [1.3.9] - 2026-09-16
 

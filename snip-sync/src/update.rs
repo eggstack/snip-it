@@ -4,14 +4,13 @@
 //! supplies the binary and checksum. The running server is updated only after
 //! the candidate has passed integrity and identity checks.
 //!
-//! NOTE (Plan 014, 2026-09-17): this updater intentionally still shells out
-//! to external `curl` instead of sharing `snp`'s in-process eggfetch-core
-//! transport. A controlled same-toolchain release comparison showed embedding
-//! the Rust TLS/HTTP stack grows this deliberately small server binary from
-//! 3,833,152 to 5,407,400 bytes (+41%), well past the plan's 10%
-//! material-growth gate, while `snp` absorbs the cost against a larger base
-//! (+11.5%, reported and kept). Do not "consolidate" this adapter onto
-//! eggfetch without re-running that measurement.
+//! NOTE (Plans 014 and 017): this updater intentionally still shells out to
+//! external `curl` instead of sharing `snp`'s in-process eggfetch-core
+//! transport. Plan 017's controlled same-toolchain lean `eggfetch-core 0.2.0`
+//! trial grew this deliberately small server binary from 3,833,152 to
+//! 5,145,224 bytes (+34.23%), past the plan's 10% material-growth gate. The
+//! server remains on curl; do not consolidate this adapter without re-running
+//! the measurement and preserving equivalent updater behavior.
 
 use semver::Version;
 use serde::Deserialize;

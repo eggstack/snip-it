@@ -79,6 +79,11 @@ supported hosts. A Homebrew-managed `snp` remains owned by Homebrew; use
 `brew upgrade snip-it` for that installation. Use `snp update --dry-run` to
 inspect the selected version and target without changing files.
 
+The client updater uses a narrow in-process HTTP/TLS transport and verifies
+release checksums before replacement. `snip-sync update` intentionally retains
+its external `curl` transport because the fresh lean embedded-transport trial
+increased the small server binary by 34.23%.
+
 ### Agent / MCP integration
 
 Coding agents can launch a local, read-only MCP server on demand. It uses

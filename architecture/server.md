@@ -273,4 +273,4 @@ determined by the operating-system lock, not by whether the file exists.
 - `snip-sync/src/process.rs` — Process management
 - `snip-sync/src/server_lock.rs` — Server singleton kernel lock
 - `snip-sync/src/test_helpers.rs` — In-process test server support
-- `snip-sync/src/update.rs` — Server self-update (external `curl` transport; see its module docs for the Plan 014 measurement)
+- `snip-sync/src/update.rs` — Server self-update (external `curl` transport; see its module docs for the Plan 017 0.2.0 requalification)

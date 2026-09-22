@@ -93,7 +93,7 @@ dependencies, installers, and release workflows are untouched. Full
 workspace tests, `scripts/check.sh`, and production-seam checks are green;
 GitHub Actions is verified through the pushed implementation commit.
 
-## Active updater dependency adoption
+## Completed updater dependency adoption
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -112,11 +112,11 @@ are preserved. Controlled same-toolchain release measurements: 0.1.5 baseline
 014 +41% server-size result was not reopened.
 
 
-## Active eggfetch 0.2.0 adoption
+## Completed eggfetch 0.2.0 adoption
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [017](017-eggfetch-0.2.0-updater-adoption-and-server-requalification.md) | eggfetch 0.2.0 updater adoption and server requalification | Ready | 016 |
+| [017](017-eggfetch-0.2.0-updater-adoption-and-server-requalification.md) | eggfetch 0.2.0 updater adoption and server requalification | Complete | 016 |
 
 Plan 017 adopts the coordinated `eggfetch-core 0.2.0` release for the
 already-migrated `snp update` path without changing its lean feature profile
@@ -126,6 +126,13 @@ one controlled measurement-only `snip-sync` trial against the current lean
 profile because the retained-curl decision was measured against the older
 0.1.5 full HTTP profile; the server remains on curl unless the fresh trial is
 <=10% growth and preserves the existing lightweight architecture.
+
+Plan 017 is complete: `snp` now pins `eggfetch-core 0.2.0` on the unchanged
+lean profile, with no `src/update.rs` changes required and all 21 focused
+updater tests passing. The fresh same-host release build stayed byte-identical
+at 6,776,320 bytes. The bounded `snip-sync` lean trial measured 5,145,224
+bytes versus the 3,833,152-byte curl baseline (+1,312,072 / +34.23%), so the
+server remains on curl and no temporary transport code was retained.
 
 ## Execution policy
 

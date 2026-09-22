@@ -1650,7 +1650,7 @@ mod tests {
             // Redirect traversal is delegated to eggfetch: prove the updater
             // selects the strict policy (follow + depth bound + downgrade
             // denial) rather than re-testing eggfetch's own redirect engine.
-            // Downgrade rejection itself is qualified by eggfetch 0.1.7; a
+            // Downgrade rejection itself is qualified by eggfetch 0.2.0; a
             // local TLS fixture is deliberately not added here.
             let policy = update_redirect_policy();
             assert!(policy.follow, "updater must follow redirects");

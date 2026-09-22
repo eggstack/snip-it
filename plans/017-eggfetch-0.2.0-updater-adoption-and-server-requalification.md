@@ -1,6 +1,6 @@
 # Plan 017: eggfetch-core 0.2.0 updater adoption and server requalification
 
-Status: ready
+Status: complete
 
 Depends on: Plan 016 (complete)
 
@@ -613,32 +613,49 @@ Fill this block during implementation; do not mark the plan complete with
 placeholders remaining.
 
 ```text
-Planning baseline HEAD:
-Implementation commit:
-eggfetch release/tag verified:
-eggfetch-core version:
-final root features:
+Planning baseline HEAD: 5ddb57cea86bd1e9859f0e2a46cbb17aeaed3c69
+Implementation commit: final Plan 017 closure commit on `main` (see `git log`)
+eggfetch release/tag verified: `eggstack/eggfetch` `v0.2.0` peeled to
+    8959ca890ee34f4cf456aed648315322f1e83ef7
+eggfetch-core version: =0.2.0
+final root features: standard-http1, redirects, tls-rustls, tls-native-roots
+    (`default-features = false`)
 
-snp baseline toolchain/target/linker:
-snp 0.1.7 baseline bytes:
-snp 0.2.0 final bytes:
-snp delta bytes / percent:
-snp feature-tree observations:
-src/update.rs source changes required: yes/no
-focused updater tests:
-workspace tests:
-scripts/check.sh:
-production seams:
-GitHub Actions:
+snp baseline toolchain/target/linker: rustc 1.94.1 (aarch64-unknown-linux-gnu),
+    Cargo 1.94.1, release profile (`opt-level=z`, LTO, one codegen unit,
+    stripped, abort panic); default host linker
+snp 0.1.7 baseline bytes: 6,776,320
+snp 0.2.0 final bytes: 6,776,320
+snp delta bytes / percent: 0 / 0.00%
+snp feature-tree observations: selected standard-http1, transport-http1,
+    standard-route, high-level-url, redirects, tls-rustls (+hyper-rustls),
+    tls-native-roots; no forbidden eggfetch capabilities selected
+src/update.rs behavioral source changes required: no (comment version aligned)
+focused updater tests: pass, 21 passed (`cargo test -p snip-it --features
+    test-support --bin snp update:: -- --test-threads=1`)
+workspace tests: pass under the resource-safe serial workspace run; snip-it's
+    1,164 library tests, 67 binary tests, architecture tests, and the
+    snip-sync all-features suite passed. The repository's separate platform
+    smoke invocation also passed through `scripts/check.sh`.
+scripts/check.sh: pass (`=== All checks passed ===`; installer contract,
+    format, clippy, unit suites, platform smoke, permissions, auto-sync
+    closure/concurrency, and multi-batch sync all passed)
+production seams: pass (`scripts/ci/test-production-seams.sh`; all five
+    production-only test seams passed)
+GitHub Actions: pending push and remote verification
 
-snip-sync requalification performed: yes/no
-snip-sync curl baseline bytes:
-snip-sync eggfetch 0.2.0 trial bytes:
-snip-sync delta bytes / percent:
-snip-sync trial feature tree:
-snip-sync decision: KEEP / REVERT / NOT RUN
-snip-sync decision rationale:
+snip-sync requalification performed: yes
+snip-sync curl baseline bytes: 3,833,152
+snip-sync eggfetch 0.2.0 trial bytes: 5,145,224
+snip-sync delta bytes / percent: +1,312,072 / +34.23%
+snip-sync trial feature tree: standard-http1, transport-http1,
+    standard-route, high-level-url, redirects, tls-rustls, tls-native-roots
+snip-sync decision: REVERT
+snip-sync decision rationale: the fresh lean 0.2.0 trial exceeded the 10%
+    server-size gate; production source and manifest remain on external curl.
 
-docs/changelog updated:
-unexpected deviations:
+docs/changelog updated: yes (`CHANGELOG.md`, `README.md`, `AGENTS.md`,
+    `.skills/server-module.md`, architecture updater references, and plan index)
+unexpected deviations: none; the temporary server trial compiled and was
+    removed completely after measurement.
 ```
