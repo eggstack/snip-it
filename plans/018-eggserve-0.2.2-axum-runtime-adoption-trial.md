@@ -6,8 +6,8 @@ Depends on: Plan 003 (complete), Plan 017 (complete)
 
 ## Objective
 
-Attempt a narrow replacement of the current \`axum::serve\` HTTP runtime used by
-\`snip-sync\` with the published EggServe runtime while preserving the existing
+Attempt a narrow replacement of the current `axum::serve` HTTP runtime used by
+`snip-sync` with the published EggServe runtime while preserving the existing
 Axum 0.8 application/router surface.
 
 This plan is deliberately a runtime-ownership experiment, not an HTTP API
@@ -41,7 +41,7 @@ existing Axum 0.8 Router
 ~~~
 
 Tonic continues to own the separate gRPC listener. TLS termination remains
-external. The existing \`/health\` and \`/metrics\` handlers, CORS policy,
+external. The existing `/health` and `/metrics` handlers, CORS policy,
 security-header middleware, database logic, metrics registry, server lock,
 startup/lifecycle CLI, and updater transport remain application-owned.
 
@@ -54,22 +54,22 @@ test the smaller direct leaf-runtime path independently.
 
 ### Current snip-sync server shape
 
-At planning baseline \`31b7d83e7f1584110438e31aa01ef23181229acd\`:
+At planning baseline `31b7d83e7f1584110438e31aa01ef23181229acd`:
 
-- \`snip-sync\` is version 0.1.6 and Rust 1.94.
+- `snip-sync` is version 0.1.6 and Rust 1.94.
 - Tonic owns the gRPC listener.
 - Axum owns a separate HTTP listener.
 - both listeners are bound before either service starts, so bind failure cannot
   leave a half-started daemon;
 - the HTTP application contains only:
-  - \`GET /health\`, returning version/status JSON and HTTP 503 when the
+  - `GET /health`, returning version/status JSON and HTTP 503 when the
     database ping fails;
-  - \`GET /metrics\`, hidden behind optional Basic authentication;
+  - `GET /metrics`, hidden behind optional Basic authentication;
   - CORS middleware;
-  - \`x-content-type-options: nosniff\`;
-  - \`x-frame-options: DENY\`;
-  - \`cache-control: no-store\`;
-- \`snip-sync\` deliberately does not terminate TLS;
+  - `x-content-type-options: nosniff`;
+  - `x-frame-options: DENY`;
+  - `cache-control: no-store`;
+- `snip-sync` deliberately does not terminate TLS;
 - the process-level orchestrator waits for Ctrl-C/SIGTERM, gRPC completion, or
   HTTP completion and then drains both services with a bounded deadline.
 
@@ -81,18 +81,18 @@ HTTP runtime replacement. Do not merge HTTP and gRPC onto one listener.
 The coordinated source tree reports workspace version 0.2.2, but crates.io
 publication is intentionally mixed:
 
-- \`eggserve-core = 0.2.2\`;
-- \`eggserve-server = 0.2.1\`;
-- \`eggserve-primitives = 0.2.0\`;
-- \`eggserve-static = 0.2.0\` through the core composition crate.
+- `eggserve-core = 0.2.2`;
+- `eggserve-server = 0.2.1`;
+- `eggserve-primitives = 0.2.0`;
+- `eggserve-static = 0.2.0` through the core composition crate.
 
 EggServe release evidence in
-\`release/plan-275-http-tower-adapter-patch-publication-closure.md\` records
-that \`eggserve-core 0.2.2\` was published on 2026-09-24 with the repaired
+`release/plan-275-http-tower-adapter-patch-publication-closure.md` records
+that `eggserve-core 0.2.2` was published on 2026-09-24 with the repaired
 HTTP/Tower adapter. A registry-only consumer with no path/git patches resolved
 that exact graph and passed an Axum 0.8 runtime proof.
 
-Do not incorrectly pin \`eggserve-server = 0.2.2\`; that crate version was not
+Do not incorrectly pin `eggserve-server = 0.2.2`; that crate version was not
 published as part of the 0.2.2 patch.
 
 ### Why 0.2.2 unblocks this consumer
@@ -100,38 +100,38 @@ published as part of the 0.2.2 patch.
 EggServe 0.2.1 introduced the direct downstream-embedding pieces needed by
 snip-sync:
 
-- \`ServerBuilder::from_listener(TcpListener)\`;
-- \`ServerHandle::into_parts()\`;
-- cloneable \`ServerControl\`;
-- cancellation-safe borrowed \`ServerCompletion::wait(&mut self)\`;
-- typed terminal propagation through \`ServerError::Terminal\`;
-- \`disable_connection_total_timeout()\`.
+- `ServerBuilder::from_listener(TcpListener)`;
+- `ServerHandle::into_parts()`;
+- cloneable `ServerControl`;
+- cancellation-safe borrowed `ServerCompletion::wait(&mut self)`;
+- typed terminal propagation through `ServerError::Terminal`;
+- `disable_connection_total_timeout()`.
 
-EggServe core 0.2.2 then repaired the optional \`http-interop\` / \`tower\`
+EggServe core 0.2.2 then repaired the optional `http-interop` / `tower`
 adapter after the canonical request body moved to the primitives crate.
 
 The upstream registry-only 0.2.2 consumer specifically proves:
 
-- \`TowerToEggserve<axum::Router>\` compiles against published crates;
+- `TowerToEggserve<axum::Router>` compiles against published crates;
 - pre-bound listener adoption;
 - streaming request and response handling;
 - middleware execution;
 - duplicate response headers;
 - disconnect cancellation;
-- external \`ServerControl::shutdown()\`;
-- clean typed \`ServerCompletion::wait()\`.
+- external `ServerControl::shutdown()`;
+- clean typed `ServerCompletion::wait()`.
 
 This removes the compatibility blocker from the earlier EggServe evaluation.
 
 ### Dependency cost remains unknown for snip-sync
 
-The compatibility route requires \`eggserve-core\` with feature \`tower\`.
-\`eggserve-core\` also unconditionally composes \`eggserve-static\`, even
+The compatibility route requires `eggserve-core` with feature `tower`.
+`eggserve-core` also unconditionally composes `eggserve-static`, even
 though snip-sync does not serve files.
 
 LTO may eliminate most unused machine code, but the dependency/build graph is
 broader than the direct leaf runtime. The repository has already rejected a
-technically sound dependency migration when it grew the \`snip-sync\` release
+technically sound dependency migration when it grew the `snip-sync` release
 binary by 34.23% in Plan 017. EggServe must pass an equivalent controlled
 measurement instead of being accepted on architectural appeal alone.
 
@@ -162,12 +162,12 @@ Do not use this plan to:
 - enable EggServe HTTP/2 or HTTP/3;
 - enable EggServe TLS;
 - change reverse-proxy/TLS deployment guidance;
-- change \`snip-sync update\` or its intentional curl transport;
+- change `snip-sync update` or its intentional curl transport;
 - add a generic HTTP abstraction;
 - add a new workspace crate;
-- redesign \`AppState\`, database, metrics, or auth;
-- rewrite \`/health\` or \`/metrics\` into native EggServe handlers;
-- remove Axum or \`tower-http\`;
+- redesign `AppState`, database, metrics, or auth;
+- rewrite `/health` or `/metrics` into native EggServe handlers;
+- remove Axum or `tower-http`;
 - introduce a second process supervisor;
 - add new release workflows or CI jobs;
 - expose additional HTTP endpoints.
@@ -222,24 +222,24 @@ eggserve-core = { version = "=0.2.2", default-features = false, features = ["tow
 eggserve-server = { version = "=0.2.1", default-features = false }
 ~~~
 
-Retain the existing \`axum = "0.8"\` and \`tower-http\` dependencies.
+Retain the existing `axum = "0.8"` and `tower-http` dependencies.
 
-The expected registry graph includes \`eggserve-primitives 0.2.0\` and
-\`eggserve-static 0.2.0\` transitively through core. Do not add them as direct
+The expected registry graph includes `eggserve-primitives 0.2.0` and
+`eggserve-static 0.2.0` transitively through core. Do not add them as direct
 dependencies in this plan unless compilation of a public API genuinely
 requires it.
 
 Refresh the lockfile narrowly. Inspect the resulting EggServe packages and
 features. The consumer must not enable:
 
-- \`http2\`;
-- \`http3\`;
-- \`tls\`;
-- \`python-bindings-internal\`;
+- `http2`;
+- `http3`;
+- `tls`;
+- `python-bindings-internal`;
 - any static-file application behavior in snip-sync.
 
-The \`tower\` feature necessarily enables \`http-interop\`,
-\`tower-service\`, and \`tower-layer\`; that is the intended compatibility
+The `tower` feature necessarily enables `http-interop`,
+`tower-service`, and `tower-layer`; that is the intended compatibility
 surface.
 
 ## Part C — preserve the existing application Router
@@ -277,7 +277,7 @@ This intentionally rejects non-empty bodies on the health/metrics control
 surface before handler execution. Treat that as a hardening of an undocumented
 input shape, not as permission to change method routing. Add a regression test
 so the behavior is deliberate. If Axum CORS preflight qualification proves
-that \`Reject\` interferes with legitimate bodyless OPTIONS handling, fix the
+that `Reject` interferes with legitimate bodyless OPTIONS handling, fix the
 specific composition; do not broaden body acceptance without evidence.
 
 ## Part D — construct EggServe from the already-bound listener
@@ -292,7 +292,7 @@ only then start either service
 ~~~
 
 The EggServe server must adopt the existing Tokio listener through
-\`ServerBuilder::from_listener(http_listener)\`. It must not bind the HTTP
+`ServerBuilder::from_listener(http_listener)`. It must not bind the HTTP
 address a second time.
 
 Configure only values required to preserve the daemon's actual lifecycle
@@ -301,7 +301,7 @@ contract.
 Required:
 
 - bind metadata consistent with the resolved HTTP address;
-- \`disable_connection_total_timeout()\` so healthy keep-alive connections are
+- `disable_connection_total_timeout()` so healthy keep-alive connections are
   not killed after EggServe's 60-second default total lifetime;
 - graceful shutdown bounded consistently with the existing snip-sync drain
   budget;
@@ -322,7 +322,7 @@ do not silently add user-facing knobs for them.
 
 Do not wrap EggServe in a second daemon manager.
 
-Update the existing \`snip-sync::orchestration\` module so it can supervise:
+Update the existing `snip-sync::orchestration` module so it can supervise:
 
 ~~~text
 gRPC:
@@ -333,14 +333,14 @@ HTTP:
     eggserve_server::ServerCompletion
 ~~~
 
-Use EggServe's borrowed, cancellation-safe \`ServerCompletion::wait(&mut self)\`
+Use EggServe's borrowed, cancellation-safe `ServerCompletion::wait(&mut self)`
 directly in the first-terminal-event select.
 
 Required lifecycle behavior:
 
 1. Ctrl-C/SIGTERM:
    - broadcast shutdown to Tonic;
-   - call \`ServerControl::shutdown()\`;
+   - call `ServerControl::shutdown()`;
    - drain both services.
 2. unexpected gRPC completion:
    - classify it;
@@ -369,27 +369,27 @@ them.
 
 The current integration helpers primarily exercise gRPC. Add a small HTTP
 fixture that starts the actual Router through EggServe on
-\`127.0.0.1:0\`.
+`127.0.0.1:0`.
 
 Cover at minimum:
 
-1. \`GET /health\` healthy:
+1. `GET /health` healthy:
    - 200;
-   - JSON contains current version and \`"healthy"\`.
+   - JSON contains current version and `"healthy"`.
 2. unhealthy database path/fixture if deterministic support already exists:
    - 503;
-   - \`"unhealthy"\`.
-3. \`GET /metrics\` with credentials absent:
+   - `"unhealthy"`.
+3. `GET /metrics` with credentials absent:
    - 404.
 4. metrics with credentials configured:
    - missing/wrong Basic auth -> 401;
    - correct Basic auth -> 200 and Prometheus text.
 5. security headers on success and error responses:
-   - \`x-content-type-options: nosniff\`;
-   - \`x-frame-options: DENY\`;
-   - \`cache-control: no-store\`.
+   - `x-content-type-options: nosniff`;
+   - `x-frame-options: DENY`;
+   - `cache-control: no-store`.
 6. configured CORS origin behavior.
-7. loopback-only \`CORS_ALLOW_ALL\` behavior.
+7. loopback-only `CORS_ALLOW_ALL` behavior.
 8. HEAD behavior for GET routes.
 9. unknown route remains 404.
 10. body-bearing health/metrics request is rejected according to the selected
@@ -442,7 +442,7 @@ The 10% threshold matches the server-side dependency discipline established by
 Plans 014/017.
 
 Plan 019 remains useful after either result because the direct leaf graph is
-materially smaller than \`eggserve-core[tower]\`.
+materially smaller than `eggserve-core[tower]`.
 
 ## Part H — repository verification
 
@@ -468,12 +468,12 @@ Do not add a new workflow solely for EggServe.
 
 If the compatibility path is retained:
 
-- add a concise \`CHANGELOG.md\` Unreleased note;
-- update \`snip-sync/README.md\` only where the internal HTTP runtime
+- add a concise `CHANGELOG.md` Unreleased note;
+- update `snip-sync/README.md` only where the internal HTTP runtime
   description is relevant; user-facing commands/ports/TLS instructions should
   not change;
 - record exact resolved EggServe versions and size evidence in this plan;
-- mark Plan 018 complete and update \`plans/README.md\`.
+- mark Plan 018 complete and update `plans/README.md`.
 
 If the compatibility path is reverted:
 
@@ -486,14 +486,14 @@ If the compatibility path is reverted:
 
 ## Recommended execution order for a smaller implementation model
 
-1. Read this plan, Plan 003, Plan 017 completion notes, \`snip-sync/Cargo.toml\`,
-   \`snip-sync/src/main.rs\`, and \`snip-sync/src/orchestration.rs\`.
+1. Read this plan, Plan 003, Plan 017 completion notes, `snip-sync/Cargo.toml`,
+   `snip-sync/src/main.rs`, and `snip-sync/src/orchestration.rs`.
 2. Record fresh A baseline bytes and dependency/features tree.
-3. Add only \`eggserve-core =0.2.2[tower]\` and
-   \`eggserve-server =0.2.1\`.
+3. Add only `eggserve-core =0.2.2[tower]` and
+   `eggserve-server =0.2.1`.
 4. Refresh the lockfile narrowly and inspect selected EggServe features.
 5. Compile before changing server logic.
-6. Replace only \`axum::serve\` runtime ownership.
+6. Replace only `axum::serve` runtime ownership.
 7. Keep the Router and middleware unchanged.
 8. Adapt the existing lifecycle orchestrator to typed EggServe
    control/completion.
@@ -509,10 +509,10 @@ If the compatibility path is reverted:
 
 Plan 018 is complete when all applicable statements are true:
 
-1. A fresh current \`snip-sync\` release-size baseline is recorded.
+1. A fresh current `snip-sync` release-size baseline is recorded.
 2. The trial uses published registry crates only.
-3. Direct compatibility pins are \`eggserve-core =0.2.2\` with only
-   \`tower\`, and \`eggserve-server =0.2.1\`.
+3. Direct compatibility pins are `eggserve-core =0.2.2` with only
+   `tower`, and `eggserve-server =0.2.1`.
 4. No EggServe TLS, HTTP/2, or HTTP/3 feature is enabled.
 5. Tonic remains the gRPC runtime.
 6. The gRPC and HTTP listeners are both bound before either service starts.
@@ -527,7 +527,7 @@ Plan 018 is complete when all applicable statements are true:
 13. Unexpected EggServe completion shuts down gRPC and returns failure.
 14. EggServe terminal errors are not hidden behind a generic successful join.
 15. Requested shutdown leaves no detached HTTP runtime task.
-16. \`/health\`, \`/metrics\`, security headers, CORS, HEAD, 404, and
+16. `/health`, `/metrics`, security headers, CORS, HEAD, 404, and
    keep-alive contracts pass through the real EggServe socket.
 17. A controlled A/B release-size comparison is recorded.
 18. Growth >10% causes a full production revert.
