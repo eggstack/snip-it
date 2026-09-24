@@ -144,16 +144,16 @@ server remains on curl and no temporary transport code was retained.
 
 Plan 018 is the compatibility-first trial. It keeps the existing Axum
 health/metrics Router and replaces only HTTP runtime ownership using the
-published registry combination of \`eggserve-core 0.2.2[tower]\` and
-\`eggserve-server 0.2.1\`. It preserves the pre-bind-both-listeners startup
+published registry combination of `eggserve-core 0.2.2[tower]` and
+`eggserve-server 0.2.1`. It preserves the pre-bind-both-listeners startup
 invariant, Tonic gRPC ownership, reverse-proxy TLS topology, and existing HTTP
 application policy. The implementation is measurement-gated against a fresh
 release baseline and must revert if it grows the snip-sync binary by more than
 10%.
 
 Plan 019 begins only after Plan 018 records its A/B result. It tests the
-smaller direct leaf graph, \`eggserve-server 0.2.1\` plus
-\`eggserve-primitives 0.2.0\`, with one concrete native health/metrics service.
+smaller direct leaf graph, `eggserve-server 0.2.1` plus
+`eggserve-primitives 0.2.0`, with one concrete native health/metrics service.
 Its purpose is to determine whether removing the core/Tower adapter and
 Axum/Tower-HTTP direct dependency surface produces a meaningful footprint or
 maintenance win without recreating a framework. Exactly one HTTP production
@@ -176,8 +176,8 @@ For Plan 016, adopt eggfetch 0.1.7 as a deletion/footprint pass rather than a br
 
 For Plan 018, preserve the existing Axum application surface and change only
 HTTP runtime ownership. Use the actual published registry versions
-\`eggserve-core =0.2.2\` with only the \`tower\` feature and
-\`eggserve-server =0.2.1\`; do not enable EggServe TLS, HTTP/2, or HTTP/3.
+`eggserve-core =0.2.2` with only the `tower` feature and
+`eggserve-server =0.2.1`; do not enable EggServe TLS, HTTP/2, or HTTP/3.
 Keep Tonic on its separate listener, retain pre-binding of both listeners
 before service startup, disable EggServe's total connection-lifetime ceiling,
 and supervise HTTP through its typed control/completion API. The fresh
@@ -185,8 +185,8 @@ same-environment release-size gate is authoritative: growth above 10% requires
 a production revert rather than rationalization.
 
 For Plan 019, do not start until Plan 018 is closed with measured evidence.
-Use only the direct published leaf runtime (\`eggserve-server =0.2.1\`,
-\`eggserve-primitives =0.2.0\`) and one concrete snip-sync health/metrics
+Use only the direct published leaf runtime (`eggserve-server =0.2.1`,
+`eggserve-primitives =0.2.0`) and one concrete snip-sync health/metrics
 service. Do not build a replacement router/middleware framework. Preserve the
 captured health, metrics-auth, CORS, security-header, method, HEAD, and
 lifecycle contracts. Remove Axum/Tower-HTTP/core only when proven unused, and
