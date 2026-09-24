@@ -141,6 +141,7 @@ server remains on curl and no temporary transport code was retained.
 | --- | --- | --- | --- |
 | [018](018-eggserve-0.2.2-axum-runtime-adoption-trial.md) | EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial | Complete | 003, 017 |
 | [019](019-direct-eggserve-leaf-http-service-consolidation.md) | Direct EggServe leaf HTTP service consolidation | Complete | 018 |
+| [020](020-eggserve-http-parity-and-closure-corrective.md) | EggServe HTTP parity and closure corrective | Ready | 018, 019 |
 
 Plan 018 is the compatibility-first trial. It keeps the existing Axum
 health/metrics Router and replaces only HTTP runtime ownership using the
@@ -162,7 +163,12 @@ A = 3,833,152 bytes, B = 3,963,968 bytes (+3.41%), and C = 3,898,408 bytes
 (+1.70% vs A, -1.65% vs B). C is the final winner: it removes the direct
 compatibility/framework dependencies and 13 unique packages from B while
 remaining within the size-neutral threshold. Local `scripts/check.sh` and the
-production-seam check passed; hosted checks run on the pushed implementation.
+production-seam check passed; hosted implementation run `36011491151` passed
+Linux correctness plus Windows and macOS platform smoke. Plan 020 is the narrow
+closure corrective: restore Tower-HTTP's historical CORS `Vary` semantics,
+prove and preserve 404/405 wire representation, add the missing socket
+assertions, and reconcile Plans 018/019 completion evidence without reopening
+the selected direct EggServe architecture.
 
 ## Execution policy
 
@@ -197,6 +203,14 @@ captured health, metrics-auth, CORS, security-header, method, HEAD, and
 lifecycle contracts. Remove Axum/Tower-HTTP/core only when proven unused, and
 keep the direct path only when it passes the original <=10% hard footprint gate
 and is meaningfully preferable to the Plan 018 winner.
+
+For Plan 020, keep Plan 019's direct EggServe C architecture fixed. Limit the
+corrective work to restoring the historical three-field CORS `Vary` contract,
+capturing and preserving the old Axum 404/405 representation and preflight
+security-header behavior, adding focused real-socket assertions, and completing
+the Plans 018/019 evidence record. Do not reintroduce EggServe core, Axum,
+Tower, or Tower-HTTP as direct HTTP dependencies, and do not use this closure
+pass for unrelated cleanup or another size/architecture experiment.
 
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
