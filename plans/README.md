@@ -134,6 +134,31 @@ at 6,776,320 bytes. The bounded `snip-sync` lean trial measured 5,145,224
 bytes versus the 3,833,152-byte curl baseline (+1,312,072 / +34.23%), so the
 server remains on curl and no temporary transport code was retained.
 
+
+## Active EggServe HTTP runtime adoption
+
+| Plan | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| [018](018-eggserve-0.2.2-axum-runtime-adoption-trial.md) | EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial | Ready | 003, 017 |
+| [019](019-direct-eggserve-leaf-http-service-consolidation.md) | Direct EggServe leaf HTTP service consolidation | Blocked on 018 | 018 |
+
+Plan 018 is the compatibility-first trial. It keeps the existing Axum
+health/metrics Router and replaces only HTTP runtime ownership using the
+published registry combination of \`eggserve-core 0.2.2[tower]\` and
+\`eggserve-server 0.2.1\`. It preserves the pre-bind-both-listeners startup
+invariant, Tonic gRPC ownership, reverse-proxy TLS topology, and existing HTTP
+application policy. The implementation is measurement-gated against a fresh
+release baseline and must revert if it grows the snip-sync binary by more than
+10%.
+
+Plan 019 begins only after Plan 018 records its A/B result. It tests the
+smaller direct leaf graph, \`eggserve-server 0.2.1\` plus
+\`eggserve-primitives 0.2.0\`, with one concrete native health/metrics service.
+Its purpose is to determine whether removing the core/Tower adapter and
+Axum/Tower-HTTP direct dependency surface produces a meaningful footprint or
+maintenance win without recreating a framework. Exactly one HTTP production
+architecture must remain after the A/B/C comparison.
+
 ## Execution policy
 
 Implement plans in dependency order. Each plan is scoped so a smaller implementation model can complete it without redesigning the surrounding system. When a plan is completed, update its `Status:` line and this table in the same implementation commit.
@@ -147,6 +172,27 @@ For Plan 014, preserve HTTPS-only production redirect behavior, bounded metadata
 For Plan 015, preserve the Plan 014 transport and dependency decisions exactly. Limit implementation to moving the overall `snp` fetch deadline so it covers redirect traversal plus complete final-body consumption, guaranteeing partial-file cleanup on timeout cancellation, and adding deterministic slow-body regression tests. Do not touch `snip-sync`, dependency versions/features, installers, release workflows, proxy behavior, retries, or runtime architecture.
 
 For Plan 016, adopt eggfetch 0.1.7 as a deletion/footprint pass rather than a broad networking expansion. Prefer `standard-http1 + redirects + tls-rustls + tls-native-roots`; keep the initial production HTTPS guard, delegate hop handling to `RedirectPolicy::strict`, delegate the logical request/body deadline to native `Timeout.total`, and remove the superseded local redirect/outer-timeout machinery only after the existing regression tests pass. Do not enable advanced routing, retry, Basic auth, proxy, HTTP2/3, JSON, compression, cookies, multipart, tracing, or test-util. Keep `snip-sync` on its measured curl path and record controlled A/B/C `snp` size/feature results before closing the plan.
+
+
+For Plan 018, preserve the existing Axum application surface and change only
+HTTP runtime ownership. Use the actual published registry versions
+\`eggserve-core =0.2.2\` with only the \`tower\` feature and
+\`eggserve-server =0.2.1\`; do not enable EggServe TLS, HTTP/2, or HTTP/3.
+Keep Tonic on its separate listener, retain pre-binding of both listeners
+before service startup, disable EggServe's total connection-lifetime ceiling,
+and supervise HTTP through its typed control/completion API. The fresh
+same-environment release-size gate is authoritative: growth above 10% requires
+a production revert rather than rationalization.
+
+For Plan 019, do not start until Plan 018 is closed with measured evidence.
+Use only the direct published leaf runtime (\`eggserve-server =0.2.1\`,
+\`eggserve-primitives =0.2.0\`) and one concrete snip-sync health/metrics
+service. Do not build a replacement router/middleware framework. Preserve the
+captured health, metrics-auth, CORS, security-header, method, HEAD, and
+lifecycle contracts. Remove Axum/Tower-HTTP/core only when proven unused, and
+keep the direct path only when it passes the original <=10% hard footprint gate
+and is meaningfully preferable to the Plan 018 winner.
+
 
 Existing user-facing command spellings and the documented Rust API should remain compatible unless a plan explicitly requires a semver-compatible deprecation path. Prefer concrete structs and ordinary functions over traits or generalized infrastructure. A refactor is successful when it deletes duplicate policy and reduces unrelated reasons for files to change—not when it maximizes module count.
 
