@@ -527,7 +527,7 @@ Plan 020 is complete when all of the following are true:
 
 ~~~text
 Planning baseline: 10aeb9940e2c1a81b200ca1c67bc92a7a94d456b
-Corrective implementation commit: (filled after push; single implementation commit on main)
+Corrective implementation commit: 44e681e (Restore snip-sync HTTP wire parity with pre-migration server)
 Historical parity reference: c1c77a814989f8add527fa25cebde9e87c80b920
 Historical 404 body/content-type: empty body, content-length 0, no content-type
   (router fallback; metrics-disabled 404 keeps "Not found" text/plain payload)
@@ -550,7 +550,7 @@ Focused snip_sync_lifetime: 6 passed, 2 ignored (long-signal suites per conventi
 scripts/check.sh: passed (including new parity socket contracts)
 production-seam: passed (scripts/ci/test-production-seams.sh)
 Release sanity bytes: 3,898,408 (byte-identical to recorded C; no footprint change)
-GitHub Actions run: (verified after push; Linux correctness + Windows/macOS smoke + Link Check)
+GitHub Actions run: 36022678354 (Linux correctness, Windows and macOS platform smoke all passed on the implementation commit)
 Final architecture: C (direct EggServe)
 Closure decision: Corrective parity implemented on C with no dependency,
   listener, TLS/H2/H3, auth, endpoint, or orchestration changes. The only
