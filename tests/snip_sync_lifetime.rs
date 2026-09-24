@@ -468,6 +468,318 @@ fn http_allow_all_cors_is_available_for_loopback_server() {
     assert!(status.success(), "server should exit normally: {status:?}");
 }
 
+fn response_headers(response: &str) -> Vec<(String, String)> {
+    let mut headers = Vec::new();
+    let mut lines = response.lines();
+    let _status = lines.next();
+    for line in lines {
+        if line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+        }
+    }
+    headers
+}
+
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.as_str())
+}
+
+/// Split a comma-separated header (e.g. `Vary`) into lowercase tokens.
+fn header_tokens(headers: &[(String, String)], name: &str) -> Vec<String> {
+    header_value(headers, name)
+        .map(|value| {
+            value
+                .split(',')
+                .map(|token| token.trim().to_ascii_lowercase())
+                .filter(|token| !token.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn response_body(response: &str) -> &str {
+    response.split("\r\n\r\n").nth(1).unwrap_or("")
+}
+
+fn assert_security_headers_present(response: &str) {
+    let headers = response_headers(response);
+    assert_eq!(
+        header_value(&headers, "x-content-type-options"),
+        Some("nosniff"),
+        "{response}"
+    );
+    assert_eq!(
+        header_value(&headers, "x-frame-options"),
+        Some("DENY"),
+        "{response}"
+    );
+    assert_eq!(
+        header_value(&headers, "cache-control"),
+        Some("no-store"),
+        "{response}"
+    );
+}
+
+fn assert_no_security_headers(response: &str) {
+    let headers = response_headers(response);
+    for name in ["x-content-type-options", "x-frame-options", "cache-control"] {
+        assert!(
+            header_value(&headers, name).is_none(),
+            "preflight must not carry {name}: {response}"
+        );
+    }
+}
+
+/// Historical parity: every non-allow-all response varies on `Origin`.
+/// Allow-all responses always emit `Access-Control-Allow-Origin: *`, so they
+/// never vary and must omit `Vary`.
+fn assert_vary_origin(response: &str) {
+    let headers = response_headers(response);
+    assert_eq!(
+        header_tokens(&headers, "vary"),
+        vec!["origin"],
+        "{response}"
+    );
+}
+
+fn assert_no_vary(response: &str) {
+    let headers = response_headers(response);
+    assert!(
+        header_value(&headers, "vary").is_none(),
+        "allow-all response must omit Vary: {response}"
+    );
+}
+
+/// Historical parity: router fallback/method responses are empty with no
+/// application content-type. (The metrics-disabled 404 keeps its "Not found"
+/// application payload; only the router-level representation is empty.)
+fn assert_empty_fallback(response: &str, status_prefix: &str) {
+    assert!(response.starts_with(status_prefix), "{response}");
+    let headers = response_headers(response);
+    assert!(
+        header_value(&headers, "content-type").is_none(),
+        "fallback must omit content-type: {response}"
+    );
+    assert_eq!(
+        header_value(&headers, "content-length"),
+        Some("0"),
+        "{response}"
+    );
+    assert_eq!(response_body(response), "", "{response}");
+}
+
+#[test]
+fn http_cors_vary_parity_contract() {
+    // Default/no-origin configuration: ordinary, origin-bearing, and
+    // fallback responses all carry `Vary: origin`.
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut child, http_addr, _grpc, _http) = start_server(&tmp);
+    let health = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+    assert_vary_origin(&health);
+    let with_origin = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nConnection: close\r\n\r\n",
+    );
+    assert!(with_origin.starts_with("HTTP/1.1 200"), "{with_origin}");
+    assert_vary_origin(&with_origin);
+    let missing = http_response(
+        http_addr,
+        "GET /missing HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    assert_vary_origin(&missing);
+    stop_server(&mut child);
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(15)).success(),
+        "server should exit normally"
+    );
+
+    // Configured-origin configuration: ordinary, preflight, and fallback
+    // responses all carry `Vary: origin`, with or without a matching Origin.
+    let tmp = tempfile::tempdir().unwrap();
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+    let (mut child, http_addr) =
+        start_server_on_ports_with_http_config(&tmp, grpc_port, http_port, true, false);
+    let health = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert_vary_origin(&health);
+    let matched = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        matched.contains("access-control-allow-origin: https://example.com"),
+        "{matched}"
+    );
+    assert_vary_origin(&matched);
+    let preflight = http_response(
+        http_addr,
+        "OPTIONS /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: GET\r\nConnection: close\r\n\r\n",
+    );
+    assert!(preflight.starts_with("HTTP/1.1 200"), "{preflight}");
+    assert_vary_origin(&preflight);
+    let missing = http_response(
+        http_addr,
+        "GET /missing HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert_vary_origin(&missing);
+    stop_server(&mut child);
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(15)).success(),
+        "server should exit normally"
+    );
+
+    // Allow-all configuration: ordinary and preflight responses omit `Vary`.
+    let tmp = tempfile::tempdir().unwrap();
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+    let (mut child, http_addr) =
+        start_server_on_ports_with_http_config(&tmp, grpc_port, http_port, false, true);
+    let health = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://arbitrary.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+    assert_no_vary(&health);
+    let preflight = http_response(
+        http_addr,
+        "OPTIONS /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://arbitrary.example\r\nAccess-Control-Request-Method: POST\r\nConnection: close\r\n\r\n",
+    );
+    assert!(preflight.starts_with("HTTP/1.1 200"), "{preflight}");
+    assert_no_vary(&preflight);
+    let missing = http_response(
+        http_addr,
+        "GET /missing HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert_no_vary(&missing);
+    stop_server(&mut child);
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(15)).success(),
+        "server should exit normally"
+    );
+}
+
+#[test]
+fn http_fallback_representation_parity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut child, http_addr, _grpc, _http) = start_server(&tmp);
+
+    let missing = http_response(
+        http_addr,
+        "GET /missing HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert_empty_fallback(&missing, "HTTP/1.1 404");
+    assert_security_headers_present(&missing);
+
+    let put_health = http_response(
+        http_addr,
+        "PUT /health HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    assert_empty_fallback(&put_health, "HTTP/1.1 405");
+    let put_headers = response_headers(&put_health);
+    assert_eq!(
+        header_value(&put_headers, "allow"),
+        Some("GET, HEAD"),
+        "{put_health}"
+    );
+    assert_security_headers_present(&put_health);
+
+    let put_metrics = http_response(
+        http_addr,
+        "PUT /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    assert_empty_fallback(&put_metrics, "HTTP/1.1 405");
+    let metrics_headers = response_headers(&put_metrics);
+    assert_eq!(
+        header_value(&metrics_headers, "allow"),
+        Some("GET, HEAD"),
+        "{put_metrics}"
+    );
+    assert_security_headers_present(&put_metrics);
+
+    // The metrics-disabled 404 is an application payload, not a router
+    // fallback: it keeps its text body and content-type.
+    let disabled = http_response(
+        http_addr,
+        "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(disabled.starts_with("HTTP/1.1 404"), "{disabled}");
+    let disabled_headers = response_headers(&disabled);
+    assert_eq!(
+        header_value(&disabled_headers, "content-type"),
+        Some("text/plain; charset=utf-8"),
+        "{disabled}"
+    );
+    assert_eq!(response_body(&disabled), "Not found", "{disabled}");
+
+    stop_server(&mut child);
+    let status = wait_for_exit(&mut child, Duration::from_secs(15));
+    assert!(status.success(), "server should exit normally: {status:?}");
+}
+
+#[test]
+fn http_preflight_security_header_boundary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+    let (mut child, http_addr) =
+        start_server_on_ports_with_http_config(&tmp, grpc_port, http_port, true, false);
+
+    // Preflight on a known route: 200, empty, Allow mirrors the GET routes,
+    // CORS metadata present, ordinary security headers absent.
+    let preflight = http_response(
+        http_addr,
+        "OPTIONS /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: content-type,authorization\r\nConnection: close\r\n\r\n",
+    );
+    assert!(preflight.starts_with("HTTP/1.1 200"), "{preflight}");
+    assert_empty_fallback(&preflight, "HTTP/1.1 200");
+    let preflight_headers = response_headers(&preflight);
+    assert_eq!(
+        header_value(&preflight_headers, "allow"),
+        Some("GET, HEAD"),
+        "{preflight}"
+    );
+    assert_no_security_headers(&preflight);
+
+    // Preflight on an unknown path still short-circuits to 200 with no Allow.
+    let unknown = http_response(
+        http_addr,
+        "OPTIONS /missing HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: GET\r\nConnection: close\r\n\r\n",
+    );
+    assert!(unknown.starts_with("HTTP/1.1 200"), "{unknown}");
+    assert_empty_fallback(&unknown, "HTTP/1.1 200");
+    let unknown_headers = response_headers(&unknown);
+    assert!(
+        header_value(&unknown_headers, "allow").is_none(),
+        "unknown-path preflight must omit Allow: {unknown}"
+    );
+    assert_no_security_headers(&unknown);
+
+    // Ordinary responses keep the security headers.
+    let health = http_response(
+        http_addr,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert_security_headers_present(&health);
+
+    stop_server(&mut child);
+    let status = wait_for_exit(&mut child, Duration::from_secs(15));
+    assert!(status.success(), "server should exit normally: {status:?}");
+}
+
 #[test]
 #[ignore = "runs for 10+ seconds; invoke explicitly with --ignored"]
 fn server_exits_cleanly_on_signal() {

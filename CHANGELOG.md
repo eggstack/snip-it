@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **snip-sync HTTP parity (Plan 020)**: Restored the pre-migration wire
+  contract proven by exercising the Axum server over real sockets. Router
+  404/405 responses are empty with no content-type (the metrics-disabled 404
+  keeps its `"Not found"` payload), known routes answer preflight and
+  unsupported methods with `Allow: GET, HEAD`, every non-allow-all response
+  carries `Vary: origin`, and preflight responses carry CORS metadata without
+  the ordinary security headers. Socket regression tests lock the contract;
+  the release binary is byte-identical at 3,898,408 bytes.
+
 ### Changed
 - **snip-sync HTTP runtime (Plans 018–019)**: Replaced the Axum/Tower-HTTP
   surface with one direct EggServe HTTP/1 health/metrics service. Tonic remains

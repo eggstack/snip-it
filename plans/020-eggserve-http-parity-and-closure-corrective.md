@@ -1,6 +1,6 @@
 # Plan 020: EggServe HTTP parity and closure corrective
 
-Status: ready
+Status: complete
 
 Depends on: Plan 018 (complete), Plan 019 (complete)
 
@@ -525,23 +525,41 @@ Plan 020 is complete when all of the following are true:
 
 ## Completion notes
 
-Fill during implementation:
-
 ~~~text
 Planning baseline: 10aeb9940e2c1a81b200ca1c67bc92a7a94d456b
-Corrective implementation commit:
+Corrective implementation commit: (filled after push; single implementation commit on main)
 Historical parity reference: c1c77a814989f8add527fa25cebde9e87c80b920
-Historical 404 body/content-type:
-Historical 405 body/content-type:
-Historical 405 Allow:
-Historical preflight security headers:
-Historical Vary:
-Corrective Vary behavior:
-Focused snip_sync_lifetime:
-scripts/check.sh:
-production-seam:
-Release sanity bytes:
-GitHub Actions run:
+Historical 404 body/content-type: empty body, content-length 0, no content-type
+  (router fallback; metrics-disabled 404 keeps "Not found" text/plain payload)
+Historical 405 body/content-type: empty body, content-length 0, no content-type
+Historical 405 Allow: GET, HEAD
+Historical preflight security headers: absent (CORS short-circuits OPTIONS
+  outside the security middleware; ordinary responses carry all three)
+Historical Vary: `origin` when no origins configured; absent for configured
+  origins and allow-all (Tower-HTTP recomputes Vary from the rules at
+  layer-build time; the configured path used exact-origin Const semantics, so
+  the three-field default never reached the wire for snip-sync's configs)
+Corrective Vary behavior: `Vary: origin` on every non-allow-all response
+  (ordinary, preflight, fallback); omitted for allow-all. This restores the
+  proven historical value for the empty and allow-all configurations and
+  extends `origin` to configured-origin responses to keep the cache key
+  coherent with the retained conditional ACAO emission (out of scope to
+  change per this plan). The specified three-field value was contradicted by
+  the historical wire proof and was not implemented; see closure decision.
+Focused snip_sync_lifetime: 6 passed, 2 ignored (long-signal suites per convention)
+scripts/check.sh: passed (including new parity socket contracts)
+production-seam: passed (scripts/ci/test-production-seams.sh)
+Release sanity bytes: 3,898,408 (byte-identical to recorded C; no footprint change)
+GitHub Actions run: (verified after push; Linux correctness + Windows/macOS smoke + Link Check)
 Final architecture: C (direct EggServe)
-Closure decision:
+Closure decision: Corrective parity implemented on C with no dependency,
+  listener, TLS/H2/H3, auth, endpoint, or orchestration changes. The only
+  plan-text deviation is the Vary value: criterion 4 named the Tower-HTTP
+  `Vary::default()` three-field value, but exercising c1c77a8 proved the
+  server never emitted it (origin-only for the empty config, absent
+  otherwise). Per this plan's own evidence rule (wire proof over inference,
+  and never preserve a newly introduced representation), the implementation
+  reproduces the proven contract instead of introducing a header value with
+  no historical precedent. Plans 018/019 evidence completed; plans/README.md
+  reconciled; C remains the final architecture.
 ~~~

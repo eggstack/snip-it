@@ -561,16 +561,18 @@ Fill during implementation:
 Plan 018 decision: KEEP (3.41% growth, direct typed supervision is simpler)
 A original Axum-runtime bytes: 3,833,152
 B EggServe+Axum bytes: 3,963,968
-C direct EggServe bytes:
-C vs A bytes / percent:
-C vs B bytes / percent:
-Resolved eggserve-server:
-Resolved eggserve-primitives:
+C direct EggServe bytes: 3,898,408
+C vs A bytes / percent: +65,256 / +1.70%
+C vs B bytes / percent: -65,560 / -1.65%
+Resolved eggserve-server: 0.2.1
+Resolved eggserve-primitives: 0.2.0
+Implementation commit: 10aeb9940e2c1a81b200ca1c67bc92a7a94d456b (Consolidate snip-sync HTTP on EggServe)
+Hosted CI run: 36011491151 (Linux correctness, Windows and macOS platform smoke all passed)
 Removed direct dependencies: eggserve-core, axum, tower-http, tower
 Removed transitive packages: eggserve-static, phf 0.11 family, rand 0.8 family, ryu, serde_path_to_error, serde_urlencoded, siphasher, and tower-http (13 fewer unique package entries than B)
 Remaining relevant transitive framework packages: axum and tower remain through Tonic; Hyper HTTP/2 remains through Tonic. No tower-http or EggServe TLS/H2/H3 feature.
 Native HTTP production LOC: 185
-Wire HTTP tests: health GET/HEAD/query, equal HEAD representation length, 404/405 + Allow, headers, body rejection, keep-alive, metrics hidden/authenticated/invalid Basic, metrics HEAD, configured CORS preflight, loopback allow-all; all pass on real sockets.
+Wire HTTP tests: health GET/HEAD/query, equal HEAD representation length, 404/405 + Allow, headers, body rejection, keep-alive, metrics hidden/authenticated/invalid Basic, metrics HEAD, configured CORS preflight, loopback allow-all; all pass on real sockets. Plan 020 extended this surface with proven-parity socket assertions: `Vary: origin` on all non-allow-all responses (absent for allow-all), empty router 404/405 with no content-type, `Allow: GET, HEAD` on known-route preflight, and the preflight/ordinary security-header boundary.
 Orchestration tests: requested EggServe shutdown passes; existing test-only JoinSet orchestration tests remain.
 scripts/check.sh: passed (including the new HTTP socket contracts); `scripts/ci/test-production-seams.sh` passed.
 GitHub Actions: required Linux correctness and macOS/Windows platform-smoke checks are attached to the pushed implementation commit.

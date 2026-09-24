@@ -141,7 +141,7 @@ server remains on curl and no temporary transport code was retained.
 | --- | --- | --- | --- |
 | [018](018-eggserve-0.2.2-axum-runtime-adoption-trial.md) | EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial | Complete | 003, 017 |
 | [019](019-direct-eggserve-leaf-http-service-consolidation.md) | Direct EggServe leaf HTTP service consolidation | Complete | 018 |
-| [020](020-eggserve-http-parity-and-closure-corrective.md) | EggServe HTTP parity and closure corrective | Ready | 018, 019 |
+| [020](020-eggserve-http-parity-and-closure-corrective.md) | EggServe HTTP parity and closure corrective | Complete | 018, 019 |
 
 Plan 018 is the compatibility-first trial. It keeps the existing Axum
 health/metrics Router and replaces only HTTP runtime ownership using the
@@ -165,10 +165,16 @@ compatibility/framework dependencies and 13 unique packages from B while
 remaining within the size-neutral threshold. Local `scripts/check.sh` and the
 production-seam check passed; hosted implementation run `36011491151` passed
 Linux correctness plus Windows and macOS platform smoke. Plan 020 is the narrow
-closure corrective: restore Tower-HTTP's historical CORS `Vary` semantics,
-prove and preserve 404/405 wire representation, add the missing socket
-assertions, and reconcile Plans 018/019 completion evidence without reopening
-the selected direct EggServe architecture.
+closure corrective: it restored the proven historical CORS `Vary` semantics
+(`Vary: origin` on non-allow-all responses, omitted for allow-all) and locked
+the empty router 404/405 representation, known-route preflight `Allow`, and
+the preflight/ordinary security-header boundary with socket tests. Exercising
+the pre-migration server showed the specified three-field `Vary` value never
+reached the wire for snip-sync's configurations, so the corrective reproduces
+the proven contract rather than introducing a new header value. Plans 018 and
+019 completion evidence is filled (implementation commit `10aeb994`, C deltas,
+resolved leaf versions, run `36011491151`); C remains the final architecture
+and the EggServe sequence is closed.
 
 ## Execution policy
 

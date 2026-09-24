@@ -113,6 +113,16 @@ Request bodies are rejected. TLS remains terminated by an upstream reverse
 proxy. The runtime has no total connection-lifetime ceiling, so healthy
 keep-alive connections can remain open.
 
+Router fallback and unsupported-method responses are empty (`404`/`405`,
+`content-length: 0`, no application content-type); the metrics-disabled `404`
+keeps its `"Not found"` text payload. Known GET routes answer preflight and
+unsupported methods with `Allow: GET, HEAD`; unknown-path preflight
+short-circuits to `200` with no `Allow`. Preflight responses carry CORS
+metadata but never the security headers below; all ordinary responses carry
+them. Every non-allow-all response carries `Vary: origin` (allow-all
+responses omit it). These wire details are proven against the pre-migration
+server and locked by socket tests in `tests/snip_sync_lifetime.rs`.
+
 ### CORS
 
 Configurable via `CORS_ALLOWED_ORIGINS` env var or config file. Supports multiple comma-separated origins.

@@ -1,7 +1,30 @@
 //! The snip-sync health and metrics HTTP control surface.
+//!
+//! Wire parity with the pre-migration Axum/Tower-HTTP server (proven by
+//! exercising parent commit `c1c77a8` over real sockets):
+//!
+//! - router fallback/method responses are empty with no application
+//!   content-type (`404`/`405`, `content-length: 0`); the metrics-disabled
+//!   `404` keeps its `"Not found"` text application payload;
+//! - known GET routes answer preflight/unsupported methods with
+//!   `Allow: GET, HEAD`; unknown-path preflight short-circuits to `200` with
+//!   no `Allow`;
+//! - preflight responses carry CORS metadata but never the ordinary security
+//!   headers; ordinary responses always carry the three security headers;
+//! - every non-allow-all response carries `Vary: origin` (the historical
+//!   Tower-HTTP `CorsLayer` recomputes its `Vary` from the configured rules at
+//!   layer-build time: the empty configuration varies on `Origin`, while the
+//!   configured and allow-all configurations use fixed origins and omit it).
+//!   The retained native policy keeps conditional `Access-Control-Allow-Origin`
+//!   emission, so `Vary: origin` is emitted for configured origins as well to
+//!   keep the cache key coherent.
 
 use crate::AppState;
 use eggserve_primitives::{HeaderBlock, RequestHead, Response, ResponseBody, StatusCode};
+
+/// Historical CORS cache-key token: the only `Vary` value the pre-migration
+/// server ever emitted. Allow-all responses omit `Vary` entirely.
+const VARY_ORIGIN: &str = "origin";
 
 #[derive(Clone)]
 pub struct CorsPolicy {
@@ -30,6 +53,9 @@ async fn handle_request(
 
     if method == "OPTIONS" {
         let mut response_headers = Vec::new();
+        if !cors.allow_all {
+            response_headers.push(("vary", VARY_ORIGIN.to_owned()));
+        }
         if cors.allow_all {
             response_headers.push(("access-control-allow-origin", "*".to_owned()));
             response_headers.push(("access-control-allow-methods", "*".to_owned()));
@@ -45,12 +71,19 @@ async fn handle_request(
             {
                 response_headers.push(("access-control-allow-origin", origin));
             }
-            response_headers.push(("vary", "origin".to_owned()));
         }
-        return Ok(make_response(200, Vec::new(), None, response_headers));
+        if path == "/health" || path == "/metrics" {
+            response_headers.push(("allow", "GET, HEAD".to_owned()));
+        }
+        return Ok(make_response(
+            200,
+            ResponseBody::Empty,
+            None,
+            response_headers,
+        ));
     }
 
-    let (status, body, content_type) = match (method, path) {
+    let (status, payload) = match (method, path) {
         ("GET" | "HEAD", "/health") => {
             let healthy = state.db.ping().await.is_ok();
             let status = if healthy { 200 } else { 503 };
@@ -60,22 +93,14 @@ async fn handle_request(
                 "status": health,
             }))
             .map_err(|error| eggserve_server::ServiceError::internal(error.to_string()))?;
-            (status, body, "application/json")
+            (status, Some((body, "application/json")))
         }
-        ("GET" | "HEAD", "/metrics") => metrics_response(&state, request_headers),
-        ("GET" | "HEAD", _) => (404, b"404 Not Found".to_vec(), "text/plain; charset=utf-8"),
-        ("OPTIONS", "/health" | "/metrics") => (
-            405,
-            b"Method Not Allowed".to_vec(),
-            "text/plain; charset=utf-8",
-        ),
-        ("OPTIONS", _) => (404, b"404 Not Found".to_vec(), "text/plain; charset=utf-8"),
-        (_, "/health" | "/metrics") => (
-            405,
-            b"Method Not Allowed".to_vec(),
-            "text/plain; charset=utf-8",
-        ),
-        _ => (404, b"404 Not Found".to_vec(), "text/plain; charset=utf-8"),
+        ("GET" | "HEAD", "/metrics") => {
+            let (status, body, content_type) = metrics_response(&state, request_headers);
+            (status, Some((body, content_type)))
+        }
+        (_, "/health" | "/metrics") => (405, None),
+        _ => (404, None),
     };
 
     let mut response_headers = vec![
@@ -83,6 +108,9 @@ async fn handle_request(
         ("x-frame-options", "DENY".to_owned()),
         ("cache-control", "no-store".to_owned()),
     ];
+    if !cors.allow_all {
+        response_headers.push(("vary", VARY_ORIGIN.to_owned()));
+    }
     if status == 405 {
         response_headers.push(("allow", "GET, HEAD".to_owned()));
     }
@@ -97,16 +125,12 @@ async fn handle_request(
                 origin
             },
         ));
-        if !cors.allow_all {
-            response_headers.push(("vary", "origin".to_owned()));
-        }
     }
-    Ok(make_response(
-        status,
-        body,
-        Some(content_type),
-        response_headers,
-    ))
+    let (body, content_type) = match payload {
+        Some((body, content_type)) => (ResponseBody::Bytes(body), Some(content_type)),
+        None => (ResponseBody::Empty, None),
+    };
+    Ok(make_response(status, body, content_type, response_headers))
 }
 
 fn metrics_response(
@@ -166,7 +190,7 @@ fn origin_allowed(cors: &CorsPolicy, origin: &str) -> bool {
 
 fn make_response(
     status: u16,
-    body: Vec<u8>,
+    body: ResponseBody,
     content_type: Option<&str>,
     headers: Vec<(&str, String)>,
 ) -> Response {
@@ -181,7 +205,5 @@ fn make_response(
             .header(name, value)
             .expect("HTTP response header is valid");
     }
-    builder
-        .body(ResponseBody::Bytes(body))
-        .expect("response body is valid")
+    builder.body(body).expect("response body is valid")
 }
