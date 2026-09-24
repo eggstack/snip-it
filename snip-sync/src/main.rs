@@ -120,14 +120,10 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error::Error>> {
-    use axum::extract::State;
-    use axum::http::HeaderValue;
-    use base64::Engine;
     use snip_proto::snippet_sync_server::SnippetSyncServer;
     use snip_sync::{AppState, Database, Metrics, PremadeManager, RateLimiter, SnipSyncService};
     use std::sync::Arc;
     use std::time::Duration;
-    use tower_http::cors::{Any, CorsLayer};
 
     let db = Arc::new(Database::connect(&config.db_path, config.db_max_connections).await?);
     tracing::info!("Database initialized at {}", config.db_path);
@@ -244,125 +240,39 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         cors_allow_all
     };
 
-    let cors = if cors_allow_all {
+    if cors_allow_all {
         tracing::info!("CORS: allowing all origins (CORS_ALLOW_ALL=true)");
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any)
     } else if cors_allowed_origins.is_empty() {
         tracing::warn!(
             "CORS: no origins configured. Cross-origin requests will be blocked. \
              Set CORS_ALLOWED_ORIGINS to allow specific origins, or CORS_ALLOW_ALL=true for permissive CORS."
         );
-        CorsLayer::new()
     } else {
-        let mut cors = CorsLayer::new();
-        for origin in &cors_allowed_origins {
-            if let Ok(header_value) = origin.parse::<axum::http::HeaderValue>() {
-                cors = cors.allow_origin(header_value);
-            }
-        }
         tracing::info!("CORS allowed origins: {:?}", cors_allowed_origins);
-        cors.allow_methods([axum::http::Method::GET])
-            .allow_headers([
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::AUTHORIZATION,
-            ])
-    };
-
-    async fn security_headers_middleware(
-        req: axum::http::Request<axum::body::Body>,
-        next: axum::middleware::Next,
-    ) -> axum::response::Response {
-        let mut response = next.run(req).await;
-        let headers = response.headers_mut();
-        headers.insert(
-            "x-content-type-options",
-            HeaderValue::from_static("nosniff"),
-        );
-        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
-        headers.insert("cache-control", HeaderValue::from_static("no-store"));
-        response
     }
+    let http_service = snip_sync::http::service(
+        state,
+        snip_sync::http::CorsPolicy {
+            allow_all: cors_allow_all,
+            allowed_origins: cors_allowed_origins,
+        },
+    );
 
-    async fn metrics_handler(
-        State(state): State<AppState>,
-        headers: axum::http::HeaderMap,
-    ) -> Result<String, (axum::http::StatusCode, String)> {
-        let (username, password) = match (
-            &state.config.metrics_username,
-            &state.config.metrics_password,
-        ) {
-            (Some(u), Some(p)) => (u.as_str(), p.as_str()),
-            _ => {
-                return Err((axum::http::StatusCode::NOT_FOUND, "Not found".to_string()));
-            }
-        };
-
-        let auth_header = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Basic "));
-
-        let expected = format!("{}:{}", username, password);
-        let valid = if let Some(encoded) = auth_header {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                use subtle::ConstantTimeEq;
-                let expected_bytes = expected.as_bytes();
-                let mut padded = decoded.clone();
-                padded.resize(expected_bytes.len(), 0);
-                bool::from(padded.ct_eq(expected_bytes)) && decoded.len() == expected_bytes.len()
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !valid {
-            return Err((
-                axum::http::StatusCode::UNAUTHORIZED,
-                "Authentication required".to_string(),
-            ));
-        }
-
-        use prometheus::Encoder;
-        let encoder = prometheus::TextEncoder::new();
-        let mut buffer = Vec::new();
-        if let Err(e) = encoder.encode(&state.metrics.registry.gather(), &mut buffer) {
-            return Err((
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error gathering metrics: {}", e),
-            ));
-        }
-        Ok(String::from_utf8(buffer).unwrap_or_default())
-    }
-
-    let app = axum::Router::new()
-        .route(
-            "/health",
-            axum::routing::get(|State(state): State<AppState>| async move {
-                let healthy = state.db.ping().await.is_ok();
-                let status = if healthy { "healthy" } else { "unhealthy" };
-                let code = if healthy {
-                    axum::http::StatusCode::OK
-                } else {
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE
-                };
-                (
-                    code,
-                    axum::Json(serde_json::json!({
-                        "version": env!("CARGO_PKG_VERSION"),
-                        "status": status
-                    })),
-                )
-            }),
-        )
-        .route("/metrics", axum::routing::get(metrics_handler))
-        .layer(axum::middleware::from_fn(security_headers_middleware))
-        .layer(cors)
-        .with_state(state);
+    // Start HTTP only after both listeners have been pre-bound, and before
+    // spawning gRPC so a runtime startup error cannot leave gRPC detached.
+    let http_runtime = eggserve_server::RuntimeConfig::builder()
+        .bind(http_addr)
+        .disable_connection_total_timeout()
+        .graceful_shutdown_timeout(timeout)
+        .build()?;
+    let http_server = eggserve_server::Server::builder()
+        .runtime(http_runtime)
+        .from_listener(http_listener)
+        .build()?
+        .start_with_service(http_service)
+        .await?;
+    let (http_control, http_completion) = http_server.into_parts();
+    tracing::info!("HTTP server listening on http://{}", http_addr);
 
     // Create a single broadcast shutdown signal. Both services receive
     // a clone of the receiver; the orchestrator sends exactly once.
@@ -392,18 +302,6 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         );
 
         result
-    });
-
-    let mut http_shutdown_rx = shutdown_tx.subscribe();
-    let http_handle = tokio::spawn(async move {
-        tracing::info!("HTTP server listening on http://{}", http_addr);
-
-        axum::serve(http_listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = http_shutdown_rx.recv().await;
-                tracing::info!("Shutdown signal received, stopping HTTP server...");
-            })
-            .await
     });
 
     // Wait for the first terminal event: a process signal, or an
@@ -443,10 +341,11 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
 
     tokio::pin!(shutdown_signal);
 
-    let outcome = snip_sync::orchestration::run_services_until_shutdown(
+    let outcome = snip_sync::orchestration::run_eggserve_services_until_shutdown(
         shutdown_signal.as_mut(),
         grpc_handle,
-        http_handle,
+        http_control,
+        http_completion,
         shutdown_tx,
         timeout,
     )

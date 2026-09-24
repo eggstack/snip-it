@@ -139,8 +139,8 @@ server remains on curl and no temporary transport code was retained.
 
 | Plan | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [018](018-eggserve-0.2.2-axum-runtime-adoption-trial.md) | EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial | Ready | 003, 017 |
-| [019](019-direct-eggserve-leaf-http-service-consolidation.md) | Direct EggServe leaf HTTP service consolidation | Blocked on 018 | 018 |
+| [018](018-eggserve-0.2.2-axum-runtime-adoption-trial.md) | EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial | Complete | 003, 017 |
+| [019](019-direct-eggserve-leaf-http-service-consolidation.md) | Direct EggServe leaf HTTP service consolidation | Complete | 018 |
 
 Plan 018 is the compatibility-first trial. It keeps the existing Axum
 health/metrics Router and replaces only HTTP runtime ownership using the
@@ -157,7 +157,12 @@ smaller direct leaf graph, `eggserve-server 0.2.1` plus
 Its purpose is to determine whether removing the core/Tower adapter and
 Axum/Tower-HTTP direct dependency surface produces a meaningful footprint or
 maintenance win without recreating a framework. Exactly one HTTP production
-architecture must remain after the A/B/C comparison.
+architecture must remain after the A/B/C comparison. The measured sizes were
+A = 3,833,152 bytes, B = 3,963,968 bytes (+3.41%), and C = 3,898,408 bytes
+(+1.70% vs A, -1.65% vs B). C is the final winner: it removes the direct
+compatibility/framework dependencies and 13 unique packages from B while
+remaining within the size-neutral threshold. Local `scripts/check.sh` and the
+production-seam check passed; hosted checks run on the pushed implementation.
 
 ## Execution policy
 

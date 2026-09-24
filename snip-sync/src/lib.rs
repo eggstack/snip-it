@@ -16,6 +16,7 @@ pub mod cert;
 pub mod cli;
 pub mod db;
 pub mod editor;
+pub mod http;
 pub mod metrics;
 pub mod orchestration;
 pub mod paths;

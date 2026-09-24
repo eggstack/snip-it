@@ -1,6 +1,6 @@
 # Plan 018: EggServe 0.2.2 Axum-preserving HTTP runtime adoption trial
 
-Status: ready
+Status: complete
 
 Depends on: Plan 003 (complete), Plan 017 (complete)
 
@@ -544,20 +544,20 @@ Fill during implementation:
 
 ~~~text
 Planning baseline HEAD: 31b7d83e7f1584110438e31aa01ef23181229acd
-Implementation commit:
-Toolchain/target/linker:
-A current Axum-runtime bytes:
-B EggServe+Axum bytes:
-delta bytes / percent:
-Resolved eggserve-core:
-Resolved eggserve-server:
-Resolved eggserve-primitives:
-Resolved eggserve-static:
-Selected EggServe features:
-Focused HTTP tests:
-Orchestration tests:
-scripts/check.sh:
-GitHub Actions:
-Decision: KEEP / REVERT
-Reason:
+Implementation commit: this closure and Plan 019 are recorded together on `main`.
+Toolchain/target/linker: Rust 1.94.1, aarch64-unknown-linux-gnu, Cargo release profile, workspace target directory, default linker
+A current Axum-runtime bytes: 3,833,152
+B EggServe+Axum bytes: 3,963,968
+delta bytes / percent: +130,816 / +3.41%
+Resolved eggserve-core: 0.2.2
+Resolved eggserve-server: 0.2.1
+Resolved eggserve-primitives: 0.2.0
+Resolved eggserve-static: 0.2.0
+Selected EggServe features: core tower/http-interop/tower-layer/tower-service; runtime HTTP/1 only; no EggServe TLS, HTTP/2, HTTP/3, or Python bindings. Hyper HTTP/2 remains selected through Tonic independently.
+Focused HTTP tests: health/HEAD/fallback/security, metrics auth, configured CORS, loopback allow-all, body rejection, and keep-alive coverage passed on the final direct EggServe socket (Plan 019); the compatibility adapter compiled and was measured.
+Orchestration tests: EggServe requested-shutdown test passed; workspace tests passed.
+scripts/check.sh: passed on the final tree, including the HTTP socket contracts.
+GitHub Actions: required Linux correctness and macOS/Windows platform-smoke checks are attached to the pushed implementation commit.
+Decision: KEEP
+Reason: +3.41% is below the 10% gate. The direct typed-control/completion supervisor is shorter than the existing generic JoinSet wrapper, and the Axum application remains unchanged.
 ~~~

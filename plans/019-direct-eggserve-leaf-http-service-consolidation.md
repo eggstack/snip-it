@@ -1,6 +1,6 @@
 # Plan 019: direct EggServe leaf HTTP service consolidation
 
-Status: blocked on Plan 018
+Status: complete
 
 Depends on: Plan 018
 
@@ -413,9 +413,9 @@ Record:
 ~~~text
 A original Axum-runtime bytes:
 B EggServe+Axum bytes:
-C direct EggServe bytes:
-C vs A bytes / percent:
-C vs B bytes / percent:
+C direct EggServe bytes: 3,898,408
+C vs A bytes / percent: +65,256 / +1.70%
+C vs B bytes / percent: -65,560 / -1.65%
 direct dependencies removed:
 transitive packages removed:
 remaining Tower/Hyper sources:
@@ -558,22 +558,22 @@ Plan 019 is complete when all applicable statements are true:
 Fill during implementation:
 
 ~~~text
-Plan 018 decision:
-A original Axum-runtime bytes:
-B EggServe+Axum bytes:
+Plan 018 decision: KEEP (3.41% growth, direct typed supervision is simpler)
+A original Axum-runtime bytes: 3,833,152
+B EggServe+Axum bytes: 3,963,968
 C direct EggServe bytes:
 C vs A bytes / percent:
 C vs B bytes / percent:
 Resolved eggserve-server:
 Resolved eggserve-primitives:
-Removed direct dependencies:
-Removed transitive packages:
-Remaining relevant transitive framework packages:
-Native HTTP production LOC:
-Wire HTTP tests:
-Orchestration tests:
-scripts/check.sh:
-GitHub Actions:
-Final winner: A / B / C
-Reason:
+Removed direct dependencies: eggserve-core, axum, tower-http, tower
+Removed transitive packages: eggserve-static, phf 0.11 family, rand 0.8 family, ryu, serde_path_to_error, serde_urlencoded, siphasher, and tower-http (13 fewer unique package entries than B)
+Remaining relevant transitive framework packages: axum and tower remain through Tonic; Hyper HTTP/2 remains through Tonic. No tower-http or EggServe TLS/H2/H3 feature.
+Native HTTP production LOC: 185
+Wire HTTP tests: health GET/HEAD/query, equal HEAD representation length, 404/405 + Allow, headers, body rejection, keep-alive, metrics hidden/authenticated/invalid Basic, metrics HEAD, configured CORS preflight, loopback allow-all; all pass on real sockets.
+Orchestration tests: requested EggServe shutdown passes; existing test-only JoinSet orchestration tests remain.
+scripts/check.sh: passed (including the new HTTP socket contracts); `scripts/ci/test-production-seams.sh` passed.
+GitHub Actions: required Linux correctness and macOS/Windows platform-smoke checks are attached to the pushed implementation commit.
+Final winner: C
+Reason: C is 1.70% above A and 1.65% smaller than B, below the 10% hard ceiling and inside the size-neutral threshold. It removes the direct core/Axum/Tower-HTTP/Tower surface and 13 unique packages from B while keeping the application in one concrete module.
 ~~~

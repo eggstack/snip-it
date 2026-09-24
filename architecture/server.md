@@ -16,7 +16,7 @@ A standalone gRPC + HTTP server that stores encrypted snippets, manages users/li
 │                                          │
 │  ┌─────────────┐    ┌─────────────────┐  │
 │  │ gRPC Server │    │ HTTP Server     │  │
-│  │ (tonic)     │    │ (axum)          │  │
+│  │ (tonic)     │    │ (EggServe H1)   │  │
 │  │ :50051      │    │ :50050          │  │
 │  └──────┬──────┘    └───────┬─────────┘  │
 │         │                   │             │
@@ -98,14 +98,20 @@ Implements `SnippetSync` trait from `snip-proto`:
 
 ## HTTP Server
 
-**File**: `snip-sync/src/main.rs`
+**File**: `snip-sync/src/http.rs` (service), `snip-sync/src/main.rs` (runtime)
 
-Axum-based HTTP server with two endpoints:
+EggServe owns the pre-bound HTTP/1 listener and drives one concrete
+snip-sync service. Tonic owns a separate gRPC listener. The service exposes:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | JSON health check (no auth) |
-| `/metrics` | GET | Prometheus metrics (Basic auth required) |
+| `/health` | GET, HEAD | JSON health check (no auth) |
+| `/metrics` | GET, HEAD | Prometheus metrics (Basic auth required) |
+
+HEAD uses the same logical response as GET; EggServe suppresses the wire body.
+Request bodies are rejected. TLS remains terminated by an upstream reverse
+proxy. The runtime has no total connection-lifetime ceiling, so healthy
+keep-alive connections can remain open.
 
 ### CORS
 
@@ -212,20 +218,18 @@ notified and the orchestrator returns an error.
 On Unix, the server registers both `tokio::signal::ctrl_c()` and
 `tokio::signal::unix::SignalKind::terminate()` so that `snip-sync stop`
 (which sends SIGTERM) triggers the same graceful shutdown path as Ctrl-C.
-gRPC uses Tonic's `serve_with_incoming_shutdown` for connection-aware draining;
-HTTP uses `axum::serve().with_graceful_shutdown`. Both service tasks are owned
-by a `JoinSet` and are awaited inside the real drain timeout.
-Persistence shutdown occurs only after both request-serving tasks have completed
-or been aborted.
+gRPC uses Tonic's `serve_with_incoming_shutdown` for connection-aware draining.
+EggServe exposes a typed shutdown control and completion handle; the
+orchestrator preserves its terminal error and awaits both services before
+persistence shutdown. EggServe owns its bounded HTTP connection drain.
 
-The shutdown coordination logic lives in a shared `run_services_until_shutdown()`
-helper (`snip-sync/src/orchestration.rs`) called by both `serve_inner` and
-deterministic orchestration tests. The helper selects on the shutdown signal and
-the `JoinSet`, captures the first terminal event, broadcasts shutdown, then
-drains remaining tasks inside the configured timeout. Each service completion is
-recorded exactly once. If the drain timeout expires, the original unfinished
-service tasks are explicitly aborted through their own handles, and the
-wrapper joins are drained until those cancellations are observed. `ServiceShutdownOutcome` carries the result to the caller, and
+The production shutdown coordination lives in
+`run_eggserve_services_until_shutdown()` (`snip-sync/src/orchestration.rs`). It
+selects on the process signal, the Tonic task, and EggServe's borrowed,
+cancellation-safe completion future. It broadcasts shutdown, requests EggServe
+shutdown, and drains both services under the configured deadline while
+preserving EggServe's typed terminal result. `ServiceShutdownOutcome` carries
+the result to the caller, and
 `serve_inner` evaluates `ensure_clean_requested_shutdown()` to decide between
 `Ok(())` and an error after persistence cleanup. A requested shutdown fails if
 either service returned an error or panicked during drain, if any service
@@ -259,10 +263,11 @@ determined by the operating-system lock, not by whether the file exists.
 ## Key Files
 
 - `snip-sync/src/main.rs` — Server entry, gRPC/HTTP setup, config loading
-- `snip-sync/src/lib.rs` — Config loading, `SnipSyncService` implementation, axum routes
+- `snip-sync/src/lib.rs` — Config loading and `SnipSyncService` implementation
+- `snip-sync/src/http.rs` — Concrete health/metrics service, Basic auth, CORS, and security headers
 - `snip-sync/src/db.rs` — SQLite database, user/snippet/library operations (18 tests)
 - `snip-sync/src/bootstrap.rs` — Server initialization and service wiring
-- `snip-sync/src/orchestration.rs` — Graceful shutdown coordination (`run_services_until_shutdown`)
+- `snip-sync/src/orchestration.rs` — Typed Tonic/EggServe graceful shutdown coordination
 - `snip-sync/src/rate_limiter.rs` — Per-key rate limiting
 - `snip-sync/src/metrics.rs` — Prometheus counters
 - `snip-sync/src/premade.rs` — Premade library file scanning

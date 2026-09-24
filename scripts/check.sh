@@ -39,4 +39,8 @@ cargo test --test auto_sync_concurrency --features test-support -- --test-thread
 echo "=== Multi-batch sync contracts ==="
 cargo test --test sync_multibatch --features test-support -- --test-threads=1
 
+echo "=== snip-sync HTTP socket contracts ==="
+cargo build -p snip-sync --bin snip-sync
+cargo test --test snip_sync_lifetime -- --test-threads=1
+
 echo "=== All checks passed ==="

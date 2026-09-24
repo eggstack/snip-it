@@ -5,8 +5,9 @@ Guide agents through working with the snip-sync server (`snip-sync/src/`).
 
 ## Security Notes
 
-- **TLS**: Server defaults to HTTP. Production deployments must use a reverse proxy with TLS. `TLS_ENABLED` env var available for native TLS. Documentation at startup and in `config.rs` notes this requirement.
+- **TLS**: snip-sync serves plaintext gRPC and HTTP. Production deployments must use a reverse proxy with TLS; `TLS_ENABLED` acknowledges proxy termination and does not enable native TLS.
 - **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS. When not set and no origins configured, cross-origin requests are blocked.
+- **HTTP runtime**: `snip-sync/src/http.rs` is the concrete `/health` and `/metrics` EggServe leaf service. It rejects request bodies, keeps metrics Basic-auth comparison constant-time, applies configured CORS and security headers, and relies on EggServe for HEAD framing. Keep Tonic on its separate listener and do not add EggServe TLS/H2/H3 or a general routing framework.
 - **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. Registration rate limits use IP address (not client-controlled device_id). `RATE_LIMIT_PER_MINUTE` controls limit.
 - **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs`.
 
@@ -15,7 +16,8 @@ Guide agents through working with the snip-sync server (`snip-sync/src/`).
 ```
 snip-sync/
 ├── src/main.rs         # gRPC + HTTP server entry, CLI dispatch
-├── src/lib.rs          # Config loading, SnipSyncService, axum routes
+├── src/lib.rs          # Config loading and SnipSyncService
+├── src/http.rs         # EggServe health/metrics service and HTTP policy
 ├── src/db.rs           # SQLite via sqlx (18 tests)
 ├── src/rate_limiter.rs # Per-key sliding window (120 req/min default)
 ├── src/metrics.rs      # Prometheus counters
@@ -26,7 +28,7 @@ snip-sync/
 ├── src/cli.rs          # CLI argument parsing
 ├── src/editor.rs       # Editor integration
 ├── src/process.rs      # Legacy PID parsing for stop/restart compatibility
-├── src/orchestration.rs # Shared shutdown orchestration (run_services_until_shutdown)
+├── src/orchestration.rs # Typed Tonic/EggServe shutdown supervision
 ├── src/server_lock.rs  # Kernel-backed server singleton lock (flock/LockFileEx)
 ├── src/test_helpers.rs # In-process test server support
 ├── src/test_observer.rs# Test-only request telemetry (no secrets)
@@ -41,13 +43,12 @@ records on Unix; stale legacy records are cleaned only after lock acquisition,
 while live unrelated processes are refused unless `--force` is explicit.
 Persistent lock-file presence is not an ownership signal.
 
-### Shutdown Orchestration (Phase 13H + Phase 13J)
+### Shutdown Orchestration
 
-- Shutdown coordination lives in a shared `run_services_until_shutdown()` helper in `orchestration.rs`.
-- `serve_inner` and deterministic tests call the same helper — production and test paths are identical.
-- Both service tasks are owned by a `JoinSet`; each completion is recorded exactly once.
-- On timeout (default 30s graceful drain), the original unfinished service tasks are explicitly aborted through their own handles; wrapper joins are drained until cancellation is observed — they are not silently dropped.
-- `serve_inner` evaluates `ServiceShutdownOutcome::ensure_clean_requested_shutdown()` after persistence cleanup. A requested shutdown returns success only when both services returned cleanly without forced abort; any drain-time service error, panic, or forced abort produces a failure that retains both classifications and the original detail.
+- Production coordination lives in `run_eggserve_services_until_shutdown()` in `orchestration.rs`.
+- The supervisor selects among the process signal, the Tonic task, and EggServe's borrowed completion future; it requests shutdown of both listeners and preserves typed EggServe terminal errors.
+- EggServe owns its bounded HTTP connection drain. The supervisor waits for both services before returning and records a failed outcome for unexpected completion, errors, or forced gRPC cancellation.
+- `serve_inner` evaluates `ServiceShutdownOutcome::ensure_clean_requested_shutdown()` after persistence cleanup.
 - `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
 
 ## Environment Variables

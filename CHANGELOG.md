@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **snip-sync HTTP runtime (Plans 018–019)**: Replaced the Axum/Tower-HTTP
+  surface with one direct EggServe HTTP/1 health/metrics service. Tonic remains
+  on its separate listener and TLS remains external. The controlled release
+  build measured 3,898,408 bytes, 1.70% above the original Axum runtime and
+  1.65% smaller than the EggServe/Axum adapter trial.
 - **Self-update transport (Plan 017; supersedes the Plan 016 version bump)**:
   `snp update` now pins `eggfetch-core` 0.2.0 on the unchanged lean
   `standard-http1` + `redirects` + Rustls native-roots profile. Strict

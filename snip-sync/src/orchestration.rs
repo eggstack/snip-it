@@ -5,6 +5,78 @@
 
 use std::time::Duration;
 
+/// Supervise Tonic and EggServe while preserving EggServe's typed terminal result.
+pub async fn run_eggserve_services_until_shutdown<F>(
+    mut shutdown_future: std::pin::Pin<&mut F>,
+    mut grpc_handle: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
+    http_control: eggserve_server::ServerControl,
+    mut http_completion: eggserve_server::ServerCompletion,
+    shutdown_sender: tokio::sync::broadcast::Sender<()>,
+    drain_timeout: Duration,
+) -> ServiceShutdownOutcome
+where
+    F: std::future::Future<Output = ()>,
+{
+    let mut requested = false;
+    let mut grpc_result = None;
+    let mut http_result = None;
+
+    tokio::select! {
+        biased;
+        _ = &mut shutdown_future => requested = true,
+        result = &mut grpc_handle => grpc_result = Some(classify_result(result)),
+        result = http_completion.wait() => {
+            http_result = Some(match result {
+                Ok(_) => ServiceResult::Clean,
+                Err(error) => ServiceResult::ServiceError(error.to_string()),
+            });
+        }
+    }
+
+    let _ = shutdown_sender.send(());
+    http_control.shutdown();
+
+    let drain_result = tokio::time::timeout(drain_timeout, async {
+        while grpc_result.is_none() || http_result.is_none() {
+            tokio::select! {
+                result = &mut grpc_handle, if grpc_result.is_none() => {
+                    grpc_result = Some(classify_result(result));
+                }
+                result = http_completion.wait(), if http_result.is_none() => {
+                    http_result = Some(match result {
+                        Ok(_) => ServiceResult::Clean,
+                        Err(error) => ServiceResult::ServiceError(error.to_string()),
+                    });
+                }
+            }
+        }
+    })
+    .await;
+
+    let forced = drain_result.is_err();
+    if forced {
+        grpc_handle.abort();
+        if grpc_result.is_none() {
+            grpc_result = Some(classify_result(grpc_handle.await));
+        }
+        if http_result.is_none() {
+            // EggServe owns its bounded connection drain. Await its typed
+            // completion so no runtime task is detached from the process.
+            http_result = Some(match http_completion.wait().await {
+                Ok(_) => ServiceResult::Clean,
+                Err(error) => ServiceResult::ServiceError(error.to_string()),
+            });
+        }
+    }
+
+    ServiceShutdownOutcome {
+        requested,
+        forced,
+        grpc_result: grpc_result.unwrap_or_else(|| ServiceResult::Cancelled("not observed".into())),
+        http_result: http_result.unwrap_or_else(|| ServiceResult::Cancelled("not observed".into())),
+    }
+}
+
 /// Terminal classification of a service task result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceResult {
@@ -87,6 +159,7 @@ fn classify_result(
 /// * `shutdown_sender` — broadcast sender to notify services of shutdown.
 /// * `drain_timeout` — maximum time to wait for services to drain after
 ///   shutdown.
+#[cfg(test)]
 pub async fn run_services_until_shutdown<F>(
     mut shutdown_future: std::pin::Pin<&mut F>,
     grpc_handle: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
@@ -771,5 +844,51 @@ mod tests {
         assert!(outcome.requested);
         assert!(!outcome.forced);
         assert!(outcome.is_clean_requested_shutdown());
+    }
+}
+
+#[cfg(test)]
+mod eggserve_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn eggserve_runtime_drains_after_requested_shutdown() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = eggserve_server::Server::builder()
+            .from_listener(listener)
+            .build()
+            .unwrap();
+        let handle = server
+            .start_with_service(eggserve_server::service_fn(|_request| async {
+                Ok(eggserve_primitives::Response::builder()
+                    .status(eggserve_primitives::StatusCode::OK)
+                    .body(eggserve_primitives::ResponseBody::Empty)
+                    .unwrap())
+            }))
+            .await
+            .unwrap();
+        let (control, completion) = handle.into_parts();
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let grpc = tokio::spawn({
+            let mut shutdown_rx = shutdown_tx.subscribe();
+            async move {
+                let _ = shutdown_rx.recv().await;
+                Ok::<(), tonic::transport::Error>(())
+            }
+        });
+        let signal = std::future::ready(());
+        tokio::pin!(signal);
+
+        let outcome = run_eggserve_services_until_shutdown(
+            signal,
+            grpc,
+            control,
+            completion,
+            shutdown_tx,
+            Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(outcome.is_clean_requested_shutdown(), "{outcome:?}");
     }
 }
