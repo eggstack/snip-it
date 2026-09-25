@@ -1,6 +1,6 @@
 # Snippet Selector Model
 
-[← Back to CLI](cli.md)
+[← Back to Overview](overview.md) · [← Back to CLI](cli.md)
 
 ## Overview
 
@@ -250,6 +250,38 @@ MCP is a thin adapter over the same helpers: `snippets_search` uses
 `searchable_text()` + `matches_required_tags()` + `Relevance` ranking, and
 `snippet_get` uses `resolve_selector_readonly()`. No execution, no mutation,
 no interactive variable expansion. See `docs/MCP.md` for the tool schemas.
+
+## Invariants / gotchas (from AGENTS.md)
+
+- Search parity is structural, not conventional: `snp get --query`,
+  `snp list --filter`, and MCP `snippets_search` all call
+  `searchable_text()` + `score_fuzzy_matches()` with
+  `SearchFields::fuzzy_default()` (description + command always, tags by
+  default). Output/notes join only via `SearchFields::with_output()`
+  (`list --search-output`, MCP `search_output: true`), bounded through
+  `OutputPresentation::for_scoring()` (512 chars).
+- `folders`, `favorite`, sync metadata, credentials, and keychain data
+  are never searchable. `snippet_get` requires exactly one of ID
+  (case-sensitive) / description / command (case-insensitive).
+- Mutating `resolve_selector()` may migrate legacy state; read-only
+  `resolve_selector_readonly()` never creates files or migrates — `snp get`
+  on a legacy checkout reads in place.
+- Deleted snippets are excluded from every mode, including ID lookup.
+- `LibraryScope::from_filter_arg()` / `from_owned_arg()` is the single
+  `"all"` definition shared by CLI and MCP; `exact_selector()` /
+  `resolve_exact_target()` is the single exact-target constructor.
+
+## File / line refs
+
+- `src/selector.rs:46-77` (`LibraryScope` + `from_filter_arg` /
+  `from_owned_arg`), `:90-158` (`SearchFields`, `searchable_text`,
+  `score_fuzzy_matches`, `matches_required_tags`), `:214-225`
+  (`ResolutionPolicy`), `:229-280` (`SnippetMatch`, `SnippetIdentity`,
+  `SelectionResult`, `SnippetSelector` + builders), `:354-454`
+  (`resolve` priority chain), `:515-597` (`sort_matches`,
+  `finish_aggregate`, `exact_selector`), `:599-612`
+  (`resolve_exact_target`), `:623-737` (`resolve_selector_readonly` vs
+  `resolve_selector`), `:739-1208` (unit tests).
 
 ## Tests
 

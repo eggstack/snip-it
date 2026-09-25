@@ -1,101 +1,102 @@
-# doctor_cmd — Diagnostics and Compatibility Analysis
+# doctor_cmd — Diagnostics, Pet Analysis, Environment Audit
 
-**Sources:** `src/commands/doctor_cmd.rs` (check orchestration, `DoctorArgs`),
-`src/commands/doctor_report.rs` (`DiagnosticReportFormat`, human rendering;
-re-exported via `doctor_cmd` for CLI schema compat)
+[← Back to Overview](../overview.md)
 
-## Purpose
+## Overview
 
-Provides five diagnostic modes:
+`src/commands/doctor_cmd.rs` (1406 lines) orchestrates `snp doctor`'s
+five diagnostic modes and builds the `DoctorReport`; rendering lives
+in `doctor_report.rs` (`doctor_report.md`), analysis primitives in
+`pet_analysis.rs` (`pet_analysis.md`), shared types in
+`src/diagnostics.rs`. All modes are read-only and side-effect-free
+apart from report output.
 
-1. **Pet file analysis** — Analyzes a pet TOML snippet file for compatibility with snp
-2. **Environment audit** — Checks the installed snp environment for common issues
-3. **Sync diagnostics** — Runs focused sync diagnostics using the canonical status snapshot
-4. **Shell syntax check** — Validates generated shell integration code
-5. **Library check** — Validates a specific library file
+## CLI surface
 
-## Modes
+`DoctorArgs` (`doctor_cmd.rs:18`), `snp doctor` (no alias):
 
-### `--pet-file <PATH>`
-Analyzes a pet TOML file for import compatibility:
-- Parses the file using `pet_analysis::parse_pet_toml()`
-- Runs `analyze_entry()` on each snippet for variable syntax, field presence, etc.
-- Detects duplicates via `detect_duplicates()`
-- Detects unknown fields via `detect_unknown_fields()`
-- Reports diagnostics as human-readable or JSON
+| Flag | Conflicts | Meaning |
+|------|-----------|---------|
+| `--pet-file PATH` | `compatibility, library, sync` | Analyze a pet TOML file |
+| `--library NAME_OR_PATH` | `pet_file, compatibility, sync` | Analyze a library file in place |
+| `--compatibility` | `pet_file, library` | Installed-environment audit (may combine with `--sync`, `--check-shell`) |
+| `--sync` | `pet_file, library` | Focused sync diagnostics from the canonical snapshot |
+| `--check-shell <bash\|zsh\|fish>` | — | Validate generated shell-init syntax (combinable) |
+| `--strict` | — | Elevate 9 `W-*` codes to errors |
+| `--report <human\|json>` | — | Rendering (default `human`) |
 
-### `--compatibility`
-Audits the installed snp environment:
-- Reports binary version
-- Checks config directory existence and writability
-- Checks library directory existence
-- Validates primary library resolution and snippet count (via the shared `LibraryManager::inspect_library_index()` view, so `doctor` and `validate` classify the same primary state)
-- Checks sync configuration presence and loadability
-- Checks shell availability (bash, zsh, fish)
-- Checks `snp select` and `snp new` flag availability
-- Reports findings as `DoctorReport`
+`DiagnosticReportFormat` is defined in `doctor_report.rs` and
+re-exported here (`:50`) for CLI-schema compatibility. No mode →
+`runtime_error("No mode selected")`.
 
-### `--sync`
-Runs sync-focused diagnostics:
-- Captures a `StatusSnapshot` via `status_snapshot::capture_snapshot()`
-- Maps `StatusDiagnostic` entries to doctor-compatible codes
-- Reports pending state, lock health, execution status, and config validity
+## Flow / steps
 
-### `--check-shell <bash|zsh|fish>`
-Validates generated shell integration code:
-- Generates code via `shell_cmd::generate_*()`
-- Runs the shell's syntax checker (`bash -n`, `zsh -n`, `fish --no-execute`)
-- Reports pass/fail with stderr output
+`run(pet_file, compatibility, sync, check_shell, library, strict,
+report_format)` (`:1228`):
 
-### `--library <NAME_OR_PATH>`
-Validates a specific library file:
-- Loads the library via `parse_pet_toml()` (same as `--pet-file`)
-- Detects unknown TOML fields
-- Analyzes each snippet for variable syntax and field validity
-- Detects unsupported pet-specific concepts
-- Detects duplicate commands and descriptions
-- Reports diagnostics
+1. `get_existing_library_names()` for destination-conflict checks.
+2. Pet-file / library mode → `read_source_file` (empty → error) →
+   `build_pet_report` (`:201`): raw structural scan
+   (`detect_unknown_fields`), TOML parse (failure recorded as
+   `has_toml_error`, report returned early), per-entry
+   `analyze_entry`, unsupported-concept scan
+   (`detect_unsupported_concepts`: unmatched `</>` → `W-MALFORMED-VAR`,
+   `folders` → `I-FIELD-FOLDERS`), destination-name conflict
+   (`W-DEST-CONFLICT`), in-file duplicates, normalization preview
+   (timestamps/sync-fields/ID), capability census, recommended
+   `snp import pet …` command (commented-out when errors exist).
+3. Compatibility mode → `build_compatibility_report(strict)` (`:470`):
+   environment audit (binary, config paths, editor, clipboard,
+   themes) **plus** `append_sync_diagnostics(report, compat_mode=true)`
+   with `CONFIG_LOAD_FAILED` downgraded Error→Warning.
+4. Sync mode → `append_sync_diagnostics(report, compat_mode=false)`
+   preserving native severities; always seeds a
+   `compat.sync.checked` info entry, then maps each
+   `StatusDiagnostic` via `map_snapshot_diagnostic` (`:70`) to dotted
+   codes (`sync.config.*`, `sync.pending.*`, `sync.execution.*`,
+   `sync.worker_lock.*`, `sync.status.*`, `sync.attention.*`).
+5. Optional `check_shell_init` (`:1084`): generates the init script
+   for the named shell and syntax-validates it, recording findings.
+6. `apply_strict_elevation` (9 `STRICT_WARNING_CODES`, `:53-63`);
+   emit human (`emit_human_report`) or pretty JSON; errors present →
+   `ValidationFailed`, else `Success`.
 
-## Output Formats
+## Mutation vs read-only
 
-| Format | Flag | Destination |
-|--------|------|-------------|
-| Human | `--report human` (default) | stderr |
-| JSON | `--report json` | stdout |
+Read-only. No gate, no lock, no save, no runtime. Library files are
+read through `read_source_file`, never loaded through the migrating
+path.
 
-## Strict Mode
+## Auto-sync trigger
 
-`--strict` elevates designated warning codes to errors. The `STRICT_WARNING_CODES` list includes:
-- `W-MALFORMED-VAR` — invalid variable syntax
-- `W-DUP-CMD` / `W-DUP-DESC` — duplicate commands or descriptions
-- `W-DEST-CONFLICT` — import destination conflict
-- `W-DESC-MISSING` / `W-CMD-MISSING` — missing required fields
-- `W-DESC-EMPTY` / `W-TAG-EMPTY` — empty field values
-- `W-TYPE-MISMATCH` — field type mismatch
+None. Doctor observes the snapshot/diagnostics and never writes
+pending markers, status, or snippet data.
 
-## Diagnostic Code Mapping
+## Error / exit mapping
 
-The doctor command maps `StatusDiagnostic` codes from the status snapshot to dotted diagnostic codes for the doctor report:
+- Findings with `Error` severity → `CliOutcome::ValidationFailed`
+  (exit 6); clean → `Success`.
+- Usage errors (no mode, empty file, unreadable path) →
+  `runtime_error` (exit 1/2 family).
+- `--strict` changes finding severities before the exit decision, so
+  strict runs fail on warnings in the 9 listed codes.
+- JSON mode prints the full `DoctorReport`; human mode writes the
+  formatted sections to stderr.
 
-| Snapshot Code | Doctor Code |
-|--------------|-------------|
-| `CONFIG_LOAD_FAILED` | `sync.config.load_failed` |
-| `NOT_CONFIGURED` | `sync.config.not_configured` |
-| `PENDING_CORRUPT` | `sync.pending.corrupt` |
-| `PENDING_INACCESSIBLE` | `sync.pending.inaccessible` |
-| `EXECUTION_LOCK_STALE` | `sync.execution.dead_stale` |
-| `EXECUTION_LOCK_MALFORMED` | `sync.execution.malformed` |
-| `EXECUTION_LOCK_INACCESSIBLE` | `sync.execution.malformed` |
-| `WORKER_LOCK_STALE` | `sync.worker_lock.dead_stale` |
-| `WORKER_LOCK_MALFORMED` | `sync.worker_lock.malformed` |
-| `WORKER_LOCK_INACCESSIBLE` | `sync.worker_lock.malformed` |
-| `STATUS_CORRUPT` | `sync.status.corrupt` |
-| `ATTENTION_REQUIRED` | `sync.attention.*` (varies by failure class) |
+## Key invariants
 
-## Integration Points
+- Orchestration vs rendering split: `doctor_cmd` never formats;
+  `doctor_report` never checks. No generic finding DSL — each consumer
+  keeps its own semantics over `inspect_library_index`.
+- Sync diagnostics always derive from `capture_snapshot()` — no
+  second, driftable sync-health implementation.
+- Pet analysis and import share `pet_analysis` primitives, so
+  `doctor --pet-file` predictions match `import pet` behavior.
+- Escaped `\<`/`\>` never trigger `W-MALFORMED-VAR`.
 
-- **`pet_analysis`** — Core analysis functions for pet file compatibility
-- **`status_snapshot`** — Canonical status projection for sync diagnostics
-- **`shell_cmd`** — Code generation for shell syntax validation
-- **`library`** — Library loading and validation
-- **`diagnostics`** — `CompatibilityDiagnostic`, `DoctorReport`, and related types
+## File / line references
+
+- `DoctorArgs`: `src/commands/doctor_cmd.rs:18`; strict codes: `:53`
+- Snapshot mapping: `:70,165`; pet report: `:201`; compat: `:470`
+- Shell check: `:1084`; `run`: `:1228`; sanitize: `:437`
+- Rendering: `src/commands/doctor_report.rs`; dispatch: `src/main.rs:756-768`

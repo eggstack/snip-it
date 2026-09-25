@@ -1,91 +1,82 @@
 # list_cmd — Text-Based Snippet Listing
 
+[← Back to Overview](../overview.md)
+
 ## Overview
 
-`list_cmd` displays snippets in a plain text, non-interactive format. Useful for scripting and piping to other commands.
+`src/commands/list_cmd.rs` (252 lines) lists snippets as human text,
+JSON, or CSV. Filtering is fuzzy over the canonical
+`selector::searchable_text` contract; ordering goes through
+`sort::rank_snippets` with optional usage data. Never executes,
+edits, or syncs.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(
-    filter: Option<String>,
-    config: Option<PathBuf>,
-    library: Option<String>,
-    format: ListFormat,
-    sort_opts: Option<SortOptions>,
-    search_output: bool,
-) -> SnipResult<()>
-```
+`ListArgs` (`list_cmd.rs:9`), `snp list` (alias `l`):
 
-## Flow
+| Flag | Meaning |
+|------|---------|
+| `-f/--filter` | Fuzzy filter string |
+| `-c/--config PATH` | Legacy single-file source (ignores `--library` with a warning) |
+| `-l/--library` | Library scope |
+| `--json` | JSON array to stdout (conflicts with `--csv`) |
+| `--csv` | CSV to stdout (conflicts with `--json`) |
+| `--search-output` | Include output/notes field in matching (default off) |
+| `--sort <mode>` | `SnippetSort`, default `Relevance` |
+| `--favorites-first` | Favorites rank first |
 
-1. Load snippets from library
-2. Apply optional filters (tag, folder, search term)
-3. Print to stdout in specified format
-4. Exit
+`main.rs:479-498` maps json/csv flags to `ListFormat::{Json,Csv,Default}`
+and builds `SortOptions{mode, favorites_first}` (always `Some`).
 
-## Output Formats
+## Flow / steps
 
-### Default (plain text)
-```
- Name          Command                     Tags      Folder
-─────────────────────────────────────────────────────────────
- hello         echo "Hello, World!"       demo      scripts
- fortunes      fortune | cowsay           fun      scripts
-```
+`run()` (`list_cmd.rs:50`):
 
-### JSON (`--json`)
-```json
-[
-  {
-    "description": "hello",
-    "command": "echo \"Hello, World!\"",
-    "output": "",
-    "tags": ["demo"],
-    "folders": ["scripts"],
-    "favorite": false
-  }
-]
-```
+1. Load: `--config` → `load_snippets`; else `get_library_path` →
+   `load_library` (no library → hint + `Ok(())`).
+2. Filter: deleted tombstones excluded; with a filter, score
+   `searchable_text(s, SearchFields{include_tags:true,
+   include_output:search_output})` via `shared_fuzzy_matcher()`,
+   keeping matches + scores (empty searchable text never matches).
+3. Sort (`:113-143`): collect indices, load `UsageIndex` **only** for
+   `LastUsed`/`MostUsed`, `rank_snippets(indices, snippets, scores,
+   usage, opts)`, then reorder by rank map (stable, total order).
+4. Render: JSON (`description/command/output/tags/folders/favorite`
+   per item, pretty); CSV (header + `csv_escape`); Default (colored
+   `-----` separators, description: command, `Output:` 80-char summary
+   via `OutputPresentation`, `Tags:`).
 
-### CSV (`--csv`)
-```csv
-description,command,output,tags,folders,favorite
-hello,echo "Hello, World!",,demo,scripts,false
-```
+`csv_escape` (`:214`): prefixes `= + - @`-leading fields with `\t`
+(formula-injection defense), then quotes fields containing
+`, " \n \r \t` with `""` doubling.
 
-## Filters
+## Mutation vs read-only
 
-- `--tag <tag>` — Filter by tag
-- `--folder <folder>` — Filter by folder
-- `--search <term>` — Fuzzy search on name/command
-- `--sort <field>` — Sort by name, date, or usage
+Read-only. No gate, no lock, no save, no clipboard, no runtime.
 
-## Use Cases
+## Auto-sync trigger
 
-- Integration with external tools (jq, fzf)
-- CI/CD pipeline inspection
-- Quick lookup without TUI
+None. No `notify_mutation`, no explicit sync. Listing is invisible to
+auto-sync (usage is not even recorded here — only run/clip record).
 
-## Related
+## Error / exit mapping
 
-- [mod.md](mod.md) — Shared helpers
-- [search_cmd.md](search_cmd.md) — TUI interactive search
-- [tui.md](../tui.md) — TUI architecture
+`SnipResult<()>`; load/serialize errors propagate (exit 1). Empty
+library or empty filter result prints nothing and still succeeds.
+`--library ignored with --config` is a stderr warning, not an error.
 
-## Output-Aware Search (Release 4B)
+## Key invariants
 
-The `--search-output` flag includes the output/notes field in fuzzy search matching.
+- Search parity with `get --query` and MCP `snippets_search` via
+  `searchable_text`; output/notes participates only with
+  `--search-output` (bounded to 512 chars for scoring).
+- Deleted snippets never list, in any format.
+- Sort skips the usage-file read unless the mode needs it.
+- CSV formula protection applies before quoting; JSON carries no IDs
+  or sync metadata by design of this view.
 
-### Behavior
+## File / line references
 
-- Default (flag absent): fuzzy filter matches `description`, `command`, and
-  `tags` via the canonical `selector::searchable_text()` contract.
-- With `--search-output`: fuzzy filter also matches against `output` (bounded to 512 chars for scoring).
-- Output content is sanitized for terminal display via `OutputPresentation::for_scoring()`.
-
-### Default Display
-
-- Empty output fields are hidden in the default (human) display format.
-- Non-empty output shows a single-line summary (truncated to 80 chars).
-- JSON and CSV output always include the raw `output` field.
+- `ListArgs`: `src/commands/list_cmd.rs:9`; `ListFormat`: `:35`
+- `run`: `:50`; sort block: `:113`; renderers: `:145-212`
+- `csv_escape`: `:214`; dispatch: `src/main.rs:479-498`

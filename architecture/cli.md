@@ -1,176 +1,183 @@
-# CLI Entry & Commands
+# CLI Entry & Command Dispatch
 
 [← Back to Overview](overview.md)
 
-## Entry Point
+## Overview
 
-**File**: `src/main.rs`
+`src/main.rs` is the `snp` binary entry point: clap schema (`Cli` +
+`Commands`), Unix signal setup, startup-service classification, and a 1:1
+`dispatch_command()` fan-out to `src/commands/*`. It owns no business logic —
+each subcommand maps to exactly one command module, and each command module
+owns its canonical `*Args` struct beside its handler. The `snp data`
+subgroup is a compatibility alias layer over the same arg types and the same
+single-path `handle_*` helpers, never a second schema.
 
-The binary `snp` is built with `clap` for argument parsing. On startup:
+## Startup Sequence
 
-1. Panic handler is installed (restores terminal, logs panic info)
-2. Signal handlers registered (SIGINT, SIGTERM on Unix; crossterm on Windows)
-3. CLI args parsed and startup services classified
-4. Logging and audit infrastructure initialized only when the command needs it
-5. Command dispatched via `dispatch_command()`
+`main()` (`src/main.rs:999`) runs, in order:
 
-`version`, `completions`, `shell`, `keybindings`, and read-only commands use a
-minimal startup path: they do not create the config/log directory, `.self_check`,
-`snp.log`, or `audit.log`. Mutation and sync commands initialize file logging
-before dispatch; audit records are appended synchronously when needed. The panic
-hook remains installed before parsing so TUI terminal cleanup is still protected.
+1. `setup_panic_handler()` — installed before parsing so TUI terminal
+   cleanup is protected even on argument errors.
+2. `setup_signal_handler()` (`src/main.rs:29`) — registers SIGINT + SIGTERM
+   via `signal_hook::flag` on Unix (`src/main.rs:37-44`); on Windows Ctrl+C
+   is handled by the crossterm event loop (`src/main.rs:47-50`).
+3. `Cli::parse()` + `command_behavior()` — one match assigns both the
+   `StartupRecoveryPolicy` and the `StartupServices` level, preventing drift.
+4. Conditional logging: `Minimal` commands skip config/log directory,
+   `.self_check`, `snp.log`, and `audit.log` creation; `Logging` commands
+   call `init_default_file_logging()` + `log_startup_info()`.
+5. `startup_recover_pending()` — only when the policy is `Allow`.
+6. `dispatch_command()` (`src/main.rs:443`); the outcome maps to a process
+   exit code via `CliOutcome::exit_code()`.
 
 ### Global State
 
-- `CONFIG_PATH: LazyLock<PathBuf>` — Lazy-resolved snippet file path
-- `RUNTIME: LazyLock<Runtime>` — Tokio runtime, only initialized when async commands run
-
-### Command Dispatch
-
-```rust
-fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome>
-```
-
-All subcommands map 1:1 to a module in `src/commands/`. Each module exposes a `run()` function, except `premade_cmd` and `library_cmd` which use subcommand-dispatched functions (`run_list`, `run_get`, etc.).
-
-`validate`, `backup`, `restore`, `repair`, and `status` each have one
-canonical Clap `Args` struct beside their handler
-(`ValidateArgs`, `BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`).
-Top-level and `snp data ...` spellings reuse the same type, and both
-dispatch through single-path `handle_*` helpers in `src/main.rs`. `snp data`
-is a compatibility alias layer, not a second schema.
-
-Every other command with CLI schema (`new`, `list`, `run`, `clip`,
-`search`, `select`, `edit`, `get`, `doctor`, `cron`, `register`) likewise
-owns one canonical `*Args` struct beside its handler (`NewArgs`,
-`ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`, `EditArgs`,
-`GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`). `src/main.rs` keeps
-only the top-level `Commands` composition, runtime/signal/log setup,
-dispatch, and outcome mapping. Shared shell spellings live in
-`shell_cmd::ShellIntegration` (`--check-shell`, `shell init`).
+- `RUNTIME: LazyLock<tokio::runtime::Runtime>` (`src/main.rs:22`) — the
+  Tokio runtime is constructed lazily and therefore only initialized when an
+  async path touches it: `update` (`block_on`, `src/main.rs:452`), `sync` /
+  `register` / `premade` (always passed `&RUNTIME`), and `run` / `clip` /
+  `search` only when `--sync` is set (`args.sync.then_some(&RUNTIME)`,
+  `src/main.rs:515,560,596`). Local-only commands never init it.
+- No subcommand takes `&mut self` runtime plumbing beyond that: sync paths
+  receive `&RUNTIME` (or `Option<&Runtime>` for `run_snippet_selection`).
 
 ## Subcommands
+
+`Commands` (`src/main.rs:64`) plus nested groups (`SyncCommands`,
+`LibraryCommands`, `PremadeCommands`, `McpCommands`, `DataCommands`,
+`ShellCommands`, `ImportSubcommands`) give 30+ spellings:
 
 | Command | Alias | Module | Async | Description |
 |---------|-------|--------|-------|-------------|
 | `version` | `v` | — | No | Print version |
 | `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor |
 | `list` | `l` | `list_cmd` | No | List snippets (fuzzy filter over description/command/tags; `--search-output` includes output in match) |
-| `run` | `r` | `run_cmd` | Yes | TUI select → execute via shell; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
-| `clip` | `c` | `clip_cmd` | Yes | TUI select → copy to clipboard; exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI |
-| `search` | `s` | `search_cmd` | Yes | TUI select → display snippet info |
-| `select` | `sel` | `select_cmd` | No | Select a snippet and print its command to stdout (no execution) |
-| `edit` | `e` | `edit_cmd` | No | Open snippet file in `$EDITOR`; or set/clear output field (`--output`, `--output-stdin`, `--clear-output` with `--filter`); exact selectors (`--id`, `--description-exact`, `--command-exact`) bypass TUI for output editing |
-| `get` | — | `get_cmd` | No | Deterministic non-TUI snippet retrieval (never executes, no clipboard) |
-| `validate` | `val` | `validate_cmd` | No | Validate snippet libraries and configuration |
-| `backup` | — | `backup_cmd` | No | Backup snippet libraries to directory with manifest |
-| `restore` | — | `restore_cmd` | No | Restore snippets from backup (dry-run, merge, replace) |
-| `repair` | `rp` | `repair_cmd` | No | Repair snippet libraries and sync artifacts |
-| `library` | `lib` | `library_cmd` | No | Manage snippet libraries |
-| `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries |
-| `import` | `i` | `import_cmd` | No | Import snippets from external formats |
+| `run` | `r` | `run_cmd` | If `--sync` | TUI select → execute via shell; exact selectors bypass TUI |
+| `clip` | `c` | `clip_cmd` | If `--sync` | TUI select → copy to clipboard; exact selectors bypass TUI |
+| `search` | `s` | `search_cmd` | If `--sync` | TUI select → display snippet info |
+| `select` | `sel` | `select_cmd` | No | Print a snippet's command to stdout (no execution) |
+| `edit` | `e` | `edit_cmd` | No | Open library in `$EDITOR`; or set/clear output (`--output`, `--output-stdin`, `--clear-output` with `--filter` or exact selectors) |
+| `get` | — | `get_cmd` | No | Deterministic non-TUI retrieval (never executes, no clipboard) |
+| `validate` | `val` | `validate_cmd` | No | Validate snippet libraries and configuration (read-only) |
+| `backup` | — | `backup_cmd` | No | Secret-free backup snapshot (directory manifest) |
+| `restore` | — | `restore_cmd` | No | Restore from backup (dry-run, merge, replace) |
+| `repair` | `rp` | `repair_cmd` | No | Conservative, backed-up, idempotent repair |
+| `library` | `lib` | `library_cmd` | No | Library CRUD (`list/create/delete/set-primary/show`) |
+| `premade` | `p` | `premade_cmd` | Yes | Browse/download premade libraries (`list/get/sync/search/update`) |
+| `import` | `i` | `import_cmd` | No | Import Pet snippet files (`import pet`, create/merge/replace) |
 | `doctor` | — | `doctor_cmd` | No | Diagnose configuration and environment |
-| `sync` | `y` | `sync_cmd` | Yes | Sync snippets with server |
-| `cron` | `cr` | `cron_cmd` | No | Generate crontab entry for auto-sync |
+| `sync` | `y` | `sync_cmd` | Yes | Bidirectional sync (`run/config/retry/clear-failure/discard-pending/repair`) |
+| `cron` | `cr` | `cron_cmd` | No | Generate crontab entry for periodic sync |
 | `register` | `reg` | `register_cmd` | Yes | Register new sync account |
 | `keybindings` | `k` | `keybindings_cmd` | No | Print keybinding reference |
-| `status` | — | `status_cmd` | No | Show auto-sync status |
-| `data` | `d` | `DataCommands` | No | Compatibility alias layer reusing the canonical `validate`/`backup`/`restore`/`repair`/`status` args (`validate`→`v`, `backup`→`b`, `status`→`s`) |
-| `update` | — | `update_cmd` | No | Check for and install an update |
+| `status` | — | `status_cmd` | No | Show auto-sync status (read-only) |
+| `data` | `d` | `DataCommands` | No | Alias layer reusing canonical `validate`/`backup`/`restore`/`repair`/`status` args (`validate`→`v`, `backup`→`b`, `status`→`s`) |
+| `mcp` | — | `mcp` | No | Local MCP adapter (`serve/instructions/install`) — read-only, stdio-only; see [mcp.md](mcp.md) |
+| `update` | — | `update` (`src/update.rs`) | Yes | Check for and install an update; see [update.md](update.md) |
 | `shell` | — | `shell_cmd` | No | Generate interactive shell integration |
-| `completions` | — | `completions_cmd` | No | Generate shell completions |
-| `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden.** Detached debounce worker for auto-sync (internal use) |
+| `completions` | `g` | inline (`clap_complete`) | No | Generate shell completions |
+| `auto-sync-worker` | — | `auto_sync::worker` | No | **Hidden** (`hide = true`). Detached debounce worker; see [auto_sync.md](auto_sync.md) |
+| `__self-replace` | — | `update` | No | **Hidden** Windows self-replacement helper (`--candidate`/`--destination`) |
 
-The `auto-sync-worker` subcommand is registered with `hide = true` in the clap
-CLI — it does not appear in `--help` output and is used internally by the
-detached helper protocol. See
-[auto_sync.md](auto_sync.md) for the full architecture.
+Bare `snp` (no subcommand) defaults to the `run` TUI (`src/main.rs:445`).
+
+## Dispatch & Canonical Args
+
+`dispatch_command()` (`src/main.rs:443`) maps every `Commands` variant to
+its module 1:1. Each module exposes `run()` (except `premade_cmd` /
+`library_cmd`, which use subcommand-dispatched `run_list`/`run_get`/…).
+`premade`/`sync`/`register` call sites pass `&RUNTIME`; `run`/`clip`/`search`
+pass `args.sync.then_some(&RUNTIME)` so the runtime stays cold otherwise.
+
+One canonical Clap `*Args` struct lives beside each handler — `ValidateArgs`,
+`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, plus `NewArgs`,
+`ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`, `EditArgs`,
+`GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`. `src/main.rs` keeps only
+the `Commands` composition, runtime/signal/log setup, dispatch, and outcome
+mapping. Shared shell spellings live in `shell_cmd::ShellIntegration`.
+
+`snp data` reuses the same five arg types through single-path helpers in
+`src/main.rs:401-441`: `handle_validate`, `handle_backup`, `handle_restore`,
+`handle_repair` (exits 10/1 via `exit_on_repair_status` for
+`UnsafeOnly`/`PartialFailure`), `handle_status`. Both spellings therefore
+share validation, JSON formatting, and exit-code mapping.
 
 ## Startup Recovery Classification
 
-`command_behavior()` in `src/main.rs` maps every `Commands` variant to a
-`CommandBehavior` containing both a `StartupRecoveryPolicy` (gating whether
-auto-sync recovery runs before dispatch) and a `StartupServices` level
-(gating logging and audit initialization). This prevents read-only commands
-from triggering network work.
+`command_behavior()` (`src/main.rs:886`) maps every `Commands` variant to a
+`CommandBehavior { recovery, services }`. `StartupRecoveryPolicy`
+(`src/auto_sync/notification.rs:190`) has exactly 5 variants:
 
 ```rust
 pub enum StartupRecoveryPolicy {
-    Allow,              // Mutation commands — recovery permitted
-    SuppressReadOnly,   // Read-only commands — no worker spawn, no network
+    Allow,                // Mutation commands — recovery permitted
+    SuppressReadOnly,     // Read-only — no worker spawn, no network
     SuppressExplicitSync, // sync, cron, register — manage own behavior
-    SuppressInternal,   // auto-sync-worker
-    SuppressConfiguration, // doctor, keybindings, shell, completions, update
+    SuppressInternal,     // auto-sync-worker
+    SuppressConfiguration,// update, self-replace, doctor, keybindings, shell, completions
 }
 ```
 
-### Command Classification
-
 | Policy | Commands |
 |--------|----------|
-| `Allow` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary` |
-| `SuppressReadOnly` | `version`, `list`, `select`, `status`, `get`, `validate`, `backup`, `library list/show` |
+| `Allow` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create/delete/set-primary`, bare TUI |
+| `SuppressReadOnly` | `version`, `list`, `select`, `status`, `get`, `validate`, `backup`, `mcp`, `library list/show`, plus dry-run modes (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`) and the read-only `data` spellings |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` |
-| `SuppressConfiguration` | `update`, `doctor`, `completions`, `shell`, `keybindings` |
+| `SuppressConfiguration` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
 
-The classification is exhaustive — every variant is mapped. Adding a new command
-requires selecting a policy, enforced by the compiler (no catch-all arm).
+The match is exhaustive — adding a command requires choosing a policy and a
+`StartupServices` level, enforced by the compiler with no catch-all arm.
+Dry-run modes of mutating commands are classified read-only so previews never
+trigger network work or create log/config state.
+
+`StartupServices` (`src/main.rs:872`) has two levels: `Minimal` skips file
+logging, startup/shutdown log lines, and audit entirely, while `Logging`
+initializes file logging plus `log_startup_info()` / `log_shutdown_info()`.
+Read-only and dry-run paths pair `SuppressReadOnly` with `Minimal`; every
+other policy pairs with `Logging`. Non-`Success` outcomes exit via
+`outcome.exit_code()` (`src/main.rs:1019-1024`); hard errors print to stderr
+and exit 1 (`src/main.rs:1025-1031`).
 
 ## Shared Command Utilities
 
-**File**: `src/commands/mod.rs`
+**File**: `src/commands/mod.rs` — see [commands/mod.md](commands/mod.md):
 
-Provides functions shared across command modules:
-
-- `get_config_path()` — Resolve config path from CLI arg or default
-- `get_library_path()` — Resolve library path by name or primary
-- `load_snippets()` / `save_snippets()` — TOML read/write with error recovery
-- `get_snippet_data()` — Extract parallel arrays for TUI display
-- `expand_snippet_command()` — Parse variables, prompt user, expand
-- `run_snippet_selection()` — Shared TUI selection loop with process callback
-- `init_library_manager()` — Create LibraryManager with library mode
-
-### `run_snippet_selection` Pattern
-
-Most TUI commands (`run`, `clip`, `search`) follow the same pattern:
-1. Load library and snippets
-2. Extract snippet data for TUI
-3. Enter selection loop (TUI renders, user filters, selects)
-4. Call `process_fn` callback with selected snippet
-5. Handle result (Cancel/Continue/Done)
-6. Optionally trigger sync on exit
-
-### Exact-Source Validation Pipeline
-
-All exact command sources (`--command-stdin`, `--from-file`, `--editor`) share
-`validate_exact_command_bytes()` for: 16 MiB cap, valid UTF-8, no NUL bytes,
-and no empty/whitespace-only input. Source resolution completes before library
-mutation, so partial failures cannot corrupt the snippet collection. The editor
-command specification is parsed with `shell-words` — no shell is invoked.
+- `get_config_path()` / `get_library_path()` — config and library resolution
+- `load_snippets()` / `save_snippets()` — TOML read/write with recovery
+- `get_snippet_data()` — parallel arrays for TUI display
+- `expand_snippet_command()` — variable parsing, prompting, expansion
+- `run_snippet_selection()` — shared TUI loop (`Option<&Runtime>`; `None`
+  when `do_sync` is false) with `process_fn` callback
+- `init_library_manager()` — `LibraryManager` construction
+- `validate_exact_command_bytes()` — shared 16 MiB cap, UTF-8, no-NUL,
+  non-empty gate for `--command-stdin` / `--from-file` / `--editor`
 
 ## Exact Selectors
 
-`run`, `clip`, and `edit` support `--id`, `--description-exact`, and `--command-exact`
-flags that bypass the TUI entirely. When any of these flags is provided, the command
-resolves the snippet deterministically via `SnippetSelector` and proceeds directly
-to the action (execute, copy, or edit output field).
+`run`, `clip`, and `edit` accept `--id` / `--description-exact` /
+`--command-exact`, which bypass the TUI via
+`selector::resolve_exact_target()` (`src/selector.rs:604`;
+`src/main.rs:501,547,637`):
 
-- `--id <UUID>` — match by exact snippet UUID
-- `--description-exact <text>` — match by exact description (case-insensitive)
-- `--command-exact <text>` — match by exact command text (case-insensitive)
+- `--id <UUID>` — exact snippet UUID (case-sensitive)
+- `--description-exact <text>` — exact description (case-insensitive)
+- `--command-exact <text>` — exact command text (case-insensitive)
 
-These flags conflict with `--filter` (TUI fuzzy filter) and with each other.
-See [selector.md](selector.md) for the full resolution model.
+They conflict with `--filter` (fuzzy TUI pre-filter) and with each other.
+Ambiguous description/command matches report identities (exit 5); no match
+is exit 3. `snp edit --output/--output-stdin/--clear-output` requires an
+exact selector or `--filter`. See [selector.md](selector.md).
 
 ## Exit Codes
 
-All commands map outcomes to stable exit codes via `CliOutcome`:
+`CliOutcome` → code mapping lives in `src/outcome.rs:72-91` (stable, see
+`docs/EXIT_CODES.md`):
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
+| 1 | General error (`PersistenceFailed` maps here for backward compat) |
 | 2 | Usage/argument error (Clap) |
 | 3 | Not found |
 | 4 | User cancelled |
@@ -179,28 +186,19 @@ All commands map outcomes to stable exit codes via `CliOutcome`:
 | 7 | Sync failure |
 | 8 | Execution failure |
 | 9 | Conflict/refused |
-| 10 | Unsafe repairs (repair found issues requiring operator decision) |
+| 10 | Unsafe repairs pending operator decision (never a `CliOutcome`; `repair` exits directly via `exit_on_repair_status`, `src/main.rs:375`) |
 
-`PersistenceFailed` maps to code 1 (general error). `ExecutionFailed` propagates the
-child process exit code when available, falling back to code 8.
+`ExecutionFailed { child_code }` propagates the child process exit code when
+available, falling back to 8 (`src/outcome.rs:83-87`; direct
+`std::process::exit(child_code.unwrap_or(8))` on the exact and TUI `run`
+paths, `src/main.rs:517,541`). `UnsafeOnly` deliberately avoids 2: a valid
+invocation awaiting an operator decision is not a usage error.
 
 ## Key Files
 
-- `src/main.rs` — CLI definition, signal handling, command dispatch
-- `src/commands/mod.rs` — Shared helpers, TOML load/save, selection loop
-- `src/commands/run_cmd.rs` — Shell execution with output file support
-- `src/commands/clip_cmd.rs` — Clipboard copy with audit logging
-- `src/commands/search_cmd.rs` — Display snippet details
-- `src/commands/new_cmd.rs` — Unified snippet creation pipeline (positional, prompts, multiline, `--command-stdin`, `--from-file`, `--editor`)
-- `src/commands/sync_cmd.rs` — Server library linking, conflict resolution
-- `src/commands/library_cmd.rs` — Library CRUD operations
-- `src/commands/premade_cmd.rs` — Premade library browsing/downloading
-- `src/commands/edit_cmd.rs` — Editor resolution (absolute, relative, PATH search); output/notes editing (`--output`, `--output-stdin`, `--clear-output`)
-- `src/commands/cron_cmd.rs` — Crontab entry generation
-- `src/commands/register_cmd.rs` — Account registration
-- `src/commands/keybindings_cmd.rs` — Keybinding reference display
-- `src/commands/list_cmd.rs` — CLI-based snippet listing with fuzzy filter
-- `src/output.rs` — Output/notes presentation model, terminal sanitization, search scoring
-- `src/commands/get_cmd.rs` — Deterministic non-TUI snippet retrieval
-- `src/selector.rs` — Shared snippet selector model, resolution policies
-- `src/outcome.rs` — CLI outcome types, exit-code mapping
+- `src/main.rs` — CLI schema, signals, `RUNTIME`, dispatch, classification
+- `src/commands/mod.rs` — shared helpers, TOML load/save, selection loop
+- `src/auto_sync/notification.rs:190` — `StartupRecoveryPolicy` (5 variants)
+- `src/outcome.rs:18,46` — `CliOutcome`, `exit_code` constants 0–10
+- `src/selector.rs:604` — `resolve_exact_target` for `--id`/`--description-exact`/`--command-exact`
+- `src/update.rs` — `snp update` transport (in-process eggfetch-core)

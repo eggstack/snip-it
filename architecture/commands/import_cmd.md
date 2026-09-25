@@ -1,78 +1,100 @@
 # import_cmd — Pet Snippet File Import
 
-**Source:** `src/commands/import_cmd.rs`
+[← Back to Overview](../overview.md)
 
-## Purpose
+## Overview
 
-Imports snippets from pet-format TOML files into native snip-it libraries. Handles the full lifecycle: parsing, compatibility analysis, conversion, deduplication, and persistence.
+`src/commands/import_cmd.rs` (690 lines) imports pet TOML exports into
+native libraries. Analysis primitives (`read_source_file`,
+`parse_pet_toml`, `detect_unknown_fields`, `analyze_entry`,
+duplicate predicates) live in `pet_analysis.rs`; this module owns
+conversion (fresh IDs, timestamps, sync-field clearing), destination
+handling (`Create`/`Merge`/`Replace`), duplicate triage, and the
+`PetImportReport`. `doctor --pet-file` previews the same diagnostics
+without writing.
 
-## Import Modes
+## CLI surface
 
-| Mode | Flag | Behavior |
-|------|------|----------|
-| Create | (default) | Creates a new library; fails if it already exists |
-| Merge | `--merge` | Imports into an existing library, skipping exact duplicates |
-| Replace | `--replace` | Replaces the destination library entirely (with backup) |
+`snp import pet` (alias `i`), `main.rs:774-802`:
 
-## Flow
+| Flag | Meaning |
+|------|---------|
+| `path` (positional) | Source pet TOML file |
+| `--library NAME` | Destination (default: sanitized file stem) |
+| `--merge` | Upsert into existing (skip exact duplicates) |
+| `--replace` | Replace destination (with backup) |
+| `--dry-run` | Convert + report, write nothing |
+| `--strict` | Empty command aborts instead of skipping |
+| `--report <human\|json>` | Report rendering |
+| `--report-file PATH` | Also write report to file |
 
-1. **Read source** — `pet_analysis::read_source_file()` reads and validates the pet TOML file (max 16 MB)
-2. **Parse** — `pet_analysis::parse_pet_toml()` deserializes the TOML, applying `fix_invalid_toml_escapes()` for compatibility
-3. **Analyze** — For each entry:
-   - `analyze_entry()` checks variable syntax, field presence, command validity
-   - `detect_unknown_fields()` flags non-standard TOML keys
-   - Duplicate detection via `is_exact_duplicate()`, `same_command_different_description()`, `same_description_different_command()`
-4. **Convert** — `convert_entry()` transforms pet `Snippet` to snip-it `Snippet`:
-   - Generates UUID for `id`
-   - Sets `created_at` / `updated_at` to current timestamp
-   - Preserves command text semantically
-   - Records normalization diagnostics
-5. **Deduplicate** — In merge mode, exact duplicates (same description + command) are skipped
-6. **Persist** — Writes the library file via `crate::library::save_library()` and registers it in the library config
-7. **Report** — Outputs diagnostics as human-readable or JSON
+`PetImportOptions{source, destination_library, mode, strict, dry_run,
+report_format, report_file}` (`import_cmd.rs:37`);
+`ImportMode{Create(default),Merge,Replace}` (`:15`);
+`ReportFormat{Human(default),Json}` (`:27`). `--replace` wins over
+`--merge`; neither means `Create`.
 
-## Duplicate Detection
+## Flow / steps
 
-Three types of duplicates are detected:
+`run_import_pet(options)` (`:167`):
 
-| Type | Condition | Severity |
-|------|-----------|----------|
-| Exact | Same description AND command | Info (skipped in merge) |
-| Same command, different description | Same command text, different descriptions | Warning |
-| Same description, different command | Same description, different command text | Warning |
+1. `read_source_file` (size/UTF-8/NUL guards) → reject empty →
+   `parse_pet_toml` (with `fix_invalid_toml_escapes`) → reject zero
+   entries → `detect_unknown_fields` on the raw TOML.
+2. `LibraryManager::new + ensure_library_mode`; destination =
+   `--library` or `derive_library_name` (lowercase, non-alnum → `-`,
+   collapse/trim, fallback `imported`).
+3. `PetImportReport::new` + capability census (`toml_format`,
+   `snippet_count=N`, `variables`, `choice_variables`,
+   `output_fields`, `tags`).
+4. Per entry `convert_entry` (`:96`): record normalizations (zero
+   timestamps, sync fields, non-empty ID), regenerate UUID, stamp
+   `now` for zero timestamps, clear `device_id`/`deleted=false`, then
+   `analyze_entry` diagnostics. Empty command → skip + `had_fatal`
+   (strict aborts with an error naming the index).
+5. Destination: `Create` refuses existing (suggest `--merge/--replace`);
+   `Merge` loads-or-defaults, skips exact duplicates via O(n+m)
+   lookup tables, records `ImportDuplicate`s; `Replace` backs up then
+   overwrites. `dry_run` skips all writes.
+6. `save_library` (gated + locked internally) unless dry-run; notify;
+   emit human/JSON report (+ file when requested).
 
-## Diagnostic Codes
+## Mutation vs read-only
 
-| Code | Severity | Meaning |
-|------|----------|---------|
-| `W-DUP-CMD` | Warning | Duplicate command text |
-| `W-DUP-DESC` | Warning | Duplicate description |
-| `I-FIELD-UNKNOWN` | Info | Unknown TOML field |
-| `W-DESC-MISSING` | Warning | Missing description |
-| `W-CMD-MISSING` | Warning | Missing command |
-| `E-CMD-EMPTY` | Error | Empty command |
-| `W-DESC-EMPTY` | Warning | Empty description |
-| `W-TYPE-MISMATCH` | Warning | Field type mismatch |
+Mutating unless `--dry-run`: one `save_library` of the destination.
+Gating/locking ride the library persistence layer. Dry-run converts
+fully in memory and writes nothing (still validates everything).
 
-## Report Formats
+## Auto-sync trigger
 
-| Format | Flag | Destination |
-|--------|------|-------------|
-| Human | `--report human` (default) | stderr |
-| JSON | `--report json` | stdout |
-| JSON file | `--report-file <path>` | File |
+`notify_mutation(MutationKind::Import, MutationOrigin::Import)`
+(`import_cmd.rs:473-475`) after a successful commit — the only
+`Import`-origin notify in the codebase. Dry-run and failures notify
+nothing. (Restore uses the transactional `ensure_pending_for_transaction`
+with `Import` kind instead — same sync effect, crash-safe path.)
 
-## Strict Mode
+## Error / exit mapping
 
-`--strict` aborts the import if any error-severity diagnostic is produced.
+`SnipResult<()>`: empty source, zero entries, strict empty-command,
+existing destination in `Create` mode, and save failures propagate
+(exit 1 family with remediation text). Non-strict empty commands are
+skipped and counted, not fatal.
 
-## Dry Run
+## Key invariants
 
-`--dry-run` previews the import without writing any files. Shows what would be created/merged/replaced.
+- Imported snippets always get fresh UUIDs; pet IDs become
+  normalization records, never live keys.
+- Sync fields are cleared at import (`device_id=""`,
+  `deleted=false`) so imports can never resurrect or misattribute.
+- Exact duplicates are skipped in `Merge`, preserved as report data;
+  near-duplicates (`same_command_different_description`,
+  `same_description_different_command`) are reported, not merged.
+- Destination-name derivation matches `doctor`'s
+  `sanitize_library_name` (single home per module, same rules).
 
-## Integration Points
+## File / line references
 
-- **`pet_analysis`** — Core parsing, analysis, and duplicate detection
-- **`LibraryManager`** — Library creation, deletion, and persistence
-- **`diagnostics`** — `PetImportReport`, `ImportDuplicate`, `NormalizationRecord`
-- **`utils/toml_helpers`** — TOML escape handling for cross-format compatibility
+- Modes/options: `src/commands/import_cmd.rs:15,27,37`
+- `convert_entry`: `:96`; `run_import_pet`: `:167`; notify: `:473`
+- Analysis: `src/commands/pet_analysis.rs`; report: `src/diagnostics.rs`
+- Dispatch: `src/main.rs:774-802`

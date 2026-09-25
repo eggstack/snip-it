@@ -1,6 +1,6 @@
 # CLI Outcome Types
 
-[← Back to CLI](cli.md)
+[← Back to Overview](overview.md) · [← Back to CLI](cli.md)
 
 ## Overview
 
@@ -157,3 +157,67 @@ OutputContext::field()   // Machine, Never color
 Commands check `ctx.suppress_ansi()` before formatting output, and
 use `ctx.write_stdout()` for byte-safe output that handles broken pipe
 without noise or backtraces.
+
+### Key functions — `src/outcome.rs:151-272`
+
+```rust
+OutputContext::human() -> Self
+OutputContext::json() / csv() / raw() / field() -> Self // machine, Never color, non-interactive
+pub fn is_machine_mode(&self) -> bool    // Json | Csv | Raw | Field
+pub fn suppress_ansi(&self) -> bool      // Never, machine mode, or Auto + non-interactive
+pub fn write_stdout(&self, data: &[u8]) -> io::Result<()> // BrokenPipe → Ok
+pub fn writeln(&self, text: &str) -> io::Result<()>       // adds trailing newline
+pub fn diagnostic(&self, text: &str)                     // stderr only
+pub fn strip_ansi_if_needed(&self, text: &str) -> String // CSI (any final byte) + OSC (BEL/ST)
+```
+
+`Expanded` is intentionally *not* machine mode (variable-expanded human
+display). Exact-byte modes (`Raw`, `Field`) use `write_all` with no
+trailing newline.
+
+## Stream policy
+
+Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
+
+- **Exit codes are implemented and stable** (0–10 via `CliOutcome`,
+  table above). Stream separation is **aspirational**: human-readable
+  output still goes to stdout in several commands; only `import`/`doctor`
+  JSON splits are clean (JSON → stdout, human → stderr).
+- Enforced today: data only on stdout, diagnostics on stderr
+  (`diagnostic()`), no ANSI in machine modes (`suppress_ansi()` +
+  `strip_ansi_if_needed()`), no update notices / auto-sync advisories /
+  prompts / spinners in machine mode, tracing subscriber on stderr,
+  broken pipe swallowed.
+- `main.rs` maps `Ok(outcome)` → `outcome.exit_code()` (`Success` → no
+  exit) and `Err(SnipError)` → exit 1; `repair` bypasses `CliOutcome`
+  via `exit_on_repair_status` for `UnsafeOnly` (10) / `PartialFailure` (1).
+- Detached auto-sync worker codes are internal, not part of the public
+  contract. With `auto_sync_failure = "error"`, a post-commit spawn
+  failure surfaces exit 1 via `SnipError::Runtime` — local mutation stays
+  committed; worker-side failures surface via logs / `snp doctor` only.
+- Cancellation: `run`/`clip`/`search` treat TUI cancel as success
+  (exit 0); `snp select` maps cancel → `CliOutcome::Cancelled` → exit 4
+  at the CLI boundary. Failed `run` records no usage metadata.
+
+## Invariants / gotchas (from AGENTS.md)
+
+- `CliOutcome` is `#[non_exhaustive]` — add variants, never renumber
+  codes (`docs/EXIT_CODES.md` + `--help` document them).
+- `PersistenceFailed` → 1 (`GENERAL_ERROR`) deliberately shares the
+  general code for backward compat; `USAGE_ERROR` (2) comes from Clap,
+  never from command code; `UNSAFE_REPAIRS` (10) has no variant.
+- `ExecutionFailed` propagates the child code when known (0–255),
+  else 8 (spawn failure, signal kill, `SNP_COMMAND_TIMEOUT`).
+- Never leak secrets through `diagnostic()` or stdout payloads; machine
+  output must stay pipe-safe (no prompts, no ANSI, exact bytes).
+
+## File / line refs
+
+- `src/outcome.rs:18-40` (`CliOutcome`), `:46-70` (`exit_code::*`
+  0–10), `:72-91` (`exit_code()` mapper), `:93-149`
+  (`ColorPolicy`, `OutputMode`, `OutputContext`), `:151-272`
+  (constructors + guards), `:274-376` (tests: mapping, child-code
+  propagation, distinctness, ANSI stripping).
+- `docs/EXIT_CODES.md` (stable table, child-code rules, shell example),
+  `docs/CLI_EXITCODE_STREAM_POLICY.md` (per-command streams, implemented
+  vs aspirational split).

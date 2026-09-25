@@ -1,144 +1,101 @@
 # new_cmd — Create New Snippet
 
+[← Back to Overview](../overview.md)
+
 ## Overview
 
-`src/commands/new_cmd.rs` owns command-source resolution and then sends every
-source through the same metadata, validation, library-loading, backup, and
-atomic-save pipeline. The positional command and existing prompts remain the
-compatibility path; Release 2A adds exact stdin ingestion for shell helpers;
-Release 2B adds file-based ingestion and editor-based creation.
+`src/commands/new_cmd.rs` (920 lines) creates snippets from six mutually
+exclusive command-body sources and funnels every source through one
+metadata, validation, library-loading, and atomic-save pipeline. Exact
+sources (stdin/file/editor) preserve bytes verbatim; interactive sources
+(multiline/prompt/positional) keep their historical prompting behavior.
 
-## Sources
+## CLI surface
 
-The CLI accepts these mutually exclusive command-body sources:
+`NewArgs` (`new_cmd.rs:18`), dispatched as `snp new` (alias `n`):
 
-| CLI form | Internal source | Behavior |
-| --- | --- | --- |
-| `snp new '<command>'` | `CommandSource::Positional` | Existing positional behavior; non-empty commands are echoed as before. |
-| `snp new` | `CommandSource::InteractivePrompt` | Existing single-line prompt, with the existing trim behavior. |
-| `snp new --multiline` | `CommandSource::MultilinePrompt` | Existing two-blank-line stdin prompt. |
-| `snp new --command-stdin` | `CommandSource::Stdin` | Reads stdin as exact UTF-8 command data. |
-| `snp new --from-file <path>` | `CommandSource::File` | Reads the specified file as exact UTF-8 command data. Symlinks are followed; the resolved target must be a regular file. |
-| `snp new --editor` | `CommandSource::Editor` | Opens `$VISUAL` (if set), then `$EDITOR`, then `vim` for authoring the command body. Editor arguments are parsed with shell-word semantics. |
+| Flag | Conflicts | Meaning |
+|------|-----------|---------|
+| `COMMAND` (positional) | `command_stdin, multiline, from_file, editor` | Inline command text |
+| `-t/--tags [TAGS]` | — | `Set` with `0..=1` args; bare `-t` prompts (sentinel `__snp_prompt_tags__`) |
+| `-m/--multiline` | `command_stdin, editor` | Two-blank-line stdin prompt |
+| `--command-stdin` | `command, multiline, from_file, editor` | Byte-exact stdin ingestion |
+| `--from-file PATH` | `command, command_stdin, editor` | Byte-exact file ingestion |
+| `--editor` | `command, command_stdin, from_file` | `$VISUAL`/`$EDITOR` composition |
+| `-d/--description` | — | Description (else prompted) |
+| `-c/--config PATH` | — | Legacy single-file path fallback |
+| `-l/--library NAME` | — | Target library |
 
-`--command-stdin` conflicts with a positional command, `--multiline`, `--from-file`, and `--editor`.
-`--from-file` conflicts with a positional command, `--command-stdin`, `--multiline`, and `--editor`.
-`--editor` conflicts with a positional command, `--command-stdin`, `--multiline`, and `--from-file`.
-Source resolution happens before library resolution so malformed input cannot
-trigger migration or persistence.
+`--command-stdin` requires `--description` (stdin is reserved for the
+body) and rejects tag prompting (tags must be explicit or omitted).
 
-## Exact stdin contract
+## Flow / steps
 
-`read_command_stdin()` reads at most 16 MiB, validates UTF-8, rejects NUL bytes,
-and returns the resulting `String` without trimming, shell parsing, evaluation,
-or an appended newline. A supplied trailing newline (or multiple trailing
-newlines) is stored unchanged. The command is data only: it is never executed
-by the ingestion path and is not echoed to stdout or included in normal logs.
+`run()` (`new_cmd.rs:541`):
 
-The data model rejects commands that are empty or whitespace-only, matching
-`Snippet::new()` and existing positional creation behavior.
+1. Guard stdin-mode preconditions (description/tags rules above).
+2. Resolve `CommandSource` (`new_cmd.rs:72`): Stdin / File / Editor /
+   MultilinePrompt / Positional / InteractivePrompt.
+3. Acquire command data **before touching library state** (malformed
+   stdin never triggers migration):
+   - Stdin → `read_command_stdin` (`:178`); File → `read_file_command`
+     (`:196`); Editor → `read_editor_command` (`:427`); Multiline →
+     `read_multiline_command` (`:513`); Prompt/Positional → colored
+     `Command>` line (`:518`).
+   - All exact sources share `validate_exact_command_bytes` (`:131`):
+     16 MiB cap (`MAX_COMMAND_STDIN_BYTES`), UTF-8, no NUL, non-blank.
+     Accepted bytes are never modified (trailing newlines preserved).
+4. Resolve description (flag or `Description>` prompt) and tags
+   (`parse_tags` splits on space/comma, `:532`).
+5. Resolve destination: `get_library_path(library)` → `load_library`;
+   else legacy `load_snippets(fallback)` where fallback is `--config`
+   or the primary library path.
+6. `Snippet::new(description, command, tags)`, stamp `device_id` from
+   sync settings (server rejects device-less snippets), push, then
+   `save_library` / `save_snippets`.
+7. `notify_mutation(SnippetCreate, User)` after the commit; print
+   `Snippet added`.
 
-## File-based ingestion (`--from-file`)
+Editor handling: `parse_editor_spec` (shell-word split, no shell),
+`resolve_editor` (absolute/CWD-relative/PATH search, Windows
+extensions, symlink-escape rejection), precedence
+`$VISUAL > $EDITOR > vim`, private `snp-editor-*.sh` tempfile, direct
+spawn with no shell, exit-status check, re-read + shared validator.
 
-`read_file_command(path)` reads the specified file as exact UTF-8 command
-data. It applies the same validation as `read_command_stdin()`: at most 16 MiB,
-valid UTF-8, no NUL bytes. Symlinks are followed; the resolved target must be a
-regular file (directories, FIFOs, sockets, and device nodes are rejected). File
-content is not trimmed, evaluated, or executed; it is stored verbatim.
+## Mutation vs read-only
 
-Because the command body comes from a file rather than stdin, `--description` is
-optional — it can be supplied as a flag or prompted interactively. The file path
-is consumed but never included in the snippet data.
+Mutating. Writes one library file through `save_library` /
+`save_snippets`, both of which gate on interrupted transactions and take
+the local-data lock internally (`LibraryManager::gate_mutation`,
+`mod.rs:180`).
 
-## Editor-based creation (`--editor`)
+## Auto-sync trigger
 
-`read_editor_command()` resolves the editor using `$VISUAL` (if non-empty),
-then `$EDITOR` (if non-empty), then falls back to `vim`. The editor
-specification is parsed with `shell-words` so values like `code --wait`,
-`nvim -f`, or `"/path with spaces/bin/code" --wait` work without invoking a
-shell. The parsed program and arguments are passed through to the editor
-verbatim.
+`notify_mutation(MutationKind::SnippetCreate, MutationOrigin::User)`
+(`new_cmd.rs:650-653`), reported via `report_notification_result`
+(Workstream B1). No explicit sync here; the detached worker picks it up.
 
-The temporary file is created atomically via `tempfile::Builder` in the OS
-temporary directory with prefix `snp-editor-`. On Unix, the file is created
-with `0600` permissions. The `NamedTempFile` RAII guard ensures cleanup
-regardless of success or failure.
+## Error / exit mapping
 
-After the editor exits, the temp file content is validated using
-`validate_exact_command_bytes()` (shared with `--command-stdin` and
-`--from-file`): 16 MiB cap, valid UTF-8, no NUL bytes, no empty or
-whitespace-only content. Editor errors identify the editor executable and exit
-status but never include the command body.
+`SnipResult<()>`; `main.rs` maps `Err` to exit 1 (general) with the
+`SnipError` detail. Notable errors: stdin without description, tag
+prompt with stdin, oversized/non-UTF-8/NUL/empty input (labeled by
+`CommandSourceKind`: stdin/file/editor), directory/non-regular file,
+missing file, editor not found/failed, library not found.
 
-Because the command body comes from the editor rather than stdin, `--description`
-is optional — it can be supplied as a flag or prompted interactively.
+## Key invariants
 
-## Common exact-source validation
+- Input resolution precedes any library load/save.
+- Exact sources are byte-exact; `--multiline` is **not** (two-blank-line
+  terminator is consumed; trailing blanks unrepresentable).
+- Never sanitize the command (by design); never log the body.
+- `Snippet::new` validates; `device_id` stamped only when configured.
+- Removing CLI flags is breaking (deprecate first).
 
-All exact sources (`--command-stdin`, `--from-file`, `--editor`) share a single
-validation function:
+## File / line references
 
-```rust
-fn validate_exact_command_bytes(
-    bytes: Vec<u8>,
-    source: CommandSourceKind,
-) -> SnipResult<String>
-```
-
-This function enforces: 16 MiB maximum size, valid UTF-8 decoding, no NUL
-bytes, and no empty or whitespace-only content. Using one shared validator
-prevents validation drift across sources. The validator does not trim accepted
-content — leading and trailing whitespace in non-empty commands is preserved.
-
-## Metadata and persistence
-
-`--description` accepts a direct description. With `--command-stdin`, it is
-required because stdin is reserved for the command body; metadata prompts must
-not consume the command stream. With `--from-file` and `--editor`, `--description`
-is optional — these modes do not consume stdin, so interactive prompts are
-available. `--tags` remains a prompt when passed without a value, and accepts
-comma/space-separated values when given a value. The prompt-only form is
-rejected for stdin ingestion.
-
-After source and metadata resolution:
-
-1. `get_library_path()` resolves a named or primary library.
-2. The existing library or legacy single-file loader reads the collection.
-3. `Snippet::new()` validates the command and description and assigns ID/time
-   fields through the existing model.
-4. The snippet is appended and saved through `save_library()` or
-   `save_snippets()`, preserving backup and atomic-write behavior.
-
-No separate stdin persistence implementation exists.
-
-## Errors and atomicity
-
-Invalid UTF-8, NUL bytes, oversized input, missing noninteractive metadata,
-empty commands, missing libraries, non-existent files, broken symlinks,
-directories, non-regular files passed to `--from-file`, failed or empty editor
-output, and save failures return the existing general error status. They occur
-before the new snippet is appended; save operations use the existing backup and
-atomic replacement path, so an input or write failure does not leave a partial
-snippet.
-
-## Testing
-
-- `src/commands/new_cmd.rs` unit tests cover exact newlines, invalid UTF-8,
-  NUL rejection, tag parsing, `CommandSource` resolution for all modes,
-  multiline input (including delimiter behavior, EOF before delimiter,
-  leading/trailing blank lines), editor tempfile permissions and cleanup,
-  `--from-file` symlink following, and `validate_exact_command_bytes` edge
-  cases.
-- `tests/integration.rs` verifies exact TOML round-trips, metadata, leading
-  hyphens, Unicode, metacharacters, no trailing newline, invalid input
-  atomicity, conflicts, legacy `--tags` prompting, golden corpus preservation
-  across all sources (stdin, file, editor, positional), multiline terminator
-  limitations, and `snp run` execution.
-- `tests/integration.rs` also covers `--from-file` (valid files, symlinks,
-  broken symlinks, directories, invalid UTF-8, NUL bytes, oversized files)
-  and `--editor` (empty output, failed editor, successful creation, tempfile
-  cleanup).
-- `src/commands/shell_cmd.rs` unit tests verify Bash previous-command capture
-  preserves leading whitespace and quotes/backslashes.
-- Shell integration tests stub `snp` and verify that generated helpers pass
-  command data over stdin without evaluating it.
+- `NewArgs`: `src/commands/new_cmd.rs:18`; `CommandSource`: `:72`
+- `validate_exact_command_bytes`: `:131`; `read_command_stdin`: `:178`
+- `read_file_command`: `:196`; editor stack: `:238-475`
+- `read_multiline_from`: `:485`; `run`: `:541`
+- notify: `:650`; tests: `:659-920`

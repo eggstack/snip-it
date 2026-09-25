@@ -1,185 +1,121 @@
-# sync_cmd — Sync with Server
+# sync_cmd — Bidirectional Sync, Recovery, Library Linking
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`sync_cmd` synchronizes local snippets with the snip-sync server. Handles bidirectional sync, conflict resolution, server library management, and auto-sync recovery commands.
+`src/commands/sync_cmd.rs` (990 lines) is the foreground sync
+operator: it owns the `SyncExecutionLock` wait, server library
+linking (with interactive conflict triage), direction resolution,
+durable status recording, pending-clear ordering, and five recovery
+subcommands (`config`, `retry`, `clear-failure`, `discard-pending`,
+`repair`). The merge itself lives in `sync_commands::run_sync`; this
+module is the locking/status/linking shell around it.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()>
-```
+`snp sync` (alias `y`), subcommands in `main.rs:272-321`:
 
-## Sync Execution Lock
+| Form | Handler | Flags |
+|------|---------|-------|
+| `snp sync` / `snp sync run` | `run(SyncOptions)` (`:173`) | `-l/--library`, `--servers`, `--push-only` ⊥ `--pull-only`, `--dry-run` |
+| `snp sync config` | `run_config` (`:356`) | `--show`, `--auto-sync on\|off`, `--debounce`, `--max-delay`, `--failure ignore\|warn\|error`, `--timeout` |
+| `snp sync retry [--library]` | `run_retry` (`:511`) | Replays pending work only; `No pending sync work` when absent |
+| `snp sync clear-failure` | `run_clear_failure` (`:611`) | Clears attention/failures; corrupt status → error |
+| `snp sync discard-pending [--force] [--generation N]` | `run_discard_pending` (`:636`) | Confirm-guarded; non-tty requires `--force`; generation must match |
+| `snp sync repair [--dry-run] [--apply]` | `run_repair` (`:714`) | Quarantine corrupt status, drop orphaned temps, fix `0o600` |
 
-The sync command acquires `SyncExecutionLock` via `wait_acquire` with a 30-second
-timeout (foreground behavior). This serializes manual sync with the detached
-auto-sync worker and any other concurrent sync caller.
+`SyncOptions{library, servers, push_only, pull_only, dry_run}` (`:162`).
 
-Before running sync, the command captures the observed pending generation via
-`observe_pending_generation()`. After sync succeeds (or fails), it clears the
-pending marker via `clear_pending_after_explicit_sync(observed_generation,
-sync_succeeded)` — generation-safe clearing that prevents a stale manual sync
-from clobbering a newer pending mutation.
+## Flow / steps
 
-This means any manual `snp sync` call clears any pending auto-sync intent,
-preventing duplicate delayed sync attempts for the same mutation generation.
+### `run()` (`:173`)
 
-## Sync Modes
+1. `load_sync_settings`; disabled → hint + `Ok`; missing API key →
+   `snp register --force` hint + `Ok` (both are success-with-message,
+   not errors).
+2. `wait_acquire(state_dir, 30 s)`; `Timeout/AlreadyHeld` map to
+   `"sync already in progress"` with owner pid.
+3. `--servers`: create client, `list_libraries`, print, return.
+4. Create client (`ConnectFailed` on failure) → `list_libraries` →
+   `init_library_manager` (`LibraryManagerInitFailed` on failure).
+5. `--dry-run`: resolve library, print direction + live-snippet list,
+   return before any linking.
+6. Link every server library (`link_server_library`, `:49`): slug
+   `lowercase + spaces→hyphens`; same-ID → skip; unlinked local with
+   content on both sides → prompt `skip/overwrite/rename`
+   (`prompt_conflict`, `:140`); overwrite clears + links (rollback
+   unlink on save failure); rename backs local content to
+   `<name>_local` (fail-closed on malformed input) then clears + links;
+   unknown → `add_server_library`.
+7. Direction: CLI flags win, else config (`Push`/`Pull` → one-sided,
+   else bidirectional by passing neither flag).
+8. `observe_pending_generation()` **before** `sync_commands::run_sync`
+   (a mutation racing the sync is preserved — D5).
+9. `record_success` / `record_failure` (best-effort, warn-only) with
+   config fingerprint; propagate `sync_result`; on success
+   `clear_pending_after_explicit_sync(observed, true)`.
 
-### Server Libraries (`--servers`)
-```bash
-snp sync --servers
-```
-- Lists available libraries on the server
-- Does not perform actual sync
+### Recovery handlers
 
-### Bidirectional Sync (default)
-```bash
-snp sync
-```
-1. Connect to server via gRPC
-2. Load local snippets
-3. Pull snippets from server
-4. Merge using last-write-wins strategy
-5. Push merged result to server
-6. Save merged result locally
+- `run_config`: `--show` prints effective config (with
+  enabled-without-key warnings); setters clamp to
+  `AUTO_SYNC_DEBOUNCE_MIN/MAX`, `MAX_DELAY_MIN/MAX`,
+  `MIN/MAX_SYNC_TIMEOUT_SECS`; saves only when something changed.
+- `run_retry`: pending-gated (`NotFound → "No pending sync work"`,
+  corrupted → runtime error); runs `run_sync` in the config direction;
+  success records status + generation-matched clear, failure records.
+- `run_clear_failure`: `Corrupt → error`, `Missing → "No failure
+  recorded"`, else reset attention/failures/next-attempt/message.
+- `run_discard_pending`: prints generation; tty confirm (`y/yes`)
+  unless `--force` (non-tty without `--force` → `ConflictOrRefused`);
+  generation arg must match; conditional clear maps
+  Cleared/Missing → `Success`, changed → `ConflictOrRefused`, I/O →
+  `PersistenceFailed`, corrupt → `ValidationFailed`.
+- `run_repair`: scans corrupt status (recreate-empty only when pending
+  exists, else quarantine), orphaned `snp-sync-tmp.*`/`.quarantine.*`
+  temps, and non-`0o600` status perms. Never touches kernel-lock
+  files. `--dry-run` or no `--apply` prints only; `--apply` quarantines
+  (copy + dir-fsync + remove) then applies.
 
-## Merge Logic
+## Mutation vs read-only
 
-See [sync.md](../sync.md) for full merge strategy details.
+Sync is a remote-mutating, locally-journaled operation: it holds the
+execution lock, writes merged libraries, and records durable status.
+`--dry-run`, `--servers`, `config --show`, and `repair` without
+`--apply` are read-only. `discard-pending`/`clear-failure` mutate sync
+*state*, never snippet data.
 
-Key points:
-- **Last-write-wins** based on `updated_at`
-- **Server deleted: true** → local copy marked deleted
-- **Local-only preserved** — `output`, `folders`, `favorite` kept when server wins
+## Auto-sync trigger
 
-## Subcommands
+Foreground sync does not `notify_mutation` — it *is* the sync: it
+observes, runs, records, and clears pending. `SyncMerge` origin never
+re-triggers (no loops). Recovery commands manipulate pending/status
+directly with generation guards.
 
-### `snp sync` (default)
-Run a sync operation. Supports bidirectional, push-only, pull-only, and dry-run modes.
+## Error / exit mapping
 
-### `snp sync config`
-View or update auto-sync policy settings.
+- Sync failures → `SyncFailureKind` (`ConnectFailed`,
+  `LibraryManagerInitFailed`, merge kinds) → exit 7.
+- Lock contention → `runtime_error` (exit 1/9 family) with owner pid.
+- `run_discard_pending` returns `CliOutcome` directly: `Success` (0),
+  `ConflictOrRefused` (9), `ValidationFailed` (6),
+  `PersistenceFailed` (1 family).
+- Disabled/unconfigured sync and empty retry are exit-0 messages.
 
-Flags:
-- `--show` — Display current auto-sync configuration
-- `--auto-sync <on|off>` — Enable or disable auto-sync after mutations
-- `--debounce <secs>` — Debounce delay in seconds (0-300)
-- `--max-delay <secs>` — Maximum delay before forcing a sync (0-600)
-- `--timeout <secs>` — Executor sync timeout in seconds (5-120, default 30)
-- `--failure <ignore|warn|error>` — Failure behavior
+## Key invariants
 
-Examples:
-```bash
-snp sync config --show
-snp sync config --auto-sync on
-snp sync config --debounce 5 --failure warn
-snp sync config --max-delay 60 --timeout 45
-```
+- Observe-then-run-then-clear ordering is load-bearing (D5/H/D).
+- Status writes are best-effort and never mask the sync result.
+- Library linking fails closed: malformed local content is never
+  backed up over by emptiness; link rollback on clear failure.
+- Repair quarantines before deleting; lock files are never repaired.
+- `SyncOptions` direction default (neither flag) means bidirectional.
 
-### `snp sync retry`
-Force an immediate sync attempt, bypassing backoff. Acquires the execution lock, runs sync, records success/failure, and clears pending on success.
+## File / line references
 
-```bash
-snp sync retry [--library <name>]
-```
-
-**Behavior:**
-1. Validates sync is enabled and API key is configured.
-2. Acquires `SyncExecutionLock` via `wait_acquire` (30s timeout).
-3. Reads the pending marker to capture the current generation.
-4. Runs `run_sync()` with the configured direction.
-5. On success: records success in status file, clears pending marker via `clear_if_generation_matches`.
-6. On failure: records failure class and backoff in status file; pending marker preserved.
-
-**When to use:** When `snp status` shows `Sync: attention required` or `Sync: pending retry` and you want to retry immediately without waiting for the next mutation or backoff window.
-
-### `snp sync clear-failure`
-Clear the failure state from the status file, resetting `attention_required`, `consecutive_failures`, and `next_attempt_at_unix_ms`.
-
-```bash
-snp sync clear-failure
-```
-
-**Behavior:**
-1. Reads `auto-sync-status.toml`.
-2. If corrupt: returns an error.
-3. If missing: prints "No failure recorded".
-4. If valid: sets `attention_required = false`, `consecutive_failures = 0`, `next_attempt_at_unix_ms = 0`, `message = "cleared by operator"`, writes back.
-
-**When to use:** When you've fixed the underlying issue (e.g., updated API key, fixed network) and want to allow immediate retry without the status file blocking scheduling. This does NOT trigger a sync — it only clears the failure disposition so the next mutation or `snp sync retry` can proceed.
-
-### `snp sync discard-pending`
-Remove the pending sync marker, abandoning synchronization intent for the current generation.
-
-```bash
-snp sync discard-pending [--force] [--generation <N>]
-```
-
-**Behavior:**
-1. Reads the pending marker to capture the current generation.
-2. If no pending work: prints "No pending sync work" and exits.
-3. If not `--force` and running in a terminal: prompts for confirmation.
-4. If `--generation` specified and doesn't match observed: exits with error.
-5. Calls `clear_if_generation_matches(observed_generation)` — if generation changed during the prompt, refuses to discard.
-6. Records the discard outcome.
-
-**When to use:** When you want to abandon sync intent — e.g., after a failed sync that you don't intend to retry, or when switching sync accounts. This never deletes local snippet data, only the pending marker.
-
-**Safety:** The generation check prevents a stale discard from clobbering a newer mutation. If a mutation arrives between the prompt and the clear, the discard fails with "Generation changed".
-
-### `snp sync repair`
-Diagnose and repair corrupt auto-sync state.
-
-```bash
-snp sync repair [--dry-run] [--apply]
-```
-
-**Behavior (without `--apply`):** Lists all detected issues as dry-run actions:
-- Corrupt status file → quarantine and recreate
-- Orphaned temp files (`snp-sync-tmp.*`, `.quarantine.*`) → remove
-- Incorrect file permissions (not `0o600`) → fix
-
-Persistent kernel-lock files (`auto-sync-execution.lock`,
-`auto-sync-worker.lock`, and `auto-sync-pending.lock`) are intentionally not
-repair targets. Their metadata may be stale or malformed; the kernel lock is
-authoritative and the next successful acquirer refreshes metadata.
-
-**Behavior with `--apply`:** Executes all detected repair actions:
-- Corrupt files are moved to `.quarantine.{timestamp}/` before removal.
-- Temp files are deleted.
-- Permissions are set to `0o600` on Unix.
-
-**When to use:** When `snp status` shows `Sync: corrupt or inaccessible state` or when `snp doctor` reports lock/status issues. Safe to run during active sync — repair actions only affect status and temporary artifacts; persistent kernel-lock files are left byte-for-byte unchanged.
-
-## Legacy Flags (on `snp sync`)
-
-- `--servers` — List server libraries only
-- `--push-only` — Upload local changes only
-- `--pull-only` — Download remote changes only
-- `--dry-run` — Show what would be synced
-- `--library` — Sync a specific library
-
-## Settings
-
-Sync settings loaded from `~/.config/snp/sync.toml`:
-- `server_url` — gRPC server address
-- `api_key` — System keychain via `keyring`
-- `direction` — `push`, `pull`, or `bidirectional`
-- `interval` — Periodic sync interval
-
-### Auto-Sync Policy
-
-Configured via `snp sync config`:
-- `auto_sync` — Enable/disable auto-sync (default: off)
-- `auto_sync_debounce_seconds` — Delay before sync fires (default: 2, range: 0-300)
-- `auto_sync_failure` — Failure mode: ignore, warn (default), or error
-
-## Related
-
-- [sync.md](../sync.md) — Full sync protocol and merge details
-- [auto_sync.md](../auto_sync.md) — Auto-sync policy, debounce, triggers
-- [status.md](../status.md) — Status snapshot module
-- [sync_commands.rs](../../sync_commands.rs) — Orchestration code
-- [register_cmd.md](register_cmd.md) — Device registration
+- `SyncOptions`/`run`: `src/commands/sync_cmd.rs:162,173`
+- Linking: `:9-159`; `run_config`: `:356`; `run_retry`: `:511`
+- `run_clear_failure`: `:611`; `run_discard_pending`: `:636`
+- `run_repair`/`apply_repair_action`: `:714,837`; tests: `:915-990`
+- Merge: `src/sync_commands.rs`; statuses: `src/auto_sync/status.rs`

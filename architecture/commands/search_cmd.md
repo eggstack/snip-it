@@ -1,49 +1,89 @@
-# search_cmd — Search and Display Snippet
+# search_cmd — Fuzzy Search with Detail Display
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`search_cmd` provides fuzzy search through snippets and displays detailed information about the selected snippet.
+`src/commands/search_cmd.rs` (61 lines) is the thinnest TUI command: it
+opens the shared snippet selector and prints the chosen snippet's full
+detail instead of executing or copying. Selection, sorting, filtering,
+and `--sync` reuse `run_snippet_selection` verbatim.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(
-    filter: Option<String>,
-    do_sync: bool,
-    library: Option<String>,
-    config: Option<PathBuf>,
-    sort_opts: Option<crate::sort::SortOptions>,
-    runtime: Option<&tokio::runtime::Runtime>,
-) -> SnipResult<()>
-```
+`SearchArgs` (`search_cmd.rs:7`), `snp search` (alias `s`):
+`-f/--filter` (initial TUI filter), `--sync`, `-l/--library`,
+`--sort` (default `Relevance`), `--favorites-first`. No exact-selector
+flags (unlike `run`/`clip`/`get`/`edit`); no output-format flags — the
+detail block is fixed. `main.rs:585-597` passes `config: None`
+(the `--config` derivation below lives inside `run`).
 
-## Flow
+## Flow / steps
 
-1. **TUI Selection** — Call `run_snippet_selection()` to get user-selected snippet
-2. **Display** — Show snippet details to stdout:
-   - Description
-   - Command
-   - Output
-   - Tags
-   - Folders
-   - Favorite status
+`run()` (`search_cmd.rs:23`):
 
-## Fuzzy Matching
+1. Derive `effective_library`: explicit `--library`, else the file stem
+   of `--config` (with an explanatory `note:` to stderr so a stem that
+   differs from a registered library name is not confusing).
+2. `run_snippet_selection(filter, effective_library, do_sync,
+   allow_delete=true, sort_opts, runtime, print_fn)`.
+3. `print_fn` prints six lines — Description, Command, Output, Tags,
+   Folders, Favorite — and returns `Done("")`. Cancel/skip semantics
+   come from the shared loop untouched.
 
-Uses `fuzzy-matcher` with `SkimMatcherV2`:
-- Matches against snippet name, command, tags
-- Displays match score in debug mode
-- Results update as user types (with debouncing)
+The TUI delete shortcut (`allow_delete=true`) is available, identical
+to `run`/`clip`.
 
-## Display Modes
+## Mutation vs read-only
 
-Users can toggle between display modes with `z` key:
-- **Normal** — Compact list view in TUI
-- **Detailed** — Full snippet view after selection
+Display-only: no `save_library`, no transaction gate, no output files.
+The only write on this path is the shared-loop delete shortcut
+(tombstone + save + audit), which is a property of the selector, not
+of search itself.
 
-## Related
+## Auto-sync trigger
 
-- [mod.md](mod.md) — Shared helpers
-- [run_cmd.md](run_cmd.md) — Execution variant
-- [clip_cmd.md](clip_cmd.md) — Clipboard variant
-- [tui.md](../tui.md) — TUI architecture
+None of its own. `do_sync` flows into `run_snippet_selection`, which
+performs the trailing `run_explicit_sync` after a selection (and
+`notify_mutation(SnippetDelete, User)` after a delete when `do_sync`
+is false). Search never notifies by itself.
+
+## Error / exit mapping
+
+`SnipResult<()>`; errors propagate (exit 1). Cancellation is silent
+success via the shared loop. `--sync` without a runtime errors inside
+`run_snippet_selection` before the TUI opens.
+
+## Key invariants
+
+- No search-specific selection logic: filter, fuzzy matching
+  (`SkimMatcherV2`), navigation, and variable prompting all live in
+  `ui` + `commands::mod`.
+- `--config` is translated to a library *name* (stem), never passed as
+  a file path into the selector pipeline.
+- Keep the detail-print closure side-effect-free apart from stdout;
+  execution stays in `run_cmd`, clipboard in `clip_cmd`.
+
+## The delete shortcut
+
+Because `allow_delete=true`, the search TUI offers the same `d`
+(delete with confirm) flow as `run`/`clip`: the shared loop marks the
+tombstone, saves, audits, and notifies `SnippetDelete/User` (or runs
+the explicit sync when `--sync`). A search session can therefore
+mutate despite search itself being display-only — review UIs that wrap
+`search` should account for this (contrast `select`, which passes
+`allow_delete=false`).
+
+## Testing
+
+No unit tests in `search_cmd.rs` (the module is a thin closure over
+the shared loop). Coverage comes from TUI integration tests driving
+`--filter` selection and cancellation, plus the shared-loop tests in
+`commands::mod`. When changing the `--config`-stem derivation, add a
+case asserting the stderr `note:` names the derived library.
+
+## File / line references
+
+- `SearchArgs`: `src/commands/search_cmd.rs:7`; `run`: `:23`
+- Shared loop: `src/commands/mod.rs:306`
+- Dispatch: `src/main.rs:585-597`

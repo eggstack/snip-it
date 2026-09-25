@@ -1,53 +1,89 @@
-# cron_cmd — Crontab Generation
+# cron_cmd — Crontab Generation for Periodic Sync
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`cron_cmd` generates crontab entries for automatic periodic sync operations.
+`src/commands/cron_cmd.rs` (162 lines) prints a copy-pasteable crontab
+entry that runs `snp sync` on an interval. The pure builder
+(`make_cron_entry`) is unit-tested; the interactive wrapper adds
+platform instructions and an optional clipboard copy.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(interval: u32) -> SnipResult<()>
+`CronArgs` (`cron_cmd.rs:6`), `snp cron` (alias `cr`): `-i/--interval
+N` (default 15, minutes). No subcommands, no JSON mode.
+
+## Flow / steps
+
+1. `run(interval)` (`:53`) → `make_cron_entry(interval)` (`:37`):
+   `0` → `runtime_error("Invalid interval")`; else `"*/N * * * *
+   <binary> sync"` where `<binary>` is `current_exe()` or bare `snp`.
+2. Print the entry + `every N minutes` header.
+3. Platform block: Unix → three `crontab -e` steps; Windows →
+   six Task Scheduler steps (binary path + `sync` argument).
+4. Prompt `Copy to clipboard? [y/N]`; on `y`, best-effort
+   `copy_to_clipboard_auto` (failure → stderr warning, still `Ok`).
+
+`shell_escape_path` (`:11`): empty → `''`; strings containing
+space/`'"/\$\`` wrap in single quotes with `'` → `'\''`. Paths from
+`current_exe()` almost always pass through unquoted.
+
+## Mutation vs read-only
+
+Read-only. Prints text and optionally writes the clipboard; never
+touches config, libraries, cron tables, or the Task Scheduler.
+No gate, no lock, no save.
+
+## Auto-sync trigger
+
+None. The generated entry invokes foreground `snp sync` on a timer,
+which performs its own execution-lock + pending-clear cycle when it
+fires — but generating the entry schedules nothing.
+
+## Error / exit mapping
+
+`SnipResult<()>`: interval 0 → error (exit 1/2 family); clipboard
+failure is swallowed to a warning. Success prints unconditionally.
+
+## Key invariants
+
+- `make_cron_entry` performs no I/O (notably no stdin reads), so unit
+  tests cover validation + quoting without interaction.
+- Binary resolution prefers the running executable over `PATH`, so
+  dev installs and renamed binaries still schedule correctly.
+- The entry runs plain `snp sync` (bidirectional default); direction
+  flags belong in `sync.toml`, not in the crontab line.
+- Prompt default is No — piping/Enter never copies.
+
+## Example output
+
+```
+Crontab entry (every 15 minutes):
+*/15 * * * * /usr/local/bin/snp sync
+
+To add to your crontab:
+  1. Run: crontab -e
+  2. Add the line above
+  3. Save and exit
+
+Copy to clipboard? [y/N]:
 ```
 
-## Flow
+With a spaced install path, the binary field renders quoted:
+`*/30 * * * * '/opt/my tools/snp' sync`.
 
-1. Load sync settings from `~/.config/snp/sync.toml`
-2. Determine sync interval
-3. Generate crontab entry for the current user
-4. Output to stdout or append to crontab
+## Testing
 
-## Generated Crontab Entry
+`make_cron_entry` and `shell_escape_path` carry the unit tests
+(`cron_cmd.rs:97-162`): zero-interval rejection, valid-interval
+acceptance, and quoting cases (empty, simple, spaces, embedded single
+quotes, `$`, backticks, backslashes). The interactive prompt and
+clipboard branch are untested by unit tests (stdin/clipboard seams) —
+covered indirectly by platform smoke tests.
 
-```cron
-*/15 * * * * /path/to/snp sync
-```
-This runs sync every 15 minutes.
+## File / line references
 
-## Interval Mapping
-
-| Interval Flag | Crontab |
-|---------------|---------|
-| `--interval 15` | `*/15 * * * *` |
-| `--interval 60` | `*/60 * * * *` |
-| `--interval 1` | `*/1 * * * *` |
-| `--interval 0` | Error: "Interval must be at least 1 minute" |
-
-## Flags
-
-- `--interval <minutes>` — Sync interval in minutes (default: 15)
-
-## Safety
-
-- Prints the crontab entry to stdout for manual review
-- Optionally copies to clipboard
-- On Windows, prints Task Scheduler instructions instead
-
-## Sync Mode
-
-Generated entries use `snp sync` which respects the configured sync direction in `sync.toml`. The cron entry does not add extra flags — it relies on the user's saved sync configuration.
-
-## Related
-
-- [sync_cmd.md](sync_cmd.md) — Sync operation details
-- [sync.md](../sync.md) — Sync settings and merge strategy
+- `CronArgs`: `src/commands/cron_cmd.rs:6`; escaping: `:11`
+- `binary_path`: `:27`; `make_cron_entry`: `:37`; `run`: `:53`
+- Tests: `:97-162`; dispatch: `src/main.rs:723-725`

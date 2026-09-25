@@ -1,14 +1,13 @@
-# Sync Infrastructure (`sync.rs`, `sync_commands.rs`)
+# Sync Infrastructure (`sync.rs`, `sync_commands.rs`, `sync_failure.rs`)
 
-## Overview
+[← Back to Overview](overview.md)
 
-Sync enables bidirectional synchronization of snippets between the local client and the snip-sync server. It uses gRPC for transport and implements end-to-end encryption (AES-256-GCM) for snippet data.
+Bidirectional snippet sync over gRPC (tonic) with client-side
+AES-256-GCM encryption. This document covers the sync-client layer only.
+Auto-sync scheduling, workers, and pending state live in
+[auto_sync.md](auto_sync.md); the wire schema lives in [proto.md](proto.md).
 
-## Sync Client (`sync.rs`)
-
-### SyncClient
-
-Wraps the tonic gRPC client for the `SnippetSync` service defined in `snip-proto/`.
+## SyncClient (`src/sync.rs`)
 
 ```rust
 pub struct SyncClient {
@@ -18,22 +17,72 @@ pub struct SyncClient {
 }
 ```
 
-### Key Methods
+- `create(settings)` — manual path, `limits = None`, unbounded except for
+  transport timeouts.
+- `create_with_limits(settings, limits)` — automatic path, `limits = Some(..)`.
+- Every RPC takes `&mut self` because tonic clients borrow mutably per call.
 
-- `sync_encrypted()` — Full bidirectional sync with byte-bounded upload batching
-- `push_snippets_batch()` — Upload a batch via PushSnippets RPC
-- `health_check()` — Server health check
-- `register()` — Device registration
-- `list_libraries()` / `create_library()` — Library management
-- `list_premade()` / `get_premade()` / `search_premade()` — Premade libraries
-- `detect_device_conflict()` — Warn on device ID mismatch
-- `sync_with_retry()` — `Sync` RPC via the unified retry macro (`RateLimitAware`)
-- `retry_grpc_unified!` + `RetryBackoff` — Single retry/backoff/deadline policy
+### `retry_grpc_unified!` (single retry policy)
 
-### Byte-Bounded Upload Batching
+All RPCs share one macro (`src/sync.rs`). It is a macro — not a
+closure-based generic helper — so the `self.client.<rpc>()` reborrow
+expands inline at each call site (a closure helper fails with
+"captured variable cannot escape `FnMut`"). Do not reintroduce one.
 
-The sync client splits encrypted snippets into byte-bounded batches before
-transmission. The ceiling is 3.5 MiB (below the server's 4 MiB gRPC default).
+Preserved semantics:
+
+- 1 initial + 3 retries = 4 attempts (`DEFAULT_MAX_RETRIES = 3`).
+- Backoff: 100 ms initial, 2x progression, 5 s cap, jitter in [0.5, 1.5)
+  (`retry_jitter_multiplier`).
+- Retryable codes: everything except `InvalidArgument`, `NotFound`,
+  `AlreadyExists`, `PermissionDenied`, `Unauthenticated`
+  (`SyncRetryConfig::is_retryable_grpc_error`).
+- Warning log per retry with `attempt/total` and delay.
+- Terminal errors map via `grpc_error_to_snip_error`.
+
+### `RetryBackoff`: Standard vs RateLimitAware
+
+| Variant | Used by | Behaviour |
+|---------|---------|-----------|
+| `Standard` | Every RPC except `Sync` | `delay * 2`, capped at `max_delay_ms` (5 s) |
+| `RateLimitAware` | `sync_with_retry` (`Sync` RPC) only | `ResourceExhausted` → `delay * 4`, capped at 120 s; all other codes → standard progression |
+
+### `SyncRunLimits` / timeouts
+
+```rust
+pub(crate) struct SyncRunLimits {
+    pub deadline: std::time::Instant,
+    pub request_timeout: Duration,
+}
+```
+
+- `None` limits (manual `snp sync`, register, premade RPCs): unbounded;
+  only the transport timeout applies.
+- `Some(limits)` (automatic sync): each RPC is wrapped in
+  `tokio::time::timeout(remaining)`; backoff sleeps that would overrun the
+  deadline are refused. All expirations map to
+  `SyncFailureKind::Timeout` (→ `FailureClass::Transient`), including
+  `ensure_budget()` before the operation starts.
+- Transport: connect timeout defaults to 10 s (`SNP_SYNC_CONNECT_TIMEOUT`
+  override); request timeout defaults to 30 s (`SNP_SYNC_REQUEST_TIMEOUT`
+  override, clamped as the upper bound for automatic-sync limits).
+- Premade RPCs (`list/get/search_premade_libraries`) always run with
+  `None` limits (manual-only path, historical unbounded behaviour).
+
+### Client methods
+
+| Method | RPC | Notes |
+|--------|-----|-------|
+| `sync_encrypted` / `sync_encrypted_with_ceiling` | `Sync` + `PushSnippets` | Entry points; see §4 |
+| `push_snippets_batch` | `PushSnippets` | One batch, `Standard` backoff |
+| `sync_with_retry` | `Sync` | `RateLimitAware` backoff; `api_key` passed explicitly so the body field stays empty |
+| `health_check` | `Health` | `Timeout` maps to `Err`, anything else to `Ok(false)` |
+| `register` | `Register` | Associated function, no settings needed |
+| `list_libraries` / `create_library` | `ListLibraries` / `CreateLibrary` | Library list paginates (50/page, 10 000-page bound) |
+| `list_premade_libraries` / `get_premade_library` / `search_premade_libraries` | premade RPCs | Client-side caps: 10 000 entries, 4 MiB content |
+| `detect_device_conflict` | — | Warns when a server snippet carries a foreign non-empty `device_id` |
+
+## `build_upload_batches` (byte-bounded batching)
 
 ```rust
 pub(crate) fn build_upload_batches(
@@ -45,619 +94,214 @@ pub(crate) fn build_upload_batches(
 ) -> SnipResult<Vec<Vec<Snippet>>>
 ```
 
-- Uses `prost::Message::encoded_len()` on a constructed `SyncRequest` (the
-  larger of the two request envelopes) to measure actual encoded size. Batches
-  that fit `SyncRequest` also fit `PushSnippetsRequest`.
-- Batches are sorted by snippet ID for deterministic ordering across retries.
-- A single oversized item fails with `SyncFailureKind::RequestTooLarge` before
-  any remote mutation.
-- After an overflow split, the new singleton is immediately re-validated so an
-  oversized item following a small item is caught before any remote mutation.
-
-### Upload Strategy
-
-All upload batches are sent before any response page is requested:
-
-- **Zero batches** (pull-only): An empty-upload `Sync(offset=0)` fetches the
-  authoritative first response page. This is the normal path for empty local
-  collections or when all local snippets fail encryption.
-- **One batch**: `Sync(batch, offset=0)` carries the upload and returns the
-  first response page in one RPC. Paginate remaining response pages.
-- **Two or more batches**: Each batch is sent via `PushSnippets` (upload only).
-  After all uploads succeed, an empty-upload `Sync(offset=0)` fetches the
-  authoritative first response page. Paginate remaining response pages.
-
-This ordering ensures that `has_more == false` on the first response cannot
-truncate uploads, and the final response describes server state after all
-successful uploads. `PushSnippets` is idempotent by snippet identity — retrying
-an already-accepted batch is safe (server upserts use `ON CONFLICT ... WHERE newer`).
-
-### Retry Logic
-
-All gRPC RPCs share one `retry_grpc_unified!` macro with exponential backoff
-and jitter for transient failures (1 initial + 3 retries = 4 attempts;
-100ms initial, 2x, 5s cap, jitter [0.5, 1.5)). Retryability
-(`SyncRetryConfig::is_retryable_grpc_error`), counters, warning logging, and
-terminal `grpc_error_to_snip_error` mapping live in that single path. The
-`Sync` RPC alone uses `RetryBackoff::RateLimitAware` (4x up to 120s on
-`ResourceExhausted`); every other RPC uses `RetryBackoff::Standard`.
-`None` limits (manual, register, premade) run unbounded except for transport
-timeouts; `Some(SyncRunLimits)` (automatic sync) bounds each RPC with
-`tokio::time::timeout(remaining)` and refuses backoff sleeps that would
-overrun the deadline, mapping all expirations to `SyncFailureKind::Timeout`.
-
-Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` via
-the private `add_batch_context()` helper — a clock-skew error remains `ClockSkew` /
-`FailureClass::Configuration` even when batch context is attached.
-
-### Single Prepared Transport
-
-`sync_encrypted` and `sync_encrypted_with_ceiling` both delegate to
-`sync_encrypted_inner`, which runs real encryption and then calls the private
-`sync_prepared_encrypted_inner`. That helper owns the entire zero/one/many
-batch transport logic. A test-only `sync_encrypted_with_test_encrypt` method
-inside the unit-test module accepts an injected encrypt function and drives the
-same prepared transport; it is `#[cfg(test)]` only and never reachable from
-production.
-
-## Sync Orchestration (`sync_commands.rs`)
-
-### run_sync()
-
-Entry point for sync operations. Handles:
-1. Load local snippets
-2. Connect to server (with retry)
-3. Determine sync direction
-4. Pull → Merge → Push flow
-
-### Sync Direction
-
-```rust
-pub enum SyncDirection {
-    Push,           // Local → Server only
-    Pull,           // Server → Local only
-    Bidirectional,  // Both ways
-}
-```
-
-## Merge Strategy (`merge_snippets()`)
-
-Live versions are ordered by the deterministic key
-`(updated_at, device_id, SHA-256(content))`. The fingerprint covers only the
-synced fields (`id`, description, command, tags in stored order, creation and
-update timestamps, device ID, and deletion state); local-only `output`,
-`folders`, and `favorite` are never part of conflict ordering. This makes an
-equal-timestamp merge produce the same result when the two inputs are swapped.
-
-Deletion is intentionally stronger than last-write-wins: a deleted version
-wins over live content even when the live copy has a later timestamp. This
-product does not silently resurrect an explicitly deleted snippet. If both
-copies are deleted, the merged display omits the record; tombstones remain in
-the local data until the server acknowledges them.
-
-For a live/live conflict, the greater key wins and the losing copy's local-only
-fields remain local. A snippet present on only one side is preserved according
-to its state.
-
-The primary ordering is still wall-clock time in Unix seconds. Deterministic
-tie-breaking does not correct clocks: a device with a severely fast clock can
-dominate edits until real time catches up. Correct the system clock if this
-occurs. Sync is deliberately not a CRDT and does not add logical clocks,
-vector clocks, or distributed reconciliation machinery.
-
-### Output Field Sync Contract
-
-The `output` field is **local-only**: it is not in `ProtoSnippet`, never uploaded or downloaded, and always preserved from the local copy during merge. Another device will not receive the value automatically.
-
-### Result
-
-Merged snippets sorted by `updated_at` descending.
-
-## Encryption
-
-- **Key Derivation**: Argon2id from password/passphrase
-- **Cipher**: AES-256-GCM
-- **Payload**: `EncryptedPayload { salt, nonce, ciphertext }`
-- `encrypt_snippet()` / `decrypt_snippet()` in `sync.rs`
-
-### Transport Security
-
-- **TLS required**: Client requires HTTPS for non-loopback server URLs
-- **Loopback exception**: `SNIP_SYNC_ALLOW_HTTP=true` permits plaintext HTTP for local development only
-- **Certificate validation**: System native roots via webpki-roots, hostname verification via domain_name()
-- **API key transport**: Bearer token in gRPC `authorization` metadata (over TLS), NOT in request body
-- **Size limits**: 4 MiB gRPC max message, 10K snippets max, per-field length limits (command: 1024, description: 1024, tags: 50, tag length: 100)
-- **Server error sanitization**: Generic "Internal error" messages, detailed errors logged server-side only
-- **Clock-skew diagnostics**: Server validates timestamps in one `now` sample and reports skew magnitude (e.g., "updated_at is 742 seconds ahead of server time; synchronize the client clock and retry"). Client maps `InvalidArgument` with timestamp content to `SyncFailureKind::ClockSkew` → `FailureClass::Configuration`.
-- **Upload batching ceiling**: Client-side 3.5 MiB ceiling (below server 4 MiB default). `build_upload_batches()` uses Prost `encoded_len()`. Oversized single items fail with `SyncFailureKind::RequestTooLarge` before any remote mutation.
-
-## Protocol Buffers (`snip-proto/`)
-
-Defines `SnippetSync` service:
-
-```protobuf
-service SnippetSync {
-    rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);
-    rpc PushSnippets (PushSnippetsRequest) returns (PushSnippetsResponse);
-    rpc Sync (SyncRequest) returns (SyncResponse);
-    rpc Health (HealthRequest) returns (HealthResponse);
-    rpc Register (RegisterRequest) returns (RegisterResponse);
-    rpc CreateLibrary (CreateLibraryRequest) returns (CreateLibraryResponse);
-    rpc ListLibraries (ListLibrariesRequest) returns (ListLibrariesResponse);
-    rpc DeleteLibrary (DeleteLibraryRequest) returns (DeleteLibraryResponse);
-    rpc ListPremadeLibraries (ListPremadeLibrariesRequest) returns (ListPremadeLibrariesResponse);
-    rpc GetPremadeLibrary (GetPremadeLibraryRequest) returns (GetPremadeLibraryResponse);
-    rpc SearchPremadeLibraries (SearchPremadeLibrariesRequest) returns (SearchPremadeLibrariesResponse);
-}
-```
-
-## Settings
-
-`~/.config/snp/sync.toml`:
-- `server_url` — gRPC server address
-- `api_key` — Stored in system keychain via `keyring` crate
-- `direction` — Sync direction
-- `interval` — Periodic sync interval (for cron)
-
-## Error Handling
-
-- `SnipError::Runtime` for sync-specific errors (sync failures, validation errors)
-- `CryptoError` for encryption/decryption errors (converted to `SnipError::Runtime` via `From`)
-- Network failures trigger retry with exponential backoff via the single
-  `retry_grpc_unified!` macro
-
-## Remote Library Recovery
-
-When a linked remote library is missing, the client writes an atomic
-`<library>.sync_recovery` TOML record before recreating it. The record contains
-only the local name/ID, phase, timestamp, and (once returned) the server ID —
-never credentials or snippet content. The server ID is persisted before local
-relinking, and the local server ID plus `last_sync = 0` are saved together.
-
-If a process stops before the server ID is recorded, the next recovery lists
-libraries by normalized name and reuses exactly one match; zero matches may
-create one, while multiple matches fail visibly as ambiguous. Corrupt or
-mismatched markers are preserved and block blind recreation. Startup scans and
-the normal `LibraryNotFound` path resume `Creating`, `RemoteCreated`, and
-`Linked` markers. A linked marker never creates a remote library. A marker is
-removed only after merged content and the final `last_sync` cursor have been
-durably completed.
-
-## Auto-Sync Policy
-
-**Module**: `src/auto_sync/policy.rs`
-
-Auto-sync is disabled by default. When enabled via `snp sync config --auto-sync on`,
-mutation commands spawn a detached one-shot helper (`snp auto-sync-worker`) that
-performs the remote sync directly after the local change is committed. The helper
-owns the execution lock for the full cycle. The parent returns immediately — no
-in-process latency. The effective policy is resolved once per command invocation via
-`AutoSyncPolicy::resolve()`.
-
-### AutoSyncPolicy
-
-```rust
-pub struct AutoSyncPolicy {
-    pub sync_configured: bool,
-    pub enabled: bool,
-    pub debounce: Duration,
-    pub failure_mode: AutoSyncFailureMode,
-    pub sync_timeout: Duration,
-    pub max_lifetime: Duration,
-}
-```
-
-**Note:** Retry behavior is driven by durable backoff state in `auto-sync-status.toml`. This is distinct from `SyncRetryConfig.max_retries` in `sync.rs`, which controls per-request gRPC retry attempts within a single sync operation (the `retry_grpc_unified!` macro).
-
-### AutoSyncFailureMode
-
-```rust
-pub enum AutoSyncFailureMode {
-    Ignore,  // Suppress user-facing failure
-    Warn,    // Emit warning to stderr (default)
-    Error,   // Nonzero exit code; local mutation still committed
-}
-```
-
-### MutationKind
-
-```rust
-pub enum MutationKind {
-    SnippetCreate,
-    SnippetUpdate,
-    SnippetDelete,
-    Import,
-    LibraryChange,
-    PremadeInstall,
-    SyncConflictWrite,
-    AccountConfig,  // Never triggers sync
-}
-```
-
-### MutationOrigin
-
-```rust
-pub enum MutationOrigin {
-    User,       // User-initiated mutation
-    Import,     // Import operation
-    SyncMerge,  // Sync merge (NEVER triggers auto-sync — prevents loops)
-    Recovery,   // Recovery operation
-}
-```
-
-### Product Invariants
-
-1. Auto-sync is disabled by default.
-2. Local mutation commits before any remote work begins.
-3. Remote failure never rolls back or corrupts a successful local mutation.
-4. Existing `snp sync`, `snp cron`, daemon/service workflows remain unchanged.
-5. Auto-sync never changes sync direction, credentials, server selection, library mapping, or conflict policy implicitly.
-6. Machine-facing stdout remains free of background sync diagnostics.
-7. Command bodies, output metadata, credentials, API keys, and encryption material are never included in auto-sync logs, errors, or worker artifacts.
-
-## Auto-Sync Detached Worker (Release 5D corrective)
-
-**Module**: `src/auto_sync/`
-
-The detached one-shot worker replaces the earlier in-process coordinator. After
-the parent mutation command commits the local change, it records a durable
-pending marker and re-execs the current binary as `snp auto-sync-worker` with
-platform-detached flags. The worker acquires the shared `SyncExecutionLock`,
-performs debounce, invokes the canonical sync directly, and exits independently.
-The parent never acquires the execution lock.
-
-### Architecture
-
-```text
-Mutation command (parent)
-  -> atomic local commit
-  -> notify_mutation(kind, origin)
-  -> AutoSyncPolicy::resolve()
-  -> pending::record_pending_mutation(state_dir, snapshot) -> PendingState{generation}
-  -> worker::schedule_existing_pending(state_dir)  [NEVER mutates pending state]
-     -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir)
-        -> setsid() (Unix) / DETACHED_PROCESS | CREATE_NO_WINDOW (Windows)
-        -> stdin/stdout/stderr -> null
-        -> child process detached
-  -> return AutoSyncNotificationResult::Scheduled{generation}
-
-snp auto-sync-worker (child, detached)
-  -> AutoSyncPolicy::resolve(get_sync_settings())
-  -> execution_lock::try_acquire(state_dir) -> SyncExecutionLock (or AlreadyHeld -> NothingToDo)
-  -> read_state_from_dir(state_dir) -> PendingState
-  -> debounce loop:
-     -> compute deadline from observed timestamp + policy.debounce
-     -> sleep in ≤250ms increments, reloading marker each time
-     -> restart deadline if newer generation detected
-  -> execute_sync(state_dir, policy)
-     -> run canonical sync directly
-        -> bounded network requests and retries in sync client
-     -> on success: clear_if_generation_matches(state_dir, generation)
-     -> on failure: record_failure(state_dir, generation, classification)
-  -> reload marker; if newer generation exists, run another cycle
-  -> release execution lock, exit(0)
-```
-
-### AutoSyncNotificationResult
-
-```rust
-pub enum AutoSyncNotificationResult {
-    Disabled,
-    Suppressed,
-    Scheduled { generation: u64 },
-    SchedulingFailed { generation: Option<u64> },
-}
-```
-
-### WorkerOutcome
-
-```rust
-pub enum WorkerOutcome {
-    Success,
-    Failed,
-    NothingToDo,
-}
-```
-
-### FailureClass
-
-Four variants classify sync errors:
-
-```rust
-pub enum FailureClass {
-    Transient,       // Network, timeout, partial — retry with backoff
-    Configuration,   // Auth, config, credential — defer until config change
-    LocalFailure,    // Persistence, conflict, corruption — requires repair
-    Internal,        // Unclassified — bounded retry (3 attempts)
-}
-```
-
-Each variant carries a `RetryDisposition` via `retry_disposition()`:
-
-```rust
-pub enum RetryDisposition {
-    RetryAfter(Duration),
-    WaitForConfigurationChange,
-    RequiresAttention,
-    NoAutomaticRetry,
-}
-```
-
-Retry dispositions by class:
-
-| FailureClass | RetryDisposition | Rationale |
-|--------------|------------------|-----------|
-| Transient | RetryAfter(exponential backoff) | Network, timeout, and partial failures are ephemeral |
-| Configuration | WaitForConfigurationChange | Auth, config, or credential failures require user correction |
-| LocalFailure | RequiresAttention | Persistence, conflict, and corruption issues persist |
-| Internal | RetryAfter(Duration), then RequiresAttention | Bounded retry (3 attempts), then RequiresAttention |
-
-Classified from `SnipError` via `FailureClass::from_error()` in `sync_failure.rs`,
-which applies typed variant matching with a fallback heuristic for legacy runtime
-errors. The worker records the classification into
-`auto-sync-status.toml` for diagnostics.
-
-### Durable Pending State (Schema v2)
-
-Persisted to `~/.config/snp/auto-sync-pending.toml` with CRC32 integrity:
-
-```toml
-schema = 2
-generation = 1
-created_at_unix_ms = 1700000000000
-
-[snapshot.Mutation]
-kind = "snippet_create"
-
-integrity = "crc32:441c462e"
-```
-
-- Monotonic `generation` increments per `mark_pending`. Conditional clear keyed
-  on observed generation prevents stale workers from clobbering fresh state.
-- Schema v1 markers (`kind = "..."`, `created_at_unix_ms = ...`) migrate
-  transparently to v2 on load.
-- `created_at_unix_ms` is used by `startup_recover_pending` to clear stale
-  markers older than 5 minutes.
-- `integrity` is `crc32:<hex>` over all behavior-driving fields: schema,
-  generation, created_at_unix_ms, and serialized snapshot.
-- Atomic write via unique temp file (PID + nanosecond timestamp) + rename +
-  directory fsync. Unique temp files prevent concurrent writer corruption.
-- 0o600 permissions on Unix. No secrets, commands, or snippet content.
-
-### Cross-Process Worker Lock
-
-TOML lock at `~/.config/snp/auto-sync-worker.lock`:
-
-```toml
-pid = 12345
-started_at_unix_ms = 1700000000000
-nonce = "abc-12345-def"
-```
-
-- Atomic acquisition via `OpenOptions::create_new(true)` — only one worker wins.
-- The parent never acquires the lock — every spawned worker races for it.
-- Stale detection: `kill -0 pid` on Unix only (dead process → stale). Live
-  PIDs are never reclaimed regardless of age — this prevents displacing a
-  long-running worker that is still actively syncing.
-- Ownership-checked `Drop`: removes the lock only if PID and nonce still
-  match the current file, preventing an old owner from deleting a
-  replacement owner's lock.
-- Restrictive permissions (0o600 on Unix).
-- **Platform note:** `kill -0` is Unix-only. On non-Unix platforms all PIDs
-  are treated as alive (conservative non-stealing), with a documented manual
-  recovery command as the fallback.
-
-### Pending Transaction Lock (Release 5E)
-
-**Module**: `src/auto_sync/pending_lock.rs`
-
-Short-lived transaction lock serializing concurrent CLI processes on the
-pending marker. Distinct from the long-lived worker execution lock — parent
-mutation commands hold this guard only for the minimum read/modify/write
-critical section.
-
-```toml
-# ~/.config/snp/auto-sync-pending.lock
-pid = 12345
-nonce = "abc-12345-def"
-created_at_unix_ms = 1700000000000
-```
-
-Key properties:
-- Atomic acquisition via `OpenOptions::create_new(true)`.
-- Bounded retry with 1-5ms random jitter (500ms default timeout).
-- Dead-owner reclaim via `kill -0` on Unix; live owners never stolen.
-- Ownership-checked `Drop`: removes the lock only if PID and nonce match.
-- Atomic rename + directory fsync for durable writes via `utils::atomic::atomic_write_bytes()`.
-- 0o600 permissions on Unix. No secrets, commands, or snippet content.
-
-### Process Detachment
-
-- Unix: `libc::setsid()` puts the worker in a new session, ensuring it does
-  not die when the parent exits and has no controlling terminal.
-- Windows: `DETACHED_PROCESS | CREATE_NO_WINDOW` flags on `CreateProcess`.
-- `stdin`/`stdout`/`stderr` are routed to `null` so the worker cannot interfere
-  with the parent's TTY.
-
-### Failure Policy Rendering
-
-When the parent fails to spawn the worker:
-- `Ignore`: debug-level log only, no user-facing output
-- `Warn`: `eprintln!` warning to stderr
-- `Error`: `eprintln!` error to stderr + nonzero exit code
-
-Worker-side failures are logged to `~/.config/snp/logs/` and surface via
-`snp doctor --compatibility` diagnostics. The user is no longer present when
-the worker runs, so stderr is not the appropriate channel.
-
-### Design Decisions
-
-**Architecture: detached one-shot worker (corrective)**
-
-Three options were evaluated:
-1. **Option A (in-process coordinator):** Initial design. The mutation command
-   owns debounce and sync execution. Adds visible latency to mutation commands
-   and holds the parent process hostage during network round-trips.
-2. **Option B (persistent daemon):** Rejected. snp is a CLI tool with no
-   existing long-running process; a daemon would require lifecycle, IPC, and
-   uninstall handling disproportionate to the use case.
-3. **Option C (detached one-shot worker):** Chosen (Release 5D corrective).
-   The parent re-execs itself as a hidden `auto-sync-worker` subcommand with
-   detached process flags. Zero IPC, portable across Unix and Windows, reuses
-   the same `snp` binary's sync code path. The user never waits on network
-   round-trips.
-
-**Sync target: Global (not per-library)**
-
-`run_default_sync` syncs all configured libraries. The `MutationContext::library_id`
-field is retained for forward compatibility but currently unused. Per-library
-targeting deferred until the sync protocol supports it.
-
-**Delivery guarantees: Best-effort**
-
-Auto-sync is convenience, not durable delivery. The durable pending marker
-survives crash/restart, and `startup_recover_pending` clears stale state
-(>5 minutes). Manual `snp sync` and cron remain the recovery path for missed
-syncs.
-
-### Doctor Integration
-
-`snp doctor --compatibility` inspects auto-sync state using `auto_sync::paths`:
-- `paths::state_dir()` — directory containing all auto-sync artifacts.
-- `paths::pending_marker()` — full path to the pending TOML.
-- `paths::pending_txn_lock()` — full path to the pending transaction lock.
-- `paths::worker_lock()` — full path to the worker lock TOML.
-- `paths::execution_lock()` — full path to the execution lock TOML.
-- Liveness probe uses `lock::process_alive(pid)` (`kill -0` on Unix).
-
-Diagnostics emitted:
-- `compat.auto_sync.enabled` / `compat.auto_sync.disabled` — policy state.
-- `compat.auto_sync.pending_active` / `compat.auto_sync.pending_stale` /
-  `compat.auto_sync.pending_unreadable` — pending marker status.
-- `compat.auto_sync.lock_held` / `compat.auto_sync.lock_stale` /
-  `compat.auto_sync.lock_unreadable` — worker lock status.
-
-### Safety Invariants
-
-1. Worker never mutates snippet libraries directly (only calls `run_default_sync`).
-2. Secrets and snippet content never enter pending markers, lock files, worker argv, or worker env.
-3. SyncMerge origin never triggers auto-sync (prevents loops).
-4. PID+nonce worker lock prevents concurrent worker executions across processes.
-5. Pending marker survives crash; stale markers (>5 min) cleared on startup recovery.
-6. Manual and scheduled sync remain independent; explicit sync clears pending.
-7. No new visible CLI surface added — `auto-sync-worker` is hidden.
-8. Pending marker schema is versioned (v2) with CRC32 integrity.
-9. Conditional clear keyed on observed generation prevents stale workers from
-   clobbering fresh state.
-10. All sync operations share one `SyncExecutionLock`; no concurrent sync possible.
-11. The helper runs canonical sync directly; local I/O is not force-cancelled by a child process.
-12. Startup recovery is suppressed for the hidden helper and explicit sync commands.
-
-## Auto-Sync Mutation Trigger Integration
-
-**Module**: `src/auto_sync/notification.rs`
-
-All syncable local mutations are wired into the auto-sync coordinator
-via the central mutation notification API. Auto-sync triggers automatically
-after successful local mutations when enabled.
-
-### Central Mutation Notification API
-
-```rust
-pub fn notify_mutation(kind: MutationKind, origin: MutationOrigin) -> AutoSyncNotificationResult
-```
-
-Convenience function for mutation commands. Loads sync settings, resolves
-the policy, and calls `notify_local_mutation()`. Use this after a successful
-local atomic write.
-
-```rust
-pub fn notify_local_mutation(
-    policy: &AutoSyncPolicy,
-    context: MutationContext,
-) -> AutoSyncNotificationResult
-```
-
-Low-level function that takes a pre-resolved policy. Used for testing.
-
-```rust
-pub struct MutationContext {
-    pub kind: MutationKind,
-    pub origin: MutationOrigin,
-    pub library_id: Option<String>,
-}
-```
-
-### Mutation Flow
-
-```text
-user command
-  -> validate
-  -> local atomic write
-  -> audit/local success
-  -> notify_mutation(kind, origin)
-  -> AutoSyncPolicy::resolve() + origin check
-  -> record_pending_mutation(state_dir) -> PendingState{generation}
-  -> spawn::spawn_worker(current_exe, "auto-sync-worker", state_dir)
-  -> return AutoSyncNotificationResult::Scheduled{generation}
-```
-
-### Command Trigger Matrix
-
-| Command | Mutation | Origin | Triggers? | Notes |
-|---------|----------|--------|-----------|-------|
-| `snp new` (all sources) | SnippetCreate | User | Yes | After atomic save |
-| `snp edit` (editor) | SnippetUpdate | User | Yes | After editor closes |
-| `snp edit --output/--clear-output` | SnippetUpdate | User | **No** | Output is local-only |
-| TUI delete | SnippetDelete | User | Yes | After tombstone save |
-| `snp import pet` (create) | Import | Import | Yes | After library + config saved |
-| `snp import pet` (merge, changed) | Import | Import | Yes | Only if imported > 0 |
-| `snp import pet` (replace) | Import | Import | Yes | After replacement saved |
-| `snp import pet` (dry-run) | — | — | **No** | Read-only |
-| `snp import pet` (no-op merge) | — | — | **No** | Nothing changed |
-| `snp library create` | LibraryChange | User | Yes | After library created |
-| `snp library delete` | LibraryChange | User | Yes | After library deleted |
-| `snp library set-primary` | — | — | **No** | Local-only metadata |
-| `snp premade get` | — | — | **No** | Local copy of remote data |
-| `snp sync` (manual) | — | — | Clears pending | Explicit sync clears auto-sync state |
-| Sync merge writes | SyncConflictWrite | SyncMerge | **No** | Prevents feedback loops |
-
-### Explicit Sync Precedence
-
-When `--sync` flag is used (on `run`, `clip`, `search`, or TUI delete):
-
-1. `run_explicit_sync(runtime)` in `commands/mod.rs` acquires the execution lock, observes pending generation, runs `run_default_sync(runtime)`, and clears pending on success.
-2. TUI and exact-selector paths share one implementation — no divergence.
-3. Pending auto-sync state is cleared via `clear_pending_after_explicit_sync()`.
-4. No duplicate delayed sync for the same mutation generation.
-
-### Transaction Boundaries
-
-Each command defines its authoritative commit point:
-
-- **`snp new`**: After `save_library()` or `save_snippets()` succeeds
-- **`snp edit` (editor)**: After editor process exits successfully
-- **`snp edit --output`**: After `save_library()` succeeds (but no sync trigger)
-- **TUI delete**: After `save_library()` succeeds
-- **`snp import pet`**: After library file saved AND library registered in config
-- **`snp library create/delete`**: After library manager operation succeeds
-
-Auto-sync is submitted only after all local state required for a consistent
-view has committed. Backup failure does not trigger sync.
-
-### Local-Only Fields
-
-The `output` field is local-only — not in `ProtoSnippet`, never uploaded
-or downloaded. Edits that change only the `output` field do NOT trigger
-auto-sync because there is nothing to sync remotely.
-
-### Product Invariants (Release 5C additions)
-
-8. All syncable user mutation paths use one notification API.
-9. Triggers occur strictly after commit.
-10. Dry-run, cancel, failure, and no-op paths emit no request.
-11. Local-only mutations follow explicit protocol scope.
-12. Explicit/manual sync does not cause duplicate delayed sync.
-13. Sync-origin writes cannot recurse.
-14. Local state survives every remote/scheduling failure.
-15. Tests prove exactly-once logical notification and clean stdout.
+- Ceiling: `DEFAULT_CLIENT_REQUEST_CEILING = 3_584 * 1024` (3.5 MiB),
+  deliberately below the server 4 MiB gRPC default to leave framing headroom.
+- Size is measured with Prost `encoded_len()` on a constructed
+  `SyncRequest` — the larger of the two request envelopes — via
+  `sync_request_encoded_len` / `snippet_field_encoded_len` (1-byte tag +
+  varint length + message). Batches that fit `SyncRequest` also fit
+  `PushSnippetsRequest`.
+- Snippets are sorted by ID first: deterministic ordering across retries.
+- Incremental build: tentatively append, measure, keep or split. After an
+  overflow split the new singleton is **immediately re-validated**, so an
+  oversized item following a small item is still caught before any remote
+  mutation.
+- A single oversized item fails with `SyncFailureKind::RequestTooLarge`
+  before any batch is sent. The message names the snippet ID and sizes and
+  states the local snippet is unchanged.
+
+## Upload strategy (0 / 1 / many)
+
+Owned by `sync_prepared_encrypted_inner`. All uploads are sent **before**
+any response page is requested, so `has_more == false` on the first
+response can never truncate uploads, and the final response describes
+server state after all successful uploads.
+
+| Batches | Transport |
+|---------|-----------|
+| 0 (pull-only: no locals, or every local failed encryption) | Empty-upload `Sync(offset=0)` fetches the authoritative first page |
+| 1 | `Sync(batch, offset=0)` carries the upload **and** returns the first response page in one RPC |
+| ≥ 2 | Each batch via `PushSnippets` (upload only), then an empty-upload `Sync(offset=0)` for the authoritative first page |
+
+Further rules:
+
+- `PushSnippets` is idempotent by snippet identity (server upserts `ON
+  CONFLICT … WHERE newer`); retrying an accepted batch is safe.
+- Multi-batch errors go through `add_batch_context(batch, total)`, which
+  prefixes `batch n/m` while **preserving the original
+  `SyncFailureKind`** — a `ClockSkew` stays `ClockSkew` /
+  `FailureClass::Configuration`, and a `Runtime` (e.g. gRPC `internal` →
+  `Internal`) is never re-wrapped as `SyncRequestFailed` (which would
+  wrongly retry it as `Transient` forever).
+- Pagination (`paginate_remaining`): stops on `!has_more` or an empty page;
+  hard bound `MAX_PAGINATION_PAGES = 10_000`; `i32` offset saturation
+  surfaces `RequestTooLarge` instead of looping at `i32::MAX`.
+- Per-page decrypt failures are counted, not fatal: IDs land in
+  `skipped_ids`, and `build_sync_response` marks the aggregate unsuccessful
+  only when **all** snippets were skipped on one side.
+
+## Prepared transport seam
+
+- `sync_encrypted` / `sync_encrypted_with_ceiling` → `sync_encrypted_inner`
+  (real encryption via `encrypt_snippets`, `key_cache_guard`,
+  `ensure_budget`) → `sync_prepared_encrypted_inner` (the single
+  zero/one/many transport implementation).
+- `sync_encrypted_with_test_encrypt` is `#[cfg(test)]`-only: it accepts an
+  injected encrypt function and drives the same prepared transport (used by
+  the all-encryption-failed pull-path regression). Never reachable from
+  production.
+
+## Orchestration (`src/sync_commands.rs`)
+
+`run_sync(settings, library, push_only, pull_only, runtime)` delegates to
+`run_sync_with_limits(…, limits)`:
+
+1. Resolve direction (`Push` / `Pull` / `Bidirectional`; push-only warns it
+   skips downloads). `run_default_sync` = bidirectional, all libraries.
+2. `ensure_sync_configured`, connect (`ConnectFailed` on transport error),
+   `check_server_health`.
+3. Enumerate libraries from the **config index** (never the filesystem, so
+   crash-orphaned files are not resurrected); error `NoLibrariesToSync`
+   when empty. Unlinked libraries are created + linked on the server first.
+4. Replay `check_and_complete_recovery_markers` (startup scan), then sync
+   each library: `sync_encrypted(locals, last_sync, library_id)` → on
+   `LibraryNotFound`, `handle_library_not_found` (see §8).
+5. `merge_and_save` on success; advance `last_sync` to `server_timestamp`
+   only when `skipped_count == 0`, so encryption/decryption failures are
+   retried next time. Partial per-library failures accumulate in
+   `SyncStatus`; the run reports them without aborting sibling libraries.
+
+## Merge (`merge_snippets`)
+
+Live versions order by the deterministic key
+`(updated_at, device_id, SHA-256(synced fields))` — never role-dependent
+server-wins. `choose_version` compares timestamps first, then `device_id`,
+and computes the SHA-256 fingerprint lazily only on a full tie.
+
+Fingerprint inputs (`fingerprint()`): `id`, description, command, tags **in
+stored order** (length-prefixed), `created_at`, `updated_at`, `device_id`,
+deletion flag. Local-only `output`, `folders`, `favorite` are excluded and
+never influence conflict ordering; swapping two inputs on an equal
+timestamp yields the same winner.
+
+- **Deletion wins**: a deleted version beats live content even with an
+  older timestamp (no resurrection). Both-deleted merges to
+  `Equivalent` and the record is omitted from display; tombstones persist
+  locally until the server acknowledges them. A server-only tombstone for
+  an ID the device never saw is dropped (nothing to preserve).
+- Winner `Remote` adopts server description/command/tags/timestamps but
+  keeps local `output`/`folders`/`favorite`; winner `Local` keeps the local
+  record untouched. One-sided live records are preserved.
+- Result is sorted by `updated_at` descending (`sort_by_cached_key` over
+  the version key — O(n) hashes, not O(n log n)).
+- Clocks are still wall-clock Unix seconds: a fast clock can dominate
+  edits until real time catches up. Sync is deliberately not a CRDT (no
+  logical/vector clocks).
+
+### Output field contract
+
+`output` is **local-only**: it is not a field of `ProtoSnippet`, is never
+uploaded or downloaded, and merge always preserves the local value (server
+wins still keep local `output`; new server-only snippets start with empty
+`output`). `snp edit --output` requires `--filter`.
+
+## Transport security
+
+- **TLS required.** `create_tls_channel` refuses plaintext gRPC to
+  non-loopback hosts. `http://` is allowed only for loopback
+  (`localhost`, `127.x.x.x`, `[::1]`, IPv4-mapped IPv6 loopback) **or**
+  when `SNIP_SYNC_ALLOW_HTTP` is truthy (`true`/`1`/`yes`/`on`,
+  case-insensitive, for local development only). HTTPS uses system native
+  roots with hostname verification (`domain_name`) and assumes HTTP/2
+  (skips ALPN negotiation).
+- **Bearer metadata.** The API key travels as gRPC `authorization:
+  Bearer <key>` metadata (`add_api_key_metadata`); body `api_key` fields
+  are sent empty for the sync-family RPCs (the proto fields remain only as
+  deprecated compatibility surface). API keys are `Zeroizing`-wrapped in
+  memory and never logged (see `error.rs`, `utils/redact.rs`).
+- **Field/size limits** (server defaults in `snip-sync/src/lib.rs`;
+  client enforces the upload ceiling + premade caps):
+
+  | Limit | Value |
+  |-------|-------|
+  | gRPC max message (server) | 4 MiB |
+  | Client upload ceiling | 3.5 MiB |
+  | `command` / `description` | 1024 chars |
+  | tags / tag length / id / device_id | 50 / 100 / 128 / 128 chars |
+  | API key | 512 chars |
+  | `Sync` page (`MAX_REQUEST_LIMIT`) | 1000 records |
+  | Server sync-set cap | 10 000 snippets |
+  | Client premade caps | 10 000 entries, 4 MiB content |
+
+- **Clock-skew diagnostics.** The server validates `created_at` /
+  `updated_at` against one `now` sample and rejects outliers with
+  `InvalidArgument("CLOCK_SKEW: … N seconds ahead of server time;
+  synchronize the client clock and retry")`. The client maps
+  `InvalidArgument` with a `CLOCK_SKEW:` prefix to
+  `SyncFailureKind::ClockSkew` → `FailureClass::Configuration`.
+- **Sanitized server errors.** Unauthenticated callers and internal faults
+  surface as generic `Unauthenticated` / `Status::internal("Internal
+  error")`; detail is logged server-side only.
+- **Rate limiting.** `ResourceExhausted` ("Rate limit exceeded") triggers
+  the `RateLimitAware` 4x/120 s backoff on the `Sync` RPC only.
+
+## Remote library recovery (`<library>.sync_recovery`)
+
+When a linked remote library is missing (`LibraryNotFound`), the client
+drives an atomic TOML state machine beside the library file
+(`libraries/<name>.sync_recovery`, schema 1, `Creating → RemoteCreated →
+Linked`), holding only local name/ID, phase, timestamp, and the recovered
+server ID — never credentials or snippet content:
+
+1. Write/validate the marker (corrupt or identity-mismatched markers —
+   wrong schema, name stem, local ID, or missing library file — are
+   preserved and block blind recreation).
+2. Reuse the recorded server ID, or list remotes by **normalized** name
+   (`lowercase`, spaces → `-`): exactly one match is reused, zero matches
+   create one, multiple matches fail visibly as ambiguous. A `Linked`
+   marker never creates a remote library.
+3. Persist the server ID (`RemoteCreated`) **before** relinking locally;
+   relink writes the server ID plus `last_sync = 0` together.
+4. Retry the sync from cursor 0, merge + save, advance `last_sync` — only
+   then remove the marker. Startup (`check_and_complete_recovery_markers`)
+   resumes `Creating` / `RemoteCreated` / `Linked` markers the same way.
+
+## Failures (`src/sync_failure.rs`, `src/error.rs`)
+
+`SyncFailureKind` has 21 variants:
+
+`NotConfigured`, `ConnectFailed`, `HealthCheckFailed`,
+`AuthenticationFailed`, `SyncRequestFailed`, `CreateLibraryFailed`,
+`GetPremadeLibraryFailed`, `RegistrationFailed`,
+`LibraryManagerInitFailed`, `LibraryModeInitFailed`,
+`LibrariesDirReadFailed`, `NoLibrariesToSync`,
+`SaveMergedLibraryFailed`, `PartialSyncFailure`,
+`PremadePartialFailure`, `EncryptionFailed`, `DecryptionFailed`,
+`LibraryNotFound`, `Timeout`, `RequestTooLarge`, `ClockSkew`.
+
+`FailureClass::from_error` maps them without string matching:
+
+| `FailureClass` | Members |
+|----------------|---------|
+| `Transient` | `ConnectFailed`, `HealthCheckFailed`, `SyncRequestFailed`, `GetPremadeLibraryFailed`, `PartialSyncFailure`, `PremadePartialFailure`, `Timeout` |
+| `Configuration` | `NotConfigured`, `AuthenticationFailed`, `CreateLibraryFailed`, `RegistrationFailed`, `LibraryNotFound`, `RequestTooLarge`, `ClockSkew` |
+| `LocalFailure` | `LibraryManagerInitFailed`, `LibraryModeInitFailed`, `LibrariesDirReadFailed`, `SaveMergedLibraryFailed` |
+| `Internal` | `NoLibrariesToSync`, `EncryptionFailed`, `DecryptionFailed` |
+
+Legacy `Runtime` / `Io` / `Toml` errors fall back to substring heuristics
+(auth/keychain → `Configuration`, network/timeout/server → `Transient`,
+save/read/conflict/merge → `LocalFailure`, else `Internal`).
+`FailureClass` lives in the sync-client layer so `sync.rs` classifies
+without depending on `auto_sync`; `auto_sync::policy` re-exports it and
+adds `RetryDisposition`. Scheduling errors are typed (`ScheduleError::
+Pending` vs `Spawn`) — never collapsed into `NoPending` / `SpawnNow` /
+success.
+
+## Auto-sync pointer
+
+Detached scheduling, debounce, pending generations, locks, and the worker
+loop are documented in [auto_sync.md](auto_sync.md). The only contract
+this layer owns: every sync path (manual, explicit `--sync`, cron,
+detached worker) holds the shared `SyncExecutionLock` for the whole
+operation, and the worker calls `run_sync_with_limits` directly with
+`Some(SyncRunLimits)`.

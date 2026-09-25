@@ -1,46 +1,93 @@
-# repair_cmd — Conservative Data Repair
+# repair_cmd — Conservative, Backed-Up, Idempotent Repair
 
 [← Back to Overview](../overview.md)
 
-## Purpose
+## Overview
 
-`repair` validates configuration and library files, identifies safe repair candidates, and applies fixes only when explicitly requested. Always creates a backup before any mutations.
+`src/commands/repair_cmd.rs` (1079 lines) turns `validate` diagnostics
+and transaction-journal scans into a typed, previewable, backed-up
+repair plan. Default (no flags) only summarizes; `--dry-run` previews;
+`--apply` snapshots a pre-repair backup, applies **safe** actions only,
+and reports applied/skipped/failed with a typed exit status. Running it
+twice without new damage is a no-op (idempotent).
 
-Inspection is read-only: primary-library candidates come from the shared `LibraryManager::inspect_library_index()` view and orphaned-usage candidates from the shared `library::find_orphaned_ids()` classifier, so `repair` agrees with `validate`/`doctor` on the same state. Mutations stay behind `--apply` under the existing backup/locking/transaction rules.
+## CLI surface
 
-**File**: `src/commands/repair_cmd.rs`
+`RepairArgs` (`repair_cmd.rs:19`), `snp repair` (alias `rp`) and
+`snp data repair` via `handle_repair` (`main.rs:431`):
+`--dry-run` (preview, no changes), `--apply` (backup + apply safe
+repairs), `-l/--library` (scope candidate collection), `--json`
+(machine report). `--dry-run --apply` prints the plan without changing
+anything (`show_only = !apply || dry_run`).
 
-## Repair Actions
+`RepairAction` (`:36`): `PruneOrphanedUsage`, `RollbackTransaction{id}`,
+`ResumeCleanup{id}`, `FinalizeCommittedLocal{id}`,
+`CleanupLegacyCommitted{id}`, `CleanupLegacyRolledBack{id}`,
+`RemoveTerminalJournal{id}`, `RemoveOrphanedArtifact`,
+`RepairLibraryIndex`, `RepairSnippetIds`, `RepairTimestamps`.
+`category()` (`:81`) groups for display; `is_safe()` (`:98`) admits
+only usage-prune and transaction-journal actions — index/ID/timestamp
+repairs are planned but never auto-applied. `RepairExitStatus` (`:144`):
+`Clean | Repaired | PartialFailure | UnsafeOnly | DryRun`.
 
-| Action | Category | Safe? | Description |
-|--------|----------|-------|-------------|
-| `PruneOrphanedUsage` | usage | Yes | Remove usage index entries for deleted snippets |
-| `RollbackTransaction` | transaction | Yes | Roll back an interrupted transaction |
-| `ResumeCleanup` | transaction | Yes | Resume cleanup for a `CleaningUp` transaction |
-| `FinalizeCommittedLocal` | transaction | Yes | Complete pending + cleanup for `CommittedLocal` |
-| `CleanupLegacyCommitted` | transaction | Yes | Clean up legacy `Committed` journals |
-| `CleanupLegacyRolledBack` | transaction | Yes | Clean up legacy `RolledBack` journals |
-| `RemoveTerminalJournal` | transaction | Yes | Remove terminal journal with no artifacts |
-| `RemoveOrphanedArtifact` | transaction | Yes | Remove artifact dir with no matching journal |
-| `RepairLibraryIndex` | index | No | Fix duplicate/missing primary in library index |
-| `RepairSnippetIds` | ids | No | Fix duplicate/missing snippet IDs |
-| `RepairTimestamps` | timestamps | No | Fix missing/invalid timestamps |
+## Flow / steps
 
-## Safety Model
+`run(dry_run, apply, library, json)` (`:181`):
 
-- All actions marked `is_safe() = true` are applied automatically with `--apply`
-- Unsafe actions are reported but skipped (not applied)
-- A backup snapshot is always created before any mutation
+1. `collect_repair_candidates` (`:259`): library validation → typed
+   `RepairItem{action, category, problem, fix, safe, target_path}`
+   (typed path, never string-parsed).
+2. `collect_transaction_repairs`: scan `<config>/.transaction/` journals
+   — Prepared/Committing/RollingBack → rollback; CleaningUp → resume;
+   CommittedLocal → finalize; legacy terminal journals with/without
+   artifacts → cleanup/remove; orphaned artifact dirs → remove.
+3. If `apply` and items exist: no safe items → `UnsafeOnly` + single
+   report; else `create_repair_backup()` first, then `apply_repair`
+   per safe item, counting applied/failed/skipped(unsafe).
+   `PartialFailure` if any failed, else `Repaired`.
+4. No items → `Clean`; `dry_run` with items → `DryRun` (+ `(dry run —
+   no changes made)`); items without `--apply` → `UnsafeOnly`.
+5. Emit exactly one final report (human to stderr, JSON to stdout),
+   then return the status. `main.rs:375-384 exit_on_repair_status`:
+   Clean/Repaired/DryRun → continue `Success`; PartialFailure →
+   exit 1; UnsafeOnly → exit 10 (unsafe repairs pending).
 
-## Transaction Repair
+## Mutation vs read-only
 
-The primary use case is recovering from interrupted transactions:
-- `Prepared`, `BackupsDurable`, `Committing`, `RollingBack` states → `RollbackTransaction`
-- `CleaningUp` state → `ResumeCleanup`
-- `CommittedLocal` state → `FinalizeCommittedLocal`
+Conditionally mutating: read-only unless `--apply` (with safe items),
+in which case it is the most privileged local writer — backup first,
+journal-driven, idempotent. Preview paths take no locks and need no
+gate; apply paths go through the transaction APIs (which own gating
+and locking).
 
-## Output
+## Auto-sync trigger
 
-- Default: lists discovered repair candidates
-- `--apply`: executes safe repairs (with backup)
-- `--json`: machine-readable JSON report
+None. `repair_cmd.rs` contains no `notify_mutation`; repaired content
+syncs via the normal post-repair mutation path (the next user mutation
+or explicit `snp sync`), never from repair itself.
+
+## Error / exit mapping
+
+- Exit 0: Clean / Repaired / DryRun. Exit 1: PartialFailure (some
+  safe repair failed). Exit 10: UnsafeOnly (needs operator judgment).
+- JSON counters (`applied/skipped/failed`) and `exit_status` reflect
+  the final state — the report emits once, after all work.
+- Per-item failure never aborts the batch; it is counted and reported.
+
+## Key invariants
+
+- Backup before any mutation; repairs are idempotent and safe to
+  re-run (`--apply` on clean state → `Clean`).
+- Only `is_safe()` actions auto-apply; unsafe candidates are reported
+  with manual fixes, never executed.
+- `target_path` is typed — display strings are never re-parsed.
+- Kernel-lock files are diagnostic-only: never inspected, rewritten,
+  or removed by repair. `kill(pid,0)`: only `ESRCH` proves absence.
+- Barrier-gated tests (`repair_transactions`, `test-support`) cover
+  crash/restore interleavings; run serially.
+
+## File / line references
+
+- `RepairArgs`: `src/commands/repair_cmd.rs:19`; actions: `:36-124`
+- `RepairItem/Report/Status`: `:128-169`; `run`: `:181`
+- Candidates: `:259`; exit mapping: `src/main.rs:375-384,431-435`

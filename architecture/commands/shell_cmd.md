@@ -1,57 +1,83 @@
 # shell_cmd — Shell Integration Code Generation
 
-**Source:** `src/commands/shell_cmd.rs`
+[← Back to Overview](../overview.md)
 
-## Purpose
+## Overview
 
-Generates shell integration functions for bash, zsh, and fish. These functions allow users to interact with snp directly from their shell prompt — selecting snippets, capturing the current buffer as a new snippet, and saving the previous history entry as a snippet.
+`src/commands/shell_cmd.rs` (1495 lines, mostly generated-script
+templates) prints shell functions that wire `snp` into interactive
+use: TUI selection into the command line, buffer capture into
+`snp new`, and history helpers. It installs no keybindings and mutates
+no shell config — output is printed for inspection before sourcing.
+`snp doctor --check-shell` syntax-validates this same output.
 
-## Generated Functions
+## CLI surface
 
-Each shell gets four functions:
+`snp shell init <bash|zsh|fish>` (alias `i`), `main.rs:228-236,769-773`.
+`ShellIntegration{Bash,Zsh,Fish}` (`shell_cmd.rs:8`, `ValueEnum`) is
+the CLI spelling; `as_str()` gives the lowercase name for doctor and
+`to_shell_type()` maps to `ShellType{Bash,Zsh,Fish}` (`:39`,
+`Display`). `run(shell: ShellType)` (`:56`) dispatches to
+`generate_bash` (`:68`) / `generate_zsh` (`:201`) /
+`generate_fish` (`:333`); output goes through `print!` (no trailing
+newline added — the template owns its bytes).
 
-### `snp_select_raw` / `snp_select_expanded`
-Opens the TUI snippet selector and replaces the current shell buffer with the selected command.
+## Flow / steps
 
-- `raw` — inserts the command verbatim
-- `expanded` — prompts for `<name>` variables before inserting
+1. `run` selects the generator and prints the script verbatim.
+2. Bash (`__snp_select`, `snp_select_raw/_expanded`,
+   `snp_new_current`, history helpers): selection via
+   `mktemp` + `snp select --output-file $tmp --raw|--expanded
+   [--query $READLINE_LINE]`; exit 4 (cancelled) restores the buffer;
+   creation via `printf %s $READLINE_LINE | snp new --command-stdin`.
+3. Zsh: same protocol against `BUFFER`/`CURSOR` (widgets, no
+   Readline dependency); fish: same against `commandline`.
+4. Contract details: selection adapters pass the temp file
+   (`--output-file`) for lossless transport and read it with
+   `read -r -d ''`; creation adapters pipe text over stdin with no
+   shell evaluation; every helper guards `command -v snp` first and
+   restores the prior buffer on any failure path.
 
-### `snp_new_current`
-Captures the current shell buffer (what the user has typed) and creates a new snippet from it via `snp new --command-stdin`.
+The canonical `ShellIntegration` enum is shared with
+`doctor --check-shell` so shell spellings cannot drift between
+generation and diagnostics.
 
-### `snp_new_previous`
-Captures the previous shell history entry and creates a new snippet from it via `snp new --command-stdin`.
+## Mutation vs read-only
 
-## Safety Properties
+Read-only codegen: prints to stdout, writes no files, changes no
+shell state. (The *generated* helpers invoke `snp select`/`snp new`,
+which have their own read-only/mutating contracts — see
+`select_cmd.md`, `new_cmd.md`.)
 
-1. **No `eval`** — generated code never uses `eval` or evaluates arbitrary strings
-2. **No history file access** — uses shell builtins (`fc`, `history search`, `commandline`) instead of reading history files directly
-3. **Buffer preservation** — on cancellation (exit 4) or error, the original `$READLINE_LINE` / `$BUFFER` / `commandline` is restored
-4. **No execution on source** — sourcing the generated code only defines functions; nothing executes until the user invokes a function
+## Auto-sync trigger
 
-## Transport Mechanism
+None at generation time. At *use* time, the helpers inherit the
+underlying commands' behavior: `select` never notifies;
+`new --command-stdin` notifies `SnippetCreate/User`.
 
-Selection uses `--output-file` (atomic temp file) rather than stdout, because stdout is connected to the terminal and cannot be captured by the shell function reliably. The shell function reads the temp file and cleans it up.
+## Error / exit mapping
 
-## Shell-Specific Details
+`SnipResult<()>`; generation is infallible in practice (template
+lookup cannot fail for a typed `ShellType`). Unknown shell spellings
+are rejected by clap before `run`. Helper-level failures (missing
+`snp`, cancelled selection, empty output file) are shell `return 1`
+inside the generated code, not CLI errors.
 
-| Shell | Buffer API | History API | Keybinding |
-|-------|-----------|-------------|------------|
-| Bash | `$READLINE_LINE` / `$READLINE_POINT` | `fc -ln` | `bind -x` |
-| Zsh | `$BUFFER` / `$CURSOR` | `fc -ln` | `zle -N` + `bindkey` |
-| Fish | `commandline` | `history search` | `bind` |
+## Key invariants
 
-## Testing
+- Never auto-install: no keybindings, no rc-file edits — the user
+  inspects and sources explicitly.
+- Lossless transport: temp-file + `read -d ''` for selection (stdout
+  would add/mangle newlines); stdin pipe for creation (never `eval`).
+- Exit 4 (cancelled) is load-bearing: helpers restore the buffer only
+  on this code; keep `select_cmd`'s `Cancelled → 4` mapping stable.
+- `Shell` (completions) vs `ShellIntegration` (init) are distinct
+  enums — do not merge them.
 
-Tests are extensive:
-- **Syntax checks** — `bash -n`, `zsh -n`, `fish --no-execute` verify generated code parses
-- **Function existence** — source and verify all functions are defined
-- **Behavioral tests** — stub `snp` executable, source generated code, verify buffer manipulation
-- **Cancellation tests** — verify buffer restoration on exit 4 and errors
-- **Edge cases** — multiline selection, special characters, missing `snp`
+## File / line references
 
-## Integration Points
-
-- **`select_cmd`**: The `snp select --output-file` command that shell functions call
-- **`new_cmd`**: The `snp new --command-stdin` command that capture functions call
-- **`doctor_cmd --check-shell`**: Validates generated shell code syntax
+- Enums/run: `src/commands/shell_cmd.rs:8,39,56`
+- Generators: `:68 (bash), :201 (zsh), :333 (fish)`
+- Consumer contract: `src/commands/select_cmd.rs:69`
+- Syntax check: `src/commands/doctor_cmd.rs:1084`
+- Dispatch: `src/main.rs:228-236,769-773`

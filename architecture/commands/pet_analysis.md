@@ -1,43 +1,83 @@
-# pet_analysis — Pet Snippet File Analysis
+# pet_analysis — Pet File Reading, Field Detection, Import Analysis
 
 [← Back to Overview](../overview.md)
 
-## Purpose
+## Overview
 
-Helper module for analyzing and importing [pet](https://github.com/knqyf263/pet) snippet files. Used by both `snp doctor` (analysis) and `snp import` (migration).
+`src/commands/pet_analysis.rs` (642 lines) is the shared,
+side-effect-free analysis kernel for pet TOML files, used by both
+`import pet` (conversion input) and `doctor --pet-file/--library`
+(compatibility preview). It covers bounded file reads, TOML parsing,
+structural field/type diagnostics, per-entry analysis, and duplicate
+detection. It never converts, writes, or reports — callers own those.
 
-**File**: `src/commands/pet_analysis.rs`
+## CLI surface
 
-## Source File Reading
+None directly (no `*Args`, no dispatch). Surfaced through
+`PetImportOptions.source` (`import_cmd.rs:37`) and
+`DoctorArgs{pet_file, library}` (`doctor_cmd.rs:18`). Size bound:
+`MAX_SOURCE_FILE_BYTES = 16 MiB` (`pet_analysis.rs:10`).
+`KNOWN_SNIPPET_FIELDS` (`:13-35`) lists canonical + alias keys
+(`id/description/command/output/tag/tags/folders/favorite/created_at/
+updated_at/device_id/deleted/name/cmd` plus capitalized variants).
 
-`read_source_file()` validates the pet TOML source:
-- Rejects directories, non-regular files
-- Enforces 16 MiB size limit (`MAX_SOURCE_FILE_BYTES`)
-- Requires valid UTF-8
-- Rejects NUL bytes
+## Flow / steps
 
-## Known Pet Fields
+1. `read_source_file(path)` (`:40`): `metadata` (NotFound → runtime
+   error; dir/non-regular → dedicated errors), open + bounded read
+   (`limit+1` then length check), UTF-8 decode, NUL rejection. Source
+   never modified.
+2. `parse_pet_toml(content)` (`:102`): `fix_invalid_toml_escapes`
+   then `toml::from_str::<Snippets>`.
+3. `detect_unknown_fields(raw_toml)` (`:109`, raw `toml::Value`
+   scan): per `[[snippets]]` entry, known-field type expectations
+   (`tag/tags/folders→array`, `favorite/deleted→boolean`,
+   `created_at/updated_at→integer`, text fields→string) with
+   `W-TYPE-MISMATCH` on drift; unknown keys → `I-FIELD-UNKNOWN`;
+   missing description/command/name and command/cmd variants →
+   `W-DESC-MISSING` / `W-CMD-MISSING`. Unparseable TOML yields no
+   structural findings (the parse error itself is the finding).
+4. `analyze_entry(index, pet)` (`:213`): empty description →
+   `W-DESC-EMPTY`; empty command → `E-CMD-EMPTY` (the sole error);
+   present output → `I-OUTPUT-PRESENT`; plus tag/variable findings.
+5. Duplicate predicates (`:300-316`): `is_exact_duplicate`
+   (description + command), `same_command_different_description`,
+   `same_description_different_command`; `detect_duplicates` (`:318`)
+   returns `(Vec<ImportDuplicate>, Vec<CompatibilityDiagnostic>)`
+   with `W-DUP-CMD` / `W-DUP-DESC` diagnostics.
 
-```rust
-pub const KNOWN_SNIPPET_FIELDS: &[&str] = &[
-    "id", "description", "command", "output", "tag", "tags",
-    "folders", "favorite", "created_at", "updated_at",
-    "device_id", "deleted", "name", "cmd",
-    "Tag", "Tags", "Description", "Command", "Output", "Id", "ID",
-];
-```
+## Mutation vs read-only
 
-Used to detect unrecognized fields during analysis and to distinguish pet-format snippets from snip-it format.
+Pure analysis: no gate, no lock, no writes, no ID regeneration, no
+normalization. `convert_entry` (import) and `build_pet_report`
+(doctor) consume these findings and own all mutation.
 
-## Analysis Capabilities
+## Auto-sync trigger
 
-- **Field detection**: identifies known vs. unknown pet fields
-- **Duplicate detection**: finds snippets with matching descriptions/commands
-- **Format validation**: checks TOML structure and required fields
-- **Import report**: `PetImportReport` with diagnostics, duplicates, and importable snippet counts
+None. Analysis creates no pending intent and records no usage.
 
-## Integration Points
+## Error / exit mapping
 
-- `snp doctor` — uses `read_source_file()` and field analysis for compatibility diagnostics
-- `snp import` — uses analysis to plan conversion from pet format to snip-it format
-- `diagnostics.rs` — `CompatibilityDiagnostic` and `ImportDuplicate` types for structured reporting
+`read_source_file`/`parse_pet_toml` return `SnipResult` (not-found,
+dir, special-file, oversized, non-UTF-8, NUL, TOML parse). The
+`detect_*`/`analyze_*` functions return finding vectors, never
+errors — absence of findings is an empty vec, and callers decide
+fatality (import strict mode vs doctor `--strict` elevation).
+
+## Key invariants
+
+- One analysis implementation serves doctor-preview and
+  import-execution: predictions cannot drift between the two.
+- Alias tolerance at read (`cmd→command`, `name→description`,
+  `Tag/Tags→tags`) with normalization records at write; unknown
+  fields are ignored-with-info, never fatal.
+- `E-CMD-EMPTY` is the only entry-level error; everything else
+  degrades to warning/info (strict modes elevate explicitly).
+- The 16 MiB bound is checked pre-allocation via `take(limit+1)`.
+
+## File / line references
+
+- Bounds/fields: `src/commands/pet_analysis.rs:10,13`
+- `read_source_file`: `:40`; `parse_pet_toml`: `:102`
+- `detect_unknown_fields`: `:109`; `analyze_entry`: `:213`
+- Duplicate API: `:300-330+`; callers: `import_cmd.rs`, `doctor_cmd.rs:1-4`

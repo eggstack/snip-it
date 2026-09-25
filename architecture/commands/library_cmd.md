@@ -1,80 +1,81 @@
-# library_cmd — Library Management
+# library_cmd — Library Management Subcommands
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`library_cmd` manages multiple snippet libraries. Libraries allow organizing snippets into separate files and choosing a "primary" library for operations.
+`src/commands/library_cmd.rs` (155 lines) manages snippet libraries
+via `LibraryManager`: list, create, delete (confirm-guarded), set
+primary, and show metadata. Creation/deletion are synced mutations;
+listing/primary/show are local metadata operations.
 
-## Entry Point
+## CLI surface
 
-Each subcommand dispatches to a dedicated function:
+`snp library` (alias `lib`), `main.rs:187-207,729-737`:
 
-```rust
-pub fn run_list() -> SnipResult<()>
-pub fn run_create(name: String) -> SnipResult<()>
-pub fn run_delete(name: String, force: bool) -> SnipResult<()>
-pub fn run_set_primary(name: String) -> SnipResult<()>
-pub fn run_show(name: Option<String>) -> SnipResult<()>
-```
+| Form | Handler | Notes |
+|------|---------|-------|
+| `library list` (alias `l`) | `run_list()` (`:6`) | Prints `filename [+ (primary)]` |
+| `library create <name>` (alias `c`) | `run_create(name)` (`:24`) | Validates + writes new `.toml` |
+| `library delete <name> [--force]` (alias `d`) | `run_delete` (`:39`) | Confirm unless `--force`; non-tty requires `--force` |
+| `library set-primary <name>` (alias `p`) | `run_set_primary` (`:74`) | Local pointer swap |
+| `library show [name]` (alias `s`) | `run_show` (`:82`) | One library detail or all with `[linked]` |
 
-## Subcommands
+## Flow / steps
 
-### list
-```bash
-snp library list
-```
-Lists all configured libraries with their paths and metadata.
+- `run_list`: `LibraryManager::new → list_libraries`; empty →
+  `No libraries found.`; else `Libraries:` + entries.
+- `run_create`: `create_library(name)` (sanitizes, rejects
+  duplicates/reserved, writes file + index) → notify →
+  `Created library '<name>' at <path>`.
+- `run_delete`: without `force`, non-terminal stdin → hard error
+  (`Non-interactive delete … Use --force`); terminal → `[y/N]`
+  confirm, anything but `y` → `Cancelled.` + `Ok`. Then
+  `delete_library(name)` → notify → `Deleted library '<name>'`.
+- `run_set_primary`: `set_primary(name)` → confirmation line. No
+  notify (pointer-only change).
+- `run_show`: named → filename, ID (`{not linked}` when empty),
+  primary flag, last-sync timestamp (`%Y-%m-%d %H:%M`); unnamed →
+  all libraries with `(primary)`/`[linked]` markers; unknown name →
+  `runtime_error("Library not found")`.
 
-### create
-```bash
-snp library create <name>
-```
-Creates a new empty library file at `~/.config/snp/libraries/<name>.toml`.
+`StringExt::if_empty` (`:120-132`) backs the `{not linked}` fallback.
 
-### delete
-```bash
-snp library delete <name>
-```
-Deletes a library file (with confirmation). If the deleted library was primary, another library is promoted.
+## Mutation vs read-only
 
-### set-primary
-```bash
-snp library set-primary <name>
-```
-Sets the active library for all operations.
+Mixed: `create`/`delete` mutate (index + files, gated inside
+`LibraryManager::gate_mutation`); `list`/`set-primary`/`show` are
+metadata-level (set-primary writes `libraries.toml` only, no snippet
+content — hence no gate/notify implications beyond the index write).
 
-### show
-```bash
-snp library show
-```
-Shows the current primary library path and statistics.
+## Auto-sync trigger
 
-## Library Configuration
+- `run_create` / `run_delete`: `notify_mutation(
+  MutationKind::LibraryChange, MutationOrigin::User)` after success
+  (`:29`, `:64`; Workstream B5).
+- `run_set_primary` / `run_list` / `run_show`: none — primary
+  pointers and reads create no sync intent.
 
-Libraries metadata stored in `~/.config/snp/libraries.toml`:
+## Error / exit mapping
 
-```toml
-[[library]]
-name = "personal"
-path = "~/.config/snp/libraries/personal.toml"
-primary = true
+`SnipResult<()>`: unknown/duplicate/invalid names, non-interactive
+delete without `--force`, and manager I/O errors propagate (exit 1;
+not-found maps toward exit 3 via `library_not_found` wording where
+applicable). Cancellation (`n` at the prompt) is exit-0 `Ok`.
 
-[[library]]
-name = "work"
-path = "~/.config/snp/libraries/work.toml"
-primary = false
-```
+## Key invariants
 
-## Migration from Single File
+- All libraries live under `~/.config/snp/libraries/`; external
+  paths unsupported. Malformed `libraries.toml` fails closed
+  (backup + error, never synthetic-empty).
+- Missing-library recovery uses atomic `<library>.sync_recovery`
+  state: one normalized remote-name match only, ambiguity fails.
+- Deletion is refused non-interactively without `--force` — scripts
+  must opt in explicitly.
+- `last_sync` linkage resets atomically with relink + retry sync.
 
-If `snippets.toml` exists but `libraries.toml` does not:
-1. Create `libraries/` directory
-2. Move `snippets.toml` to `libraries/default.toml`
-3. Create `libraries.toml` with single default entry
-4. Mark as primary
+## File / line references
 
-This happens automatically on first library operation if migration needed.
-
-## Related
-
-- [mod.md](mod.md) — Path resolution, library loading
-- [library.md](../library.md) — LibraryManager and snippet structures
+- Handlers: `src/commands/library_cmd.rs:6,24,39,74,82`
+- Notifies: `:29,64`; guard: `:43-59`; manager: `src/library/manager.rs`
+- Dispatch: `src/main.rs:187-207,729-737`

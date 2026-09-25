@@ -1,10 +1,12 @@
 # Test Infrastructure
 
+[← Back to Overview](overview.md)
+
 Deterministic end-to-end testing infrastructure for the auto-sync subsystem. Reusable components in `tests/support/` that provide isolated environments, server event tracking, and cross-process lifecycle evidence.
 
 ## Overview
 
-The auto-sync test infrastructure exercises the single detached helper with
+The test suite holds **~50 integration targets** (`tests/*.rs`) plus workspace unit tests. The auto-sync tests exercise the single detached helper with
 real binaries, real gRPC servers, and deterministic assertions. Tests prove
 exact sequences — not just "eventually consistent" behavior — including remote
 state effects, pending marker lifecycle, and status file truth.
@@ -38,14 +40,15 @@ env.write_sync_toml();
 **Key properties:**
 
 - `XDG_CONFIG_HOME` points to a `TempDir`, never the developer's real config
-- `SNP_ALLOW_PLAINTEXT_API_KEY=true` enables plaintext API key in test config
+- `SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on every spawned command, enabling plaintext API keys in test config (the production keychain path is never touched). The seam is asserted by a guard test — never remove it.
+- `SNP_TEST_EVENTS_DIR` is explicitly *removed* from spawned commands by default; tests opt in only when they assert lifecycle events.
 - Each environment gets a unique `device_id` (`test-device-<uuid>`) and fixed `api_key` (`test-api-key-e2e-05a`)
 - Child processes spawned via `spawn_snp_detached` are tracked and SIGTERM'd on drop
 - `read_pending_generation()` and `status_file_path()` / `pending_marker_path()` provide direct file inspection
 
 ### RecordingServer (`tests/support/recording_server.rs`)
 
-Wrapper around `snip-sync`'s `start_test_server` that adds event tracking and deterministic wait/poll helpers. Binds to port 0 for port conflict avoidance.
+Wrapper around `snip-sync`'s `start_test_server` that adds event tracking and deterministic wait/poll helpers. Binds to port 0 for port conflict avoidance; each test starts its own in-process server backed by `sqlite::memory:`.
 
 ```rust
 use support::recording_server::RecordingServer;
@@ -74,10 +77,12 @@ let has_op = server.wait_for_operation("sync", Duration::from_secs(5)).await;
 | `wait_for_operation(name, timeout)` | Block until a named operation appears in events |
 | `wait_for_request_count(name, n, timeout)` | Block until operation count reaches `n` |
 
+`events()`, `event_count(op)`, `has_operation(op)`, and `RecordingSummary::count_for` back the exact-count assertions. `set_failure_mode(FailureMode)` injects server-side failures without needing unreachable hosts.
+
 ### EventSink / EventWriter (`tests/support/event_sink.rs`)
 
 JSON-lines channel for detached-helper lifecycle evidence. The helper writes
-events; the test side reads and asserts.
+events; the test side reads and asserts. Emission is compiled in only under `test-support` (`src/auto_sync/test_events.rs`) and fires **only when `SNP_TEST_EVENTS_DIR` is set**, writing `<dir>/test-events.jsonl`. Production builds carry no-op stubs.
 
 ```rust
 use support::event_sink::{EventSink, EventWriter};
@@ -158,6 +163,12 @@ fn test_my_scenario() {
 
 Point at an unreachable server (`127.0.0.1:1`) to prove pending is preserved when sync fails. Local commit must succeed; pending marker must remain.
 
+### Assertion Discipline
+
+- **Exact counts, not `>= 1`**: `assert_eq!(count, 1, ...)` on sync attempts, worker spawns, and server operations.
+- **Server-side effects proven**: remote state (snippet appears on pull, request recorded) is asserted, not just client exit codes.
+- **Pending-clear ordering**: remote effect occurs *before* pending clear; pending clear is impossible when canonical sync fails; status-file truth is necessary but not sufficient alone.
+
 ## Isolation Guarantees
 
 | Concern | Guarantee |
@@ -169,6 +180,7 @@ Point at an unreachable server (`127.0.0.1:1`) to prove pending is preserved whe
 | State files | All in `TempDir`; `auto-sync-pending.toml`, `auto-sync-status.toml`, `test-events.jsonl` |
 | Device identity | Unique `test-device-<uuid>` per test, never reused |
 | Server isolation | Each test starts its own in-process `snip-sync` with `sqlite::memory:` |
+| Event emission | JSON-lines lifecycle events only when `SNP_TEST_EVENTS_DIR` is set |
 
 Tests never touch the developer's real `~/.config/snp/`, real keychain, or real network ports.
 
@@ -193,6 +205,44 @@ pending-generation and scheduling sequence. Sync server effects are covered by
 - Local mutation always commits before any remote work
 - Pending clear is impossible when canonical sync fails
 - Status file truth is necessary but not sufficient alone
+
+## Serial vs Parallel
+
+Unit tests (`cargo test --workspace --lib`) are parallel-safe — each uses an isolated `TempDir`. Integration targets that share real PTYs, kernel locks, barriers, or timing-sensitive helpers run serially:
+
+| Targets | Why serial | Command fragment |
+|---------|-----------|------------------|
+| `pty_integration` | Real pty pairs | `-- --test-threads=1` |
+| `auto_sync_concurrency` | Cross-process timing | `--features test-support -- --test-threads=1` |
+| `sync_multibatch` | Multi-batch ordering | `--features test-support -- --test-threads=1` |
+| `process_lock_concurrency` | Kernel flock, real subprocesses | `--features test-support -- --test-threads=1` |
+| `local_data_lock_barriers` | Barrier protocol | `--features test-support -- --test-threads=1` |
+| `repair_transactions` | Barrier protocol, recovery API | `--features test-support -- --test-threads=1` |
+| `snip_sync_lifetime` | HTTP socket contracts | `-- --test-threads=1` |
+
+`scripts/check.sh` (Linux CI) runs the focused set: `platform_smoke`, `destination_permissions`, `auto_sync_closure`, `auto_sync_concurrency`, `sync_multibatch`, `snip_sync_lifetime`. Deep crash/restore/manifest suites (`transaction_crash_recovery`, `cleanup_crash_failpoints`, `restore_crash_failpoints`, `manifest_contracts`) run only in `release-check.sh verify`, not CI.
+
+## Feature Gating
+
+Three integration targets plus the `process_lock_helper` bin compile only under `test-support` (`required-features` in `Cargo.toml`), so plain `cargo test --workspace --all-targets` stays green without test-only code:
+
+- `repair_transactions` (public transaction recovery API re-export)
+- `process_lock_concurrency`
+- `local_data_lock_barriers`
+- `process_lock_helper` bin (cross-process lock participant)
+
+`snip-sync` test helpers (`start_test_server`, `InMemoryObserver`) gate on `test-helpers`; `cargo test -p snip-sync --features test-helpers` enables them.
+
+## Edition 2024 Notes
+
+The workspace is edition 2024, where `std::env::set_var` is `unsafe`. Barrier tests (e.g. `repair_transactions.rs`) wrap the call explicitly:
+
+```rust
+// SAFETY: this is the only thread calling set_var, ...
+unsafe {
+    std::env::set_var("SNP_TEST_MUTATION_BARRIER_DIR", barrier_dir2);
+}
+```
 
 ## Future Work
 
@@ -222,7 +272,7 @@ pending-generation and scheduling sequence. Sync server effects are covered by
 | Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
 | PTY | serial target | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
-| Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `set_var`, barrier protocol |
+| Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `unsafe set_var`, barrier protocol |
 | Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
 | Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
-| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
+| Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement (`LOGICAL_LAYERS.md`) |

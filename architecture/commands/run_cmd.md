@@ -1,72 +1,111 @@
-# run_cmd — Execute Snippet
+# run_cmd — TUI Selection + Shell Execution
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`run_cmd` provides TUI-based snippet selection and shell execution. It is the primary way users run their snippets.
+`src/commands/run_cmd.rs` (469 lines) is the primary execution path:
+TUI fuzzy selection (or exact bypass) → variable expansion → shell
+spawn with timeout supervision → audit/usage bookkeeping → optional
+explicit sync. `run()` serves the TUI; `run_exact()` serves
+`--id/--description-exact/--command-exact` from `main.rs`.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(
-    filter: Option<String>,
-    do_sync: bool,
-    library: Option<String>,
-    sort_opts: Option<SortOptions>,
-    runtime: Option<&tokio::runtime::Runtime>,
-) -> SnipResult<CliOutcome>
-```
+`RunArgs` (`run_cmd.rs:12`), `snp run` (alias `r`):
 
-## Flow
+| Flag | Meaning |
+|------|---------|
+| `-f/--filter` | Initial TUI filter (conflicts with exact selectors) |
+| `--sync` | Explicit sync after execution (needs Tokio runtime) |
+| `-l/--library` | Library scope |
+| `--sort <mode>` | `SnippetSort`, default `Relevance` |
+| `--favorites-first` | Favorites rank first |
+| `--id` | Exact UUID bypass (conflicts with other selectors + filter) |
+| `--description-exact` | Exact description bypass |
+| `--command-exact` | Exact command bypass |
 
-1. **TUI Selection** — Call `run_snippet_selection()` to get user-selected snippet
-2. **Variable Expansion** — If snippet has variables (`<name>` or `<name=default>`), call `ui::prompt_variables()` to collect values
-3. **Command Expansion** — `expand_snippet_command()` substitutes values into command
-4. **Execute** — `Command::new(shell).arg("-c").arg(&expanded).spawn()` and wait
-5. **Output Capture** — If snippet has `output` field set, display/capture stdout
-6. **Clipboard** — Optional copy to clipboard (`--clip`)
-7. **Audit Log** — Record execution in `audit.log`
+`main.rs:500-544` routes exact selectors through
+`resolve_exact_target` → `run_exact`, else `run`.
 
-## Shell Execution
+## Flow / steps
 
-- Default shell from `$SHELL` env var, fallback to platform-specific (`/bin/sh`, `cmd.exe`)
-- `Command::new(shell).arg("-c")` for POSIX, `cmd.exe /C` for Windows
-- Blocks until command completes
-- Return code checked; non-zero logged as error
+### `run()` (`run_cmd.rs:342`)
 
-## Variable Handling
+Calls `run_snippet_selection(filter, library, do_sync,
+allow_delete=true, sort_opts, runtime, process_snippet)` and maps
+`ExecutionFailed{exit_code} → CliOutcome::ExecutionFailed`,
+`Cancelled → Success` (run treats cancellation as exit 0),
+`Selected → Success`. `main.rs` turns `ExecutionFailed` into
+`process::exit(child_code.unwrap_or(8))`.
 
-See [variables.md](../utils/variables.md) for parsing/expansion details.
+### `run_exact()` (`run_cmd.rs:371`)
 
-### Prompt UI
+Requires a runtime when `do_sync`. Runs `process_snippet(snippet,
+false)` directly, maps `Failed` to `ExecutionFailed`, then a trailing
+`run_explicit_sync` (warn-only) if `do_sync`.
 
-`ui::prompt_variables()` shows TUI dialog:
-- Defaults shown in muted color
-- Arrow keys / tab to navigate
-- `q` cancel, `Enter` accept
-- `Esc` to skip all (use defaults)
+### `process_snippet()` (`run_cmd.rs:194`)
 
-## Flags
+1. `expand_snippet_command`: `Cancel → ProcessResult::Cancel`,
+   `Skip → Continue`.
+2. Copy flag set (TUI `y`) → `clip_cmd::copy_to_clipboard` + trace log,
+   `Done("Copied to clipboard")`.
+3. `snippet.output` non-empty → hardened output-file branch: CWD
+   canonicalization, symlink/traversal checks pre- and post-open,
+   `create_new` + Unix `O_NOFOLLOW`, fd-vs-path dev/ino identity check,
+   then `spawn_and_wait_execution` with stdout redirected and a 300 s
+   default timeout (`DEFAULT_TIMEOUT_SECONDS`, overridable via
+   `SNP_COMMAND_TIMEOUT`; `0` disables).
+4. Otherwise normal branch: `SHELL`/`COMSPEC` shell, `-c`/`/C` flag,
+   no default timeout (env override still applies), unified
+   `spawn_and_wait_execution`.
+5. `record_execution_result` (`:169`): on success only — `audit_log(
+   "execute")` + `UsageIndex::record_use` (best-effort); always
+   `log_command_execution` tracing.
 
-- `--clip` — Copy output to clipboard after execution
-- `--sync` — Sync with server after execution
+`spawn_and_wait_execution` (`:123`) maps success → `Done`, nonzero
+status → `Failed{exit_code: status.code()}` (None on signal),
+spawn/timeout/wait failure → `Failed{exit_code: None}`.
 
-## Audit Log
+## Mutation vs read-only
 
-Records:
-- Snippet name
-- Timestamp
-- Expanded command (for debugging)
-- Exit code
+Execution is **not** a library mutation: no transaction gate, no
+`save_library`, no pending marker. Side effects are process-level
+(child process, output file, clipboard) plus bookkeeping (audit log,
+usage index). The TUI delete shortcut inside `run_snippet_selection`
+is the only library write on this path.
 
-## Error Handling
+## Auto-sync trigger
 
-- `SnipError::Command` for execution failures
-- `SnipError::VariableNotFound` for missing required variables
-- `SnipError::Clipboard` for clipboard failures
+No direct `notify_mutation`. With `--sync`, the post-selection /
+post-`run_exact` `run_explicit_sync` performs a foreground sync under
+the `SyncExecutionLock` and clears pending. Without `--sync`, usage or
+execution leaves no sync intent.
 
-## Related
+## Error / exit mapping
 
-- [mod.md](mod.md) — Shared helpers
-- [clip_cmd.md](clip_cmd.md) — Clipboard copy variant
-- [search_cmd.md](search_cmd.md) — Search/display variant
-- [sync_cmd.md](sync_cmd.md) — Sync integration
+- Child nonzero → exit code passthrough (`ExecutionFailed`, exit 8
+  container or raw child code via `main.rs`).
+- Spawn failure / timeout / signal death → `Failed{None}` → exit 8.
+- Output-path escape / parent race / timeout → `SnipError::runtime_error`
+  (exit 1); timeout message reports the second count.
+- Editor/variable cancellation → exit 0.
+
+## Key invariants
+
+- Never sanitize snippet commands (by design).
+- Output files are `create_new`-only; symlink races fail closed at
+  three checkpoints (pre-open, post-open, fd identity).
+- Usage/audit record only on `Done`, never on failure/cancel.
+- `get_shell`/`shell_arg_flag` are platform-split (Unix `-c`,
+  Windows `/C` + `COMSPEC`).
+- Reaping after `kill` is bounded (5 s grace) so uninterruptible
+  children cannot hang the CLI forever.
+
+## File / line references
+
+- `RunArgs`: `src/commands/run_cmd.rs:12`; timeouts: `:39-101`
+- `spawn_and_wait_execution`: `:123`; `record_execution_result`: `:169`
+- `process_snippet`: `:194`; `run`: `:342`; `run_exact`: `:371`
+- Dispatch: `src/main.rs:500-544`

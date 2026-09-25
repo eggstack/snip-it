@@ -1,8 +1,12 @@
 # variables.rs — Snippet Variable Parsing
 
+[← Back to Overview](../overview.md)
+
 ## Overview
 
-Variables allow snippets to be parameterized at runtime. Syntax: `<name>` or `<name=default>` or `<name=|_opt1_||_opt2_||_opt3_||>` for Pet-style multiple choice.
+Variables allow snippets to be parameterized at runtime. Syntax: `<name>`, `<name=default>`, or `<name=|_opt1_||_opt2_||_opt3_||>` for Pet-style multiple choice.
+
+**File**: `src/utils/variables.rs` (1919 lines — parser, Pet-choice support, diagnostics, `VariableAssignments`, and ~100 unit tests)
 
 ## Data Structures
 
@@ -15,6 +19,8 @@ pub struct Variable {
     pub default: Option<String>,
 }
 ```
+
+`default` is a backward-compatible convenience: `None` for `Required`, `Some(val)` for `DefaultValue`, `Some(first_choice)` for `Choices`.
 
 ### VariableKind
 
@@ -29,6 +35,27 @@ pub enum VariableKind {
 }
 ```
 
+### VariableDiagnostic
+
+```rust
+pub struct VariableDiagnostic {
+    pub severity: DiagnosticSeverity, // Warning | Error
+    pub message: String,
+    pub span: Option<std::ops::Range<usize>>,
+    pub code: &'static str,           // "choice.malformed" | "choice.empty" |
+                                      // "choice.unclosed" | "var.duplicate"
+    pub suggested_fix: Option<String>,
+}
+```
+
+### VariableAssignments
+
+```rust
+pub struct VariableAssignments(BTreeMap<String, String>);
+```
+
+Explicit non-interactive assignments from `--var key=value` CLI args. `parse_arg` splits on the first `=` (empty key rejected); `from_pairs` deduplicates identical pairs but rejects conflicting values for the same key.
+
 ## Parsing
 
 ### parse_variables()
@@ -37,71 +64,61 @@ pub enum VariableKind {
 pub fn parse_variables(command: &str) -> Vec<Variable>
 ```
 
-Extracts all variables from a command string:
-- `<name>` → `Variable { name, kind: Required, default: None }`
-- `<name=default>` → `Variable { name, kind: DefaultValue("default"), default: Some("default") }`
-- `<name=|_opt1_||_opt2_||_opt3_||>` → `Variable { name, kind: Choices { values: ["opt1", "opt2", "opt3"], default_index: Some(0) }, default: Some("opt1") }`
+- `<name>` → `Required`; `<name=default>` → `DefaultValue`; `<name=|_opt1_||_opt2_||>` → `Choices { values, default_index: Some(0) }` with `default = Some(first_choice)`.
 
-### extract_variable_tokens() *(internal)*
+### parse_variables_diagnostics()
 
-Returns raw `<...>` tokens for internal use by `parse_variables` and `expand_command`.
+```rust
+pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<VariableDiagnostic>)
+```
 
-### is_choice_syntax() / extract_choices() *(internal)*
+Same parse plus warnings: malformed/unclosed/empty choice syntax and duplicate names. Malformed choices fall back to plain `DefaultValue` rather than failing.
 
-Private helpers. `is_choice_syntax` detects Pet-compatible multiple-choice syntax (`|_..._||_..._||`) within a default value string. `extract_choices` parses the individual choice values and returns `Option<Vec<String>>` — `None` if malformed.
+### Internals
+
+`extract_variable_tokens()` walks the command char-by-char: backslash-state tracking, escaped `\<` skipped, `<`/`>` matched with a depth counter for nesting, `\\`/angle escapes handled inside the body, content trimmed, `name=default` split on the first `=`. Empty names (`<>`) are dropped. `is_choice_syntax` / `extract_choices` detect and parse the Pet `|_..._||` form (`None` if malformed).
 
 ## Expansion
 
 ### expand_command()
 
 ```rust
-pub fn expand_command(
-    command: &str,
-    values: &[(String, String)],
-) -> String
+pub fn expand_command(command: &str, values: &[(String, String)]) -> String
 ```
 
-Substitutes values into command:
-- Looks up `name` in provided values
-- Uses default if value not provided but default exists
-- Falls back to the variable name itself for missing required variables (no error returned)
-- For `Choices` variables, the selected value is used just like a required variable value
+Looks up `name` in provided values (repeated names consume successive entries positionally); falls back to the default (first choice for `Choices`), then to the bare variable name for missing required variables — never errors. Escaped `\<` emits a literal `<`; unparsed `<...>` regions echo verbatim.
 
 ## Escape Sequences
 
 ### strip_escape_sequences()
 
-Converts escaped angle brackets and backslashes:
-- `\<` → `<`
-- `\>` → `>`
-- `\\` → `\`
+```rust
+pub fn strip_escape_sequences(command: &str) -> String
+```
 
-This allows literal angle brackets in commands without triggering variable substitution.
+`\<` → `<`, `\>` → `>`, `\\` → `\`. Unknown escapes (`\n`) and trailing `\` are preserved. Call whenever a command is copied or executed, even without variables.
+
+### has_unmatched_angle_bracket()
+
+```rust
+pub fn has_unmatched_angle_bracket(command: &str) -> bool
+```
+
+Nesting- and escape-aware unclosed-`<` detector used for validation warnings.
 
 ## Edge Cases
 
-- Unmatched `<` without a matching `>` is treated as a literal `<` in the output (no variable substitution, character preserved). For example, `echo <hello` expands to `echo <hello`.
-- Escape sequences (`\<`, `\>`) inside a variable name are stripped during parsing: `<x\>foo` expands to `<x>foo` — the backslash is silently dropped because the `>` is consumed as the variable terminator.
-- Malformed choice syntax (e.g., `<name=|>` with no options) triggers a parser diagnostic warning.
-- Duplicate variable names within a single command are warned about but not rejected.
+- Unmatched `<` echoes literally (`echo <hello` → `echo <hello`).
+- `\<`/`\>` inside a variable name are stripped: `<x\>foo` → `<x>foo`.
+- Malformed choice syntax and duplicate names warn (`choice.*`, `var.duplicate`) but never fail.
 
 ## Choice Variables
 
-Pet uses a `Choice|choice1|choice2|choice3` syntax for multiple-choice parameters. snip-it recognizes the Pet-compatible form `<name=|_opt1_||_opt2_||_opt3_||>` where:
-
-- Choices are delimited by `||` and wrapped in `|_` ... `_|` markers
-- The first choice is the default
-- During TUI prompting, choice variables render as a navigable list selector (arrow keys / j/k in normal mode)
-- Raw command text is preserved in storage — choices are only expanded during interactive prompting
-- `expand_command` treats the selected value identically to a required variable value
+Pet-compatible `<name=|_opt1_||_opt2_||_opt3_||>`: choices delimited by `||` in `|_` ... `_|` markers, first choice is the default, TUI renders a navigable list selector, raw text stays in storage until prompting, `expand_command` treats the selection like any value.
 
 ## Usage in Commands
 
-Variables are expanded before shell execution:
-1. Parse variables from command
-2. Prompt user for values (or use defaults)
-3. Expand command with provided values
-4. Execute expanded command
+Parse → prompt (defaults / `--var` pre-fill) → expand → execute.
 
 ## Related
 

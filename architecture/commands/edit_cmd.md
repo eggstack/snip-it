@@ -1,77 +1,94 @@
-# edit_cmd — Edit Snippets
+# edit_cmd — Edit in $EDITOR, Manage Output Field
+
+[← Back to Overview](../overview.md)
 
 ## Overview
 
-`edit_cmd` opens the snippets library file in the user's preferred editor for direct text editing.
+`src/commands/edit_cmd.rs` (293 lines) has two distinct modes. `run()`
+opens the whole library TOML in the user's editor (whole-file mutation
+with byte-change detection). `run_edit_output()` /
+`run_edit_output_by_id()` mutate only the local-only `output`/notes
+field of one snippet. `main.rs:614-671` selects the mode.
 
-## Entry Point
+## CLI surface
 
-```rust
-pub fn run(library: Option<String>, config: Option<PathBuf>) -> SnipResult<()>
-```
+`EditArgs` (`edit_cmd.rs:9`), `snp edit` (alias `e`):
 
-## Flow
+| Flag | Meaning |
+|------|---------|
+| `-l/--library` | Target library (else primary/default path) |
+| `--output TEXT` | Set output field (conflicts with `--output-stdin`, `--clear-output`; requires `--filter` or exact selector) |
+| `--output-stdin` | Read output field from stdin (same requirement) |
+| `--clear-output` | Clear output field (sets `""`) |
+| `-f/--filter` | Substring match on description/command for output editing |
+| `--id` | Exact UUID bypass → `run_edit_output_by_id` |
+| `--description-exact` / `--command-exact` | Exact bypass → `run_edit_output_by_id` |
 
-1. Determine editor: `$VISUAL` env var → `$EDITOR` env var → fallback to `vim`
-2. Determine library path: active library file
-3. Open in editor: `Command::new(editor).arg(path).spawn()`
-4. Wait for editor to exit
+Without output flags, `run(library)` opens the editor regardless of
+filter/exact flags.
 
-## Supported Editors
+## Flow / steps
 
-Uses `clap` value parser that checks for known editors:
-- `vim`, `nvim`, `nano`, `code`, `subl`, `emacs`, etc.
-- Falls back to `vim` if neither `$VISUAL` nor `$EDITOR` is set
+### `run()` — whole-file edit (`edit_cmd.rs:36`)
 
-## Use Cases
+1. Resolve path: named library via `get_library_path`, else primary or
+   `LibraryManager::get_default_snippets_path`. Create parents + empty
+   file if missing.
+2. Resolve editor via `new_cmd::resolve_editor_spec` (`$VISUAL >
+   $EDITOR > vim`, shell-word args, PATH/CWD validation).
+3. Snapshot pre-editor bytes; `gate_mutation_on_interrupted_transactions`
+   (`:73`) — same invariant as every writer.
+4. Spawn editor (no shell), capture exit status, re-read bytes.
+5. Take the local-data lock for the observe-and-notify window (`:101`);
+   `changed = before != after`.
+6. Editor failed + changed → notify `SnippetUpdate/User`, then error
+   noting the save survived. Editor failed + unchanged → error, no
+   notify. Success + changed → notify. Success + unchanged → silent.
 
-- Bulk editing multiple snippets
-- Precise control over TOML structure
-- Search/replace across all snippets
-- Comment/uncomment snippets for temporary disable
+### Output-field edits (`:143`, `:233`)
 
-## Error Handling
+1. Resolve `lib_path` (missing library → error, never synthesize).
+2. `load_library`; find target: `run_edit_output` uses
+   case-insensitive substring on description/command and errors on zero
+   or 2+ matches (lists candidates, demands an exact selector);
+   `run_edit_output_by_id` matches `id == snippet_id`.
+3. Set `output` (`None` defensively clears), bump
+   `updated_at = max(now)+1`, `save_library`, report to stderr.
 
-- `SnipError::Command` if editor not found
-- `SnipError::Io` if library file doesn't exist or cannot be created
-- Editor non-zero exit with file changes is reported as an error but sync notification is still sent
+## Mutation vs read-only
 
-## Note
+Mutating in all modes. Whole-file edit gates **before** the editor and
+locks after; output edits ride `save_library`'s internal gate + lock.
+Neither output path notifies auto-sync (see below).
 
-Does not use TUI; launches external editor process. Terminal state is preserved and restored via tracing panic handler.
+## Auto-sync trigger
 
-## Related
+- Whole-file edit: `notify_mutation(MutationKind::SnippetUpdate,
+  MutationOrigin::User)` **only when bytes changed** (`:107`, `:130`).
+  Unchanged sessions create no pending intent.
+- Output-field edits: **no notification** — `output` is local-only,
+  excluded from the sync fingerprint and absent from `ProtoSnippet`.
 
-- [mod.md](mod.md) — Path resolution and library loading
-- [library.md](../library.md) — Library and snippet data structures
+## Error / exit mapping
 
-## Output/Notes Editing (Release 4B)
+`SnipResult<()>`: library-not-found, editor-not-found / spawn /
+nonzero exit (with changed/unchanged detail), no-match, ambiguous
+filter (exit 1 family with remediation text). Output-value intake
+(stdin read) errors are I/O errors.
 
-When `--output`, `--output-stdin`, or `--clear-output` flags are provided, the edit command
-operates in structured output-editing mode instead of opening `$EDITOR`.
+## Key invariants
 
-### CLI Flags
+- Editor sessions are interactive and cannot hold the local lock; only
+  the short post-editor compare-and-notify is critical-sectioned.
+- Notify on byte change even when the editor reports failure — the
+  bytes on disk are the source of truth, not the exit status.
+- `output` edits require `--filter` (or exact selector) by CLI
+  contract; `snp edit --output` without targeting is a usage error in
+  `main.rs`.
+- Whole-file edit never parses or normalizes TOML itself.
 
-- `--output <text>` — Set the output/notes field to the given text.
-- `--output-stdin` — Read the output/notes field from stdin (byte-for-byte).
-- `--clear-output` — Clear the output/notes field to empty.
-- `--filter <query>` — Required; selects the snippet by description or command substring match.
+## File / line references
 
-### Conflicts
-
-- `--output`, `--output-stdin`, and `--clear-output` are mutually exclusive.
-- `--filter` is required when any output flag is present.
-
-### Behavior
-
-1. Loads the library file.
-2. Finds the first non-deleted snippet matching the filter (case-insensitive substring).
-3. Updates the `output` field and bumps `updated_at`.
-4. Saves atomically with backup.
-5. Reports the operation to stderr.
-
-### Safety
-
-- Cancellation is implicit: if no matching snippet is found, returns an error.
-- No command execution or variable expansion occurs on the output value.
-- The edit is atomic (backup + temp file + rename).
+- `EditArgs`: `src/commands/edit_cmd.rs:9`; `run`: `:36` (gate `:73`)
+- `run_edit_output`: `:143`; `run_edit_output_by_id`: `:233`
+- Dispatch: `src/main.rs:614-671`
