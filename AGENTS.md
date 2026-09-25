@@ -67,4 +67,5 @@ cargo test -p snip-sync --features test-helpers
 
 ## Pointers (don't duplicate)
 
-- `AGENTS.override.md`, `architecture/` (per-command deep-dives), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
+- `AGENTS.override.md`, `architecture/` (per-command deep-dives), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI, planning), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
+- `plans/registry.md` is the authoritative planning status — check it before assuming any roadmap state. Canonical direction: `plans/000-long-term-specification.md`, `plans/001-terminology-and-domain-model.md`, `plans/002-long-term-roadmap.md`; governance: `plans/003-planning-process.md`. Subsystem roadmaps live in `plans/subsystems/`, handoff plans in `plans/implementation/<subsystem>/`, completion gates in `plans/closure/<subsystem>/`, predecessors in `plans/archive/`.
