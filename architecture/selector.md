@@ -271,17 +271,19 @@ no interactive variable expansion. See `docs/MCP.md` for the tool schemas.
   `"all"` definition shared by CLI and MCP; `exact_selector()` /
   `resolve_exact_target()` is the single exact-target constructor.
 
-## File / line refs
+## File / line refs (verify with `grep` — line numbers drift)
 
-- `src/selector.rs:46-77` (`LibraryScope` + `from_filter_arg` /
-  `from_owned_arg`), `:90-158` (`SearchFields`, `searchable_text`,
-  `score_fuzzy_matches`, `matches_required_tags`), `:214-225`
-  (`ResolutionPolicy`), `:229-280` (`SnippetMatch`, `SnippetIdentity`,
-  `SelectionResult`, `SnippetSelector` + builders), `:354-454`
-  (`resolve` priority chain), `:515-597` (`sort_matches`,
-  `finish_aggregate`, `exact_selector`), `:599-612`
-  (`resolve_exact_target`), `:623-737` (`resolve_selector_readonly` vs
-  `resolve_selector`), `:739-1208` (unit tests).
+- `src/selector.rs` (`LibraryScope` + `from_filter_arg` /
+  `from_owned_arg`), (`SearchFields`, `searchable_text`,
+  `score_fuzzy_matches`, `matches_required_tags`),
+  (`ResolutionPolicy`), (`SnippetMatch`, `SnippetIdentity`,
+  `SelectionResult`, `SnippetSelector` + builders), (priority chain:
+  ID → description → command → query), (`sort_matches`,
+  `finish_aggregate`, `exact_selector`),
+  (`resolve_exact_target`), (`resolve_selector_readonly` vs
+  `resolve_selector`), (unit tests). Key anchors: `searchable_text`,
+  `exact_selector`, `resolve_exact_target`, `resolve_selector_readonly`,
+  `resolve_selector`.
 
 ## Tests
 

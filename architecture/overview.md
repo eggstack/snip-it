@@ -77,8 +77,11 @@ proto changes require bumping its version in both dependents.
 ## Logical Layers
 
 Source modules are organized into three logical layers with a strict
-dependency direction, documented in [`../docs/LOGICAL_LAYERS.md`](../docs/LOGICAL_LAYERS.md)
-and enforced by source-scanning tests in `tests/architecture.rs`:
+dependency direction, documented in [`../docs/LOGICAL_LAYERS.md`](../docs/LOGICAL_LAYERS.md).
+`tests/architecture.rs` source-scans the core/sync-client boundary only
+(`library/`, `sort.rs`, `output.rs`, `usage.rs`, `diagnostics.rs` vs
+`sync.rs`/`sync_commands.rs`/`encryption.rs`; `config/` is an explicit carve-out) —
+treat wider layer claims as convention, not enforced contract:
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -112,7 +115,7 @@ import commands/ui/logging/auto_sync.
 
 Entry point using `clap` with 30+ subcommands. A global `LazyLock<Runtime>`
 provides Tokio only when an async command is invoked (`run`, `clip`, `search`,
-`sync`, `register`, `premade`). Signal handlers are registered on Unix
+`sync`, `register`, `premade`, `update`). Signal handlers are registered on Unix
 (SIGINT + SIGTERM).
 
 Command dispatch flows through `dispatch_command()` which maps each CLI
@@ -124,7 +127,8 @@ is suppressed from help and from startup-recovery recursion.
 
 **Exit codes** (stable, see `docs/EXIT_CODES.md`): 0 success, 1 general error,
 2 usage error, 3 not found, 4 cancelled, 5 ambiguous, 6 validation,
-7 sync failure, 8 execution failure, 9 conflict/refused, 10 unsafe repairs pending.
+7 sync failure, 8 execution failure, 9 conflict/refused, 10 unsafe repairs pending
+(exit 10 is a direct `exit_on_repair_status` path in `main.rs`, never a `CliOutcome` variant).
 
 ---
 
@@ -546,8 +550,9 @@ Do not sanitize snippet commands (by design). Clipboard side effects go through
 
 ### TOML Handling
 - `\<` and `\>` in double-quoted TOML strings cause parse failures
-- Solution: convert to single-quoted (raw literals) before parsing, reverse
-  on save — implemented in `utils/toml_helpers.rs`
+- Solution: convert to single-quoted (raw literals) on the load path only
+  (`fix_invalid_toml_escapes` in `utils/toml_helpers.rs`, called from
+  `commands/mod.rs`, `library/manager.rs`, `config/sync_settings.rs`)
 - Save path does NOT post-process `toml::to_string_pretty` (golden corpus:
   tabs, trailing spaces, CRLF must survive)
 
@@ -558,11 +563,11 @@ Do not sanitize snippet commands (by design). Clipboard side effects go through
 - See [encryption.md](encryption.md)
 
 ### Process Locks
-- Kernel-backed (`flock` Unix / `LockFileEx` Windows) for:
-  - Server singleton (`server_lock.rs`)
-  - Auto-sync execution lock (`execution_lock.rs`)
-  - Transaction lock (`transaction.rs`)
-  - Local data lock (`local_data.rs`)
+- Kernel-backed (`flock` Unix / `LockFileEx` Windows) via `process_file_lock.rs`:
+  server singleton (`server_lock.rs`), auto-sync execution/worker/pending locks
+  (`auto_sync/execution_lock.rs`, `auto_sync/pending_lock.rs`)
+- Owned-record + PID-reclaim (`create_new` + `ProcessIdentity::observe` + quarantine):
+  transaction lock (`transaction.rs`), local-data lock (`local_data.rs`)
 - `Drop` releases without unlinking; lock files may hold stale metadata
 - `kill(pid,0)`: only `ESRCH` proves absence (`EPERM`/unknown = live);
   Linux start tokens use `/proc/<pid>/stat` field 22

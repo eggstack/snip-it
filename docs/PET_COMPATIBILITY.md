@@ -32,7 +32,7 @@ For each feature area:
 | `deleted` | Not present in pet | Tombstone flag for sync. Deleted snippets are filtered from TUI display but preserved for sync propagation. | New | — | snp-only. Pet has no concept of soft-delete. |
 | `folders` | Not present in pet | Array of folder names for organizational grouping. | New | — | snp-only. |
 | `favorite` | Not present in pet | Boolean flag for favorites. | New | — | snp-only. |
-| TOML backslash handling | Standard TOML escaping | `fix_invalid_toml_escapes()` converts double-quoted strings with problematic backslashes to single-quoted raw literals on read. `quote_strings_containing_backslashes()` reverses on save. | Supported differently | — | snp handles pet files with `\<` and `\>` in double-quoted strings more permissively than strict TOML. |
+| TOML backslash handling | Standard TOML escaping | `fix_invalid_toml_escapes()` converts double-quoted strings with problematic backslashes to single-quoted raw literals on read; the save path never post-processes `toml::to_string_pretty` output. | Supported differently | — | snp handles pet files with `\<` and `\>` in double-quoted strings more permissively than strict TOML. |
 
 ### Serialization contract
 

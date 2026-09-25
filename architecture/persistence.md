@@ -199,10 +199,11 @@ This separation ensures the pending marker is never written to the `.transaction
 ```
 Prepared → Committing{next_commit_position} → CleaningUp{outcome, next_step} → (journal removed)
 Prepared → RollingBack{next_rollback_position} → CleaningUp{outcome, next_step} → (journal removed)
-Prepared → Failed(error_message)
+Committing → CommittedLocal{pending} → CleaningUp → (journal removed; restore pending-finalization path)
+Prepared → Failed(error_message) (persisted terminal; recovery refuses without repair)
 ```
 
-New transactions never persist terminal `Committed` or `RolledBack` states. The journal is removed during cleanup, making the absence of a journal the true terminal indicator. Legacy `Committed`, `RolledBack`, `BackupsDurable`, and `CommittedLocal` journals (from older versions) are handled during recovery.
+New transactions never persist terminal `Committed` or `RolledBack` states. The journal is removed during cleanup, making the absence of a journal the true terminal indicator. Legacy `Committed`, `RolledBack`, and `BackupsDurable` journals (from older versions) are handled during recovery. `CommittedLocal` is live on the restore path (see below) and also handled for legacy journals via `FinalizeCommittedLocal`.
 
 ### Components
 
@@ -280,9 +281,9 @@ All transaction artifact paths (backup, staged, destination) are validated by `v
 
 The helper runs for every transaction state (not just on disk existence), and backup references are revalidated immediately before reading in rollback.
 
-### CommittedLocal State (Legacy)
+### CommittedLocal State (restore path + legacy)
 
-`CommittedLocal { pending }` is a legacy state from older versions. New transactions transition directly from `Committing` to `CleaningUp`. Legacy `CommittedLocal` journals are handled during recovery via `FinalizeCommittedLocal`, which completes the pending intent recording.
+`CommittedLocal { pending }` is the restore pending-finalization state (`src/commands/restore_cmd.rs` advances through `advance_to_committed_local` before `commit_transaction`). New non-restore transactions transition directly from `Committing` to `CleaningUp`. Older-version `CommittedLocal` journals are handled during recovery via `FinalizeCommittedLocal`, which completes the pending intent recording.
 
 ---
 

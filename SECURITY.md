@@ -41,9 +41,12 @@ Snippets are encrypted client-side before leaving the machine.
 
 API keys are stored in the OS keychain (macOS Keychain, GNOME Keyring,
 Windows Credential Manager) by default. Plaintext storage in
-`sync.toml` is gated behind the `SNP_ALLOW_PLAINTEXT_API_KEY`
-environment variable. A runtime warning is emitted when the plaintext
-fallback is active.
+`sync.toml` requires the exact `SNP_ALLOW_PLAINTEXT_API_KEY=true`
+environment value. A runtime warning is emitted when the plaintext
+fallback is active. Keep `keyring = "4"` default features: building
+with `default-features = false` silently degrades persistence to the
+mock store. Keychain-backed configs store the `@keychain` marker (never
+the key); plaintext is migrated into the keychain on load.
 
 ### File Permissions
 
@@ -54,16 +57,16 @@ when the keychain is unavailable.
 
 ### Process Isolation
 
-The auto-sync worker and executor run as detached processes. The
-executor is spawned as a separate process so that the worker's
-`SyncExecutionLock` is held for the duration of the sync cycle without
-blocking the parent CLI. No secrets are placed in process arguments;
+The detached auto-sync worker (`snp auto-sync-worker`) holds the
+`SyncExecutionLock` for the duration of the sync cycle without
+blocking the parent CLI; it invokes `run_sync` directly with no
+descendant executor process. No secrets are placed in process arguments;
 they are passed through file descriptors or environment variables only.
 
 ### Supply Chain
 
-- `cargo-deny` checks for known security advisories and license
-  compliance on every CI run.
+- `cargo deny check` (via `deny.toml`) is the local supply-chain gate for
+  known security advisories and license compliance; it does not run in CI.
 - Locked `Cargo.lock` files ensure reproducible builds and prevent
   silent dependency version changes.
 
@@ -152,18 +155,12 @@ and hard links are rejected. HTTPS-only downloads prevent MITM attacks.
   `api_key` fields remain for backward compatibility with older
   clients and are ignored when metadata is present.
 
-### Known Suppressed Advisories
+### Advisory Exceptions
 
-`deny.toml` ignores `RUSTSEC-2024-0437` (uncontrolled recursion /
-stack overflow in `protobuf 2.28.0`, pulled in transitively by
-`prometheus 0.13.x`). The `snip-sync` server does not parse
-untrusted protobuf data on this code path — `prometheus` is used
-only for its text encoder in the `/metrics` endpoint, and the
-`protobuf` crate itself is built but not used to deserialize
-attacker-controlled input. The advisory is therefore not
-exploitable in the snip-it / snip-sync build. We track the
-upstream `prometheus` crate for a release that removes the old
-`protobuf` dependency.
+`deny.toml` currently carries no active suppressions (`ignore = []`). Past
+suppressions are removed once the upstream crate fixes the advisory — do not
+re-add without a fresh exploitability analysis. The server uses
+`prometheus 0.14` (text encoder for `/metrics` only).
 
 ### Server Deployment
 

@@ -39,7 +39,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | **Max size** | ~1KB |
 | **Atomicity method** | `utils::atomic::write_private_atomic` |
 | **Permissions** | `0o600` on Unix |
-| **Corruption handling** | Uses defaults on parse failure |
+| **Corruption handling** | Fail-closed: best-effort backup + error, never synthesize a writable empty index |
 | **Unknown-field policy** | Serde default (ignored) |
 | **Backup inclusion** | Yes (required for restore) |
 | **Migration owner** | `LibraryManager` |
@@ -125,9 +125,9 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 
 | Property | Value |
 |----------|-------|
-| **Canonical path** | `~/.config/snp/auto-sync-pending/<device_id>.pending` |
+| **Canonical path** | `~/.config/snp/auto-sync-pending.toml` |
 | **Owner module** | `src/auto_sync/pending.rs` |
-| **Schema** | Simple marker file with generation number |
+| **Schema** | TOML marker with monotonic generation + creation timestamp |
 | **User-editable** | No |
 | **Secret classification** | None |
 | **Durability class** | EphemeralCoordination |
@@ -163,9 +163,9 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 
 | Property | Value |
 |----------|-------|
-| **Canonical path** | `~/.config/snp/auto-sync-locks/<device_id>.lock` |
-| **Owner module** | `src/auto_sync/lock.rs`, `src/auto_sync/execution_lock.rs` |
-| **Schema** | Simple lock file |
+| **Canonical path** | `auto-sync-execution.lock` / `auto-sync-worker.lock` in the state dir |
+| **Owner module** | `src/auto_sync/execution_lock.rs` (+ `lock.rs` re-export shim), `src/auto_sync/pending_lock.rs` |
+| **Schema** | Kernel-backed lock file (diagnostic PID/nonce/start-token metadata; kernel is authoritative) |
 | **User-editable** | No |
 | **Secret classification** | None |
 | **Durability class** | EphemeralCoordination |

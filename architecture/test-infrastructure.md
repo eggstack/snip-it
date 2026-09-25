@@ -11,7 +11,7 @@ real binaries, real gRPC servers, and deterministic assertions. Tests prove
 exact sequences — not just "eventually consistent" behavior — including remote
 state effects, pending marker lifecycle, and status file truth.
 
-All tests exercise the `snp` binary as a subprocess, never as a library call, ensuring we test the real user-facing code path.
+Integration tests exercise the `snp` binary as a subprocess (real user-facing path); unit tests (`src/*/…` inline modules, `tests/persistence_unit.rs`) and the in-process `snip-sync` test server (`sqlite::memory:`, `start_test_server` via the `test-helpers` feature) cover library-level paths.
 
 ## Components
 
@@ -244,11 +244,11 @@ unsafe {
 }
 ```
 
-## Future Work
+## Completed (was: Future Work)
 
-- **Barrier synchronization** — Deterministic coordination points for helper tests (replacing `sleep`-based timing)
-- **Failpoint injection** — Configurable failure modes at specific pipeline stages (connection refused, partial sync, timeout) without needing unreachable servers
-- **Crash-window recovery** — Table-driven tests proving state consistency across 9 crash windows (requires barriers/failpoints)
+- **Barrier synchronization** — done: `local_data_lock_barriers.rs`, `repair_transactions.rs` coordinate via `SNP_TEST_MUTATION_BARRIER_DIR` (serial, `test-support`)
+- **Failpoint injection** — done: `src/test_failpoints.rs` hooks (`SNP_TEST_FAILPOINT`, `test-support` only) pin restore/cleanup crash windows
+- **Crash-window recovery** — done: `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` run in `release-check.sh verify`, not CI
 
 ## Completed Test Suites
 

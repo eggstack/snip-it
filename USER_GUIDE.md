@@ -438,10 +438,12 @@ With that setting, plain `snp sync` merges local and remote changes.
 
 ### Conflict behavior
 
-Shared fields use last-write-wins ordering based on `updated_at`; the server
-wins when timestamps are equal. Local-only fields such as `output`, `folders`,
-and `favorite` are not synchronized and are preserved locally when a remote
-version replaces the shared fields.
+Shared fields use last-write-wins ordering by `(updated_at, device_id,
+SHA-256(synced fields))` — never role-dependent server-wins: equal
+timestamps break by `device_id`, then content fingerprint. Deletion beats
+live content even with an older timestamp (no resurrection). Local-only
+fields such as `output`, `folders`, and `favorite` are not synchronized
+and are preserved locally when a remote version replaces the shared fields.
 Deleted snippets are retained as tombstones so a later sync can converge.
 
 ## Syncing one account across environments
@@ -533,8 +535,8 @@ auto_sync_failure = "warn"
 - Local mutations always succeed before any remote work begins.
 - A failed auto-sync never rolls back or corrupts a successful local save.
 - The parent spawns the worker and returns immediately — no in-process debounce delay.
-- The detached worker uses a two-process-per-cycle model: it spawns a killable executor subprocess (`snp auto-sync-execute`) for the actual sync work. This allows proper timeout enforcement — on timeout the executor is killed via SIGTERM then SIGKILL.
-- All sync operations (worker, manual `snp sync`, explicit `--sync`, cron) share a single `SyncExecutionLock`. The worker owns this lock for the entire detached cycle; the executor subprocess does NOT reacquire it.
+- The detached worker invokes `run_sync` directly (no descendant executor process) with bounded timeouts; one `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
+- All sync operations (worker, manual `snp sync`, explicit `--sync`, cron) share a single `SyncExecutionLock`. The worker owns this lock for the entire detached cycle.
 - Each `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
 - A durable pending marker (`auto-sync-pending.toml`) records the latest mutation generation with CRC32 integrity; only the worker that observes its own generation may clear it.
 - PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness detection prevents concurrent worker executions across processes.

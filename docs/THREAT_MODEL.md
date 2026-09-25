@@ -42,9 +42,9 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Snippet commands | Confidential | `snippets.toml`, per-library TOML | Yes (encrypted) | Arbitrary shell content; highest sensitivity |
 | Snippet descriptions | Confidential | Same as commands | Yes (encrypted) | Free-text metadata |
 | Snippet tags | Internal | Same as commands | Yes (encrypted) | Classification metadata |
-| Snippet output | Confidential | `usage.toml` (local) | No | Local-only presentation field |
-| Snippet folders | Internal | Same as commands | Yes (encrypted) | Organizational structure |
-| Snippet favorites | Internal | Same as commands | Yes (encrypted) | User preference |
+| Snippet output | Confidential | Per-library TOML (local-only field) | No | Local-only presentation field, preserved on merge |
+| Snippet folders | Internal | Per-library TOML (local-only field) | No | Organizational structure, preserved on merge |
+| Snippet favorites | Internal | Per-library TOML (local-only field) | No | User preference, preserved on merge |
 | Stable IDs | Internal | Same as commands | Yes (encrypted) | Content-addressed identifiers |
 | Timestamps | Internal | Same as commands | Yes (encrypted) | Created/modified metadata |
 | Library/index configuration | Internal | `libraries.toml`, `libraries/*.toml` | Yes (encrypted) | Library registry and per-library structure |
@@ -56,15 +56,14 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Nonces | Secret | Embedded in ciphertext | Yes | 12-byte AES-GCM random nonces |
 | Encrypted remote payloads | Confidential | Sync server | Yes | Ciphertext blobs; server cannot decrypt |
 | Encrypted remote metadata | Confidential | Sync server | Yes | Encrypted field-level metadata |
-| Pending intent | Sensitive | `pending-sync` files | No | Coordinates detached worker cycles |
+| Pending intent | Sensitive | `auto-sync-pending.toml` | No | Coordinates detached worker cycles |
 | Durable attempt status | Internal | `auto-sync-status.toml` | No | CRC32-integrity-protected, redacted |
-| Lock files | Internal | `lock` files in state dir | No | O_EXCL creation, nonce-based ownership |
-| Transaction journals | Sensitive | `transaction-journals/` | No | Crash-recovery state |
+| Lock files | Internal | `*.lock` files in state dir | No | Kernel (`flock`/`LockFileEx`) or owned-record + PID-reclaim ownership |
+| Transaction journals | Sensitive | `.transaction/` (`txn-<uuid>.toml`) | No | Crash-recovery state |
 | Backups | Confidential | `backups/` | No | SHA-256 checksummed snapshots |
 | Logs | Internal | `~/.config/snp/logs/` | No | Structured file-rotated logs |
 | Installed binary | N/A | System or user-local path | No | Integrity depends on install method |
-| Update channel | N/A | crates.io / Homebrew | No | Integrity delegated to package manager and registry |
-| Release assets | N/A | Package-manager artifacts | No | No standalone archive updater is supported |
+| Update channel | N/A | crates.io / Homebrew / verified GitHub binaries | No | `snp`: in-process `eggfetch-core`; `snip-sync`: external `curl`; checksums verified before replace |
 
 ---
 

@@ -303,6 +303,7 @@ sync policy.
 | `snp shell init` | Generate interactive shell integration |
 | `snp completions` | Generate shell completion definitions |
 | `snp keybindings` | Print the complete TUI keybinding reference |
+| `snp mcp` | Local read-only MCP server (`serve`/`install`/`instructions`) |
 | `snp update` | Check for and install a supported update |
 | `snp version` | Print the installed version |
 

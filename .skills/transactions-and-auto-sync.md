@@ -16,17 +16,19 @@ this before changing either.
 - Pending APIs receive `sync_state_dir`; transaction APIs receive `transaction_dir`.
 - `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` needs BOTH.
 - Callers derive them via `crate::auto_sync::notification::derive_state_dir()` and
-  `.join(".transaction")` (`src/local_data.rs:273`).
+  `.join(".transaction")` (e.g. `src/commands/mod.rs:178`, `src/commands/restore_cmd.rs`).
 
 ## Transaction State Machine
 
 ```
 Prepared → Committing{next_commit_position} → CleaningUp{outcome, next_step} → journal removed
 Prepared → RollingBack{next_rollback_position} → CleaningUp{...} → journal removed
-Prepared → Failed(error_message)
+Committing → CommittedLocal{pending} → CleaningUp → journal removed (restore pending-finalization path)
+Prepared → Failed(error_message) (persisted terminal; recovery refuses without repair)
 ```
 
 - Absence of a journal is the true terminal indicator; terminal states are never persisted.
+- `BackupsDurable`, `Committed`, `RolledBack` are legacy recovery-only states (older journals); new code paths don't produce them.
 - `Committing{next_commit_position}` uses completed-position semantics: progress is
   persisted only AFTER each verified atomic write, never before.
 - Rollback restores files in reverse order with hash verification after each action.
@@ -40,9 +42,7 @@ Prepared → Failed(error_message)
 
 Acquisition order: **`LocalDataLock` → `TransactionLock` → writes**. Never invert.
 
-- All cross-process locks are kernel-backed: `flock` (Unix) / `LockFileEx` (Windows)
-  via `src/process_file_lock.rs`. The kernel alone is authoritative — persistent lock
-  file metadata may be stale and is diagnostic only.
+- Cross-process exclusion has two mechanisms: kernel-backed `flock`/`LockFileEx` via `src/process_file_lock.rs` (auto-sync execution/worker/pending locks, server singleton) and owned-record + PID-reclaim locks (`TransactionLock`, `LocalDataLock`: `create_new` + `ProcessIdentity::observe` + quarantine). The kernel alone is authoritative where it applies — persistent lock file metadata may be stale and is diagnostic only.
 - Linux process start tokens use `/proc/<pid>/stat` field 22 (`starttime`). Unix
   `kill(pid, 0)` probes treat `EPERM` and unknown errors as a live process; only
   `ESRCH` proves absence.
@@ -99,7 +99,7 @@ Hard rules:
 | `auto_sync/execution_lock.rs` | `SyncExecutionLock` (wait_acquire / try_acquire) |
 | `auto_sync/worker.rs` | Detached helper cycle |
 | `auto_sync/status.rs` / `notification.rs` | Durable status/backoff; pending clear after manual sync |
-| `auto_sync/policy.rs` | Backoff policy; re-exports `FailureClass` from `src/sync_failure.rs` |
+| `auto_sync/policy.rs` | Backoff policy; consumes `FailureClass` defined in `src/sync_failure.rs` |
 
 ## Test Seams
 
@@ -107,8 +107,9 @@ Hard rules:
   deep-recovery tests (`transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`,
   `restore_crash_failpoints.rs`) run manually/release only.
 - Barrier-coordinated tests (`local_data_lock_barriers.rs`, `repair_transactions.rs`)
-  need `--features test-support` AND `--test-threads=1` (they use `set_var`).
+  need `--features test-support` AND `--test-threads=1` (`set_var` needs `unsafe` in edition 2024).
 - `process_lock_concurrency.rs` spawns real subprocesses — serial target.
+- Test-only env vars (`SNP_TEST_FAILPOINT`, `SNP_SKIP_WORKER_SPAWN`, `SNP_TEST_EVENTS_DIR`, `SNP_TEST_MUTATION_BARRIER_DIR`, `SNP_ALLOW_DIR_FSYNC_FAILURE`) are inert in production builds — proven by `scripts/ci/test-production-seams.sh`.
 
 ## Related Docs
 - `architecture/persistence.md` — verified deep-dive on transactions/durability

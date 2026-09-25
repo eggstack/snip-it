@@ -103,7 +103,7 @@ snp list | grep "deploy"
 
 After (robust):
 ```bash
-snp list --json | jq '.items[] | select(.description | contains("deploy"))'
+snp list --json | jq '.[] | select(.description | contains("deploy"))'
 ```
 
 ---

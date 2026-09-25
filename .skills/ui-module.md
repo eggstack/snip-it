@@ -15,7 +15,7 @@ src/ui/
 - `Theme` — 10-color palette (Copy, Clone): primary, secondary, accent, background, text, border, selected_bg, muted, string_color, escape_color
 - `SelectState` — `selected` index + `scroll_state` (`pub(super)` in `state.rs`, internal to the UI module)
 - `FilterState` — Sort mode and tag filter text (in `state.rs`)
-- `SortMode` — None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed
+- `SortMode` — None, Newest, Oldest, AlphaAsc, AlphaDesc, LastUsed, MostUsed, Command (initial-only, from `--sort command`; never produced by interactive toggles — `src/ui/state.rs:4-16`)
 - `VariablePromptResult` — User's response to variable prompts
 
 ## TUI Loop (select_snippet_inner)
@@ -55,8 +55,14 @@ src/ui/
 - `COLORFGBG` auto-detection still supported
 
 ### Helpers
-- `get_theme()` returns current theme reference (from `RwLock<Theme>`)
+- `get_theme()` returns a `Theme` snapshot by value (`Copy`) from the `ACTIVE_THEME` lock (`src/ui/theme.rs:639-644`)
 - `style_fg()` / `style_fg_bg()` helpers for styled text
+
+## Callers (don't break)
+
+- Any function moved out of `ui/mod.rs` must be re-exported there — `commands/` calls through the re-exports (`AGENTS.override.md`)
+- `commands/mod.rs` owns `load_snippets` / `save_snippets` / `run_snippet_selection(Option<&Runtime>)` (`None` when `do_sync` is false); clipboard side effects go only through `copy_to_clipboard()` in `clip_cmd.rs`
+- Search shares `selector::searchable_text` across `snp get --query`, `snp list --filter`, and MCP `snippets_search` — keep parity
 
 ## Dependencies
 - `ratatui` for terminal UI

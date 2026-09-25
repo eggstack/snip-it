@@ -13,12 +13,10 @@
 ### 2. Security: Rate Limiting
 - Rate limit check BEFORE auth check (cheaper operation first)
 - Use server-controlled keys (IP address) not client-controlled (device_id)
-- Pattern: `rate_limiter.allow(&key, limit, window).await`
+- Pattern: `rate_limiter.allow(&key, max_requests, window).await` (`snip-sync/src/rate_limiter.rs:45` takes `&self, key: &str, max_requests: usize, window: Duration -> bool`); canonical entry is `authenticate_and_rate_limit[_with_duration]` (`snip-sync/src/lib.rs`)
 
 ### 3. Security: CORS Configuration
-- Read env vars at server startup: `std::env::var("CORS_ALLOW_ALL")`
-- `CorsLayer::new().allow_origin(Any)` for permissive mode
-- Log configuration for debugging
+- EggServe leaf service only — do NOT reintroduce Axum/Tower-HTTP `CorsLayer`. HTTP policy lives in `snip-sync/src/http.rs` (`CorsPolicy`, `service()`); `CORS_ALLOW_ALL` is strictly parsed at startup (`snip-sync/src/main.rs`) and ignored on non-loopback binds. Keep `Vary: origin` / `Allow: GET, HEAD` wire parity (locked in `tests/snip_sync_lifetime.rs`).
 
 ### 4. Bug Fixes: Race Conditions
 - Use generation counters (`AtomicU64`) instead of `AtomicBool`
@@ -34,7 +32,7 @@
 ### 6. Bug Fixes: Data Integrity
 - Check for existing entries before inserting (prevent duplicates)
 - Validate input parameters (e.g., interval >= 1)
-- Use tie-breaking for concurrent updates (device_id as tiebreaker)
+- Conflict order is `(updated_at, device_id, SHA-256(synced fields))` — never role-dependent server-wins; deletion beats live content even with an older timestamp
 
 ### 7. Code Quality: Extract Repeated Patterns
 - Identify copy-pasted auth+rate-limit blocks
@@ -42,14 +40,11 @@
 - Reduces code duplication and ensures consistency
 
 ### 8. Code Quality: Module Splitting
-- Move independent types to appropriate modules (e.g., Variable struct)
-- Break large files into submodules with re-exports
-- Maintain public API via re-exports in mod.rs
+- Keep `commands/mod.rs` (`load/save_snippets`, `run_snippet_selection`) and `ui/mod.rs` re-exports stable — they affect all TUI commands; any function moved to a submodule needs a re-export for `commands/` callers
+- Break large files into submodules with re-exports; maintain public API via re-exports in mod.rs
 
 ### 9. Performance: SQL Optimization
-- Replace correlated subqueries with JOINs
-- Use `LEFT JOIN ... GROUP BY` for counts
-- Add indexes for frequently queried columns
+- Prefer measured, local changes; keep `snip-sync` update on external `curl` (the embedded-transport trial bloated the server +34%, past the 10% gate — see `tests/architecture.rs`). Add indexes for frequently queried columns.
 
 ### 10. Removing Dead Public Items
 - Audit public API surface before releasing (see `docs/PUBLIC_API.md`)
@@ -72,13 +67,13 @@
   - `EphemeralCoordination` for locks
 
 ### 13. Transaction journals for multi-file ops
-- Use `transaction.rs` for any operation touching 2+ files
-- Begin → stage → commit removes the journal
-- On startup, check for interrupted journals via `check_interrupted_transactions`
+- Use free functions in `transaction.rs` (`begin_transaction` / `advance_to_*` / `commit_transaction`) for any operation touching 2+ files — there is no `Transaction::begin()` API
+- Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/`
+- Gate every local mutation on `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`src/transaction.rs:2441`): one journal = auto-rollback, multiple/incomplete = refuse and direct to `snp repair`. `check_interrupted_transactions` is a scan helper, not the gate
 - Never schedule sync before local transaction is consistent
 
 ### 14. Schema versioning for migrations
-- Use `migration.rs` with `SchemaVersion` ordinal type
+- Use `migration.rs` with `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`); read via `get_schema_version()`
 - `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure
 - Always test idempotency: second run should be a no-op
 
@@ -97,8 +92,10 @@
 - Unit tests for individual functions
 - Integration tests with TempDir for file system operations
 - Server tests with `sqlite::memory:` for database isolation
-- Run `cargo clippy --all-targets -- -D warnings` before committing
-- Run `cargo fmt --check` to verify formatting
+- Serial targets (`*_concurrency`, `sync_multibatch`, `*_barriers`, `pty_integration`, `repair_transactions`) need `--test-threads=1`; `repair_transactions`/`process_lock_concurrency`/`local_data_lock_barriers` (+ helper bin) need `--features test-support`
+- Run `cargo clippy --workspace --all-targets -- -D warnings` (NOT `--all-features`) before committing
+- Run `cargo fmt --all -- --check` to verify formatting
+- `sync.rs` RPCs retry through the single `retry_grpc_unified!` macro — never reintroduce a closure-based generic retry helper (fails with "captured variable cannot escape `FnMut`")
 
 ## Phase 06A Dead Items (Removed)
 
@@ -123,16 +120,16 @@ The following patterns were introduced in Phase 07A:
 | `EphemeralCoordination` | Locks, temp state | no fsync |
 
 ### Transaction Journal (`src/transaction.rs`)
-- Operations touching 2+ files must use `Transaction::begin()`
+- Operations touching 2+ files must use the `begin_transaction` / `advance_to_*` / `commit_transaction` free functions
 - Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/` (alongside locks, durable backups, and staged files)
-- On crash recovery: `check_interrupted_transactions()` rolls back incomplete transactions
+- On crash recovery: `gate_mutation_on_interrupted_transactions()` rolls back a single interrupted journal, refuses on multiple/incomplete
 - Journal is removed only after successful commit
 
 ### Schema Migrations (`src/migration.rs`)
-- `SchemaVersion` ordinal type tracks schema state
+- `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`) tracks schema state
 - `write_schema_version` preserves TOML array-of-tables structure
 - Migrations are idempotent: re-running applies no changes
-- `current_schema_version()` reads from `snippets.toml` header
+- `get_schema_version()` reads from the file header
 
 ### Validation (`src/commands/validate_cmd.rs`)
 - Read-only checks: orphan detection, primary selection, ID uniqueness, TOML parseability

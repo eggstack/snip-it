@@ -97,7 +97,7 @@ the `Commands` composition, runtime/signal/log setup, dispatch, and outcome
 mapping. Shared shell spellings live in `shell_cmd::ShellIntegration`.
 
 `snp data` reuses the same five arg types through single-path helpers in
-`src/main.rs:401-441`: `handle_validate`, `handle_backup`, `handle_restore`,
+`src/main.rs:405-441`: `handle_validate`, `handle_backup`, `handle_restore`,
 `handle_repair` (exits 10/1 via `exit_on_repair_status` for
 `UnsafeOnly`/`PartialFailure`), `handle_status`. Both spellings therefore
 share validation, JSON formatting, and exit-code mapping.
@@ -131,7 +131,7 @@ The match is exhaustive — adding a command requires choosing a policy and a
 Dry-run modes of mutating commands are classified read-only so previews never
 trigger network work or create log/config state.
 
-`StartupServices` (`src/main.rs:872`) has two levels: `Minimal` skips file
+`StartupServices` (`src/main.rs:873`) has two levels: `Minimal` skips file
 logging, startup/shutdown log lines, and audit entirely, while `Logging`
 initializes file logging plus `log_startup_info()` / `log_shutdown_info()`.
 Read-only and dry-run paths pair `SuppressReadOnly` with `Minimal`; every

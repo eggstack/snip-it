@@ -19,7 +19,7 @@
 | `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 3, 4, 5 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 2 |
-| `doctor` | No | No | Yes | Yes | No | No | No | No | No | `--report json` | 0, 1, 2 |
+| `doctor` | No | No | Yes | Yes | No | No | No | No | No | `--report json` | 0, 1, 6 |
 | `backup` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `restore` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 6, 9 |
 | `repair` | No | No | Yes | Yes | No | Yes (`--apply`) | No | No | No | `--json` | 0, 1 |
@@ -56,7 +56,7 @@
 | 3 | Not found | Requested resource does not exist |
 | 4 | Cancelled | User cancelled interactive action |
 | 5 | Ambiguous match | Multiple candidates, unique match expected |
-| 6 | Persistence failure | Atomic write or local persistence error |
+| 6 | Validation failure | Diagnostic finding or invalid data (see `docs/EXIT_CODES.md`) |
 | 7 | Sync failure | Synchronization with remote server failed |
 | 8 | Execution failure | Snippet execution (child process) failed |
 | 9 | Conflict/refused | Destructive action refused or generation changed |

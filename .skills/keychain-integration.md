@@ -63,3 +63,10 @@ If keychain is unavailable (CI, containers, headless):
 - Linux: Uses Secret Service (dbus/zbus) or Linux Keyutils
 - Windows: Uses Windows Credential Store
 - All handled transparently by the `keyring` crate
+
+## Test Seam (never remove)
+
+- Tests set `SNP_ALLOW_PLAINTEXT_API_KEY=true` (exact match, `src/config/sync_settings.rs:257,303,373`) on every spawned command to bypass the OS keychain; the seam also **forbids** keychain access when set. A guard test asserts the seam is present.
+- `scripts/ci/test-production-seams.sh` proves all test-only env vars are inert in production builds (built without `test-support`).
+- `set_var` in tests needs `unsafe` (edition 2024).
+- Linux CI needs `libdbus-1-dev` + `pkg-config` for the Secret Service store.

@@ -8,9 +8,11 @@ Guide agents through working with the encryption module (`src/encryption.rs`).
 **Location**: `src/encryption.rs`
 ```rust
 const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
+const ARGON2_TIME_COST: u32 = 3;
+const ARGON2_PARALLELISM: u32 = 4; // Argon2id, see derive_key in src/encryption.rs
 ```
 
-Memory cost is set to `1 << 14` (16 MiB). OWASP recommends a minimum of 19 MiB (19,456 KiB).
+Memory cost is `1 << 14` (16 MiB), time cost 3, parallelism 4 (`src/encryption.rs:37-39`).
 
 **WARNING**: Changing Argon2 parameters is a **breaking change**. All existing encrypted snippets will fail to decrypt because the same salt + different parameters produces a different derived key. If changing, add parameter versioning to `EncryptedPayload` (1-byte version header) and support decrypting with old parameters for backward compatibility.
 
@@ -22,9 +24,10 @@ let mut key_bytes = [0u8; 32];
 argon2.hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)?;
 ```
 
-The derived key is wrapped in `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop`.
-The encrypt path zeroizes via `key.zeroize()` (`encryption.rs:225`); the decrypt path
-uses `drop(std::mem::take(&mut key))` (`encryption.rs:251`).
+The derived key is wrapped in private `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop` (`src/encryption.rs:102-103`).
+The encrypt path zeroizes via `key.zeroize()` (`encryption.rs:243`); the decrypt path
+uses `drop(std::mem::take(&mut key))` (`encryption.rs:269`). Never `lock().unwrap()` the
+key cache directly — use `lock_key_cache()` with its poison recovery (`encryption.rs:72-92`); `ct_eq` is `#[cfg(test)]`-only, do not re-export.
 
 ## Payload Format
 
@@ -58,7 +61,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`error.rs:310`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`error.rs:316-330`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
 
 ## Security Properties
 
@@ -72,7 +75,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 
 Derived keys are cached per-session to avoid re-running Argon2id for the same (api_key, salt) pair during sync:
 
-- **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), [u8; 32]>>>` — keyed by `(SHA-256(api_key), base64(salt))`
+- **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>>` — keyed by `(SHA-256(api_key), base64(salt))`
 - **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
 - **Clear**: `clear_key_cache()` should be called at the end of a sync operation
 - **Zeroize**: Cache entries are zeroized on drain

@@ -56,13 +56,13 @@ Report findings directly (session summary or PR description) with:
 
 ### Security
 - **Path canonicalization**: Output paths and editor paths should be canonicalized before use
-- **TLS verification**: When using TLS, ensure `domain_name(host)` is set on `ClientTlsConfig`
-- **Shell execution**: Prefer hardcoded `/bin/sh` over reading from `$SHELL` env var
+- **TLS verification**: `src/sync.rs` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it
+- **Shell execution**: `src/commands/run_cmd.rs:111` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh`
 - **Atomic file operations**: Use `fs::OpenOptions::create_new(true)` to prevent TOCTOU races
 
 ### Error Handling
 - **Error propagation**: Functions should return `Result` and propagate errors via `?`
-- **From<String> for SnipError**: Enables error conversion from String to SnipError for sync operations
+- **SnipError constructors**: Use `SnipError::io_error()`, `toml_error()`, `sync_failure()` etc. (`src/error.rs`); `CryptoError` converts via `impl From<CryptoError> for SnipError` (`src/error.rs:316-330`)
 - **Silent failures**: Check for `let _ = ...` patterns that suppress errors without logging
 
 ### Sync
@@ -71,7 +71,7 @@ Report findings directly (session summary or PR description) with:
 - **Push-only counter**: `completed` should increment regardless of `has_failures`
 
 ### Known Historical Fixes (verify they're still in place)
-- Encryption keys are zeroized after use: encrypt path calls `key.zeroize()`, decrypt path uses `drop(std::mem::take(&mut key))`
+- Encryption keys are zeroized after use: encrypt path calls `key.zeroize()` (`src/encryption.rs:243`), decrypt path uses `drop(std::mem::take(&mut key))` (`src/encryption.rs:269`)
 - Clipboard debug→warn for auto-clear failures
 - Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs`
 - Premade TOCTOU: read from `canonical_path` not original `path`
@@ -81,19 +81,18 @@ Report findings directly (session summary or PR description) with:
 
 ## Phase 06A Checklist
 
-When reviewing public API changes or architecture docs, verify:
+When reviewing public API changes or architecture docs, verify against the evergreen refs (check doc headers — `SECURITY_AUDIT`/`FEATURE_BOUNDARIES` are historical snapshots, not contracts):
 
 1. **Public API inventory** (`docs/PUBLIC_API.md`): Every public item is accounted for and justified
 2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports
 3. **Canonical operations** (`docs/CANONICAL_OPERATIONS.md`): Each operation has a single, documented entry point
 4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, public `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction.
 5. **`#[non_exhaustive]`**: All public enums that may gain variants are marked `#[non_exhaustive]`
-6. **Feature boundaries** (`docs/FEATURE_BOUNDARIES.md`): Feature-gated items are correctly gated and documented
 
 ## Verification Checklist
 
-1. **Security items** (SEC-1 through SEC-6): Verify path canonicalization, TLS verification, shell hardening
-2. **Core bugs** (CORE-1 through CORE-11): Verify atomic saves, deleted flag filtering, error propagation
-3. **Clipboard** (CLIP-1 through CLIP-3): Verify generation counter pattern, audit logging, error handling
-4. **Config** (CONFIG-1, CONFIG-2, CONFIG-4): Verify keychain error handling, migration atomicity
-5. **Sync** (CMD-10, CMD-11): Verify `run_sync()` and `run_premade_sync()` return errors properly
+1. **Security items**: Verify path canonicalization, TLS `domain_name`, shell `$SHELL`-fallback intent
+2. **Core bugs**: Verify atomic saves, deleted flag filtering, error propagation
+3. **Clipboard**: Verify generation counter pattern, audit logging, error handling
+4. **Config**: Verify keychain error handling, migration atomicity
+5. **Sync**: Verify `run_sync()` and `run_premade_sync()` return errors properly

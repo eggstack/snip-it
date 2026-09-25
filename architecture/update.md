@@ -12,9 +12,9 @@ deliberately different transports. The client fetches in-process via
 `eggfetch-core =0.2.0`; the server shells out to external `curl`. That split
 is a measured footprint tradeoff, pinned by architecture tests.
 
-**Sources**: `src/update.rs` (1769 lines), `snip-sync/src/update.rs` (778),
-`src/main.rs:451` (`RUNTIME.block_on(update::run)`), pins in
-`tests/architecture.rs:172-256`.
+**Sources**: `src/update.rs`, `snip-sync/src/update.rs`,
+`src/main.rs:452-453` (`RUNTIME.block_on(update::run)`), pins in
+`tests/architecture.rs:172-256`. (Line refs drift — verify with `grep`.)
 
 ## `snp update`: In-Process eggfetch-core
 

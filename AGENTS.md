@@ -20,7 +20,7 @@ cargo test -p snip-sync --features test-helpers
 
 - `check.sh` passes `--features test-support` to all focused targets (`platform_smoke`, `destination_permissions`, `auto_sync_closure`, plus `-- --test-threads=1` for `auto_sync_concurrency`, `sync_multibatch`). Only `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers` (plus the `process_lock_helper` bin) gate compilation on it (see `required-features` in `Cargo.toml`).
 - Integration/PTY/lock/barrier tests are serial: always `--test-threads=1` for `pty_integration` (real pty pairs), `*_concurrency`, `sync_multibatch`, `*_barriers`, `repair_transactions`. Deep crash/restore/manifest suites run only in `release-check.sh verify`, not CI.
-- Windows CI runs `pwsh -NoProfile -File scripts/tests/installers.ps1` (needs `pwsh`); Linux `check.sh` runs the bash equivalent.
+- macOS/Windows CI only runs `cargo check --workspace --all-targets` + `platform_smoke`; Windows additionally runs `pwsh -NoProfile -File scripts/tests/installers.ps1` (needs `pwsh`). Linux `check.sh` runs the bash equivalent.
 
 ## Toolchain & platform
 
@@ -46,11 +46,10 @@ cargo test -p snip-sync --features test-helpers
 - Kernel locks are authoritative: `flock`/`LockFileEx` for auto-sync locks and server singleton. `Drop` releases without unlinking; lock files may hold stale metadata. `kill(pid,0)`: only `ESRCH` proves absence (`EPERM`/unknown = live). Linux start tokens use `/proc/<pid>/stat` field 22.
 - Save path does NOT post-process `toml::to_string_pretty`. Golden corpus (tabs, trailing spaces, CRLF) must survive save/load; `write_schema_version` must use `toml::Table`, not `toml::Value`, to preserve array-of-tables.
 - `sync.rs` RPCs take `&mut self`; the retry macro expands inline so `self.client.<rpc>()` reborrows work. Do not reintroduce a closure-based generic retry helper (fails with "captured variable cannot escape `FnMut`").
-- `snp update` uses in-process `eggfetch-core =0.2.0` (`standard-http1`+`redirects`+`tls-rustls`+`tls-native-roots` only; strict eggfetch redirects + native `Timeout.total`, snip-it keeps the initial-HTTPS guard); `snip-sync update` keeps external `curl`: the fresh 0.2.0 lean-profile trial grew the server from 3,833,152 to 5,145,224 bytes (+34.23%), past the 10% gate. `tests/architecture.rs` pins the no-`curl`/lean-profile/delegated-timeout properties; transport tests live in `src/update.rs` (`test-support`) with a std-only loopback fixture.
-- `snip-sync` HTTP is one concrete two-route EggServe leaf service in `snip-sync/src/http.rs`, using only `eggserve-server =0.2.1` and `eggserve-primitives =0.2.0`; do not restore Axum/Tower-HTTP or add a generic router/middleware layer. Tonic remains on its separate gRPC listener. Keep the pre-bound listener, explicit body rejection, disabled total connection lifetime, typed EggServe shutdown completion, external TLS termination, Basic-auth constant-time comparison, configured CORS policy, and three security headers. Proven wire parity (locked in `tests/snip_sync_lifetime.rs`): router 404/405 are empty with no content-type (metrics-disabled 404 keeps `"Not found"`), known routes answer preflight/unsupported methods with `Allow: GET, HEAD`, every non-allow-all response carries `Vary: origin` (allow-all omits it), and preflight never carries the security headers.
+- Split transports by measurement, don't unify: `snp update` uses in-process lean `eggfetch-core` (see `Cargo.toml`), `snip-sync update` keeps external `curl` (embedded trial bloated the small server +34%, past the 10% gate). `tests/architecture.rs` pins this; transport tests live in `src/update.rs` (`test-support`) with a std-only loopback fixture.
+- `snip-sync` HTTP is one concrete two-route EggServe leaf in `snip-sync/src/http.rs` — no Axum/Tower-HTTP, no generic router/middleware; Tonic stays on its separate listener. Keep pre-bound listener, explicit body rejection, disabled total connection lifetime, typed shutdown completion, external TLS, constant-time Basic-auth, configured CORS, three security headers. Read `tests/snip_sync_lifetime.rs` before touching status codes, `Allow`/`Vary`, or security headers (wire parity is locked there).
 - Tokio: global `RUNTIME` only for async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`, `update`); local-only commands never init it. `run_snippet_selection` takes `Option<&Runtime>` (`None` when `do_sync` false). Detached worker uses `new_current_thread()`; keep client's `rt-multi-thread` feature. Keep `keyring = "4"` default features (platform stores) or persistence silently falls back to mock store.
 - Do not sanitize snippet commands (by design); removing CLI flags is breaking (deprecate first); Argon2 parameter changes break all existing encrypted payloads (version first); `commands/mod.rs` (`load/save_snippets`, `run_snippet_selection`) and `ui/mod.rs` re-exports affect all TUI commands; clipboard side effects go through `copy_to_clipboard()` in `clip_cmd.rs`.
-- `AGENTS.override.md` has session pitfall notes — consult it.
 
 ## Sync & persistence invariants
 
@@ -67,5 +66,16 @@ cargo test -p snip-sync --features test-helpers
 
 ## Pointers (don't duplicate)
 
-- `AGENTS.override.md`, `architecture/` (per-command deep-dives), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI, planning), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
+- `AGENTS.override.md` (session pitfall notes — consult it), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI, planning), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
 - `plans/registry.md` is the authoritative planning status — check it before assuming any roadmap state. Canonical direction: `plans/000-long-term-specification.md`, `plans/001-terminology-and-domain-model.md`, `plans/002-long-term-roadmap.md`; governance: `plans/003-planning-process.md`. Subsystem roadmaps live in `plans/subsystems/`, handoff plans in `plans/implementation/<subsystem>/`, completion gates in `plans/closure/<subsystem>/`, predecessors in `plans/archive/`.
+
+## Architecture index (start here per topic)
+
+- Overview + layer map: `architecture/overview.md`; CLI/dispatch/exit codes: `architecture/cli.md`, `architecture/outcome.md`, `architecture/commands/mod.md`
+- Sync protocol/merge/retry: `architecture/sync.md` + `.skills/sync-module.md`; conflict `(updated_at, device_id, SHA-256)` + deletion-wins + local-only `output`/`folders`/`favorite`
+- Transactions/locks/auto-sync: `architecture/persistence.md`, `architecture/auto_sync.md`, `architecture/process_file_lock.md` + `.skills/transactions-and-auto-sync.md`; gate = `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`
+- Server (EggServe leaf, no Axum): `architecture/server.md` + `.skills/server-module.md`; wire parity locked in `tests/snip_sync_lifetime.rs`
+- Updater split (lean `eggfetch-core` client vs `curl` server): `architecture/update.md`, pinned in `tests/architecture.rs`
+- Selector/search parity + MCP read-only stdio: `architecture/selector.md`, `architecture/mcp.md`
+- Library/config/TOML: `architecture/library.md`, `architecture/config.md`, `architecture/utils/`; save never post-processes `to_string_pretty`; `write_schema_version` via `toml::Table`
+- Tests: `architecture/test-infrastructure.md`; serial set + `test-support`/`test-helpers` gating per Verify section above

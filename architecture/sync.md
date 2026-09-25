@@ -146,7 +146,8 @@ Further rules:
   (real encryption via `encrypt_snippets`, `key_cache_guard`,
   `ensure_budget`) → `sync_prepared_encrypted_inner` (the single
   zero/one/many transport implementation).
-- `sync_encrypted_with_test_encrypt` is `#[cfg(test)]`-only: it accepts an
+- `sync_encrypted_with_test_encrypt` lives in `#[cfg(test)] mod tests`
+  (`src/sync.rs:1466`): it accepts an
   injected encrypt function and drives the same prepared transport (used by
   the all-encryption-failed pull-path regression). Never reachable from
   production.

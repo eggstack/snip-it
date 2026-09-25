@@ -43,7 +43,7 @@ run_sync() flow (sync_commands.rs):
 
 - `sync_encrypted` and `sync_encrypted_with_ceiling` both delegate to `sync_encrypted_inner`, which runs real encryption and then calls the private `sync_prepared_encrypted_inner` that owns the entire zero/one/many batch transport logic. Zero batches is a valid pull-only path — it sends an empty-upload `Sync(offset=0)` to retrieve remote snippets, not an `unreachable!` panic.
 - Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via the private `add_batch_context()` helper instead of flattening to `SyncRequestFailed`.
-- The custom-encryption failure injection used by the all-encryption-failed regression lives in a private `sync_encrypted_with_test_encrypt` method on `SyncClient`, compiled only for unit tests and reachable from `src/sync.rs`. It drives the same prepared transport. No public custom-encryption sync entry point exists.
+- The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1466`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
 
 ## Merge Strategy
 
@@ -77,8 +77,7 @@ content and the final cursor are durable.
 | `build_upload_batches()` | `sync.rs` | Byte-bounded batch splitting using Prost encoded_len |
 | `accumulate_page()` | `sync.rs` | Decrypt and accumulate server snippets from a response page |
 | `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
-| `SyncExecutionLock::wait_acquire()` | `auto_sync/execution_lock.rs` | Bounded-time lock acquisition for foreground callers |
-| `SyncExecutionLock::try_acquire()` | `auto_sync/execution_lock.rs` | Non-blocking lock acquisition for workers |
+| `SyncExecutionLock::wait_acquire()` / `try_acquire()` | `src/auto_sync/execution_lock.rs:143-158` (kernel-backed via `process_file_lock`) | Bounded-time lock acquisition for foreground callers / non-blocking for workers |
 | `clear_pending_after_explicit_sync()` | `auto_sync/notification.rs` | Generation-safe pending clear after manual sync |
 
 **Note:** The detached auto-sync helper invokes `run_sync_with_limits` directly
@@ -87,47 +86,7 @@ cron use the unbounded canonical wrapper.
 
 ## Test Coverage
 
-Tests in `sync_commands.rs` (unit tests near end of file):
-- `test_server_wins_with_newer_timestamp`
-- `test_local_wins_with_newer_timestamp`
-- `test_new_server_snippet_added`
-- `test_deleted_server_snippet_excluded`
-- `test_server_delete_local_already_deleted_excluded`
-- `test_local_only_snippet_preserved`
-- `test_local_deleted_snippet_not_preserved`
-- `test_merge_preserves_folders`
-- `test_merge_sorted_by_updated_at_descending`
-- `test_local_deleted_not_resurrected_by_newer_server`
-- `test_proto_snippet_excludes_usage_metadata`
-- `test_merge_preserves_local_output_when_server_wins`
-
-Tests in `sync.rs` (batching, clock skew, and unified retry):
-- `test_build_upload_batches_empty_list`
-- `test_build_upload_batches_single_small_item`
-- `test_build_upload_batches_fits_one_request`
-- `test_build_upload_batches_exact_boundary_fit`
-- `test_build_upload_batches_one_byte_over_starts_new_batch`
-- `test_build_upload_batches_oversized_single_item`
-- `test_build_upload_batches_stable_id_ordering`
-- `test_build_upload_batches_metadata_overhead_included`
-- `test_build_upload_batches_no_batch_exceeds_ceiling`
-- `test_clock_skew_invalid_argument_is_typed`
-- `test_non_clock_skew_invalid_argument_is_generic`
-- `test_request_too_large_failure_class`
-- `test_clock_skew_failure_class`
-- `retry_non_retryable_gets_one_attempt`
-- `retry_retryable_reaches_configured_attempt_count`
-- `retry_eventual_success_stops_retries`
-- `retry_limited_refuses_backoff_when_deadline_short`
-- `retry_limited_expired_before_request_maps_to_timeout`
-- `retry_limited_deadline_during_rpc_maps_to_timeout`
-- `retry_jitter_stays_within_documented_bounds`
-- `retry_backoff_preserves_historical_progression`
-
-Focused coverage also includes equal-timestamp role swaps, same-device content
-fingerprint ties, delete/live role swaps, atomic recovery marker round trips,
-and preservation of corrupt markers. Existing integration coverage continues to
-cover encryption and retry/timestamp behavior.
+Representative unit tests live at the end of `sync_commands.rs` (merge: newer-timestamp wins either role, deletion never resurrected, local `output`/`folders`/`favorite` preserved) and in `src/sync.rs` (batching boundaries, clock-skew typing, unified-retry progression/jitter/deadline). Enumerate current names with `rg 'fn test_' src/sync.rs src/sync_commands.rs` — don't trust a hardcoded list.
 
 ## Failure Classification and Retry
 
@@ -161,7 +120,7 @@ cover encryption and retry/timestamp behavior.
 
 ### FailureClass Enum
 
-`FailureClass` (defined in `src/sync_failure.rs:24`, re-exported by `auto_sync/policy.rs`) classifies sync errors into 4 variants:
+`FailureClass` is defined in `src/sync_failure.rs:24` (sync-client layer) and consumed by `auto_sync/policy.rs` via `from_error`/`from_code`. It classifies sync errors into 4 variants:
 
 | Variant | Meaning | Retry Disposition |
 |---------|---------|-------------------|

@@ -38,8 +38,9 @@ to exit 4 via `CliOutcome::Cancelled` at the CLI boundary in `main.rs`.
 - **stdout**: Nothing printed on success. The executed command's own
   stdout/stderr pass through to the parent terminal.
 - **stderr**: Error messages via `eprintln!` from the main error handler.
-- **Exit**: 0 on success (even if the executed command exits non-zero — the
-  snippet ran, which counts as success). 1 on `SnipError`.
+- **Exit**: `ExecutionFailed { child_code }` propagates the child's exit code
+  (`src/outcome.rs`); the wrapper code 8 applies only when no child code
+  exists. 1 on `SnipError`.
 - **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
   Sorting affects the TUI display order but not the exit code or output.
 
@@ -236,8 +237,8 @@ produces only JSON on stdout; the human report appears on stderr.
 | Operational errors (file not found, unreadable) | stderr | via `SnipError` |
 
 **Exit codes**: 0 on success (no error-severity diagnostics), 1 on operational failure
-(source not found, unreadable, not a file), 2 if error-severity diagnostics are detected
-(incompatible entries in the analyzed file).
+(source not found, unreadable, not a file), 6 (`ValidationFailed`) if error-severity diagnostics are detected
+(`src/commands/doctor_cmd.rs` maps through the canonical outcome table).
 
 **Stream split**: Clean — human-readable report always goes to stderr;
 machine-readable JSON always goes to stdout. Same convention as `snp import`.

@@ -206,9 +206,19 @@ pub(crate) fn strip_integrity_line(content: &str) -> String
 | `SNP_LOG` | `logging.rs` | — (per-module filter) |
 | `SNP_COMMAND_TIMEOUT` | `run_cmd.rs` | 0 (disabled) |
 | `SNP_CLIPBOARD_TIMEOUT` | `clipboard.rs` | `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | `src/config/` (test-only) | `false` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | `src/config/` (test-only) | `false` (exact `=true` required) |
+| `SNP_TEST_CREDENTIAL_FILE` | `src/config/` (test-only) | — |
+| `SNP_TEST_EVENTS_DIR` | `auto_sync/test_events.rs` (test-only) | unset (no events unless set) |
+| `SNP_SKIP_WORKER_SPAWN` | `auto_sync/` (test-only) | unset |
+| `SNP_TEST_FAILPOINT` | `test_failpoints.rs` (test-only) | unset |
+| `SNP_TEST_MUTATION_BARRIER_DIR` | `local_data.rs` (test-only) | unset |
+| `SNP_ALLOW_DIR_FSYNC_FAILURE` | `utils/atomic.rs` (test-only) | unset |
+| `SNIP_SYNC_ALLOW_HTTP` | client + server (truthy `true/1/yes/on`; server: loopback only) | `false` |
+| `SNIP_UPDATE_CRATES_API_URL` / `SNIP_UPDATE_RELEASE_BASE_URL` | `update.rs` (test-only) | crates.io / GitHub releases |
 | `SNP_SYNC_CONNECT_TIMEOUT` | `sync.rs` | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | `sync.rs` | `30` |
+
+Test-only vars are inert in production builds (proven by `scripts/ci/test-production-seams.sh`).
 
 ## Key Files
 

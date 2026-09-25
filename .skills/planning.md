@@ -16,6 +16,11 @@ Full templates live in `plans/subsystems/README.md`,
 `plans/adrs/README.md`. Governance is normative in
 `plans/003-planning-process.md`.
 
+> Registry truth: check `plans/registry.md` before assuming any roadmap state.
+> All currently registered milestones are `closed` with no open dependencies —
+> register new work only after handoff review per `003 §10`. One commit = one
+> status change; the closure record is the gate.
+
 ## When to use
 
 Load this skill when working on:

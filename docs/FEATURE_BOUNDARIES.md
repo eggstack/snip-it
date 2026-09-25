@@ -59,9 +59,8 @@ The workspace has **463 lines** of duplicate dependency output. Key duplications
 **Recommendation**: Gate behind `sync` feature. The entire sync client + encryption stack is unnecessary for local-only use. This is the largest removable dependency surface (~15 crates).
 
 ### 4. Updates
-`src/update.rs` supports managed Cargo and Homebrew installations. Unmanaged
-or standalone binaries receive a clear error and must be updated through their
-distribution channel; there is no archive updater feature to gate.
+`src/update.rs` supports managed Cargo and Homebrew installations plus direct
+`InstallMethod::Direct` verified GitHub-binary downloads (`src/update.rs`).
 
 ### 5. Bundled themes (`bundled-themes` feature)
 **Dependencies**: `flate2`, `unicode-width` (already used by TUI)
@@ -77,13 +76,18 @@ distribution channel; there is no archive updater feature to gate.
 
 ## Platform-Specific Dependencies
 
+> Historical snapshot (Phase 06A workstream analysis). Version cells below
+> drift — live truth is `Cargo.toml` (`snip-it 1.3.9`), `snip-sync/Cargo.toml`
+> (`0.1.6`), and `snip-proto 0.1.3`. The only cargo features are
+> `test-support` (client) and `test-helpers` (`snip-sync`).
+
 ```toml
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5.4"
-windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_IO", "Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(not(windows))'.dependencies]
-arboard = "3"
+arboard = { version = "3", default-features = false }
 signal-hook = "0.4"
 libc = "0.2"
 ```

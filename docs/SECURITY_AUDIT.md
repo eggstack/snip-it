@@ -1,5 +1,12 @@
 # Security Audit — Phase 10
 
+> Historical snapshot as of 2026-07-22 (pre-EggServe / pre-eggfetch). Frozen —
+> do not continuously patch. Current posture lives in `SECURITY.md`,
+> `docs/THREAT_MODEL.md`, and `CHANGELOG.md` (Plans 017–020: lean
+> `eggfetch-core` client updater vs external-`curl` server updater, direct
+> EggServe HTTP leaf). Journal path below is stale: journals live in
+> `<config>/.transaction/` as `txn-<uuid>.toml`.
+
 **Date:** 2026-07-22
 **Scope:** snp client, snip-sync server (transport), auto-sync subsystem, encryption, backup/restore, self-update
 

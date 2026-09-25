@@ -107,7 +107,7 @@ The following parsers and data-processing paths should be fuzzed with `cargo-fuz
 
 ### Variable/Default/Choice Parser
 
-**Target:** `src/utils/variable_parser.rs` (variable expansion syntax)
+**Target:** `src/utils/variables.rs` (variable expansion syntax)
 
 **Rationale:** Snippet commands contain `{{variable}}` syntax with defaults and choices. Fuzzing should verify that the parser never panics on arbitrary input and that expansion produces valid shell output.
 

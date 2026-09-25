@@ -26,6 +26,7 @@ snip-sync/
 ├── src/paths.rs        # Default path resolution
 ├── src/cert.rs         # TLS certificate handling
 ├── src/cli.rs          # CLI argument parsing
+├── src/startup.rs      # Startup gates: SNIP_SYNC_ALLOW_HTTP loopback-only, SNIP_SYNC_STATE_DIR, TLS ack, cron
 ├── src/editor.rs       # Editor integration
 ├── src/process.rs      # Legacy PID parsing for stop/restart compatibility
 ├── src/orchestration.rs # Typed Tonic/EggServe shutdown supervision
@@ -76,8 +77,11 @@ back.
 | `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per API key |
 | `TRUSTED_PROXIES` | empty | Comma-separated trusted proxy IPs |
 | `TLS_ENABLED` | `false` | Boolean: `true`/`1`/`yes`/`on` to acknowledge TLS termination |
-| `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP (loopback only) |
+| `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP — loopback binds only (`startup.rs:282`) |
+| `SNIP_SYNC_STATE_DIR` | config dir | State dir override for test isolation (`paths.rs:29`, `startup.rs:311`) |
 | `RUST_LOG` | `info` | Log level (via tracing) |
+
+Read `tests/snip_sync_lifetime.rs` before touching status codes, `Allow`/`Vary`, or security headers (wire parity is locked there).
 
 ## gRPC Endpoints
 
@@ -99,15 +103,10 @@ back.
 
 Server tests use `sqlite::memory:` for isolation. Run with:
 ```bash
-cargo test -p snip-sync
-```
-
-For in-process test server support, use the `test-helpers` feature:
-```bash
 cargo test -p snip-sync --features test-helpers
 ```
 
-Current coverage: 18 tests in `db.rs` plus integration tests via `test-helpers` feature.
+The `test-helpers` feature gates the in-process test server (`test_helpers.rs`); production builds exclude it. HTTP wire parity is locked in `tests/snip_sync_lifetime.rs` (serial: `--test-threads=1`); `scripts/check.sh` builds the `snip-sync` bin before running it.
 
 The server updater intentionally shells out to external `curl`. Plan 017
 requalified the alternative lean `eggfetch-core 0.2.0` profile: the release

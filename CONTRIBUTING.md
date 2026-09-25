@@ -11,7 +11,7 @@ provides guidelines and information for contributors.
   `rust-toolchain.toml` is checked in to pin the local toolchain.
 - **Protobuf compiler (`protoc`)** — required *only* if you regenerate
   the gRPC stubs. The generated `snip-proto/src/snip_proto.rs` is
-  committed, and `src/proto.rs` is inlined into the binary, so a
+  committed, and the `snip-proto` crate's checked-in stubs are used directly, so a
   plain `cargo build` does not need `protoc`.
 - **OpenSSL headers** (Linux) — required by `tonic`'s TLS backend.
 
@@ -36,7 +36,7 @@ SNIP_SYNC_ALLOW_HTTP=true cargo run
 
 # In another terminal, register with the local server
 cd ..
-cargo run -- register http://localhost:50051
+cargo run -- register --server http://localhost:50051
 
 # Test sync operations
 cargo run -- sync
@@ -48,8 +48,9 @@ cargo run -- sync
 
 - Follow existing code conventions — mimic surrounding code style.
 - Run `cargo fmt` before committing.
-- Run `cargo clippy --all-targets -- -D warnings` to check for lint
-  issues. CI fails on any clippy warning.
+- Run `cargo clippy --workspace --all-targets -- -D warnings` to check for lint
+  issues (NOT `--all-features`; test-only code lints via explicit targets —
+  see `AGENTS.md`). CI fails on any clippy warning.
 - Do not add comments unless asked.
 - Keep lines under 100 characters (enforced by `rustfmt.toml`).
 - Prefer `?` over `.unwrap()` for error propagation in non-test code.
@@ -64,7 +65,7 @@ bash scripts/check.sh
 cargo test --workspace --all-features -- --test-threads=1
 
 # Run server tests
-cargo test -p snip-sync
+cargo test -p snip-sync --features test-helpers
 ```
 
 CI runs `scripts/check.sh` on Linux and smoke tests on macOS/Windows.

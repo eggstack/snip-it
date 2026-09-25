@@ -110,5 +110,5 @@ from the span fields, recording only counts and the redacted command name.
 ## Key files
 
 - `src/logging.rs` — init, levels, structured events, audit, panic hook
-- `src/main.rs:872` (`StartupServices`), `:886` (`command_behavior`), `:999` (startup sequence)
+- `src/main.rs:873` (`StartupServices`), `:886` (`command_behavior`), `:999` (startup sequence)
 - `src/clipboard.rs:22` (`log_clipboard_operation` call sites), `src/commands/clip_cmd.rs:42` (audit call site)

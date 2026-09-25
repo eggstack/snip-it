@@ -63,7 +63,7 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 
 **Core layer must NOT depend on:**
 - `crate::clipboard`, `crate::ui`, `crate::logging`
-- `crate::sync`, `crate::encryption`, `crate::proto`
+- `crate::sync`, `crate::encryption`, `snip-proto` crate
 - `tonic`, `keyring`, `arboard`, `ratatui`, `crossterm`
 - `std::process::Command` (process spawning)
 
@@ -76,14 +76,14 @@ Protocol client, encryption, sync orchestration. Depends on core but not on appl
 | Module | Responsibility |
 |--------|---------------|
 | `src/encryption.rs` | AES-256-GCM + Argon2id encryption, key derivation, key cache |
-| `src/proto.rs` | Prost-generated protobuf types (Snippet, SyncRequest, etc.) |
+| `snip-proto` crate | Prost-generated protobuf types (Snippet, SyncRequest, etc.), checked-in stubs |
 | `src/sync.rs` | SyncClient (tonic gRPC), retry logic, encrypt/decrypt snippets |
 | `src/sync_commands.rs` | Sync orchestration, merge logic (last-write-wins), run_sync() |
 | `src/config.rs` | SyncSettings, SyncDirection, API key (keychain), sync config persistence |
 
 **Sync-client layer dependencies (allowed):**
 - `crate::error`, `crate::library`, `crate::utils::*` (core)
-- `crate::encryption`, `crate::proto` (sync-client)
+- `crate::encryption`, `snip-proto` (sync-client)
 - `tonic` (gRPC transport)
 - `keyring` (credential storage — platform dependency, isolated to config.rs)
 
@@ -176,10 +176,9 @@ src/
 │   └── utils/
 ├── sync_client/       # Sync-Client layer
 │   ├── encryption.rs
-│   ├── proto.rs
 │   ├── sync.rs
 │   ├── sync_commands.rs
-│   └── config.rs
+│   └── config/               # (+ external snip-proto crate for protobuf types)
 ├── app/               # Application / CLI layer
 │   ├── commands/
 │   ├── clipboard.rs

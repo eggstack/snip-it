@@ -63,7 +63,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 - Shared diagnostic model in `src/diagnostics.rs`: `DiagnosticSeverity`, `CompatibilityDiagnostic`, `DoctorReport`, `PetImportReport`
 - Diagnostic codes are stable and machine-readable (e.g., `entry.empty_command`, `compat.config_dir.ok`)
 - Human-readable report to stderr; JSON to stdout; `--strict` treats warnings as errors
-- Exit codes: 0 (no errors), 1 (operational failure), 2 (error diagnostics found)
+- Exit codes: 0 (no errors), 1 (operational failure), 6 (`ValidationFailed` when error diagnostics found)
 - Reuses the same source validation, TOML parsing, and entry analysis as `import_cmd` for consistency
 - Security: doctor never mutates source, destination, config, or library state
 - External library support (R4-C) is deferred: no runtime behavior, no config surface, no provenance tracking. Rationale recorded in `docs/PET_COMPATIBILITY.md` (release roadmap table).

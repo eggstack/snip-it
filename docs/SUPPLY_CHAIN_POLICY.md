@@ -30,8 +30,9 @@ The release profile in the root `Cargo.toml` enables LTO, single codegen unit, o
 [profile.release]
 lto = true
 codegen-units = 1
-opt-level = 3
+opt-level = "z"
 strip = true
+panic = "abort"
 ```
 
 ---
@@ -161,9 +162,9 @@ All dependencies must come from crates.io (the only allowed registry). Git depen
 
 | Crate | Version | Description |
 |-------|---------|-------------|
-| `snip-it` | 1.3.7 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
+| `snip-it` | 1.3.9 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
 | `snip-proto` | 0.1.3 | Protobuf definitions and tonic-generated gRPC code. |
-| `snip-sync` | 0.1.4 | gRPC sync server (axum HTTP + tonic gRPC, SQLite storage). |
+| `snip-sync` | 0.1.6 | gRPC sync server (EggServe HTTP leaf + tonic gRPC, SQLite storage). |
 
 All three crates share the same license (MIT), Rust edition (2024), and minimum supported Rust version (1.94).
 
@@ -185,29 +186,17 @@ The following direct dependencies are critical to the project's security and fun
 | `crossterm` | 0.29 | Terminal manipulation | Input handling, raw mode, cursor control |
 | `tokio` | 1 | Async runtime | Powers async gRPC calls and server I/O |
 
-Other notable dependencies include `serde`/`toml` for configuration persistence, `clap` for CLI argument parsing, `sqlx` (server-side) for SQLite storage, and `axum` (server-side) for HTTP endpoints.
+Other notable dependencies include `serde`/`toml` for configuration persistence, `clap` for CLI argument parsing, `sqlx` (server-side) for SQLite storage, and `eggserve-server`/`eggserve-primitives` (server-side) for the HTTP leaf service.
 
 ---
 
 ## CI Verification Commands
 
-The following commands run in CI to enforce supply-chain and code quality policies:
-
-```bash
-# License, advisory, ban, and source checks
-cargo deny check
-
-# Format compliance
-cargo fmt --all -- --check
-
-# Lint with warnings as errors
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-# Full test suite
-cargo test --workspace
-```
-
-`cargo deny check` runs all sub-checks (licenses, advisories, bans, sources) and is the primary supply-chain gate. The other commands ensure code quality and correctness.
+Linux CI runs `bash scripts/check.sh`: installer contract, `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings` (NOT `--all-features`),
+`cargo test --workspace --lib`, plus focused integration targets with
+`--features test-support` (see `AGENTS.md`). `cargo deny check` is a local
+supply-chain gate via `deny.toml`, not a CI step.
 
 ---
 
