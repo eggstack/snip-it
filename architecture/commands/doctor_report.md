@@ -16,7 +16,8 @@ grouping and ordering.
 `DiagnosticReportFormat` (`doctor_report.rs:9`, `ValueEnum`,
 `Default=Human`): `--report human` (default) → `emit_human_report`
 to stderr; `--report json` → pretty `DoctorReport` JSON to stdout
-(`doctor_cmd.rs:1297-1302`). Re-exported via `doctor_cmd.rs:50` so
+(`doctor_cmd.rs:1297-1302` → `println!` at `:1301`). Re-exported via
+`doctor_cmd.rs:50` so
 the `DoctorArgs` schema cannot drift from the renderer.
 
 ## Flow / steps
@@ -76,5 +77,5 @@ as `-` instead of panicking. Exit-code decisions live in
 
 - Format enum: `src/commands/doctor_report.rs:9`
 - `emit_human_report`: `:17` (sections: `:28-122`)
-- Caller: `src/commands/doctor_cmd.rs:1292-1317`
+- Caller (emit + exit decision): `src/commands/doctor_cmd.rs:1292-1318`
 - Types: `src/diagnostics.rs` (`DoctorReport`, `diagnostic_counts`)

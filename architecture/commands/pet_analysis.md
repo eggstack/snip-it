@@ -17,9 +17,11 @@ None directly (no `*Args`, no dispatch). Surfaced through
 `PetImportOptions.source` (`import_cmd.rs:37`) and
 `DoctorArgs{pet_file, library}` (`doctor_cmd.rs:18`). Size bound:
 `MAX_SOURCE_FILE_BYTES = 16 MiB` (`pet_analysis.rs:10`).
-`KNOWN_SNIPPET_FIELDS` (`:13-35`) lists canonical + alias keys
-(`id/description/command/output/tag/tags/folders/favorite/created_at/
-updated_at/device_id/deleted/name/cmd` plus capitalized variants).
+`KNOWN_SNIPPET_FIELDS` (`:13-35`) lists canonical + alias keys:
+`id`, `description`, `command`, `output`, `tag`, `tags`, `folders`,
+`favorite`, `created_at`, `updated_at`, `device_id`, `deleted`, `name`,
+`cmd`, plus capitalized `Tag`, `Tags`, `Description`, `Command`,
+`Output`, `Id`, `ID`.
 
 ## Flow / steps
 

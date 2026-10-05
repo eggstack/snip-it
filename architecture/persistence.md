@@ -41,12 +41,14 @@ All user-facing data lives under `~/.config/snp/` (XDG-compliant). See [utils.md
 
 ### API
 
-Two public functions:
+Public functions:
 
 | Function | Purpose |
 |----------|---------|
 | `write_private_atomic(path, content, prefix)` | Simple atomic write with `0o600` permissions on Unix |
 | `atomic_replace(target, bytes, options)` | Enhanced atomic replace with durability classes, permission control, and target validation |
+| `atomic_write_bytes(path, bytes, durability)` | Convenience wrapper over `atomic_replace` with default options |
+| `hash_file(path)` | Canonical SHA-256 file helper (`transaction::hash_file` delegates here) |
 
 ### Durability Classes
 
@@ -54,17 +56,20 @@ Two public functions:
 pub enum Durability {
     DurableUserData,       // fsync before rename, parent dir sync
     SensitiveConfig,       // 0o600 permissions, symlink rejection
-    RecoverableMetadata,   // no fsync, default permissions
+    RecoverableMetadata,   // no fsync
     EphemeralCoordination, // no fsync, no dir sync
 }
 ```
 
 | Class | fsync file | fsync dir | Permissions | Symlink reject |
 |-------|-----------|-----------|-------------|----------------|
-| `DurableUserData` | Yes | Yes (best-effort) | Default | No |
-| `SensitiveConfig` | No | Yes (best-effort) | `0o600` | Yes |
-| `RecoverableMetadata` | No | Yes (best-effort) | Default | No |
-| `EphemeralCoordination` | No | No | Default | No |
+| `DurableUserData` | Yes | Yes (hard failure) | `0o600` temp file | No |
+| `SensitiveConfig` | Yes | Yes (hard failure) | `0o600` | Yes |
+| `RecoverableMetadata` | No | Yes (best-effort) | `0o600` temp file | No |
+| `EphemeralCoordination` | No | No | `0o600` temp file | No |
+
+On Unix the temp file is always created `0o600`, so a replaced file keeps
+`0o600` unless `preserve_permissions` restores the previous mode.
 
 ### Options
 
@@ -85,14 +90,13 @@ pub struct AtomicWriteOptions {
 1. Resolve parent directory (create if missing via `create_dir_all`)
 2. Validate target — reject directories, FIFOs, sockets, block/character devices, and optionally symlinks
 3. Snapshot original permissions if `preserve_permissions` is set
-4. Create UUID-named temp file in the same directory
-5. For `SensitiveConfig` on Unix, set `0o600` on the temp file
-6. Write bytes, flush to kernel buffer
-7. For `DurableUserData`, call `sync_all` on the file
-8. Atomic `rename` over the target
-9. Restore original permissions if `preserve_permissions` was set
-10. Sync parent directory (best-effort, logged on failure)
-11. On any failure, `TempFileGuard` cleans up the temp file
+4. Create UUID-named temp file in the same directory (`0o600` on Unix for every class)
+5. Write bytes, flush to kernel buffer
+6. For `DurableUserData` and `SensitiveConfig`, call `sync_all` on the file
+7. Atomic `rename` over the target
+8. Restore original permissions if `preserve_permissions` was set
+9. Sync parent directory — for `DurableUserData`/`SensitiveConfig` a failure fails the write; for `RecoverableMetadata` it is logged and ignored; `EphemeralCoordination` skips it
+10. On any failure, `TempFileGuard` cleans up the temp file
 
 ### Report
 
@@ -108,7 +112,7 @@ pub struct AtomicWriteReport {
 
 ### Write Path in LibraryManager
 
-`LibraryManager::save_library()` calls `write_private_atomic()` for all library TOML writes. The simple atomic write is used because library files are `DurableUserData` with default permissions and the `0o600` temp file prevents brief world-readable exposure.
+Every library TOML write goes through `write_private_atomic()`: `save_library()` (a free function in `src/library/persistence.rs`) for snippet libraries and `LibraryManager` for `libraries.toml`. The simple atomic write is used because it fsyncs the file, syncs the parent directory, and leaves the result `0o600` instead of briefly exposing library content through a world-readable temp file.
 
 ### Tests
 
@@ -133,7 +137,7 @@ A single authoritative cross-process mutual-exclusion primitive built on the ope
 
 ### Authority
 
-The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFileEx` over a fixed byte range on Windows guarantee that at most one process holds the lock at a time. Unsupported platforms return [`ProcessFileLockError::UnsupportedPlatform`](../../src/process_file_lock.rs) rather than silently weakening exclusion.
+The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFileEx` over a fixed byte range on Windows guarantee that at most one process holds the lock at a time. Unsupported platforms return [`ProcessFileLockError::UnsupportedPlatform`](../src/process_file_lock.rs) rather than silently weakening exclusion.
 
 ### Acquisition Order
 
@@ -141,16 +145,15 @@ The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFil
 2. Open the persistent lock file in read/write/create mode.
 3. Attempt the kernel lock nonblocking.
 4. If busy, read owner metadata best-effort for diagnostics and return `Busy`.
-5. After the kernel lock succeeds, truncate the file.
-6. Write the new identity record (PID, nonce, start token, acquired timestamp).
-7. `sync_all` and tighten permissions to `0o600` where supported.
-8. Return the guard.
+5. Tighten permissions to `0o600` where supported (warn-only on failure).
+6. Truncate the file and write the new identity record (PID, nonce, start token, acquired timestamp).
+7. `sync_all`, then return the guard.
 
 If metadata publication fails after kernel acquisition, the kernel lock is released before the error is returned, and no caller is left believing it owns the lock.
 
 ### Identity Metadata
 
-[`LockIdentity`](../../src/process_file_lock.rs) is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
+[`LockIdentity`](../src/process_file_lock.rs) is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
 
 On Linux, process start identity is parsed from `/proc/<pid>/stat` using field
 22 (`starttime`) after locating the final closing parenthesis of `comm`, which
@@ -225,22 +228,24 @@ pub struct TransactionJournal {
 
 ```rust
 pub struct StagedFile {
-    pub destination: PathBuf,
-    pub action: StagedAction,
+    pub original_path: PathBuf,
+    pub backup_path: Option<PathBuf>,
+    pub staged_path: PathBuf,
+    pub sha256: String,
     pub existed_before: bool,
-    pub original_hash: Option<String>,
-    pub intended_hash: Option<String>,
-    pub durable_backup_path: Option<PathBuf>,
+    pub action: StagedAction,
+    pub original_hash: String,
+    pub new_hash: String,
     pub durable_staged_path: Option<PathBuf>,
-    pub original_permissions: Option<PortablePermissions>,
+    pub original_metadata: OriginalFileMetadata,
 }
 ```
 
-`durable_staged_path` is a private durable copy of the intended bytes, never the live destination. `durable_backup_path` is a durable copy of the original bytes for rollback.
+`staged_path` is the live destination. `backup_path` holds the original bytes used for rollback, `durable_staged_path` a private durable copy of the intended bytes, and `original_metadata` the pre-transaction permission/metadata snapshot.
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `.quarantine.<uuid>`) rather than silently deleted.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
 
 ### API
 
@@ -249,7 +254,7 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 | `acquire_transaction_lock(state_dir, operation)` | Acquire exclusive lock, error if held |
 | `begin_transaction(state_dir, operation, affected_files)` | Create journal in `Prepared` state |
 | `commit_transaction(state_dir, journal)` | Begin cleanup phase; removes backups and journal |
-| `rollback_transaction(journal)` | Restore files from backups in reverse order |
+| `rollback_transaction(state_dir, journal)` | Restore files from backups in reverse order |
 | `check_interrupted_transactions(state_dir)` | Find journals in interruptible states on startup |
 
 ### Crash Recovery
@@ -333,9 +338,12 @@ pub struct ValidationReport {
 | `W-ID-EMPTY` | Warning | Snippet has empty ID (load assigns IDs) |
 | `W-DESC-EMPTY` | Warning | Snippet has empty description |
 | `W-SAME-ID-DIVERGENT` | Warning | Same ID appears with different content |
+| `W-DUP-CHECK-SKIPPED` | Warning | Same-ID divergent-content check skipped (raw TOML re-parse failed) |
 | `W-EXACT-DUP` | Warning | Exact duplicate snippet (same description + command) |
 | `W-ORPHAN-FILE` | Warning | File in `libraries/` not in index |
 | `W-NO-PRIMARY` | Warning | No primary library set |
+| `W-LIB-UNREADABLE` | Warning | Library file unreadable; excluded from the usage-orphan check |
+| `W-LIB-INDEX-UNREADABLE` | Warning | Library index unreadable; usage-orphan check skipped |
 | `W-USAGE-ORPHAN` | Warning | Usage entry references deleted snippet |
 | `W-INSECURE-PERMS` | Warning | Config file has world-readable/group-writable bits |
 | `W-CORRUPT-BAK` | Warning | Corrupt backup file exists |
@@ -356,7 +364,7 @@ In strict mode, designated warning codes are elevated to errors: `W-ID-EMPTY`, `
 
 ### Location
 
-`src/commands/backup_cmd.rs`
+`src/commands/backup_archive.rs` (manifest, path validation, atomic staging); `src/commands/backup_cmd.rs` owns the CLI orchestration, lock acquisition, and output reporting.
 
 ### Manifest
 
@@ -373,7 +381,7 @@ pub struct BackupManifest {
 
 pub struct BackupManifestEntry {
     pub path: String,
-    pub kind: String,                      // "library", "index", "usage", "sync_config"
+    pub kind: BackupEntryKind,         // library | index | usage | sync_config
     pub size: u64,
     pub sha256: String,
 }
@@ -444,8 +452,8 @@ Each file in the backup has a SHA-256 digest recorded in the manifest. Restore v
 13. fsync files and required parent directories according to durability class
 14. Populate all journal fields, including hashes and action
 15. Atomically persist `BackupsDurable`
-16. Perform live replacements via `atomic_replace` with `Durability::DurableUserData`, persisting `Committing { next_commit_position }` only after each verified write
-17. Advance to `CommittedLocal { pending_generation, pending_recorded }` — records pending sync intent atomically
+16. Perform live replacements via `atomic_replace` — `Durability::DurableUserData` with `preserve_permissions` for existing destinations, `Durability::SensitiveConfig` for newly created ones — persisting `Committing { next_commit_position }` only after each verified write
+17. Advance to `CommittedLocal { pending: PendingFinalization }` — records pending sync intent atomically
 18. Mark journal committed only after all live writes succeed and pending intent is recorded (`commit_transaction`)
 19. Release transaction lock
 20. Release `LocalDataLock`
@@ -493,10 +501,12 @@ Conservative, backed-up, idempotent repair. Validates configuration and library 
 
 ```rust
 pub struct RepairItem {
-    pub category: String,   // "index", "primary", "usage", "ids", "transaction", "timestamps"
+    pub action: RepairAction,   // typed action (usage/index/ids/timestamps/transaction …)
+    pub category: String,       // "usage", "transaction", "config", "primary", "ids", "timestamps", "unsafe"
     pub problem: String,
     pub fix: String,
-    pub safe: bool,         // Whether safe for auto-apply
+    pub safe: bool,             // Whether safe for auto-apply
+    pub target_path: Option<PathBuf>,
 }
 ```
 
@@ -511,6 +521,7 @@ pub struct RepairItem {
 | `primary` | Yes (single lib) | Auto-assign primary when only one library exists |
 | `primary` | No (multiple) | Prompt user to choose primary |
 | `config` | No | TOML corruption requiring manual inspection |
+| `unsafe` | No | Corrupt journal or unsafe transaction artifacts; journal preserved for manual quarantine |
 
 ### Modes
 
@@ -520,7 +531,7 @@ pub struct RepairItem {
 
 ### Backup Before Repair
 
-`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>/` before any mutations.
+`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>-<uuid>/` before any mutations.
 
 ---
 
@@ -593,7 +604,7 @@ pub enum MigrationOperation {
 ### Snippet Identity
 
 - Opaque string identifier, assigned deterministically on load for legacy snippets
-- UUID v4 for new snippets created via `Snippet::new()` or import
+- UUID v4 for snippets created by import
 - Never regenerated for a given snippet
 - Retained across edit, move, export, sync, and restore
 - New ID assigned on import (existing IDs discarded)
@@ -655,7 +666,8 @@ This ensures repeated loads of identical file content produce identical IDs with
 
 | File | Subject |
 |------|---------|
-| `src/utils/atomic.rs` | Atomic write primitive, durability classes, temp file guard |
+| `src/utils/atomic.rs` | Atomic write primitive, durability classes |
+| `src/utils/tempfile_guard.rs` | RAII temp-file cleanup used by the atomic write path |
 | `src/process_file_lock.rs` | Kernel-backed cross-process file lock primitive |
 | `src/auto_sync/execution_lock.rs` | Auto-sync execution lock and worker lock wrappers |
 | `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
@@ -663,7 +675,8 @@ This ensures repeated loads of identical file content produce identical IDs with
 | `snip-sync/src/process.rs` | Legacy PID parser and identity checks for compatibility stop/restart |
 | `src/transaction.rs` | Transaction boundary, journaling, lock, rollback |
 | `src/commands/validate_cmd.rs` | Validation framework, diagnostic model, 12+ check categories |
-| `src/commands/backup_cmd.rs` | Backup manifest, secret redaction, SHA-256 integrity |
+| `src/commands/backup_archive.rs` | Backup manifest, path validation, secret redaction, SHA-256 integrity, atomic staging |
+| `src/commands/backup_cmd.rs` | Backup CLI orchestration, lock acquisition, output reporting |
 | `src/commands/restore_cmd.rs` | Restore modes (DryRun/Merge/Replace), conflict resolution |
 | `src/commands/repair_cmd.rs` | Conservative repair, safe/unsafe classification |
 | `src/migration.rs` | Schema versioning, migration trait, TOML roundtripping |

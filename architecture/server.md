@@ -48,7 +48,7 @@ manager.
 
 Dependencies (`snip-sync/Cargo.toml`): `tonic 0.14` (+ `prost 0.14`,
 `snip-proto` stubs), `eggserve-server =0.2.1` +
-`eggserve-primitives =0.2.0` with default features off, `sqlx 0.9`
+`eggserve-primitives =0.2.1` with default features off, `sqlx 0.9`
 (`sqlite`, `runtime-tokio`, `chrono`), `argon2 0.6`, `sha2`, `subtle`,
 `prometheus 0.14`, `tokio` (`macros`, `rt-multi-thread`, `signal`),
 `tokio-stream`, `clap 4.5`, `dirs 7.0`, `semver`, `libc` /
@@ -184,7 +184,7 @@ deleted)`, `idx_libraries_user`.
 
 **File**: `snip-sync/src/http.rs` (~209 lines). One concrete two-route
 leaf service built with `eggserve_server::service_fn_head`; only
-`eggserve-server =0.2.1` and `eggserve-primitives =0.2.0` are used.
+`eggserve-server =0.2.1` and `eggserve-primitives =0.2.1` are used.
 
 | Endpoint | Methods | Auth | Body |
 |----------|---------|------|------|

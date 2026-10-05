@@ -48,10 +48,12 @@ created afterwards; previously created snippets sync their stored IDs.
 
 ## Error / exit mapping
 
-`SnipResult<()>`: registered-without-`--force`, disabled hints, and
-save failures surface as described; gRPC failure maps to
-`"Registration failed"` with the transport detail (exit 1; sync
-failures downstream are exit 7). No `CliOutcome` — success is `Ok`.
+`SnipResult<()>`: the already-registered short-circuit and save failures
+surface as described; gRPC failure maps to `"Registration failed"` with the
+transport detail (exit 1; sync failures downstream are exit 7). There is no
+disabled path — a successful registration builds fresh `SyncSettings` and
+unconditionally sets `enabled = true` with `credential_revision = 1`. No
+`CliOutcome` — success is `Ok`.
 
 ## Key invariants
 

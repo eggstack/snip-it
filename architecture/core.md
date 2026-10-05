@@ -99,8 +99,9 @@ pub(crate) mod clipboard, diagnostics, encryption, library, local_data,
 - **Stable**: documented for external use; changes need semver review.
 - **`#[doc(hidden)]`**: public only because the `snp` binary and
   integration tests are separate crates in the same package. Internal
-  worker codes stay hidden; `SnippetData`, `ProcessResult`,
-  `SelectionOutcome` are `#[non_exhaustive]` + hidden TUI-loop types.
+  worker codes stay hidden; `SnippetData`, `ProcessResult`, and
+  `SelectionOutcome` are hidden TUI-loop types, of which
+  `ProcessResult` and `SelectionOutcome` are `#[non_exhaustive]`.
 - **`pub(crate)`**: compile-enforced internal (library, encryption,
   output, transaction, …). Layer tests in `tests/architecture.rs`
   additionally forbid core ← sync-client ← application reversals.

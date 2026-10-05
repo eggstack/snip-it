@@ -31,8 +31,10 @@ without writing.
 `PetImportOptions{source, destination_library, mode, strict, dry_run,
 report_format, report_file}` (`import_cmd.rs:37`);
 `ImportMode{Create(default),Merge,Replace}` (`:15`);
-`ReportFormat{Human(default),Json}` (`:27`). `--replace` wins over
-`--merge`; neither means `Create`.
+`ReportFormat{Human(default),Json}` (`:27`). `--merge`/`--replace` are
+mutually exclusive at the CLI (`conflicts_with`); dispatch resolves
+`replace → Replace`, else `merge → Merge`, else `Create`
+(`main.rs:785-791`).
 
 ## Flow / steps
 
@@ -50,7 +52,7 @@ report_format, report_file}` (`import_cmd.rs:37`);
 4. Per entry `convert_entry` (`:96`): record normalizations (zero
    timestamps, sync fields, non-empty ID), regenerate UUID, stamp
    `now` for zero timestamps, clear `device_id`/`deleted=false`, then
-   `analyze_entry` diagnostics. Empty command → skip + `had_fatal`
+   `analyze_entry` diagnostics. Empty command → skip + `had_fatal_error`
    (strict aborts with an error naming the index).
 5. Destination: `Create` refuses existing (suggest `--merge/--replace`);
    `Merge` loads-or-defaults, skips exact duplicates via O(n+m)

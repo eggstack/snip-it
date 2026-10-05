@@ -50,8 +50,8 @@ pub fn UsageIndex::entries(&self) -> &[UsageEntry]
 | Failed / cancelled `run` | no | no |
 | Successful `clip` | yes | yes |
 | Cancelled `clip` | no | no |
-| `select` | yes | yes |
 | `search` / `list` / preview | no | no |
+| `select` | no | no |
 | `edit` / `import` / `doctor` | no | no |
 
 Identity key is the snippet UUID — stable across rename/reorder.

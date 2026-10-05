@@ -76,6 +76,6 @@ device does not receive the value automatically. Consequences:
   empty, truncation, multiline, ANSI/OSC/BEL, controls, budget,
   CJK-boundary).
 - Consumers: `src/ui/mod.rs` (preview `display()`),
-  `src/commands/list_cmd.rs` (`for_scoring()` + `summary()` + raw
-  export), `src/commands/edit_cmd.rs` (set/replace/clear),
-  `src/selector.rs:150-157` (opt-in scoring input).
+  `src/commands/list_cmd.rs` (`summary(80)` + raw JSON/CSV export,
+  opt-in via `SearchFields.include_output`), `src/commands/edit_cmd.rs`
+  (set/replace/clear), `src/selector.rs:150-157` (opt-in scoring input).

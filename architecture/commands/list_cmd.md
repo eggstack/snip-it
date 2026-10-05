@@ -25,7 +25,7 @@ edits, or syncs.
 | `--sort <mode>` | `SnippetSort`, default `Relevance` |
 | `--favorites-first` | Favorites rank first |
 
-`main.rs:479-498` maps json/csv flags to `ListFormat::{Json,Csv,Default}`
+`main.rs:479-499` maps json/csv flags to `ListFormat::{Json,Csv,Default}`
 and builds `SortOptions{mode, favorites_first}` (always `Some`).
 
 ## Flow / steps
@@ -79,4 +79,4 @@ library or empty filter result prints nothing and still succeeds.
 
 - `ListArgs`: `src/commands/list_cmd.rs:9`; `ListFormat`: `:35`
 - `run`: `:50`; sort block: `:113`; renderers: `:145-212`
-- `csv_escape`: `:214`; dispatch: `src/main.rs:479-498`
+- `csv_escape`: `:214`; dispatch: `src/main.rs:479-499`

@@ -14,7 +14,7 @@ module is the locking/status/linking shell around it.
 
 ## CLI surface
 
-`snp sync` (alias `y`), subcommands in `main.rs:272-321`:
+`snp sync` (alias `y`), subcommands in `main.rs:272-335`:
 
 | Form | Handler | Flags |
 |------|---------|-------|

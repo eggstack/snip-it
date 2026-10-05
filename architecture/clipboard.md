@@ -5,9 +5,9 @@
 ## Overview
 
 Cross-platform clipboard access (`src/clipboard.rs`, 260 lines). Plain-text
-only. Every clipboard side effect in the program funnels through one
-function — `copy_to_clipboard()` in `src/commands/clip_cmd.rs` — which adds
-audit logging and usage recording on top of the OS write.
+only. Snippet copies funnel through one function — `copy_to_clipboard()` in
+`src/commands/clip_cmd.rs` — which adds audit logging and usage recording on top
+of the OS write.
 
 ## Platform backends
 
@@ -29,8 +29,10 @@ through its used API, so content types cannot be preserved (`:171`, `:190`).
 
 Variable expansion happens *before* this call — `process_snippet` (`:51`),
 `run_exact` (`:68`), and `snp run --copy` all expand first and pass the final
-string in. Never call `clipboard::copy_to_clipboard` directly from command or
-TUI code; the audit/usage steps would be skipped.
+string in. Snippet copies should go through it so the audit/usage steps are not
+skipped; the two direct `copy_to_clipboard_auto` call sites are the interactive
+`cron` prompt (`cron_cmd.rs:89`, no audit) and the TUI visual-mode batch copy
+(`ui/mod.rs:1628`, which audits the first copied snippet itself).
 
 ## Timeout guard
 
@@ -114,7 +116,8 @@ All are `#[ignore]` (display server required); `clip_cmd` sync-guard tests
 
 ## Invariants
 
-- One funnel: `clip_cmd::copy_to_clipboard` is the only sanctioned side-effect path.
+- One funnel for snippet copies: `clip_cmd::copy_to_clipboard` is the sanctioned
+  path; the `cron` prompt and TUI batch copy call the OS layer directly.
 - Content is never logged; only op names and success flags.
 - Generation counter prevents a stale auto-clear from wiping a newer copy.
 - Timeouts bound hung OS calls; detached workers never accumulate beyond the user action rate.

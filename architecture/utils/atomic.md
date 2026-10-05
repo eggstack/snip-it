@@ -108,8 +108,8 @@ pub struct AtomicWriteReport {
 
 ## Integration
 
-- `library.rs` / `usage.rs` / `config.rs` — snippet, usage, sync-setting saves via `write_private_atomic()`
-- `transaction.rs` — journals via `write_private_atomic()` (with `DurableUserData` parent-dir sync)
+- `library/persistence.rs` / `usage.rs` / `config/sync_settings.rs` — snippet, usage, sync-setting saves via `write_private_atomic()`
+- `transaction.rs` — journals via `write_private_atomic()` (parent-dir sync under the fail-closed `SensitiveConfig` class)
 - `restore_cmd.rs` — restores via `atomic_replace()` with permission control
 
 ## Tests

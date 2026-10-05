@@ -219,8 +219,9 @@ Unit tests (`cargo test --workspace --lib`) are parallel-safe — each uses an i
 | `local_data_lock_barriers` | Barrier protocol | `--features test-support -- --test-threads=1` |
 | `repair_transactions` | Barrier protocol, recovery API | `--features test-support -- --test-threads=1` |
 | `snip_sync_lifetime` | HTTP socket contracts | `-- --test-threads=1` |
+| `transaction_crash_recovery` | Release-profile crash windows | `--features test-support -- --test-threads=1` (release-check) |
 
-`scripts/check.sh` (Linux CI) runs the focused set: `platform_smoke`, `destination_permissions`, `auto_sync_closure`, `auto_sync_concurrency`, `sync_multibatch`, `snip_sync_lifetime`. Deep crash/restore/manifest suites (`transaction_crash_recovery`, `cleanup_crash_failpoints`, `restore_crash_failpoints`, `manifest_contracts`) run only in `release-check.sh verify`, not CI.
+`scripts/check.sh` (Linux CI) runs the focused set: `platform_smoke`, `destination_permissions`, `auto_sync_closure`, `auto_sync_concurrency`, `sync_multibatch`, `snip_sync_lifetime`. The deep crash/manifest suites (`transaction_crash_recovery`, `manifest_contracts`) run only in `release-check.sh verify`, not CI. The `cleanup_crash_failpoints` and `restore_crash_failpoints` failpoint suites are wired into no script — run them explicitly.
 
 ## Feature Gating
 
@@ -248,18 +249,18 @@ unsafe {
 
 - **Barrier synchronization** — done: `local_data_lock_barriers.rs`, `repair_transactions.rs` coordinate via `SNP_TEST_MUTATION_BARRIER_DIR` (serial, `test-support`)
 - **Failpoint injection** — done: `src/test_failpoints.rs` hooks (`SNP_TEST_FAILPOINT`, `test-support` only) pin restore/cleanup crash windows
-- **Crash-window recovery** — done: `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` run in `release-check.sh verify`, not CI
+- **Crash-window recovery** — done: `transaction_crash_recovery.rs` runs in `release-check.sh verify`, not CI; `cleanup_crash_failpoints.rs` and `restore_crash_failpoints.rs` are run explicitly (no script invokes them)
 
 ## Completed Test Suites
 
 | Suite | File | Tests | What it proves |
 |-------|------|-------|----------------|
 | Auto-sync closure | `auto_sync_closure.rs` | focused | Pending generation and scheduler contracts |
-| Failure-Class Contracts | `failure_class_contracts.rs` | 42 | FailureClass → ExitCode → Status → Schedule |
-| Debounce Matrix | `debounce_matrix.rs` | 22 | Exact debounce/scheduling behavior |
-| Sync Contracts | `sync_contracts.rs` | 19 | Direction, CLI overrides, config defaults |
-| Mutual Exclusion | `mutual_exclusion.rs` | 18 | Lock semantics, sequential writes |
-| Local Contracts | `local_contracts.rs` | 23 | CLI commands, golden corpus, help output |
+| Failure-Class Contracts | `src/auto_sync/policy.rs` (unit) | 46 | FailureClass → ExitCode → Status → Schedule |
+| Debounce Matrix | `debounce_matrix.rs` | 12 | Exact debounce/scheduling behavior |
+| Sync Contracts | `sync_contracts.rs` | 9 | Direction, CLI overrides, config defaults |
+| Mutual Exclusion | `mutual_exclusion.rs` | 9 | Lock semantics, sequential writes |
+| Local Contracts | `local_contracts.rs` | 13 | CLI commands, golden corpus, help output |
 
 ## Test Classification
 
@@ -269,10 +270,10 @@ unsafe {
 | CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` — real binary, isolated TempDir |
 | Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
-| Sync integration | serial target | `sync_integration.rs` — in-process server, random port |
+| Sync integration | parallel | `sync_integration.rs` — in-process server, random port |
 | PTY | serial target | `pty_integration.rs` — real terminal pairs |
 | Cross-process lock | serial target | `process_lock_concurrency.rs` — kernel flock, real subprocesses |
 | Barrier-coordinated | serial target | `local_data_lock_barriers.rs`, `repair_transactions.rs` — `unsafe set_var`, barrier protocol |
-| Deep recovery | manual/release | `transaction_crash_recovery.rs`, `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` |
+| Deep recovery | release / explicit | `transaction_crash_recovery.rs` (`release-check.sh`); `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` (no script) |
 | Release smoke | manual/release | `release-check.sh` Phase 3 — version/help, crash recovery, production seams, `manifest_contracts.rs` |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement (`LOGICAL_LAYERS.md`) |

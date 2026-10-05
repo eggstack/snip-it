@@ -12,7 +12,7 @@ bindings, kept beside the TUI rather than in the TUI event loop.
 ## CLI surface
 
 `snp keybindings` (alias `k`), `main.rs:105-107,673-675`. No flags,
-no args, no JSON mode: `run() -> SnipResult<()>` prints ~70 lines to
+no args, no JSON mode: `run() -> SnipResult<()>` prints 74 lines to
 stdout and returns `Ok`.
 
 ## Flow / steps
@@ -25,10 +25,12 @@ Single `run()` (`keybindings_cmd.rs:4`): sequential `println!` blocks —
    tag filter (`t`), sorts (`n/o/a/z`), clear filter (`x/c`).
 2. Insert mode: `j/k`/arrow navigation, `Enter` select, `Esc` back,
    `/` search, `Backspace`.
-3. Theme picker (`e`): filter, `j/k` live preview, paging, `gg/G`,
-   `Enter` apply, `e/q` cancel-revert, `Esc` leave filter.
-4. Variable prompt (modal, starts in Insert): cursor motion, field
-   navigation (`Tab`/`Ctrl+d/u`), `Enter` save, `Esc` mode switch,
+3. Theme picker (`e`): `i` filter, `j/k` live preview, `Ctrl+d/u` /
+   `PageDown/PageUp` paging (10 per page), `gg/G`, `Enter` apply,
+   `e/q` cancel-revert, `Esc` leave filter.
+4. Variable prompt (modal INS/NOR, starts in INS): insert-mode typing,
+   cursor motion, field navigation (`Tab`/`Ctrl+d/u`), `Backspace`,
+   `Enter` save, `Esc` mode switch,
    Normal-mode extras (`0/$`, `x/Delete`, `a/A/I`, `d` hint toggle,
    `q` back to selector, `Ctrl+c` exit).
 

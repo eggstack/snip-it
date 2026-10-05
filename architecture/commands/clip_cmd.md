@@ -16,7 +16,7 @@ funnel used by `run --copy`.
 `--sync`, `-l/--library`, `--sort` (default `Relevance`),
 `--favorites-first`, `--id` / `--description-exact` / `--command-exact`
 (exact bypass, conflict with each other and `--filter`).
-`main.rs:546-583` routes exact selectors through `resolve_exact_target`
+`main.rs:545-584` routes exact selectors through `resolve_exact_target`
 → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -42,7 +42,8 @@ always copies.
 
 ### `copy_to_clipboard()` (`clip_cmd.rs:40`)
 
-The single funnel for **all** clipboard writes:
+The funnel for per-snippet clipboard writes (`clip`, exact bypass, and the
+single-snippet TUI copy path):
 
 1. `clipboard::copy_to_clipboard_auto(final_command)` (`?` — failure
    aborts before bookkeeping).
@@ -71,8 +72,9 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 
 ## Key invariants
 
-- All clipboard side effects go through `copy_to_clipboard()`
-  (AGENTS.md); do not add ad-hoc clipboard writes.
+- Per-snippet clipboard side effects go through `copy_to_clipboard()`
+  (AGENTS.md); TUI visual-range multi-select (`src/ui/mod.rs:1628`) and
+  `cron_cmd.rs:89` call `clipboard::copy_to_clipboard_auto` directly.
 - Variable expansion happens in the caller, never inside
   `copy_to_clipboard` — the function takes the final string.
 - Audit precedes usage; usage failure never fails the command.
@@ -84,4 +86,4 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 - `ClipArgs`: `src/commands/clip_cmd.rs:9`
 - `copy_to_clipboard`: `:40`; `process_snippet`: `:51`
 - `run_exact`: `:68`; `run`: `:99`
-- Dispatch: `src/main.rs:546-583`
+- Dispatch: `src/main.rs:545-584`

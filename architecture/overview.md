@@ -259,7 +259,7 @@ runs the canonical sync operation after local mutations. Disabled by default.
 - Parent never holds the worker lock; scheduler never probes the execution lock
 - `schedule_sync()` is the sole scheduling authority
 - Pending generations are monotonic; lower generation = corrupt (preserve marker, no spawn),
-  except lower-generation + strictly newer timestamp = cleared and re-recorded as new work
+  except generation exactly `1` + strictly newer timestamp = cleared and re-recorded as new work
 - Local mutations always commit before remote work; remote failure never rolls back local commit
 - SyncMerge origin never triggers auto-sync (no loops)
 
@@ -404,7 +404,7 @@ inspection (`LibraryManager::inspect_library_index`).
 | `utils/atomic` | `src/utils/atomic.rs` | [utils/atomic.md](utils/atomic.md) | `write_private_atomic()`, `atomic_replace()` — durability-aware atomic writes |
 | `utils/process` | `src/utils/process.rs` | [utils/process.md](utils/process.md) | Shared process-liveness (`is_process_alive`) and owned-lock-file removal |
 | `utils/redact` | `src/utils/redact.rs` | [utils/redact.md](utils/redact.md) | Secret redaction for logs/backups/diagnostics (never log credentials) |
-| `clipboard` | `src/clipboard.rs` | [clipboard.md](clipboard.md) | Cross-platform clipboard (arboard/clipboard-win); side effects via `copy_to_clipboard()` |
+| `clipboard` | `src/clipboard.rs` | [clipboard.md](clipboard.md) | Cross-platform clipboard (arboard/clipboard-win); `copy_to_clipboard()` is the normal path, with two direct `copy_to_clipboard_auto` call sites |
 | `logging` | `src/logging.rs` | [logging.md](logging.md) | Structured logging (`tracing`), audit trail, panic handler |
 | `process_file_lock` | `src/process_file_lock.rs` | [process_file_lock.md](process_file_lock.md) | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
 | `status_snapshot` | `src/status_snapshot.rs` | [status.md](status.md) | Status snapshot and diagnostic codes |
@@ -457,13 +457,13 @@ override), `RecordingServer`, `EventSink`. Never touch real config/keychain/port
 | CLI/platform smoke | parallel | `platform_smoke.rs`, `local_contracts.rs` |
 | Restore contracts | parallel | `destination_permissions.rs`, `backup_contracts.rs` |
 | Auto-sync contracts | parallel | `auto_sync_closure.rs`, `sync_contracts.rs`, `debounce_matrix.rs` |
-| Sync integration | serial | `sync_integration.rs` — in-process server, random port |
+| Sync integration | parallel | `sync_integration.rs` — in-process server, random port |
 | PTY | serial | `pty_integration.rs` — real terminal pairs (`--test-threads=1`) |
 | Cross-process lock | serial | `process_lock_concurrency.rs` — kernel flock (`test-support`) |
 | Barrier-coordinated | serial | `local_data_lock_barriers.rs`, `repair_transactions.rs` (`test-support`) |
 | Multi-batch sync | serial | `sync_multibatch.rs` (`--test-threads=1`) |
 | Auto-sync concurrency | serial | `auto_sync_concurrency.rs` (`--test-threads=1`) |
-| Deep recovery | manual | `transaction_crash_recovery.rs`, failpoint tests (`release-check.sh verify`) |
+| Deep recovery | release / explicit | `transaction_crash_recovery.rs` (`release-check.sh verify`); `cleanup_crash_failpoints.rs`, `restore_crash_failpoints.rs` (no script invokes them) |
 | Release smoke | manual | `release-check.sh` Phase 3 — `manifest_contracts.rs`, crash, production seams |
 | Architecture | parallel | `architecture.rs` — source-scanning layer boundary enforcement |
 
@@ -525,8 +525,11 @@ snp run [--filter FOO] [--sync]
        └─ spawn_worker()  → detached background sync (same SyncExecutionLock)
 ```
 
-Do not sanitize snippet commands (by design). Clipboard side effects go through
-`copy_to_clipboard()` in `clip_cmd.rs`.
+Do not sanitize snippet commands (by design). Clipboard writes normally go through
+`copy_to_clipboard()` in `clip_cmd.rs`, but two sites call
+`clipboard::copy_to_clipboard_auto` directly: the TUI visual-range multi-select
+(`src/ui/mod.rs:1628`, which audits only the first snippet) and `cron_cmd.rs:89`
+(no audit).
 
 ---
 

@@ -78,7 +78,7 @@ never accepted for restore.
   the four `redact_sync_config` unit tests (plain/table/indented).
 - Manifest file order is the caller's responsibility (backup sorts by
   path); unknown `kind`s reject, never ignore.
-- 20+ unit tests (`:376-677`) pin symlink/dir rejection, UTF-8/TOML
+- 20 unit tests (`:376-677`) pin symlink/dir rejection, UTF-8/TOML
   guards, containment, staging cleanup, and generation reads.
 
 ## File / line references

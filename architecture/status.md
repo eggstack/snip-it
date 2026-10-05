@@ -199,6 +199,8 @@ Diagnostics are collected by `collect_diagnostics()` and sorted by severity (Inf
 | `next_attempt > now` | `RetryScheduled` |
 | `next_attempt > 0` (but ≤ now) | `Deferred` |
 | `StatusRead::Corrupt` | `Corrupt` |
+| Any earlier recorded success (`last_success > 0`) | `Succeeded` |
+| `consecutive_failures > 0` | `RetryScheduled` |
 | Otherwise (attempt recorded but no success/count/schedule) | `RetryScheduled` (never claim success for uninterpretable state) |
 
 ## Pending State View

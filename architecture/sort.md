@@ -7,8 +7,10 @@
 Deterministic, stable snippet ranking for CLI (`--sort`,
 `--favorites-first`) and the TUI (`n`/`o`/`a`/`z` keys). One function —
 `rank_snippets()` in `src/sort.rs` (~230 lines of logic + ~1100 lines of
-tests) — serves both the `list` command and the TUI's
-`sort_filtered_indices()` with identical semantics.
+tests) — serves all of its callers: `list`, `selector` resolve, and MCP
+search. The TUI's `sort_filtered_indices()` (`src/ui/mod.rs:172`) is a
+*separate* inline comparator over `ui::state::SortMode` (which has no
+`Relevance` member) that mirrors the same ordering rules.
 
 ## Key types — `src/sort.rs:37-92`
 
@@ -61,9 +63,10 @@ pub fn rank_snippets(
 - **TUI** (`sort_filtered_indices`): fuzzy score is the *primary* key;
   the explicit mode breaks ties — best text match first in an
   interactive selector.
-- **`list`** (`rank_snippets` via `list_cmd`): fuzzy scores passed as
-  `None`, so the explicit mode is the sole key — non-interactive output
-  strictly respects the chosen order.
+- **`list`** (`rank_snippets` via `list_cmd`): fuzzy scores are passed only
+  when `--filter` is set (`filter.is_some().then_some(&fuzzy_scores)`,
+  `list_cmd.rs:133`), where they act as tie-break level 3 — the explicit
+  mode remains the primary key either way.
 - No query → explicit mode fully determines ordering. Equal
   `Relevance` scores fall through to index order — usage metadata has no
   effect unless `--sort last-used` / `most-used` is explicit
@@ -85,6 +88,7 @@ pub fn rank_snippets(
   (docs + signature), `:120-228` (ranking + tie-break), `:230-1334`
   (47 unit tests: all modes, favorites-first × usage, divergent
   metadata, relevance-tie, determinism).
-- Callers: `src/commands/list_cmd.rs` (`rank_snippets`), `src/ui/mod.rs`
-  (`sort_filtered_indices`), `src/selector.rs:425-437` (`Relevance`
-  ranking for `resolve`).
+- Callers of `rank_snippets`: `src/commands/list_cmd.rs:130`,
+  `src/selector.rs:425-437` (`Relevance` ranking for `resolve`),
+  `src/mcp/tools.rs:111`. Related but independent implementation:
+  `src/ui/mod.rs:172` (`sort_filtered_indices`).

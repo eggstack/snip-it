@@ -22,8 +22,10 @@ is a measured footprint tradeoff, pinned by architecture tests.
 (Cargo / Homebrew / direct, `src/update.rs:181`), compare
 `CARGO_PKG_VERSION` against crates.io `max_version` (prereleases rejected,
 `src/update.rs:238`), then for prebuilt hosts download the exact-tag asset
-(`{tag_prefix}v{version}`, `src/update.rs:145-168`), verify SHA-256 sidecar
-+ `version`-identity probe, and atomically replace the executable.
+(`{tag_prefix}{version}` — `v{version}` for the client, `component_tag`,
+`src/update.rs:535`), verify the SHA-256 sidecar (`download_candidate`,
+`src/update.rs:550-581`) + the `version`-identity probe (`validate_candidate`,
+`src/update.rs:679`), and atomically replace the executable.
 
 - **Pinned dependency** (`Cargo.toml:132`): `eggfetch-core = "=0.2.0"`,
   `default-features = false`, features exactly `standard-http1`,
@@ -102,9 +104,10 @@ inactive in production builds.
 binary as Homebrew (under `brew --prefix <formula>`), Cargo (under a
 `bin/` with `.crates.toml` / `.crates2.json` nearby), or direct. Homebrew
 installs delegate to `brew upgrade`; direct/Cargo paths download the
-prebuilt asset for `host_target()` (`src/update.rs:522`: six prebuilt /
-source-only mappings plus unsupported → Cargo fallback) with `--dry-run`
-printing the exact tag/asset that would be fetched (`src/update.rs:145`).
+prebuilt asset for `host_target()` (`src/update.rs:522`: seven mappings — five
+prebuilt plus two source-only — with unsupported → Cargo fallback) with
+`--dry-run` printing the exact tag/asset that would be fetched
+(`src/update.rs:145`).
 Replacement stages the candidate beside the destination, fsyncs, preserves
 permissions, and renames atomically; Windows goes through the hidden
 `__self-replace` helper (`src/main.rs:458`) via a staged copy of the

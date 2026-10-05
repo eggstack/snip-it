@@ -53,7 +53,7 @@ overlay. Non-interactive callers never enter it: they resolve through
 - **Insert mode** (default): typing edits `input_text`/`filter`; `↑`/`↓` navigate; `Esc` → normal; `Enter` selects; `Ctrl+f`/`Ctrl+d`/`PageDown` and `Ctrl+b`/`Ctrl+u`/`PageUp` page; `Tab` toggles display mode.
 - **Normal mode**: `h`/`j`/`k`/`l` + arrows move; `gg` (500 ms window, `GG_TIMEOUT_MS`, `:595`) top, `G` bottom; `v`/`V` visual mode with batch copy; `y` copies selection; `d` opens delete confirmation (`y` confirms, any other key cancels, `:1543`); `/` incremental search; `t` tag-filter mode; `n`/`o` newest/oldest; `a`/`z` alpha asc/desc; `x`/`c` clear filter; `e` theme picker; `q`/`Ctrl+C` quit; `Enter` select.
 - In insert mode `d` is ordinary filter input — deletion is only armed in normal mode and only when `allow_delete` is set (`:1776`); the status bar shows the `d: delete` hint conditionally (`:1181`).
-- **Visual copy** returns `SnippetSelection::Copied` directly from the TUI (`:1656`) and only outside `is_search` mode (`:1612`); the caller treats it as processed without re-running `process_fn`.
+- **Visual copy** returns `SnippetSelection::Copied` directly from the TUI (`:1657`) and only outside `is_search` mode (`:1656`); the caller treats it as processed without re-running `process_fn`.
 - **Mouse**: scroll navigates, single click selects, double-click within 500 ms (`DOUBLE_CLICK_DURATION_MS`, `:625`) executes. List rows use `▶ ` markers outside search mode (`:1125`).
 - **Delete dialog** (`:1221`): modal overlay showing the pending index; confirmation returns `SnippetSelection::Delete(idx)` (`:1547`).
 - Loop exit maps `TERMINATE` to `Cancelled` (`:1898`) and Enter to `Selected(idx, copy_flag)` (`:1905`), else `Cancelled` (`:1910`).
@@ -114,8 +114,11 @@ scroll (`command_line_for_display`, `:328`).
 ## Search vs select mode (`is_search`)
 
 `SnippetListParams.is_search` (`:502`) marks search-flavored invocations:
-no `▶ ` row markers (`:1125`), no visual-mode `Copied` shortcut (`:1612`),
-and no delete hint — destructive affordances stay in the managing selector.
+no `▶ ` row markers (`:1125`), a search-specific status-bar hint line
+(`:1192`), and no `Copied` shortcut that exits the loop (`:1612`, `:1656`,
+`:1770`). Delete is *not* gated on `is_search` — `d` arms on `allow_delete`
+alone (`:1775`), as does the `d: delete` hint (`:1181`); the destructive
+affordance is granted by the caller, not by the mode.
 
 ## Theme-picker overlay
 
@@ -131,7 +134,7 @@ selector with a warning (`:659`). Full palette/bundling detail: [ui.md](ui.md).
 - `original_indices` keeps TUI rows stable across filter/sort transitions; usage rows are indexed by the same mapping.
 - `SortMode::Command` is initial-only; interactive toggles never produce it.
 - Empty-filter recompute is immediate (avoids stale rows after clearing input); non-empty edits debounce at 35 ms.
-- `Copied` and delete-confirm paths are disabled in `is_search` contexts where noted.
+- `Copied` is gated on `is_search` — a `y` copy sets `should_copy` and only non-search modes break the loop; otherwise the flag rides out on `Selected(idx, copy_flag)` (`:1905`) and the caller performs the copy. Delete-confirm is gated on `allow_delete`, not `is_search`.
 
 ## Key files
 

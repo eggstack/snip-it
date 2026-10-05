@@ -9,7 +9,7 @@ five diagnostic modes and builds the `DoctorReport`; rendering lives
 in `doctor_report.rs` (`doctor_report.md`), analysis primitives in
 `pet_analysis.rs` (`pet_analysis.md`), shared types in
 `src/diagnostics.rs`. All modes are read-only and side-effect-free
-apart from report output.
+apart from report output and the `--check-shell` scratch tempfile.
 
 ## CLI surface
 
@@ -40,32 +40,46 @@ report_format)` (`:1228`):
    (`detect_unknown_fields`), TOML parse (failure recorded as
    `has_toml_error`, report returned early), per-entry
    `analyze_entry`, unsupported-concept scan
-   (`detect_unsupported_concepts`: unmatched `</>` → `W-MALFORMED-VAR`,
-   `folders` → `I-FIELD-FOLDERS`), destination-name conflict
+   (`detect_unsupported_concepts` `:373`: unmatched `<`/`>` →
+   `W-MALFORMED-VAR`, `folders` → `I-FIELD-FOLDERS`),
+   destination-name conflict
    (`W-DEST-CONFLICT`), in-file duplicates, normalization preview
    (timestamps/sync-fields/ID), capability census, recommended
    `snp import pet …` command (commented-out when errors exist).
 3. Compatibility mode → `build_compatibility_report(strict)` (`:470`):
-   environment audit (binary, config paths, editor, clipboard,
-   themes) **plus** `append_sync_diagnostics(report, compat_mode=true)`
-   with `CONFIG_LOAD_FAILED` downgraded Error→Warning.
+   environment audit (binary version, config/library dirs, primary
+   library via `inspect_library_index`, sync config presence, `snp
+   select`, `snp new` acquisition flags, choice-variable parser, shell
+   init syntax, `$VISUAL`/`$EDITOR`, canonical Pet TOML load, known
+   legacy paths) **plus** `append_sync_diagnostics(report,
+   compat_mode=true)` with `CONFIG_LOAD_FAILED` downgraded
+   Error→Warning. No clipboard or theme audit exists.
 4. Sync mode → `append_sync_diagnostics(report, compat_mode=false)`
    preserving native severities; always seeds a
    `compat.sync.checked` info entry, then maps each
    `StatusDiagnostic` via `map_snapshot_diagnostic` (`:70`) to dotted
    codes (`sync.config.*`, `sync.pending.*`, `sync.execution.*`,
    `sync.worker_lock.*`, `sync.status.*`, `sync.attention.*`).
-5. Optional `check_shell_init` (`:1084`): generates the init script
-   for the named shell and syntax-validates it, recording findings.
-6. `apply_strict_elevation` (9 `STRICT_WARNING_CODES`, `:53-63`);
-   emit human (`emit_human_report`) or pretty JSON; errors present →
-   `ValidationFailed`, else `Success`.
+5. Optional `check_shell_init` (`:1084`): maps the name to `ShellType`
+   (unknown → `compat.shell_init.<name>.unknown` warning), checks
+   availability with `which` (missing →
+   `compat.shell_init.<name>.unavailable`, Error under `--strict`),
+   then generates the init script into a tempfile and syntax-validates
+   it.
+6. `apply_strict_elevation` (9 `STRICT_WARNING_CODES`, `:53-63`) runs
+   inside the report builders (`:368` pet/library, `:1042`
+   compatibility) — the `--sync`-only and `--check-shell`-only paths
+   never call it. `run` then emits human (`emit_human_report`, stderr)
+   or pretty JSON (stdout); any `Error` finding → `ValidationFailed`,
+   else `Success`.
 
 ## Mutation vs read-only
 
 Read-only. No gate, no lock, no save, no runtime. Library files are
 read through `read_source_file`, never loaded through the migrating
-path.
+path. `--check-shell` is the one exception to "no writes": it dumps the
+generated init script into a `tempfile::NamedTempFile` for syntax
+validation.
 
 ## Auto-sync trigger
 
@@ -76,8 +90,8 @@ pending markers, status, or snippet data.
 
 - Findings with `Error` severity → `CliOutcome::ValidationFailed`
   (exit 6); clean → `Success`.
-- Usage errors (no mode, empty file, unreadable path) →
-  `runtime_error` (exit 1/2 family).
+- Usage errors (no mode, empty file, unknown `--library`) →
+  `SnipError::runtime_error` → `main.rs`'s `Err` path, exit 1.
 - `--strict` changes finding severities before the exit decision, so
   strict runs fail on warnings in the 9 listed codes.
 - JSON mode prints the full `DoctorReport`; human mode writes the

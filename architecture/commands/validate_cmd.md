@@ -22,7 +22,8 @@ Core types: `Severity{Info,Warning,Error}` (`:32`),
 `Repairability{Auto,Manual,Unrepairable}` (`:40`),
 `ValidationDiagnostic{code,severity,path,library,snippet_id,message,
 repairability}` (`:48`), `ValidationReport{schema_version:"1.0.0",
-tool_version,strict_mode,dry_run:true,totals,diagnostics}` (`:60`).
+tool_version,strict_mode,dry_run:true,total_libraries,total_snippets,
+diagnostics}` (`:60`).
 
 ## Flow / steps
 
@@ -39,10 +40,17 @@ tool_version,strict_mode,dry_run:true,totals,diagnostics}` (`:60`).
    (`W-ID-EMPTY`), empty commands (`E-CMD-EMPTY`), empty descriptions
    (`W-DESC-EMPTY`, strict-sensitive), same-ID divergent content
    (`W-SAME-ID-DIVERGENT`), exact description+command duplicates
-   (`W-EXACT-DUP`), stale `.corrupt.bak` presence.
-4. `validate_index` (h–j): duplicate index rows, dangling paths,
-   missing primary; `validate_usage` (k): orphaned usage entries;
-   `validate_permissions` (l): Unix mode expectations.
+   (`W-EXACT-DUP`), stale `<library>.toml.corrupt.bak` presence
+   (`W-CORRUPT-BAK`; `W-DUP-CHECK-SKIPPED` when the raw re-parse
+   fails).
+4. `validate_index` (`:374`, h–j): index rows pointing at missing files
+   (`E-INDEX-MISSING-FILE`), orphan library files (`W-ORPHAN-FILE`),
+   missing primary (`E-PRIMARY-MISSING`, or `W-NO-PRIMARY` when other
+   libraries exist), plus unreadable index/library warnings;
+   `validate_usage` (`:461`, k): orphaned usage entries
+   (`W-USAGE-ORPHAN`); `validate_permissions` (`:534`, l): Unix
+   `mode & 0o077 != 0` on `snippets.toml`, `libraries.toml`,
+   `sync.toml`, `usage.toml` (`W-INSECURE-PERMS`).
 5. Strict elevation: `W-ID-EMPTY, W-DESC-EMPTY, W-SAME-ID-DIVERGENT,
    W-EXACT-DUP` warnings become errors.
 6. Emit human (`emit_human`) or pretty JSON; `has_errors() →
@@ -66,7 +74,8 @@ creates pending intent.
 
 - Errors found → `CliOutcome::ValidationFailed` (exit 6,
   `docs/EXIT_CODES.md`); clean → `Success` (exit 0).
-- Unknown `--library` name → `library_not_found` error (exit 3 family).
+- Unknown `--library` name → `library_not_found` (`SnipError::runtime_error`,
+  so `main.rs`'s `Err` path exits 1, not `NOT_FOUND`=3).
 - Report serialization failure → `runtime_error` (exit 1).
 - JSON and human reports carry identical diagnostics; `strict_mode`
   and `dry_run:true` are echoed in the JSON envelope.
@@ -78,12 +87,13 @@ creates pending intent.
 - Codes are stable contracts: tests and `repair_cmd` key off them
   (`E-DUP-ID` ↔ `RepairSnippetIds`, orphaned usage ↔
   `PruneOrphanedUsage`).
-- `truncate_desc`/`truncate_cmd` keep human output one-line and
-  bounded (`:650-664`).
+- `truncate_desc`/`truncate_cmd` (`:648`, `:657`) keep human output
+  one-line and bounded (40 / 50 chars, char-boundary safe).
 - Counts in tests assert exact numbers, never `>= 1`.
 
 ## File / line references
 
 - `ValidateArgs`: `src/commands/validate_cmd.rs:18`; report types: `:32-109`
-- `validate_library`: `:133`; `run`: `:670`; strict codes: `:707-719`
+- `validate_library`: `:133`; `emit_human`: `:577`
+- `run`: `:670`; `STRICT_CODES`: `:708-713`
 - Handler: `src/main.rs:405`; tests: `validate_cmd.rs:739+`

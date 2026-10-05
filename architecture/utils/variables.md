@@ -6,7 +6,7 @@
 
 Variables allow snippets to be parameterized at runtime. Syntax: `<name>`, `<name=default>`, or `<name=|_opt1_||_opt2_||_opt3_||>` for Pet-style multiple choice.
 
-**File**: `src/utils/variables.rs` (1919 lines — parser, Pet-choice support, diagnostics, `VariableAssignments`, and ~100 unit tests)
+**File**: `src/utils/variables.rs` (1919 lines — parser, Pet-choice support, diagnostics, `VariableAssignments`, and ~120 unit tests)
 
 ## Data Structures
 

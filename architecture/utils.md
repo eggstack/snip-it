@@ -20,7 +20,7 @@
 
 ## Variables
 
-**File**: `src/utils/variables.rs` (1919 lines — includes Pet-choice support, diagnostics, and ~100 unit tests)
+**File**: `src/utils/variables.rs` (1919 lines — includes Pet-choice support, diagnostics, and ~120 unit tests)
 
 Full reference: [utils/variables.md](utils/variables.md).
 

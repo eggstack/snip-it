@@ -34,22 +34,23 @@ body) and rejects tag prompting (tags must be explicit or omitted).
 `run()` (`new_cmd.rs:541`):
 
 1. Guard stdin-mode preconditions (description/tags rules above).
-2. Resolve `CommandSource` (`new_cmd.rs:72`): Stdin / File / Editor /
+2. Resolve `CommandSource` (`new_cmd.rs:73`): Stdin / File / Editor /
    MultilinePrompt / Positional / InteractivePrompt.
 3. Acquire command data **before touching library state** (malformed
    stdin never triggers migration):
    - Stdin → `read_command_stdin` (`:178`); File → `read_file_command`
      (`:196`); Editor → `read_editor_command` (`:427`); Multiline →
-     `read_multiline_command` (`:513`); Prompt/Positional → colored
+     `read_multiline_command` (`:514`); Prompt/Positional → colored
      `Command>` line (`:518`).
    - All exact sources share `validate_exact_command_bytes` (`:131`):
      16 MiB cap (`MAX_COMMAND_STDIN_BYTES`), UTF-8, no NUL, non-blank.
      Accepted bytes are never modified (trailing newlines preserved).
 4. Resolve description (flag or `Description>` prompt) and tags
    (`parse_tags` splits on space/comma, `:532`).
-5. Resolve destination: `get_library_path(library)` → `load_library`;
-   else legacy `load_snippets(fallback)` where fallback is `--config`
-   or the primary library path.
+5. Resolve destination: `get_library_path(library)` →
+   `load_library(path)`; else legacy `load_snippets(fallback)` where
+   fallback is `--config` or the primary library file under
+   `<libraries_dir>/<library>.toml`.
 6. `Snippet::new(description, command, tags)`, stamp `device_id` from
    sync settings (server rejects device-less snippets), push, then
    `save_library` / `save_snippets`.
@@ -64,10 +65,11 @@ spawn with no shell, exit-status check, re-read + shared validator.
 
 ## Mutation vs read-only
 
-Mutating. Writes one library file through `save_library` /
-`save_snippets`, both of which gate on interrupted transactions and take
-the local-data lock internally (`LibraryManager::gate_mutation`,
-`mod.rs:180`).
+Mutating. Writes one library file through `save_library`
+(`src/library/persistence.rs:217`) / `save_snippets`
+(`src/commands/mod.rs:174`), both of which call
+`gate_mutation_on_interrupted_transactions` and then
+`acquire_local_data_lock` internally.
 
 ## Auto-sync trigger
 

@@ -26,7 +26,7 @@ second group is file logging plus audit appends, not a separate audit tier.
 ## Diagnostic files (`logs/`)
 
 - `LogConfig` (`logging.rs:50`): `log_dir` (`get_default_log_dir`, `:72` → `<config>/logs`), `file_name = "snp.log"`, `level = INFO`, `include_target`, plus audit rotation tunables.
-- `init_logging` (`:86`): idempotent via `LOG_GUARD` (`:45` — dropping it would stop writes); `create_dir_all` + Unix `0o700` on the dir (`:96`); `tracing_appender::rolling::daily` (`:107`); non-blocking writer (`:109`); no ANSI, thread IDs, file + line numbers (`:121`).
+- `init_logging` (`:86`): idempotent via `LOG_GUARD` (`:45` — dropping it would stop writes); `create_dir_all` + Unix `0o700` on the dir (`:96`); `tracing_appender::rolling::daily` (`:107`); non-blocking writer (`:109`); no ANSI, but thread IDs, file, and line numbers are enabled (`:121`).
 - Filter (`:111`): `SNP_LOG` wins (invalid value warns and falls back); else `RUST_LOG` via `try_from_default_env`; else `snp=info`.
 - `init_default_file_logging` (`:153`): `ensure_config_dir` first, then default config, then `self_check` (`:168`) which probes writability with a `.self_check` sentinel and ensures the config dir. `shutdown_logging` (`:210`) flushes by dropping the guard.
 
@@ -34,7 +34,7 @@ second group is file logging plus audit appends, not a separate audit tier.
 
 | Function | Location | Notes |
 |----------|----------|-------|
-| `log_command_execution` | `:269` | `#[instrument]` with `redact_command()` as the `command` field; `args`/`working_dir` as fields, result as `Ok`/`Err(String)` — counts only, never full text |
+| `log_command_execution` | `:269` | `#[instrument]` with `redact_command()` as the `command` field; `result` is `skip`ped, then matched — `Ok` logs info with `args_count` + `working_dir`, `Err` logs error with `args_count`, `working_dir`, and the error text |
 | `redact_command` | `:295` | `>256` chars → `<very-long-command>`; any secret pattern (via `auto_sync::status::redact_secrets`) → `<redacted-command>`; `>80` chars truncated at a char boundary + `...` |
 | `log_config_operation` | `:317` | debug on success, warn with path + error on failure |
 | `log_clipboard_operation` | `:337` | op name + success flag only, never content |
@@ -46,7 +46,7 @@ second group is file logging plus audit appends, not a separate audit tier.
 - `audit_log(action, snippet, library_id)` (`:368`): builds `AuditLogEntry` (`:34` — timestamp, action, snippet id, library, device) and calls `write_audit_log_entry_sync` (`:394`). Synchronous by design: human command rate needs no background thread or channel.
 - **No credentials, no user text**: `description` is always the literal `"[omitted]"` (`:386`) — descriptions are free text that may embed secrets; only ids, action, and device are persisted. Pinned by the sentinel-secret test (`:599`).
 - Format is pipe-delimited `timestamp|action|snippet_id|description|library_id|device_id` (`:409`) with `escape_pipe` (`:448`: `\\`, `\|`, `\n`, `\r`, `\xNN` for other controls).
-- File handling: `create + append` with Unix `0o600` at open and after write (`:420`, `:435`); open/write failures log and propagate — callers treat audit as non-critical (clip logs debug, delete logs debug).
+- File handling: `create + append` with Unix `0o600` at open and after write (`:420`, `:435`); open/write failures log and propagate, but callers differ: `clip` propagates with `?` (`clip_cmd.rs:42`), while run, delete, and the TUI batch copy log debug.
 - Rotation (`:465`, `AUDIT_LOG_MAX_SIZE_BYTES = 10 MiB`, `AUDIT_LOG_RETENTION_DAYS = 30`, `:30`): over-size files are renamed to `audit.<timestamp>.rotated`; rotated files older than retention are pruned. Missing file (`symlink_metadata` error) propagates so the caller can warn.
 
 ## Panic handler
@@ -89,7 +89,8 @@ by `log_panic_info` (`:237`) is inside the crate namespace.
 | `curl -H "Authorization: Bearer …"` / embedded `password=` / `token=` | `<redacted-command>` (`:301`) |
 
 `log_command_execution` (`:269`) additionally `skip`s the `result` payload
-from the span fields, recording only counts and the redacted command name.
+from the span fields; the event body then records the arg count, the working
+directory, the redacted command name, and — on failure — the error text.
 
 ## Tests (selected)
 

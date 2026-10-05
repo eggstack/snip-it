@@ -45,9 +45,10 @@ service SnippetSync {
 
 Notes:
 
-- Every request still carries a deprecated `api_key` string field for wire
-  compatibility, but current clients send it empty and authenticate via
-  gRPC `authorization: Bearer <key>` metadata instead.
+- Every request except `HealthRequest` (empty) and `RegisterRequest` still
+  carries a deprecated `api_key` string field for wire compatibility, but
+  current clients send it empty and authenticate via gRPC
+  `authorization: Bearer <key>` metadata instead.
 - Empty `library_id` selects the account default library. Zero `limit`
   selects the server default page size.
 - `Sync` tombstones vs `GetSnippets`: only `Sync` returns `deleted = true`

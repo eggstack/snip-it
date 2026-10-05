@@ -41,7 +41,8 @@ pub struct Snippet {
   stamps `created_at`/`updated_at` to now, `id` left empty until save/load
   normalization assigns it.
 - Serde aliases keep `pet` compatibility: `[[snippets]]`/`[[Snippets]]`,
-  `Description`, `Command`, `Tag` (`model.rs:15-22`, `tests.rs:20-54`).
+  `Description`, `Command`, `Tag` (`model.rs:15-22, 31-59`,
+  `tests.rs:20-54`).
 
 ### `Snippets` — `src/library/model.rs:14-22`
 
@@ -187,7 +188,7 @@ types; no generic finding DSL was introduced.
 
 ## File / line refs
 
-- Types: `src/library/model.rs:14-103` (`Snippet`, `Snippets`,
+- Types: `src/library/model.rs:14-148` (`Snippet`, `Snippets`,
   `LibraryConfig`, `LibraryMeta`, `ResolvedLibrarySource`,
   `PrimaryState`, `LibraryIndexInspection`).
 - Persistence: `src/library/persistence.rs:36-150` (ID normalization),

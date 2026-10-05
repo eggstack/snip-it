@@ -132,11 +132,11 @@ integrity = "crc32:441c462e"
   work).
 - Generations are **monotonic**. A lower generation normally means corrupt
   rollback: fail closed, preserve the marker, spawn nothing. Exception —
-  cleared-and-recreated marker (observed as generation 1, or any strictly
-  lower generation, with a strictly **newer** `created_at_unix_ms` after an
-  explicit sync cleared the old marker): adopted as new work
-  (`adopt_generation_reset`, in debounce, preflight, and the follow-up
-  check). Equal-or-older timestamps stay corrupt.
+  cleared-and-recreated marker (observed as generation exactly `1` with a
+  strictly **newer** `created_at_unix_ms` after an explicit sync cleared the
+  old marker): adopted as new work (`adopt_generation_reset`, in debounce,
+  preflight, and the follow-up check). Any other lower generation, and
+  equal-or-older timestamps, stay corrupt.
 - `clear_if_generation_matches` is the automatic acknowledgement boundary:
   read-compare-delete under `PendingTxnGuard`. `Cleared` on equality,
   `GenerationChanged{current}` preserves newer work,
@@ -146,9 +146,10 @@ integrity = "crc32:441c462e"
 
 `pending_lock.rs` (`auto-sync-pending.lock`) serializes concurrent CLI
 processes for the minimum read-modify-write section only (10 s timeout):
-atomic `create_new`, bounded retry with 1–5 ms jitter, dead-owner reclaim,
-ownership-checked `Drop`, 0o600. Distinct from the long-lived execution
-lock below.
+kernel-authoritative `flock`/`LockFileEx` via `process_file_lock`, bounded
+retry polling the kernel lock every 100 ms, live owners never reclaimed,
+`Drop` releases without unlinking, 0o600. Distinct from the long-lived
+execution lock below.
 
 ## Scheduling (`schedule.rs`)
 
@@ -217,8 +218,8 @@ Mutual exclusion comes from the kernel (`flock` Unix / `LockFileEx`
 Windows via `process_file_lock`); on-disk TOML (`pid`, `started_at`,
 `nonce`, `purpose`) is diagnostic only and may be stale. Stale metadata is
 overwritten by the next acquirer — no inspect-then-rename race. `Drop`
-releases without unlinking and only removes the file when PID + nonce still
-match (never deletes a replacement owner's lock). Liveness is
+releases the kernel lock and never unlinks, so the lock file persists and
+may hold a dead owner's metadata. Liveness is
 `kill(pid, 0)`: only `ESRCH` proves absence (`EPERM`/unknown = live);
 Linux start tokens use `/proc/<pid>/stat` field 22. Non-Unix treats
 unknown PIDs as alive (conservative non-stealing).
@@ -288,14 +289,22 @@ Manual `snp sync` follows the same observe-then-clear shape in
 
 ## Doctor integration
 
-`snp doctor --compatibility` reads state read-only via `auto_sync::paths`
-(`state_dir`, `pending_marker`, `pending_txn_lock`, `worker_lock`,
-`execution_lock`, `status_file`) with `process_alive` liveness probes:
+`snp doctor` reads the same artifacts indirectly: it calls
+`status_snapshot::capture_snapshot()` (which resolves them through
+`auto_sync::paths` with `process_alive` liveness probes) and maps each
+`StatusDiagnostic` to a dotted code via `map_snapshot_diagnostic`
+(`doctor_cmd.rs`):
 
-- `compat.auto_sync.enabled` / `.disabled` — policy state.
-- `compat.auto_sync.pending_active` / `.pending_stale` (> 5 min,
-  `startup_recover_pending` clears) / `.pending_unreadable`.
-- `compat.auto_sync.lock_held` / `.lock_stale` / `.lock_unreadable`.
+- `compat.sync.checked` (Info) summary carrying the top-level sync state.
+- `sync.config.load_failed` / `sync.config.not_configured` — configuration
+  state (`CONFIG_LOAD_FAILED` is downgraded Error → Warning under
+  `--compatibility`).
+- `sync.pending.corrupt` / `sync.pending.inaccessible`.
+- `sync.execution.{dead_stale,malformed}` and
+  `sync.worker_lock.{dead_stale,malformed}` — lock inspection
+  (`Inaccessible` maps to the same `malformed` code).
+- `sync.status.corrupt` and `sync.attention.*` (selected from the failure
+  class in the diagnostic message) — attention and status-file state.
 
 See [status.md](status.md) for the `snp status` projection over the same
 artifacts.
@@ -322,20 +331,22 @@ production builds compile it to a no-op (the env check is absent).
 4. `schedule_sync` is the sole spawn authority; exactly one production call
    site (`spawn_worker_if_needed`).
 5. Pending generations monotonic; lower generation fails closed except the
-   cleared-and-recreated (lower generation + strictly newer timestamp)
+   cleared-and-recreated (generation `1` + strictly newer timestamp)
    adoption.
 6. `clear_if_generation_matches` is the only automatic ack boundary; stale
    clears preserve newer work; `Missing` is already-cleared success.
 7. `SyncMerge` origin never triggers (no feedback loops).
 8. Secrets, commands, and snippet content never enter pending markers, lock
    files, worker argv/env, status, or logs (secret-free fingerprint only).
-9. Pending marker survives crash; stale markers (> 5 min) clear on startup
-   recovery; startup recovery is suppressed for read-only, explicit-sync,
-   internal-worker, and configuration commands.
+9. Pending marker survives crash; startup recovery reschedules existing
+   intent rather than discarding it by age; startup recovery is suppressed
+   for read-only, explicit-sync, internal-worker, and configuration
+   commands.
 10. All sync operations (automatic, manual, explicit `--sync`, cron) share
     one `SyncExecutionLock`; worker holds it for the full cycle.
-11. Worker only calls `run_default_sync`; it never mutates libraries
-    directly, and local I/O is never force-cancelled by a timeout.
+11. Worker drives sync only through the canonical
+    `run_sync_with_limits(.., Some(limits))` entry point; it never mutates
+    libraries directly, and local I/O is never force-cancelled by a timeout.
 12. `auto-sync-worker` adds no public CLI surface (hidden subcommand).
 13. Scheduling errors stay typed (`Pending` vs `Spawn`); backoff/attention
     state is durable and config-change aware.

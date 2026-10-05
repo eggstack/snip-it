@@ -14,7 +14,7 @@ shell, never mutates snippets, never prompts, and never triggers auto-sync.
 **Sources**: `src/mcp/mod.rs` (28 lines), `src/mcp/protocol.rs` (479),
 `src/mcp/tools.rs` (307), `src/mcp/client_install.rs` (269).
 User-facing contract: `docs/MCP.md`. CLI wiring: `McpCommands`
-(`src/main.rs:238`) with `Serve` / `Instructions` / `Install`, classified
+(`src/main.rs:239`) with `Serve` / `Instructions` / `Install`, classified
 `SuppressReadOnly` + `Minimal` services (`src/main.rs:894`).
 
 ## Transport & Protocol
@@ -129,7 +129,7 @@ Mirrors `snp get` exactly (`docs/MCP.md`, `src/mcp/tools.rs:129-206`):
 
 ## CLI Surface
 
-`McpCommands` (`src/main.rs:238`) exposes three subcommands, all classified
+`McpCommands` (`src/main.rs:239`) exposes three subcommands, all classified
 `SuppressReadOnly` + `Minimal` so agent reads never spawn workers, open
 network connections, or create log/config state:
 

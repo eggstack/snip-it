@@ -25,7 +25,7 @@ explicit sync. `run()` serves the TUI; `run_exact()` serves
 | `--description-exact` | Exact description bypass |
 | `--command-exact` | Exact command bypass |
 
-`main.rs:500-544` routes exact selectors through
+`main.rs:500-545` routes exact selectors through
 `resolve_exact_target` → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -105,7 +105,7 @@ execution leaves no sync intent.
 
 ## File / line references
 
-- `RunArgs`: `src/commands/run_cmd.rs:12`; timeouts: `:39-101`
+- `RunArgs`: `src/commands/run_cmd.rs:12`; timeouts: `:36-101`
 - `spawn_and_wait_execution`: `:123`; `record_execution_result`: `:169`
 - `process_snippet`: `:194`; `run`: `:342`; `run_exact`: `:371`
-- Dispatch: `src/main.rs:500-544`
+- Dispatch: `src/main.rs:500-545`
