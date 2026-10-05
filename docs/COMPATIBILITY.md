@@ -1,7 +1,7 @@
 # Compatibility and Deprecation Policy
 
-> Phase 08A — Workstream L
-> Rules for maintaining backward compatibility across releases.
+> **Evergreen policy.** Rules for maintaining backward compatibility across
+> releases. Enforced in part by `tests/cli_surface_compat.rs`.
 
 ---
 

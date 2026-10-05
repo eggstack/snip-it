@@ -43,20 +43,37 @@ fn keychain_retrieve(user: &str) -> SnipResult<String> {
 
 ### Serde Integration
 Use custom serialize/deserialize with `#[serde(serialize_with, deserialize_with)]`:
-- **Serialize:** Try keychain first, write `@keychain` marker if successful, else write plaintext with warning
-- **Deserialize:** If value is `@keychain`, fetch from keychain; else return as-is (legacy plaintext)
+- **Serialize (production):** store in the keychain and write the `@keychain`
+  marker. If the keychain is unavailable, the write is **refused** —
+  `"keychain unavailable: {e}; refusing plaintext API-key storage"`
+  (`src/config/sync_settings.rs:256-268`). There is **no** plaintext downgrade on
+  save. Do not "restore" a fallback here; that would silently write a credential
+  to disk.
+- **Deserialize:** if the value is `@keychain`, retrieve it from the keychain
+  (a retrieval failure is a hard error, never an empty credential). Any other
+  value is returned as-is, which is how pre-existing plaintext configs keep
+  working (`src/config/sync_settings.rs:331-333`).
+- **Fail fast (test builds only):** under `test-support` with the plaintext seam
+  set, a stored `@keychain` marker makes deserialization **refuse to load** rather
+  than return the literal marker (`src/config/sync_settings.rs:302-317`).
+  Returning the marker would authenticate every subsequent sync with a bogus
+  credential.
 
 ### Migration
-On load, if API key is not empty and not `@keychain`:
-1. Store in keychain
-2. Re-save config with `@keychain` marker
-3. Log warning if keychain unavailable
+On load, if the API key is not empty and not `@keychain`:
+1. Store it in the keychain
+2. Re-save the config with the `@keychain` marker
+3. If the keychain is unavailable, the re-save fails loudly — the legacy
+   plaintext value stays on disk and the error names the cause. It is **not**
+   downgraded to a warning.
 
-### Fallback
-If keychain is unavailable (CI, containers, headless):
-- Keep plaintext storage
-- Log warning about insecure storage
-- Application continues to work
+### Keychain unavailable (CI, containers, headless)
+In a production build there is no automatic plaintext fallback: saving sync
+settings fails with an explicit error. Tests do not hit this because they build
+with `--features test-support` and set `SNP_ALLOW_PLAINTEXT_API_KEY=true`, which
+takes the plaintext branch before `keychain_store` is ever called. If you add a
+real fallback, it is a security change: it must be opt-in, warned, and
+documented in `SECURITY.md` — do not add one incidentally.
 
 ## Platform Notes
 - macOS: Uses Keychain Services (apple-native-keyring-store)
@@ -64,9 +81,21 @@ If keychain is unavailable (CI, containers, headless):
 - Windows: Uses Windows Credential Store
 - All handled transparently by the `keyring` crate
 
-## Test Seam (never remove)
+## Test Seams (never remove)
 
-- Tests set `SNP_ALLOW_PLAINTEXT_API_KEY=true` (exact match, `src/config/sync_settings.rs:257,303,373`) on every spawned command to bypass the OS keychain; the seam also **forbids** keychain access when set. A guard test asserts the seam is present.
-- `scripts/ci/test-production-seams.sh` proves all test-only env vars are inert in production builds (built without `test-support`).
+There are **two** test-only credential seams. Both are inert in production builds
+because every read site is wrapped in `#[cfg(feature = "test-support")]` — that
+cfg gate is the actual protection, not a runtime check:
+
+| Seam | Effect | Gates |
+|------|--------|-------|
+| `SNP_ALLOW_PLAINTEXT_API_KEY=true` (exact match) | Bypasses the OS keychain **and forbids keychain access**; deserialization fails fast on a `@keychain` marker | `src/config/sync_settings.rs:257,303,373` |
+| `SNP_TEST_CREDENTIAL_FILE=<path>` | Reads the API key from a file, for tests that must supply a credential without a keychain | `src/config/sync_settings.rs:251,281,367` |
+
+- Both are read at serialize, deserialize, and sync-setup sites, so a new read
+  path must repeat the `#[cfg(feature = "test-support")]` gate.
+- `scripts/ci/test-production-seams.sh` builds without `test-support` and
+  binary-scans for `SNP_ALLOW_DIR_FSYNC_FAILURE` only (not every test-only var);
+  the plaintext-key and credential-file seams rely on the cfg gate above.
 - `set_var` in tests needs `unsafe` (edition 2024).
 - Linux CI needs `libdbus-1-dev` + `pkg-config` for the Secret Service store.

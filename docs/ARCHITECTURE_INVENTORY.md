@@ -146,7 +146,7 @@ A concise map of the snp internal architecture for contributors working on pet-c
 
 ### Auto-Sync (`src/auto_sync/`)
 
-Optional post-mutation background synchronization (Phase 12C). Disabled by default; opt-in via `snp sync config --auto-sync on`. One detached helper owns the execution lock, debounces pending work, and runs canonical sync directly.
+Optional post-mutation background synchronization. Disabled by default; opt-in via `snp sync config --auto-sync on`. One detached helper owns the execution lock, debounces pending work, and runs canonical sync directly.
 
 - **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `sync_configured`, `enabled`, `debounce`, `failure_mode`, `sync_timeout`, `max_lifetime`.
 - **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity` over all behavior-driving fields. v1 markers migrate transparently. `ConditionalClearResult` enum (Cleared/Missing/GenerationChanged) returned by conditional clear.

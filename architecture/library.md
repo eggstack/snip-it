@@ -197,3 +197,12 @@ types; no generic finding DSL was introduced.
   (mode/migration), `:248-289` (readonly resolver), `:297-357`
   (inspection), `:363-680` (CRUD + server linkage).
 - Re-exports: `src/library/mod.rs:31-40`.
+
+---
+
+## Agent skill
+
+See [`.skills/persistence-and-toml-fidelity.md`](../.skills/persistence-and-toml-fidelity.md)
+for the golden command corpus, the "never post-process serialized TOML" rule,
+durability classes, and fail-closed parsing. Identity rules are in
+[`docs/IDENTITY_CONTRACT.md`](../docs/IDENTITY_CONTRACT.md).

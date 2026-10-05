@@ -1,4 +1,4 @@
-# Supply Chain Policy — Workstream K
+# Supply Chain Policy
 
 **Scope:** Dependency management, license compliance, and supply-chain integrity for the snip-it workspace.
 

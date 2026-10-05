@@ -1,8 +1,10 @@
 //! Configuration directory and path management.
 //!
-//! Handles platform-specific config directory resolution (XDG on Linux,
-//! Application Support on macOS, AppData on Windows) and macOS legacy
-//! config directory migration.
+//! Resolves the snp config directory as `$XDG_CONFIG_HOME/snp`, falling back to
+//! `~/.config/snp`. There is **no** per-platform `#[cfg]` branch: macOS and
+//! Windows use the same `~/.config` layout as Linux. A one-way migration moves
+//! a legacy macOS `~/Library/Application Support/snp` directory to this layout
+//! when it is present.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

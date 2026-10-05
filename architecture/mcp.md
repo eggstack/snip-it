@@ -151,3 +151,12 @@ network connections, or create log/config state:
 - `deny_unknown_fields` on all tool argument structs
   (`src/mcp/tools.rs:31-59`); `limit` is bounded to 1–1000
   (`src/mcp/tools.rs:224`).
+
+---
+
+## Agent skill
+
+See [`.skills/selector-and-search-parity.md`](../.skills/selector-and-search-parity.md)
+for the hard MCP boundaries (stdio-only, read-only, non-executing) and the
+search-parity obligation against `snp get --query` / `snp list --filter`.
+The user-facing protocol contract is [`docs/MCP.md`](../docs/MCP.md).

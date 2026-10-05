@@ -1,5 +1,12 @@
 # Security Audit — Phase 10
 
+> **ARCHIVED — historical snapshot. Do not treat as a current contract.**
+> Frozen as of 2026-07-22 (pre-EggServe / pre-eggfetch). Current posture lives in
+> `SECURITY.md`, `docs/THREAT_MODEL.md`, and `CHANGELOG.md`.
+> Two further known-stale paths: `src/auto_sync/spawn.rs` moved to
+> `src/auto_sync/execution_lock.rs` (`spawn_worker`), and `src/config.rs` is now
+> `src/config/`.
+
 > Historical snapshot as of 2026-07-22 (pre-EggServe / pre-eggfetch). Frozen —
 > do not continuously patch. Current posture lives in `SECURITY.md`,
 > `docs/THREAT_MODEL.md`, and `CHANGELOG.md` (Plans 017–020: lean

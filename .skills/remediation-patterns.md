@@ -6,7 +6,7 @@
 - `keyring = "4"` for cross-platform OS keychain access (default `v1` features)
 - `Entry::new(service, user)` to create credential entries
 - `entry.set_password()` / `entry.get_password()` for storage/retrieval
-- Graceful fallback: if keychain unavailable, store plaintext with warning
+- No plaintext downgrade: a production save **refuses** when the keychain is unavailable rather than falling back. Tests bypass it via `SNP_ALLOW_PLAINTEXT_API_KEY=true` under `test-support`
 - Migration: detect plaintext on load, move to keychain, save marker
 - Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true`
 
@@ -97,19 +97,28 @@
 - Run `cargo fmt --all -- --check` to verify formatting
 - `sync.rs` RPCs retry through the single `retry_grpc_unified!` macro — never reintroduce a closure-based generic retry helper (fails with "captured variable cannot escape `FnMut`")
 
-## Phase 06A Dead Items (Removed)
+## Dead public items (removed — do not re-introduce)
 
-The following dead items were identified and **removed** during the API tightening audit:
+Removed during the API tightening audit (closure record
+`plans/closure/cli-library-sync-consolidation/`):
 
 - **`AutoSyncPolicy.max_retries`** — **REMOVED.** Field was never read; backoff is now durable and retry-count-based via `auto-sync-status.toml`. Do not re-add; use `schedule_sync()` backoff decisions instead.
 - **`STALE_LOCK_THRESHOLD_SECS`** — **REMOVED.** Constant was unused; lock staleness is handled by timeout logic and `kill -0` process liveness checks. Do not re-add; use timeout-based staleness detection.
 - **`encryption::ct_eq`** — **Removed from public API.** The constant-time equality helper was unreferenced by production code; it survives only as a `#[cfg(test)]` test helper in `encryption.rs`. Keep it out of the public surface.
 
-Public enums now carry `#[non_exhaustive]` to allow future variant additions without breaking downstream callers.
+Public enums that may gain variants carry `#[non_exhaustive]` so additions don't
+break downstream callers. This is **not** blanket: only the enums in
+`src/error.rs`, `src/outcome.rs`, `src/sync_failure.rs`, `src/sort.rs`,
+`src/config/sync_settings.rs`, `src/lib.rs`, `src/auto_sync/{worker,policy,execution_lock}.rs`,
+`src/commands/mod.rs`, and `src/utils/atomic.rs` are marked. Enums in
+`src/status_snapshot.rs`, `src/selector.rs`, `src/transaction.rs`, and
+`src/auto_sync/pending.rs` are **not** — mark a new public enum when you add it
+rather than assuming the crate already does.
 
-## Phase 07A Patterns
+## Durability and validation patterns
 
-The following patterns were introduced in Phase 07A:
+The following patterns are established and enforced by `tests/architecture.rs`
+and the `persistence`-focused integration targets:
 
 ### Durability Classes (`src/utils/atomic.rs`)
 | Class | Use case | fsync |

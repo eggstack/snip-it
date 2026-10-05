@@ -54,7 +54,7 @@ fn setup_signal_handler() {
     name = "snp",
     about = "A fast, terminal-based snippet manager with fuzzy search, clipboard support, and optional self-hosted sync",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "Exit codes:\n  0  success\n  1  general error\n  2  usage/argument error\n  3  not found\n  4  cancelled\n  5  ambiguous match\n  6  validation failure\n  7  sync failure\n  8  execution failure\n  9  conflict/refused\n\nConfig: ~/.config/snp/snippets.toml\nDocs: https://github.com/eggstack/snip-it\nShell: snp shell init bash|zsh|fish"
+    after_help = "Exit codes:\n  0  success\n  1  general error\n  2  usage/argument error\n  3  not found\n  4  cancelled\n  5  ambiguous match\n  6  validation failure\n  7  sync failure\n  8  execution failure\n  9  conflict/refused\n  10  unsafe repairs pending\n\nConfig: ~/.config/snp/snippets.toml\nDocs: https://github.com/eggstack/snip-it\nShell: snp shell init bash|zsh|fish"
 )]
 struct Cli {
     #[command(subcommand)]

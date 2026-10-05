@@ -296,3 +296,12 @@ Unit tests in `src/selector.rs` cover:
 - Deleted snippet exclusion
 - Library context propagation
 - Validation (no fields set)
+
+---
+
+## Agent skill
+
+See [`.skills/selector-and-search-parity.md`](../.skills/selector-and-search-parity.md)
+for the parity contract across `snp get --query`, `snp list --filter`, and MCP
+`snippets_search`; the readonly-vs-mutating resolver split; and the read-only
+stdio MCP boundary. Read it before changing search fields or library scope.

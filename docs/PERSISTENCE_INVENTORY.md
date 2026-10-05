@@ -1,6 +1,8 @@
 # Persistence Inventory
 
-This document catalogs every persisted artifact in snip-it. It is the authoritative reference for Phase 07A durability work.
+> **Evergreen contract.** This document catalogs every persisted artifact in snip-it,
+> with its durability class. Durability classes are implemented in
+> `src/utils/atomic.rs`.
 
 For each artifact: canonical path derivation, owner module/layer, schema/version, user-editable vs private, secret classification, durability class, max supported size, atomicity method, permissions/ACL expectation, symlink/non-regular-file policy, corruption handling, unknown-field policy, backup inclusion default, migration owner, and synchronization relevance.
 
@@ -11,7 +13,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | Property | Value |
 |----------|-------|
 | **Canonical path** | `~/.config/snp/libraries/<name>.toml` (library mode) or `~/.config/snp/snippets.toml` (legacy single-file) |
-| **Owner module** | `src/library.rs` (data structures, load/save), `src/commands/mod.rs` (load_snippets/save_snippets for legacy) |
+| **Owner module** | `src/library/` (data structures, load/save), `src/commands/mod.rs` (load_snippets/save_snippets for legacy) |
 | **Schema** | TOML with `[[snippets]]` table (pet-compatible), fields: id, description, command, output, tag, folders, favorite, created_at, updated_at, device_id, deleted |
 | **User-editable** | Yes (primary user asset) |
 | **Secret classification** | None |
@@ -31,7 +33,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | Property | Value |
 |----------|-------|
 | **Canonical path** | `~/.config/snp/libraries.toml` |
-| **Owner module** | `src/library.rs` (`LibraryManager::save_config`) |
+| **Owner module** | `src/library/` (`LibraryManager::save_config`) |
 | **Schema** | TOML with `[[libraries]]` array (filename, library_id, is_primary, last_sync, server_id) |
 | **User-editable** | No (managed by tool) |
 | **Secret classification** | None |
@@ -50,7 +52,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | Property | Value |
 |----------|-------|
 | **Canonical path** | `~/.config/snp/sync.toml` |
-| **Owner module** | `src/config.rs` (`SyncSettings`) |
+| **Owner module** | `src/config/` (`SyncSettings`) |
 | **Schema** | TOML with server_url, api_key (keychain), device_id, direction, auto_sync, etc. |
 | **User-editable** | Partially (server_url, direction) |
 | **Secret classification** | API key is secret (stored in keychain when available) |
@@ -213,7 +215,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | **Corruption handling** | SHA-256 checksums in manifest verify each file |
 | **Unknown-field policy** | Version-gated manifest |
 | **Backup inclusion** | No (is a backup) |
-| **Migration owner** | Phase 07A |
+| **Migration owner** | `src/migration.rs` |
 | **Sync relevance** | Not synced |
 
 ### 12. Transaction Journals
@@ -232,7 +234,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | **Corruption handling** | Recovery on startup: prepared journals are rolled back |
 | **Unknown-field policy** | Strict |
 | **Backup inclusion** | No |
-| **Migration owner** | Phase 07A |
+| **Migration owner** | `src/migration.rs` |
 | **Sync relevance** | Not synced |
 
 ### 13. Import/Export Outputs
@@ -259,7 +261,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | Property | Value |
 |----------|-------|
 | **Canonical path** | None (in-memory or inline in libraries.toml) |
-| **Owner module** | `src/library.rs` (layout migration) |
+| **Owner module** | `src/library/` (layout migration) |
 | **Schema** | N/A |
 | **User-editable** | No |
 | **Secret classification** | None |
@@ -278,7 +280,7 @@ For each artifact: canonical path derivation, owner module/layer, schema/version
 | Property | Value |
 |----------|-------|
 | **Canonical path** | `~/.config/snp/premade/<name>.toml` |
-| **Owner module** | `src/library.rs` (`save_premade_library`) |
+| **Owner module** | `src/library/` (`save_premade_library`) |
 | **Schema** | Same as snippet libraries |
 | **User-editable** | No (downloaded from server) |
 | **Secret classification** | None |

@@ -5,10 +5,19 @@
 ## Overview
 
 End-to-end encryption for snippet sync (`src/encryption.rs`, ~418 lines,
-sync-client layer). Snippet bodies are encrypted with the user's API key
-before transmission; the server stores and relays only ciphertext and
-never sees plaintext. Key derivation uses Argon2id; bulk encryption uses
-AES-256-GCM.
+sync-client layer). Snippet **bodies** are encrypted with the user's API key
+before transmission; the server stores and relays only ciphertext for those
+fields and never sees snippet content. Key derivation uses Argon2id; bulk
+encryption uses AES-256-GCM.
+
+**Scope boundary — what is *not* encrypted.** `encrypt_snippet`
+(`src/sync.rs:1183`) encrypts only `EncryptedSnippetData { description, command,
+tags }`, placing the ciphertext in the proto `command` field. The routing and
+bookkeeping fields `id`, `created_at`, `updated_at`, `device_id`, and `deleted`
+are sent as **plaintext** proto fields — the server needs them for merge
+ordering and deletion tombstones. `output` is not in `ProtoSnippet` at all
+(local-only). So "the server never sees plaintext" means snippet *content*, not
+snippet *metadata*; do not assume `device_id` or `updated_at` are confidential.
 
 ## Security Model
 

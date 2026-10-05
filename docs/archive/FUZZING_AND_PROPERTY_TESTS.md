@@ -1,5 +1,13 @@
 # Fuzzing and Property Tests — Workstream L
 
+> **ARCHIVED — historical gap analysis. Not a current contract.**
+> This was a planning artifact for fuzz-harness work that was never started: there
+> is no `fuzz/` directory and no `proptest`/`cargo-fuzz` dependency in
+> `Cargo.lock`. It also cites the removed `src/library.rs` / `src/config.rs`.
+> Current property-test inventory: the golden-command corpus lives in
+> `src/library/tests.rs` (not under `tests/`), and the rest are the standard
+> integration targets listed in `architecture/test-infrastructure.md`.
+
 **Scope:** Inventory of existing property-based and fuzz-style tests, identification of gaps, and verification of key invariants.
 
 ---

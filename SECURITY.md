@@ -28,7 +28,10 @@ treat the command field as opaque data and never execute it.
 
 ### Encryption
 
-Snippets are encrypted client-side before leaving the machine.
+Snippets are encrypted client-side before leaving the machine. Only the snippet
+body (`description`, `command`, `tags`) is encrypted; routing metadata (`id`,
+timestamps, `device_id`, `deleted`) travels in the clear — see
+[Sync Encryption](#sync-encryption).
 
 - **Algorithm:** AES-256-GCM (authenticated encryption with
   associated data).
@@ -40,13 +43,22 @@ Snippets are encrypted client-side before leaving the machine.
 ### Credential Storage
 
 API keys are stored in the OS keychain (macOS Keychain, GNOME Keyring,
-Windows Credential Manager) by default. Plaintext storage in
-`sync.toml` requires the exact `SNP_ALLOW_PLAINTEXT_API_KEY=true`
-environment value. A runtime warning is emitted when the plaintext
-fallback is active. Keep `keyring = "4"` default features: building
-with `default-features = false` silently degrades persistence to the
-mock store. Keychain-backed configs store the `@keychain` marker (never
-the key); plaintext is migrated into the keychain on load.
+Windows Credential Manager). Keychain-backed configs store the `@keychain`
+marker, never the key itself. On save, if the keychain is unavailable the write
+is **refused** (`keychain unavailable, refusing to store API key in plaintext`)
+rather than silently downgraded to a plaintext file. On load, a plaintext key
+already present in `sync.toml` is migrated into the keychain and the file
+re-saved with the marker; a marker whose keychain entry has been lost is a hard
+error, not a silent empty credential. Keep `keyring = "4"` default features:
+building with `default-features = false` silently degrades persistence to the
+mock store.
+
+`SNP_ALLOW_PLAINTEXT_API_KEY=true` is a **test-only** seam, compiled in under
+`#[cfg(feature = "test-support")]` (`src/config/sync_settings.rs`). Setting it
+in a production build has no effect at all — it cannot weaken or bypass
+keychain storage. In a `test-support` build it forces plaintext storage on save
+*and* forbids keychain access on load, so a config still holding the `@keychain`
+marker fails to load rather than authenticating with the literal marker string.
 
 ### File Permissions
 
@@ -137,9 +149,13 @@ and hard links are rejected. HTTPS-only downloads prevent MITM attacks.
 
 ### Sync Encryption
 
-- **In transit:** All sync payloads are encrypted client-side with
-  **AES-256-GCM** before being sent to the server. The server only
-  stores ciphertext.
+- **In transit:** Snippet **content** is encrypted client-side with
+  **AES-256-GCM** before being sent to the server; the server stores only
+  ciphertext for those fields. Per-snippet metadata — `id`, `created_at`,
+  `updated_at`, `device_id`, `deleted` — is sent as **plaintext** proto fields,
+  because the server needs it for merge ordering and deletion tombstones. `output`
+  is local-only and is never sent. So a compromised server cannot read snippet
+  content, but it can see snippet identifiers, timestamps, and deletion state.
 - **Key derivation:** Per-snippet **Argon2id** (16 MiB memory, 3
   iterations, 4 threads — OWASP-recommended parameters) derives an
   encryption key from the API key and a per-payload random salt.
@@ -205,7 +221,7 @@ when the keychain is unavailable.
 ## Security Audit
 
 For detailed audit findings and the methodology used, refer to
-[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md).
+[`docs/SECURITY_AUDIT.md`](docs/archive/SECURITY_AUDIT.md).
 
 ## Scope
 

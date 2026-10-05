@@ -106,7 +106,7 @@ snp import pet /path/to/pet-snippets.toml --report json
 
 #### Pre-migration diagnostics
 
-`snp doctor` has four modes:
+`snp doctor` has five modes:
 
 - **`--pet-file <path>`** — Analyze a pet snippet file for compatibility issues.
   Reports TOML parse status, unknown fields, missing required fields, empty
@@ -123,6 +123,10 @@ snp import pet /path/to/pet-snippets.toml --report json
 - **`--library <name>`** — Analyze a specific library file (resolved from
   `~/.config/snp/libraries/` or a literal path). Same analysis as `--pet-file`
   but targets a snp library.
+
+- **`--sync`** — Report sync configuration and health: server URL reachability,
+  auto-sync policy, pending work, and last-attempt status. Read-only; it never
+  triggers a sync.
 
 - **`--check-shell <bash|zsh|fish>`** — Validate the syntax of `snp shell init`
   output for the specified shell. Generates the init code, then runs the shell's
@@ -537,7 +541,6 @@ auto_sync_failure = "warn"
 - The parent spawns the worker and returns immediately — no in-process debounce delay.
 - The detached worker invokes `run_sync` directly (no descendant executor process) with bounded timeouts; one `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
 - All sync operations (worker, manual `snp sync`, explicit `--sync`, cron) share a single `SyncExecutionLock`. The worker owns this lock for the entire detached cycle.
-- Each `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
 - A durable pending marker (`auto-sync-pending.toml`) records the latest mutation generation with CRC32 integrity; only the worker that observes its own generation may clear it.
 - PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness detection prevents concurrent worker executions across processes.
 - Sync-merge writes never recursively trigger auto-sync.
@@ -614,11 +617,12 @@ The TUI shows the active sort mode in the status bar:
 | --- | --- |
 | (none) | Relevance (default) |
 | `[new]` | Recent |
-| `[old]` | Oldest first (future) |
+| `[old]` | Oldest first |
 | `[a-z]` | Description A→Z |
-| `[z-a]` | Description Z→A (future) |
+| `[z-a]` | Description Z→A |
 | `[used]` | Last used |
 | `[freq]` | Most used |
+| `[cmd]` | Command text A→Z (initial-only, via `snp run --sort command`; not reachable by interactive cycling) |
 
 Press `n` to cycle through sort modes interactively. Press `o` to toggle
 favorites-first.

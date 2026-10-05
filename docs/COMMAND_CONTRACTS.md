@@ -1,7 +1,9 @@
 # Command Contracts
 
-> Phase 10 — Workstream A (corrective closure)
-> Single source of truth for every CLI command's behavioral contract.
+> **Evergreen contract.** Single source of truth for every CLI command's
+> behavioral contract. Exit codes are defined in [`EXIT_CODES.md`](EXIT_CODES.md)
+> and implemented in `src/outcome.rs`.
+> **Note:** Line numbers are approximate and may drift as the codebase evolves.
 
 ---
 
@@ -18,11 +20,11 @@
 | `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | No | No | None | 0, 1 |
 | `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 3, 4, 5 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
-| `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 2 |
+| `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
 | `doctor` | No | No | Yes | Yes | No | No | No | No | No | `--report json` | 0, 1, 6 |
 | `backup` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `restore` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 6, 9 |
-| `repair` | No | No | Yes | Yes | No | Yes (`--apply`) | No | No | No | `--json` | 0, 1 |
+| `repair` | No | No | Yes | Yes | No | Yes (`--apply`) | No | No | No | `--json` | 0, 1, 10 |
 | `import` | No | No | Yes | Yes | No | Yes | No | No | No | `--report json` | 0, 1 |
 | `sync` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
 | `register` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
@@ -31,6 +33,20 @@
 | `premade` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
 | `shell` | No | No | Yes | Yes | No | No | No | No | No | None | 0, 1 |
 | `completions` | No | No | Yes | No | No | No | No | No | No | shell completion | 0, 1 |
+| `mcp` | No (stdio protocol) | No | Yes (protocol only) | Yes (diagnostics) | No | No | No | No | No | JSON-RPC 2.0 over stdio | 0, 1, 3 |
+| `update` | No | No | Yes | Yes | No | Yes (binary replace) | No | Yes (self-replace) | Yes | `--dry-run` | 0, 1 |
+| `version` | No | No | Yes | No | No | No | No | No | No | None | 0 |
+| `keybindings` | No | No | Yes | No | No | No | No | No | No | None | 0 |
+| `data` | — | — | — | — | — | — | — | — | — | — | — |
+
+`snp data <subcommand>` is a **mirror spelling** of the top-level commands
+(`validate`, `status`, `backup`, `restore`, `repair`); it has no independent
+contract. `auto-sync-worker` and `self-replace` are internal/replace
+subprocesses and are not user-facing contracts.
+
+`snp mcp serve` is the only stdio-protocol command: **stdout carries protocol
+messages only**, all diagnostics go to stderr, and it is read-only and
+non-executing. See [`MCP.md`](MCP.md).
 
 ## Column Definitions
 
@@ -52,7 +68,7 @@
 |------|------|---------|
 | 0 | Success | Operation completed successfully |
 | 1 | General error | Unclassified operational failure |
-| 2 | Validation error | CLI usage/argument error or diagnostic finding |
+| 2 | `USAGE_ERROR` | CLI usage or argument error (Clap-controlled). Validation findings use **6**, not 2. |
 | 3 | Not found | Requested resource does not exist |
 | 4 | Cancelled | User cancelled interactive action |
 | 5 | Ambiguous match | Multiple candidates, unique match expected |
@@ -66,7 +82,25 @@ Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code m
 
 ## Startup Recovery Classification
 
-Commands are classified by `StartupRecoveryPolicy` at startup. Only mutation commands (`new`, `edit`, `import`, `delete`, `library create/delete`) trigger auto-sync recovery. Read-only commands (`list`, `search`, `get`, `status`, `validate`, `backup`, `select`) suppress recovery. Explicit sync commands (`sync`, `cron`, `register`) and internal subprocesses also suppress recovery.
+Commands are classified by `command_behavior()` (`src/main.rs:886`) into a
+`StartupRecoveryPolicy` **and** a `StartupServices` level, both in one `match`
+so the two cannot drift. `snp data <subcommand>` is a mirror of the top-level
+spellings and is classified in the same table.
+
+| Policy | Commands |
+|--------|----------|
+| `SuppressReadOnly` (also `StartupServices::Minimal`) | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` |
+| `SuppressReadOnly` (dry-run variants only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — and the `data` spellings of each |
+| `Allow` (full logging + audit) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
+| `SuppressExplicitSync` | `sync`, `cron`, `register` |
+| `SuppressInternal` | `auto-sync-worker` (internal subprocess) |
+| `SuppressConfiguration` | `update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
+
+Two easy-to-miss entries: **`run`, `clip`, and `search` are `Allow`**, because
+they can record usage and schedule auto-sync; and **`mcp` is
+`SuppressReadOnly`**, because the MCP surface never mutates. Extending either
+list means editing `command_behavior()` — do not infer the policy from the
+command's name.
 
 Dry-run commands are classified based on their command category, not the dry-run flag. `restore` and `import` are classified as `Allow` (mutation) because the command itself is a mutation command; dry-run mode prevents local mutation but the recovery policy applies to the command class, not the mode.
 
@@ -74,7 +108,7 @@ Dry-run commands are classified based on their command category, not the dry-run
 
 - **TUI commands** (`run`, `clip`, `search`, `select`) render directly to the terminal via crossterm raw mode — they bypass stdout/stderr for the interactive portion.
 - **`list` default format** writes colored table output to stdout (includes ANSI escapes — not pipe-safe without `--json` or `--csv`).
-- **`edit --output`** is non-interactive; it writes the output field to stdout. The `--output-stdin` variant reads from stdin.
+- **`edit --output`** is non-interactive; it writes the output field to **stderr**, not stdout (`src/commands/edit_cmd.rs:218,220,284,286` all use `eprintln!`). This matches the `edit` row's "Writes stdout: No". The `--output-stdin` variant reads from stdin.
 - **`--json`** and **`--csv`** flags conflict with each other (enforced by clap).
 - **`ExecutionFailed`** exit code: if the child process had a valid exit code, that code is propagated; otherwise exit code 8 is used.
 - **`PersistenceFailed`** maps to exit code 1 (general error) — no dedicated public exit code for persistence failures.

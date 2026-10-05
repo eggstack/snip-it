@@ -1,21 +1,36 @@
 # JSON Output Schemas
 
-> Phase 08A — Workstream H
-> Machine-readable JSON schemas for commands that support `--json` or `--report json`.
+> **Evergreen contract.** Machine-readable JSON schemas for commands that
+> support `--json` or `--report json`.
+> Enforced by `tests/schema.rs`; per-command emitters are listed in
+> `architecture/outcome.md`.
+>
+> **Note:** Line numbers are approximate and may drift as the codebase evolves.
 
 ---
 
 ## Rules
 
 1. All field names use `snake_case`.
-2. Optional fields use explicit `null` (never omitted).
-3. Timestamps use ISO 8601 / RFC 3339 format (e.g., `"2026-01-15T10:30:00Z"`).
-4. UUIDs use standard hyphenated format (e.g., `"550e8400-e29b-41d4-a716-446655440000"`).
+2. Timestamps are Unix epoch milliseconds as integers (`*_unix_ms`), or epoch
+   seconds as integers (`created_at` / `updated_at` on snippets). **No
+   command currently emits ISO 8601 / RFC 3339 strings.**
+3. Snippet IDs are `legacy-<64 hex chars>` (deterministic SHA-256), not UUIDs.
+   See [`IDENTITY_CONTRACT.md`](IDENTITY_CONTRACT.md).
+4. Enum values serialize with Rust variant names (`PascalCase`) unless a
+   `serde(rename)` overrides it. **Struct-variant enums serialize as
+   objects** (`{"LiveExecution":{…}}`), not bare strings — see `sync.top_level`,
+   `pending.state`, `execution_lock`, and `worker_lock` below.
 5. Ordering is deterministic (sorted by ID or insertion order — never hash-map random).
 6. New fields are additive (non-breaking).
 7. Breaking changes increment the `schema` version number.
 8. No ANSI escape sequences in any JSON output.
 9. Secret values (API keys, passwords) are never included in JSON output.
+10. **Optional-field caveat:** most optional fields serialize as explicit
+    `null`, but some carry `#[serde(skip_serializing_if = "Option::is_none")]`
+    and are **omitted** entirely — e.g. `CompatibilityDiagnostic.span`
+    (`src/diagnostics.rs`) and `StatusDiagnostic.remediation`. Do not assume a
+    key is always present; check the serde attribute on the struct.
 
 ---
 
@@ -120,39 +135,56 @@ are out of scope.
 ```
 
 - `sync.configuration` is one of: `"NotConfigured"`, `"Configured"`, `"ConfiguredAutoSyncDisabled"`, `"LoadFailed"`.
-- `sync.top_level` is one of: `"CorruptOrInaccessible"`, `"LiveExecution"`, `"PendingAttentionRequired"`, `"PendingRetryBackoff"`, `"PendingAwaitingScheduling"`, `"ConfiguredAndCurrent"`, `"ConfiguredAutoSyncDisabled"`, `"NotConfigured"`.
-- `pending.state` is one of: `"None"`, `"Pending"`, `"Corrupt"`, `"Inaccessible"`.
+- `sync.top_level` has two **struct** variants and six bare variants
+  (`src/status_snapshot.rs:53-62`):
+  - bare strings: `"CorruptOrInaccessible"`, `"PendingAttentionRequired"`, `"PendingAwaitingScheduling"`, `"ConfiguredAndCurrent"`, `"ConfiguredAutoSyncDisabled"`, `"NotConfigured"`
+  - objects: `{"LiveExecution":{"pid":0,"started_at_unix_ms":0}}`, `{"PendingRetryBackoff":{"next_attempt_at_unix_ms":0}}`
+- `pending.state` has one bare variant and three **struct** variants
+  (`src/status_snapshot.rs:65-77`):
+  - bare string: `"None"`
+  - objects: `{"Pending":{"generation":0,"created_at_unix_ms":0}}`, `{"Corrupt":{"reason_code":"…"}}`, `{"Inaccessible":{"reason_code":"…"}}`
 - `attempt.state` is one of: `"NeverAttempted"`, `"Succeeded"`, `"RetryScheduled"`, `"AttentionRequired"`, `"Deferred"`, `"Corrupt"`.
-- `execution_lock` and `worker_lock` are one of: `"Idle"`, `"Live"`, `"DeadStale"`, `"Malformed"`, `"Inaccessible"`.
+- `execution_lock` and `worker_lock` have three bare variants and two **struct**
+  variants (`src/status_snapshot.rs:108-114`):
+  - bare strings: `"Idle"`, `"Malformed"`, `"Inaccessible"`
+  - objects: `{"Live":{"pid":0,"started_at_unix_ms":0}}`, `{"DeadStale":{"pid":0}}`
 
 ---
 
 ## `doctor --report json`
 
+Emitted by serializing `DoctorReport` (`src/diagnostics.rs:108-124`).
+**There is no `schema`, `mode`, `file`, `entries`, or `summary` field.**
+
 ```json
 {
-  "schema": 1,
-  "mode": "string",
-  "file": "string",
-  "entries": [
-    {
-      "severity": "string",
-      "message": "string",
-      "details": "string | null"
-    }
-  ],
-  "summary": {
-    "total": 0,
-    "errors": 0,
-    "warnings": 0,
-    "info": 0
-  }
+  "schema_version": "1.0.0",
+  "tool_version": "string",
+  "source": "string | null",
+  "analysis_mode": "string",
+  "total_entries": 0,
+  "diagnostics": [ { "...": "CompatibilityDiagnostic" } ],
+  "duplicates": [],
+  "normalizations": [],
+  "has_toml_error": false,
+  "toml_error_detail": "string | null",
+  "recommended_import_command": "string | null",
+  "detected_capabilities": [],
+  "strict_mode": false,
+  "dry_run": true
 }
 ```
 
-- `severity` is one of: `"error"`, `"warning"`, `"info"`.
-- `mode` reflects the doctor sub-mode: `"compatibility"`, `"sync"`, `"check-shell"`, `"library"`, `"pet-file"`.
-- `summary` provides aggregate counts for quick scripting.
+- `severity` on each diagnostic is one of: `"Info"`, `"Warning"`, `"Error"`
+  (`DiagnosticSeverity`, `src/status_snapshot.rs:131-135`) — **capitalized**,
+  not lowercase.
+- `analysis_mode` reflects the doctor sub-mode: `"compatibility"`, `"sync"`,
+  `"check-shell"`, `"library"`, `"pet-file"`. There are **five** modes.
+- `total_entries` is the count of `diagnostics`; there is no per-severity
+  breakdown, so aggregate error/warning counts must be computed by the caller.
+- `dry_run` is always `true` for doctor (kept for report-schema uniformity).
+- `CompatibilityDiagnostic.span` is **omitted** when `None`
+  (`skip_serializing_if`).
 
 ---
 
@@ -208,9 +240,25 @@ are out of scope.
 
 ## `restore --json`
 
+`snp restore --mode dry-run` emits a **different, manifest-focused** envelope
+first (`src/commands/restore_cmd.rs:1092-1095`) and performs no writes, no lock,
+and no transaction:
+
 ```json
 {
-  "mode": "string",
+  "mode": "DryRun",
+  "manifest_schema": 0,
+  "manifest_version": "string",
+  "files_in_backup": 0,
+  "files": [ { "...": "per-file plan entry" } ]
+}
+```
+
+`merge` and `replace` emit the `RestoreReport` shape:
+
+```json
+{
+  "mode": "Merge",
   "files_restored": 0,
   "conflicts": [
     {
@@ -224,7 +272,9 @@ are out of scope.
 }
 ```
 
-- `mode` is one of: `"dry-run"`, `"merge"`, `"replace"`.
+- `mode` is built with `format!("{:?}")` over `RestoreMode`
+  (`src/commands/restore_cmd.rs:1084`), so values are **PascalCase**:
+  `"DryRun"`, `"Merge"`, `"Replace"`. It is not `"dry-run"`.
 - `conflicts` lists libraries where restore encountered conflicts.
 - `skipped` lists library names that were skipped.
 - `pre_restore_backup` is the path to the pre-restore backup, if created.

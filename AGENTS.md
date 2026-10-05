@@ -44,7 +44,9 @@ cargo test -p snip-sync --features test-helpers
 
 - `gate_mutation_on_interrupted_transactions()` before every local mutation. One journal = auto-rollback; multiple/incomplete = refuse, direct to `snp repair`. Journals live in `<config>/.transaction/`; transaction APIs take `.transaction`, pending-marker APIs take the state dir.
 - Kernel locks are authoritative: `flock`/`LockFileEx` for auto-sync locks and server singleton. `Drop` releases without unlinking; lock files may hold stale metadata. `kill(pid,0)`: only `ESRCH` proves absence (`EPERM`/unknown = live). Linux start tokens use `/proc/<pid>/stat` field 22.
-- Save path does NOT post-process `toml::to_string_pretty`. Golden corpus (tabs, trailing spaces, CRLF) must survive save/load; `write_schema_version` must use `toml::Table`, not `toml::Value`, to preserve array-of-tables.
+- Save path does NOT post-process `toml::to_string_pretty`. Golden corpus (tabs, trailing spaces, CRLF) must survive save/load; `write_schema_version` must use `toml::Table`, not `toml::Value`, to preserve array-of-tables. Corpus + details: `.skills/persistence-and-toml-fidelity.md`.
+- Snippet IDs are **deterministic**, not UUID v4: `legacy-<sha256 hex>` from content + occurrence index (`normalize_snippet_ids`, `src/library/persistence.rs`). See `docs/IDENTITY_CONTRACT.md`.
+- Read-only paths use `resolve_selector_readonly`, never `resolve_selector` — the latter runs `ensure_library_mode()` and can migrate/rewrite metadata. Picking the wrong one reintroduces recovery side effects.
 - `sync.rs` RPCs take `&mut self`; the retry macro expands inline so `self.client.<rpc>()` reborrows work. Do not reintroduce a closure-based generic retry helper (fails with "captured variable cannot escape `FnMut`").
 - Split transports by measurement, don't unify: `snp update` uses in-process lean `eggfetch-core` (see `Cargo.toml`), `snip-sync update` keeps external `curl` (embedded trial bloated the small server +34%, past the 10% gate). `tests/architecture.rs` pins this; transport tests live in `src/update.rs` (`test-support`) with a std-only loopback fixture.
 - `snip-sync` HTTP is one concrete two-route EggServe leaf in `snip-sync/src/http.rs` — no Axum/Tower-HTTP, no generic router/middleware; Tonic stays on its separate listener. Keep pre-bound listener, explicit body rejection, disabled total connection lifetime, typed shutdown completion, external TLS, constant-time Basic-auth, configured CORS, three security headers. Read `tests/snip_sync_lifetime.rs` before touching status codes, `Allow`/`Vary`, or security headers (wire parity is locked there).
@@ -57,7 +59,7 @@ cargo test -p snip-sync --features test-helpers
 - Uploads byte-bounded via Prost `encoded_len()` (client 3.5 MiB < server 4 MiB gRPC limit); `PushSnippets` idempotent by snippet identity; multi-batch errors preserve the original `SyncFailureKind` via `add_batch_context()`.
 - Scheduling errors are typed — never collapse pending-read/spawn failures into `NoPending`/`SpawnNow`/success. Pending generations are monotonic (lower generation = corrupt, preserve marker, no spawn), except lower-generation + strictly newer timestamp = marker cleared and re-recorded, adopt as new work.
 - Malformed library/`libraries.toml` fails closed (best-effort backup + error, never synthesize writable empty); missing/empty files give defaults. Missing-library recovery uses atomic `<library>.sync_recovery` state: preserve corrupt markers, one normalized remote-name match only, fail on ambiguity, remove marker only after relink + retry sync are durable, linkage + `last_sync` reset in one save.
-- Search parity: `snp get --query`, `snp list --filter`, MCP `snippets_search` share `selector::searchable_text` (description + command always, tags by default, output/notes only with `list --search-output` / `search_output`); folders/favorite/sync metadata/credentials never searchable. MCP `snippet_get`: ID (case-sensitive) / description / command (case-insensitive), exactly one required.
+- Search parity: `snp get --query`, `snp list --filter`, MCP `snippets_search` share `selector::searchable_text` (description + command always, tags by default, output/notes only with `list --search-output` / `search_output`); folders/favorite/sync metadata/credentials never searchable. **Adding a field changes three surfaces with no compiler error** — see `.skills/selector-and-search-parity.md`. MCP `snippet_get`: ID (case-sensitive) / description / command (case-insensitive), exactly one required.
 - Tests assert exact counts (not `>= 1`), prove server-side effects, verify pending-clear ordering; helper emits JSON-lines lifecycle events only when `SNP_TEST_EVENTS_DIR` is set.
 
 ## Release & branches
@@ -66,16 +68,62 @@ cargo test -p snip-sync --features test-helpers
 
 ## Pointers (don't duplicate)
 
-- `AGENTS.override.md` (session pitfall notes — consult it), `.skills/` (sync, transactions-and-auto-sync, server, encryption, remediation, UI, planning), `docs/` — check headers: evergreen refs (`EXIT_CODES`, `PERSISTENCE_INVENTORY`, `THREAT_MODEL`, `COMMAND_CONTRACTS`) vs historical snapshots (`SECURITY_AUDIT`, `FEATURE_BOUNDARIES`).
-- `plans/registry.md` is the authoritative planning status — check it before assuming any roadmap state. Canonical direction: `plans/000-long-term-specification.md`, `plans/001-terminology-and-domain-model.md`, `plans/002-long-term-roadmap.md`; governance: `plans/003-planning-process.md`. Subsystem roadmaps live in `plans/subsystems/`, handoff plans in `plans/implementation/<subsystem>/`, completion gates in `plans/closure/<subsystem>/`, predecessors in `plans/archive/`.
+- `AGENTS.override.md` — session pitfall notes; consult it.
+- `architecture/overview.md` — **start here.** Layer map, workspace crates, and the
+  **Deep-Dive Index** covering all 61 architecture documents. Every topic below has
+  an entry there; prefer extending that index over adding prose here.
+- `docs/README.md` — index of every reference doc, split into **current contracts**
+  vs **archived snapshots** in `docs/archive/`. Check the status column before
+  trusting a doc; archived ones describe code that no longer exists.
+- `plans/registry.md` is the authoritative planning status — check it before
+  assuming any roadmap state. Canonical direction: `plans/000-long-term-specification.md`,
+  `001-terminology-and-domain-model.md`, `002-long-term-roadmap.md`; governance:
+  `plans/003-planning-process.md`. Subsystem roadmaps live in `plans/subsystems/`,
+  handoff plans in `plans/implementation/<subsystem>/`, completion gates in
+  `plans/closure/<subsystem>/`, predecessors in `plans/archive/`.
+
+### Skills (`.skills/`)
+
+| Skill | Covers |
+|-------|--------|
+| `architecture-review.md` | How to review architecture docs against code; key-file map; evergreen-reference checklist |
+| `planning.md` | The `plans/` convention: roadmaps, handoff plans, closure records, registry, status vocabulary |
+| `selector-and-search-parity.md` | `snp get --query` / `snp list --filter` / MCP `snippets_search` share one function; readonly-vs-mutating resolvers; read-only stdio MCP boundary |
+| `persistence-and-toml-fidelity.md` | Save path never post-processes TOML; golden corpus; durability classes; gate-before-mutation |
+| `sync-module.md` | gRPC client, merge/conflict order, retry policy, failure classification, status snapshot |
+| `transactions-and-auto-sync.md` | Journals, lock hierarchy, mutation gate, auto-sync worker contracts |
+| `server-module.md` | `snip-sync` EggServe leaf, env vars, gRPC surface, curl-vs-eggfetch split |
+| `encryption-module.md` | Argon2id + AES-256-GCM, what sync actually encrypts, key cache |
+| `keychain-integration.md` | `keyring` usage, migration, the two test-only credential seams |
+| `ui-module.md` | TUI event loop, themes, syntax highlighting, re-export contract |
+| `remediation-patterns.md` | Cross-cutting fix patterns: atomicity, locks, dead public items, validation-first repair |
 
 ## Architecture index (start here per topic)
 
-- Overview + layer map: `architecture/overview.md`; CLI/dispatch/exit codes: `architecture/cli.md`, `architecture/outcome.md`, `architecture/commands/mod.md`
-- Sync protocol/merge/retry: `architecture/sync.md` + `.skills/sync-module.md`; conflict `(updated_at, device_id, SHA-256)` + deletion-wins + local-only `output`/`folders`/`favorite`
-- Transactions/locks/auto-sync: `architecture/persistence.md`, `architecture/auto_sync.md`, `architecture/process_file_lock.md` + `.skills/transactions-and-auto-sync.md`; gate = `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`
-- Server (EggServe leaf, no Axum): `architecture/server.md` + `.skills/server-module.md`; wire parity locked in `tests/snip_sync_lifetime.rs`
-- Updater split (lean `eggfetch-core` client vs `curl` server): `architecture/update.md`, pinned in `tests/architecture.rs`
-- Selector/search parity + MCP read-only stdio: `architecture/selector.md`, `architecture/mcp.md`
-- Library/config/TOML: `architecture/library.md`, `architecture/config.md`, `architecture/utils/`; save never post-processes `to_string_pretty`; `write_schema_version` via `toml::Table`
-- Tests: `architecture/test-infrastructure.md`; serial set + `test-support`/`test-helpers` gating per Verify section above
+- **Overview + layer map**: `architecture/overview.md`; CLI/dispatch/exit codes:
+  `architecture/cli.md`, `architecture/outcome.md`, `architecture/commands/mod.md`
+- **Sync protocol/merge/retry**: `architecture/sync.md` + `.skills/sync-module.md`;
+  conflict `(updated_at, device_id, SHA-256)` + deletion-wins + local-only
+  `output`/`folders`/`favorite`
+- **Transactions/locks/auto-sync**: `architecture/persistence.md`,
+  `architecture/auto_sync.md`, `architecture/process_file_lock.md` +
+  `.skills/transactions-and-auto-sync.md`; gate =
+  `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`
+- **Local data / TOML fidelity**: `.skills/persistence-and-toml-fidelity.md`,
+  `architecture/library.md`, `architecture/config.md`, `architecture/utils/`
+- **Server (EggServe leaf, no Axum)**: `architecture/server.md` +
+  `.skills/server-module.md`; wire parity locked in `tests/snip_sync_lifetime.rs`
+- **Updater split (lean `eggfetch-core` client vs `curl` server)**:
+  `architecture/update.md`, pinned in `tests/architecture.rs`
+- **Selector/search parity + MCP read-only stdio**: `architecture/selector.md`,
+  `architecture/mcp.md` + `.skills/selector-and-search-parity.md`
+- **TUI vs UI components**: `architecture/tui.md` (event loop),
+  `architecture/ui.md` (theme, highlight, variables) + `.skills/ui-module.md`
+- **Backup/restore/repair/validate**: `architecture/persistence.md`,
+  `architecture/commands/{backup_cmd,backup_archive,restore_cmd,repair_cmd,validate_cmd}.md`
+- **Diagnostics / doctor**: `architecture/diagnostics.md`,
+  `architecture/status.md`, `architecture/commands/{doctor_cmd,doctor_report,pet_analysis}.md`
+- **Layer boundaries**: `docs/LOGICAL_LAYERS.md`, enforced by `tests/architecture.rs`
+  — update the doc and the test's constant lists together
+- **Tests**: `architecture/test-infrastructure.md`; serial set +
+  `test-support`/`test-helpers` gating per Verify section above

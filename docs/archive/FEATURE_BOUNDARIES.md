@@ -1,5 +1,12 @@
 # Feature Boundaries Analysis — Phase 06A Workstream I
 
+> **ARCHIVED — historical snapshot. Do not treat as a current contract.**
+> This document contradicts itself: it records that the `tui`, `clipboard`, `sync`,
+> and `bundled-themes` feature labels were removed, then later recommends gating
+> behind those same removed labels. `Cargo.toml [features]` today contains only
+> `test-support = []`. Dependency versions cited here also drift from `Cargo.lock`.
+> Current feature flags: read `Cargo.toml` and `architecture/update.md`.
+
 ## Current Feature Definitions
 
 ### snip-it (root crate)

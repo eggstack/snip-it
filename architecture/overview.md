@@ -685,8 +685,14 @@ Do not sanitize snippet commands (by design). Clipboard writes normally go throu
 
 | File | Subject |
 |------|---------|
-| `../docs/LOGICAL_LAYERS.md` | Target logical layer architecture |
+| `../docs/README.md` | **Index of reference docs** — current contracts vs archived snapshots |
+| `../docs/LOGICAL_LAYERS.md` | Target logical layer architecture (enforced by `tests/architecture.rs`) |
 | `../docs/ARCHITECTURE_INVENTORY.md` | Comprehensive module inventory |
-| `../AGENTS.md` | Authoritative verify commands, gotchas, invariants |
+| `../docs/IDENTITY_CONTRACT.md` | Deterministic snippet IDs, library identity |
+| `../docs/COMMAND_CONTRACTS.md` | Per-command behavioral contract |
+| `../docs/JSON_SCHEMAS.md` | Machine-readable JSON envelopes |
+| `../docs/LIBRARY_SCOPE.md` | `--library` resolution and the selector vs single-library paths |
+| `../AGENTS.md` | Authoritative verify commands, gotchas, invariants, doc index |
 | `../AGENTS.override.md` | Session pitfall notes |
 | `../plans/registry.md` | Authoritative planning status |
+| `../.skills/` | Task-shaped agent skills — start with `planning.md`, then `architecture-review.md` |

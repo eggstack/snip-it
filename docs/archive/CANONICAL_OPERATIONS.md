@@ -1,5 +1,12 @@
 # Canonical Operation Inventory
 
+> **ARCHIVED — historical snapshot. Do not treat as a current contract.**
+> Every `path:line` citation in this document refers to a pre-split `src/library.rs`
+> and `src/config.rs` that no longer exist, so the citations are unresolvable.
+> Current module structure and canonical entry points live in `architecture/`
+> (start at `architecture/overview.md` § Deep-Dive Index) and in the live source.
+> Retained for traceability of the single-canonical-entry-point analysis.
+
 > Generated: Phase 06A Workstream D
 > Purpose: Single source of truth for every behavior-critical operation, its canonical
 > implementation, all callers/adapters, and any semantic deviations.

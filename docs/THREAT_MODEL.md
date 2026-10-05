@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-07-22
-**Status:** Phase 09A — Workstream A
+**Status:** Evergreen contract
 **Last reviewed:** 2026-07-22
 
 ---
@@ -115,7 +115,7 @@ Each boundary below represents a transition where data crosses from one trust do
 
 **Description:** The local gRPC client communicates with the snip-sync server.
 
-**Properties:** All data in transit is end-to-end encrypted. The server never sees plaintext snippets. Bearer token in gRPC metadata. TLS via `https://` URLs; plaintext `http://` is rejected for non-loopback hosts in the client.
+**Properties:** Snippet *content* is end-to-end encrypted — the server never sees plaintext commands, descriptions, or tags. Snippet *metadata* is not: `id`, `created_at`, `updated_at`, `device_id`, and `deleted` are sent as plaintext proto fields, because the server needs them for merge ordering and deletion tombstones. `output` is local-only and never leaves the device. Bearer token in gRPC metadata. TLS via `https://` URLs; plaintext `http://` is rejected for non-loopback hosts in the client.
 
 **Mitigations:** AES-256-GCM encryption with random nonces, TLS via `https://`, client-side loopback check rejecting plaintext to non-loopback hosts, `SNIP_SYNC_ALLOW_HTTP` env var overrides the loopback check (loopback hosts are always allowed), server stores Argon2id hashes of API keys (not plaintext).
 
@@ -180,7 +180,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Residual risk** | Low. A valid TOML file with malicious shell content in a `command` field is by design executable when the user runs it. This is the intended use case. |
 | **User responsibility** | Review imported snippets before executing them. Treat snippet commands as you would any shell script from an untrusted source. |
 | **Tests / evidence** | `tests/auto_sync_closure.rs`, `tests/local_contracts.rs`. Golden command corpus verifies TOML round-trip fidelity. |
-| **Owner / module** | `src/commands/import_cmd.rs`, `src/library.rs`, `src/utils/toml_helpers.rs` |
+| **Owner / module** | `src/commands/import_cmd.rs`, `src/library/`, `src/utils/toml_helpers.rs` |
 
 ### T2: Malicious Backup Archive
 
@@ -200,11 +200,11 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | The sync server is compromised, returns malformed responses, or is impersonated. It could attempt to serve crafted encrypted payloads or harvest credentials. |
 | **Attack vector** | Server-side compromise, DNS hijacking (with invalid TLS policy), or supply-chain attack on server deployment. |
-| **Mitigations** | End-to-end encryption: server never sees plaintext snippets, commands, descriptions, or tags. AES-256-GCM with random 12-byte nonces; authentication tag verification on decryption rejects tampered ciphertext. API key is Argon2id-hashed server-side (server never stores plaintext). TLS required for non-loopback connections. |
-| **Residual risk** | Low for confidentiality and integrity of snippet data. Metadata (timestamps, sizes) may be visible to the server in encrypted envelope headers. Denial of service is possible. |
+| **Mitigations** | End-to-end encryption of snippet content: the server never sees plaintext commands, descriptions, or tags. AES-256-GCM with random 12-byte nonces; authentication tag verification on decryption rejects tampered ciphertext. API key is Argon2id-hashed server-side (server never stores plaintext). TLS required for non-loopback connections. |
+| **Residual risk** | Low for confidentiality and integrity of snippet **content**. A compromised server *does* learn per-snippet metadata — `id`, `created_at`, `updated_at`, `device_id`, `deleted` — plus record counts and rough payload sizes, because those fields are plaintext proto fields, not envelope headers. It also learns library names and which snippets were deleted when. It cannot forge content: the GCM tag rejects it. Denial of service is possible. |
 | **User responsibility** | Verify your sync server URL is correct. Use a trusted server deployment. |
 | **Tests / evidence** | `tests/sync_integration.rs`, `tests/sync_contracts.rs`. Encryption unit tests in `src/encryption.rs`. |
-| **Owner / module** | `src/sync.rs`, `src/sync_commands.rs`, `src/encryption.rs`, `src/config.rs` |
+| **Owner / module** | `src/sync.rs`, `src/sync_commands.rs`, `src/encryption.rs`, `src/config/` |
 
 ### T4: Network Attacker Under Invalid TLS Policy
 
@@ -216,7 +216,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Residual risk** | Very low. The client-side loopback check and the server-side env-var gate make accidental plaintext use unlikely. A user who deliberately disables TLS for a non-loopback server accepts the risk. |
 | **User responsibility** | Ensure the sync server URL uses `https://` for non-loopback hosts. Do not set `SNIP_SYNC_ALLOW_HTTP=true` for non-loopback servers. Use TLS in all production and staging environments. |
 | **Tests / evidence** | `src/sync.rs` (TLS enforcement), `tests/sync_integration.rs` (loopback-only HTTP tests). |
-| **Owner / module** | `src/sync.rs`, `src/config.rs` |
+| **Owner / module** | `src/sync.rs`, `src/config/` |
 
 ### T5: Same-Account Local Process
 
@@ -228,7 +228,7 @@ Each boundary below represents a transition where data crosses from one trust do
 | **Residual risk** | **Medium.** A same-user process can read all local files regardless of `0o600` permissions. CRC32 and file permissions detect corruption and reduce accidental exposure but do not authenticate state against a fully compromised user account. See [Section 6: Same-User Attacker Limitations](#6-same-user-attacker-limitations). |
 | **User responsibility** | Treat your user account as a security boundary. Be cautious about installing untrusted software that runs under your account. |
 | **Tests / evidence** | Lock nonce tests in `src/auto_sync/lock.rs`, status integrity tests in `src/auto_sync/status.rs`. |
-| **Owner / module** | `src/utils/atomic.rs`, `src/auto_sync/lock.rs`, `src/auto_sync/status.rs`, `src/config.rs` |
+| **Owner / module** | `src/utils/atomic.rs`, `src/auto_sync/lock.rs`, `src/auto_sync/status.rs`, `src/config/` |
 
 ### T6: Malicious Editor or Shell Config
 
@@ -391,9 +391,9 @@ Users who require protection against local attackers should use full-disk encryp
 |-----------|-----------|-------|----------|
 | **Argon2id** | 16 MiB memory, 3 iterations, 4 parallelism, random salt per encryption | Key derivation from passphrase to AES-256 key | `src/encryption.rs` |
 | **AES-256-GCM** | Random 12-byte nonce, 16-byte auth tag | Symmetric encryption of snippet data and metadata | `src/encryption.rs` |
-| **SHA-256** | Standard | Backup manifest checksums and deterministic IDs | `src/commands/backup_cmd.rs`, `src/library.rs` |
+| **SHA-256** | Standard | Backup manifest checksums and deterministic IDs | `src/commands/backup_cmd.rs`, `src/library/` |
 | **CRC32** | Standard | Integrity check on `auto-sync-status.toml` (not cryptographic) | `src/auto_sync/status.rs` |
-| **OS Keychain** | Platform-native | API key and encryption key storage | `src/config.rs`, `src/encryption.rs` |
+| **OS Keychain** | Platform-native | API key and encryption key storage | `src/config/`, `src/encryption.rs` |
 
 ### Cryptographic Properties
 

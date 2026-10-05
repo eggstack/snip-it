@@ -37,20 +37,34 @@ Report findings directly (session summary or PR description) with:
 
 ## Key Files to Check
 
-| Module | Primary Source Files |
-|--------|---------------------|
-| overview | `src/main.rs`, project root |
-| cli | `src/main.rs`, `src/commands/` |
-| clipboard | `src/clipboard.rs` |
-| config | `src/config/`, `src/utils/config.rs` |
-| core | `src/library/`, `src/error.rs` |
-| encryption | `src/encryption.rs` |
-| logging | `src/logging.rs` |
-| proto | `snip-proto/` |
-| server | `snip-sync/src/` |
-| sync | `src/sync.rs`, `src/sync_commands.rs` |
-| ui | `src/ui/` |
-| utils | `src/utils/` |
+`architecture/overview.md` § Deep-Dive Index is the authoritative module → doc
+map (61 files). The table below is the review *shortcut* — the highest-risk
+source files, grouped by the skill that covers them.
+
+| Area | Primary Source Files | Skill / Doc |
+|------|---------------------|-------------|
+| CLI entry + dispatch | `src/main.rs`, `src/outcome.rs`, `src/usage.rs` | `architecture/cli.md`, `outcome.md` |
+| Commands | `src/commands/` (one module per command) | `architecture/commands/*.md` |
+| Data model + persistence | `src/library/{model,persistence,manager}.rs`, `src/migration.rs` | `.skills/persistence-and-toml-fidelity.md` |
+| Config + credentials | `src/config/{mod,sync_settings,toml_cache}.rs`, `src/utils/config.rs` | `.skills/keychain-integration.md` |
+| Selector + search parity | `src/selector.rs` | `.skills/selector-and-search-parity.md` |
+| Sync client + merge | `src/sync.rs`, `src/sync_commands.rs`, `src/sync_failure.rs` | `.skills/sync-module.md` |
+| Auto-sync | `src/auto_sync/` (11 files), `src/status_snapshot.rs` | `.skills/transactions-and-auto-sync.md` |
+| Transactions + locks | `src/transaction.rs`, `src/local_data.rs`, `src/process_file_lock.rs` | `.skills/transactions-and-auto-sync.md` |
+| Server | `snip-sync/src/` | `.skills/server-module.md` |
+| Proto | `snip-proto/` | `architecture/proto.md` |
+| MCP | `src/mcp/` | `.skills/selector-and-search-parity.md` |
+| TUI | `src/ui/` (see `tui.md` for the event loop, `ui.md` for theme/highlight) | `.skills/ui-module.md` |
+| Encryption | `src/encryption.rs` | `.skills/encryption-module.md` |
+| Updater | `src/update.rs` + `snip-sync/src/update.rs` | `architecture/update.md` |
+| Backup / restore / repair | `src/commands/{backup_cmd,backup_archive,restore_cmd,repair_cmd,validate_cmd}.rs` | `architecture/persistence.md` |
+| Diagnostics / doctor | `src/diagnostics.rs`, `src/commands/{doctor_cmd,doctor_report,pet_analysis}.rs` | `architecture/diagnostics.md` |
+| Cross-cutting | `src/clipboard.rs`, `src/logging.rs`, `src/error.rs`, `src/output.rs`, `src/sort.rs`, `src/utils/` | `architecture/utils.md`, `core.md` |
+| Tests | `tests/`, `tests/support/`, `src/test_failpoints.rs` | `architecture/test-infrastructure.md` |
+
+The two most invariant-heavy modules — `transaction.rs` + `local_data.rs` and
+`auto_sync/` — are the easiest to miss if you scope a review from the CLI
+surface. Check them on any change to local mutation or sync triggering.
 
 ## Common Patterns to Verify
 
@@ -62,7 +76,7 @@ Report findings directly (session summary or PR description) with:
 
 ### Error Handling
 - **Error propagation**: Functions should return `Result` and propagate errors via `?`
-- **SnipError constructors**: Use `SnipError::io_error()`, `toml_error()`, `sync_failure()` etc. (`src/error.rs`); `CryptoError` converts via `impl From<CryptoError> for SnipError` (`src/error.rs:316-330`)
+- **SnipError constructors**: Use `SnipError::io_error()`, `toml_error()`, `sync_failure()` etc. (`src/error.rs`); `CryptoError` converts via `impl From<CryptoError> for SnipError` (`src/error.rs:316`)
 - **Silent failures**: Check for `let _ = ...` patterns that suppress errors without logging
 
 ### Sync
@@ -79,15 +93,18 @@ Report findings directly (session summary or PR description) with:
 - `CryptoError` converts to `SnipError::SyncFailure` via the `From` impl (`error.rs`)
 - `From<io::Error>` auto-conversion with kind-based operation strings (`error.rs`)
 
-## Phase 06A Checklist
+## Evergreen-reference checklist
 
-When reviewing public API changes or architecture docs, verify against the evergreen refs (check doc headers — `SECURITY_AUDIT`/`FEATURE_BOUNDARIES` are historical snapshots, not contracts):
+When reviewing public API changes or architecture docs, verify against the
+evergreen refs listed in `docs/README.md` (which classifies every doc as contract
+vs historical snapshot). `docs/archive/` holds the snapshots — never treat one as
+a contract:
 
 1. **Public API inventory** (`docs/PUBLIC_API.md`): Every public item is accounted for and justified
-2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports
-3. **Canonical operations** (`docs/CANONICAL_OPERATIONS.md`): Each operation has a single, documented entry point
-4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, public `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction.
-5. **`#[non_exhaustive]`**: All public enums that may gain variants are marked `#[non_exhaustive]`
+2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports. This file is **executable** — `tests/architecture.rs` scans `src/` and fails on a lower layer gaining a higher-layer dependency. Update the doc and the test's constant lists together
+3. **Canonical operations**: each behavior-critical operation should have a single documented entry point. The historical analysis is in `docs/archive/CANONICAL_OPERATIONS.md`, but its `path:line` citations are stale — verify the current entry point in `architecture/` and in the source
+4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, public `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction
+5. **`#[non_exhaustive]`**: mark new public enums that may gain variants. It is **not** blanket — see the note in `.skills/remediation-patterns.md` for which modules already carry it
 
 ## Verification Checklist
 

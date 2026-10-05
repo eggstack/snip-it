@@ -27,7 +27,8 @@ argon2.hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)?;
 The derived key is wrapped in private `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop` (`src/encryption.rs:102-103`).
 The encrypt path zeroizes via `key.zeroize()` (`encryption.rs:243`); the decrypt path
 uses `drop(std::mem::take(&mut key))` (`encryption.rs:269`). Never `lock().unwrap()` the
-key cache directly — use `lock_key_cache()` with its poison recovery (`encryption.rs:72-92`); `ct_eq` is `#[cfg(test)]`-only, do not re-export.
+key cache directly — use `lock_key_cache()` (`encryption.rs:72-80`) with its poison
+recovery; `ct_eq` is `#[cfg(test)]`-only, do not re-export.
 
 ## Payload Format
 
@@ -37,8 +38,26 @@ Base64(Salt[16] + Nonce[12] + Ciphertext[...])
 
 - Salt: 16 random bytes (OsRng)
 - Nonce: 12 random bytes (OsRng)
-- Ciphertext: AES-256-GCM over arbitrary caller-supplied plaintext; sync callers
-  (`encrypt_snippet` in `sync.rs`) serialize the `ProtoSnippet` to JSON first
+- Ciphertext: AES-256-GCM over arbitrary caller-supplied plaintext
+
+### What sync actually encrypts (do not assume the whole record is covered)
+
+`encrypt_snippet` (`src/sync.rs:1183`) encrypts **only** a 3-field
+`EncryptedSnippetData { description, command, tags }`, serialized to JSON. The
+ciphertext is placed in the proto `command` field; `description` is emptied and
+`tags` cleared. The remaining fields travel as **plaintext** proto fields:
+
+| Field | Wire protection |
+|-------|-----------------|
+| `description`, `command`, `tags` | Encrypted (ciphertext in `command`, `encrypted = true`) |
+| `id`, `created_at`, `updated_at`, `device_id`, `deleted` | **Plaintext** |
+| `output` | Not in `ProtoSnippet` at all (local-only) |
+
+`decrypt_snippet` (`src/sync.rs:1246`) is the symmetric inverse and returns
+unmodified records unchanged when `encrypted == false`. An agent must not
+assume the full record is confidential — `device_id` and `updated_at` are
+visible to the server and to anyone reading the wire format, which matters
+when reasoning about the threat model or about "encrypt more fields" changes.
 
 ## API
 
@@ -61,7 +80,7 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`error.rs:316-330`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:316`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
 
 ## Security Properties
 
@@ -77,7 +96,10 @@ Derived keys are cached per-session to avoid re-running Argon2id for the same (a
 
 - **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>>` — keyed by `(SHA-256(api_key), base64(salt))`
 - **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
-- **Clear**: `clear_key_cache()` should be called at the end of a sync operation
+- **Clear**: sync takes an RAII guard `let _key_cache_guard = encryption::key_cache_guard();`
+  (`src/sync.rs:403`); `KeyCacheGuard::drop` calls `clear_key_cache()`. There is no
+  direct `clear_key_cache()` call in `sync.rs` — keep the guard, or an early return
+  leaks derived keys for the rest of the process.
 - **Zeroize**: Cache entries are zeroized on drain
 
 ## Known Limitations

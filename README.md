@@ -336,10 +336,11 @@ headless environment.
 | [SECURITY.md](SECURITY.md) | Security model, encryption, credential storage, and vulnerability disclosure |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, testing, and release process |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [docs/README.md](docs/README.md) | **Index of all reference docs**, split into current contracts vs archived snapshots |
 | [docs/EXIT_CODES.md](docs/EXIT_CODES.md) | Exit code reference |
+| [docs/COMMAND_CONTRACTS.md](docs/COMMAND_CONTRACTS.md) | Per-command behavioral contract |
 | [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Pet format compatibility details |
 | [docs/JSON_SCHEMAS.md](docs/JSON_SCHEMAS.md) | Machine-readable JSON output schemas |
-| [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) | Security audit findings |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Threat model and trust boundaries |
 
 ## License

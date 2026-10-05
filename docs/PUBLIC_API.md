@@ -1,6 +1,8 @@
 # snip-it Public API Inventory
 
-Updated: Phase 13F — API, CLI, Server, and Documentation Surface Consolidation
+**Evergreen contract.** Public surface of the `snip-it` library half (`src/lib.rs`).
+The binary is not published to crates.io as a library, so this surface exists
+for integration tests and is covered by `tests/public_api_smoke.rs`.
 
 ## Overview
 
@@ -17,7 +19,7 @@ library — it is a standalone binary.  The public surface exists because:
 3. A handful of types are exposed for `#[derive(clap::ValueEnum)]` on CLI
    arguments (e.g., `sort::SnippetSort`).
 
-### Phase 13F changes
+### Documented surface decisions
 
 - Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`,
   `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`; protocol types
@@ -107,7 +109,7 @@ library — it is a standalone binary.  The public surface exists because:
 
 ---
 
-## `config` module (`src/config.rs`)
+## `config` module (`src/config/`)
 
 | Item | Classification | Notes |
 |------|---------------|-------|
@@ -354,7 +356,7 @@ the root `snip-it` library no longer exposes a generated-proto module.
 
 ---
 
-## `library` module (`src/library.rs`)
+## `library` module (`src/library/`)
 
 *Module is `pub(crate)` in `lib.rs` — correctly hidden from external consumers.*
 
@@ -449,12 +451,22 @@ the root `snip-it` library no longer exposes a generated-proto module.
 
 ### Doc warnings to fix
 
-17. **`error.rs:137`** — Broken intra-doc link to `FailureClass`.  Should be
-    `[`FailureClass`](crate::auto_sync::policy::FailureClass)`.
+Verified against `cargo doc --no-deps --workspace` (clean tree). Exactly **3**
+warnings remain, all the same class: a public doc comment links to a
+`pub(crate)` item, so the link only resolves with `--document-private-items`.
 
-18. **`output.rs:3`** — Doc links to private item `crate::library::Snippet`.
-    The `library` module is `pub(crate)`, so this link only works with
-    `--document-private-items`.  Rephrase or make the link unconditional.
+1. **`src/auto_sync/execution_lock.rs:177`** — `process_alive` links to private
+   `crate::utils::process`. Rephrase as plain text or drop the intra-doc link.
+2. **`src/commands/validate_cmd.rs:668`** — `run` links to private
+   `LibraryManager::new`. Same fix.
+3. **`src/selector.rs:618`** — `resolve_selector_readonly` links to private
+   `crate::library::readonly_library_sources`. Same fix.
+
+The previously listed `error.rs:137` → `FailureClass` warning no longer occurs;
+`FailureClass` is defined in `src/sync_failure.rs:24` and the link is gone.
+
+Note: `cargo doc` warnings are **not** covered by `check.sh` (which runs
+`clippy`, not rustdoc). Run it explicitly when touching public doc comments.
 
 ---
 

@@ -15,8 +15,11 @@ this before changing either.
 
 - Pending APIs receive `sync_state_dir`; transaction APIs receive `transaction_dir`.
 - `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` needs BOTH.
-- Callers derive them via `crate::auto_sync::notification::derive_state_dir()` and
-  `.join(".transaction")` (e.g. `src/commands/mod.rs:178`, `src/commands/restore_cmd.rs`).
+- `transaction_dir` has a dedicated helper — `local_data::transaction_dir()`
+  (`src/local_data.rs:301-303`) — and that is the form most call sites use
+  (e.g. `src/commands/mod.rs:178-179`, `src/commands/restore_cmd.rs`). The state
+  dir comes from `auto_sync::notification::derive_state_dir()`. Prefer the
+  helpers over re-deriving the `.transaction` suffix by hand.
 
 ## Transaction State Machine
 

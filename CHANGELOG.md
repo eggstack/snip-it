@@ -7,8 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **Agent-facing docs re-verified against source**: Audited every `.skills/`
+  file, `architecture/` deep-dive, and `docs/` contract against the current
+  codebase, and corrected claims that no longer held. Notable corrections:
+  sync encrypts only `{description, command, tags}` (metadata `id`,
+  `created_at`, `updated_at`, `device_id`, `deleted` travel in plaintext) — the
+  skills previously implied the whole `ProtoSnippet` was encrypted; snippet IDs
+  are deterministic `legacy-<sha256 hex>`, not UUID v4; `snip-sync` defaults are
+  `<config>/snip-sync/snippets.db`, 5 connections, and an absolute
+  `premade-libraries` path; and the keychain seam is protected by a
+  `#[cfg(feature = "test-support")]` gate rather than a guard test (a second
+  seam, `SNP_TEST_CREDENTIAL_FILE`, was undocumented).
+- **`docs/` pruned and indexed**: `SECURITY_AUDIT`, `FEATURE_BOUNDARIES`,
+  `CANONICAL_OPERATIONS`, and `FUZZING_AND_PROPERTY_TESTS` moved to
+  `docs/archive/` with headers stating exactly why each is stale — they
+  referenced the pre-split `src/library.rs` / `src/config.rs` and pre-convention
+  "Phase 06A"-style planning labels. New `docs/README.md` classifies every
+  reference doc as current contract or archived snapshot.
+- **`LOGICAL_LAYERS.md` aligned with its enforcer**: the document claimed
+  "no file moves yet" while `tests/architecture.rs` enforces the post-split
+  module layout. It now lists the exact enforced module sets, the two known
+  cross-layer exceptions, and the `config/` exclusion.
+- **Contracts corrected**: `JSON_SCHEMAS.md` (status/doctor envelopes,
+  `restore` mode casing, dry-run shape), `LIBRARY_SCOPE.md` (`snp list
+  --library all` does not exist; only the selector path understands `"all"`),
+  `COMMAND_CONTRACTS.md` (exit-2 legend, `repair` exit 10, `edit --output`
+  writes stderr, startup-recovery table), `IDENTITY_CONTRACT.md`, and
+  `PUBLIC_API.md` (3 real rustdoc warnings, verified via `cargo doc`).
+- **Two new skills**: `.skills/selector-and-search-parity.md` (the three
+  surfaces sharing `searchable_text`, the readonly-vs-mutating resolver split,
+  and the read-only stdio MCP boundary) and
+  `.skills/persistence-and-toml-fidelity.md` (the "never post-process
+  serialized TOML" rule, the 24-case golden corpus, durability classes, and
+  fail-closed parsing) — both covering invariants that previously existed only
+  in `AGENTS.md` prose or not at all.
+
 ### Fixed
-- **snip-sync HTTP parity (Plan 020)**: Restored the pre-migration wire
+- `snp --help` listed exit codes 0–9; exit 10 (`UNSAFE_REPAIRS`) is now listed.
+- `src/utils/config.rs` module docs claimed per-platform config resolution
+  (AppData on Windows, Application Support on macOS). There is no `#[cfg]`
+  branch: every platform uses `$XDG_CONFIG_HOME`/`~/.config` plus `/snp`, with
+  a one-way macOS legacy migration.
+
+### Fixed
+- **snip-sync HTTP parity (server-lifecycle-http M004)**: Restored the pre-migration wire
   contract proven by exercising the Axum server over real sockets. Router
   404/405 responses are empty with no content-type (the metrics-disabled 404
   keeps its `"Not found"` payload), known routes answer preflight and
@@ -18,12 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the release binary is byte-identical at 3,898,408 bytes.
 
 ### Changed
-- **snip-sync HTTP runtime (Plans 018–019)**: Replaced the Axum/Tower-HTTP
+- **snip-sync HTTP runtime (server-lifecycle-http M003)**: Replaced the Axum/Tower-HTTP
   surface with one direct EggServe HTTP/1 health/metrics service. Tonic remains
   on its separate listener and TLS remains external. The controlled release
   build measured 3,898,408 bytes, 1.70% above the original Axum runtime and
   1.65% smaller than the EggServe/Axum adapter trial.
-- **Self-update transport (Plan 017; supersedes the Plan 016 version bump)**:
+- **Self-update transport (updater-transport M005; supersedes M004)**:
   `snp update` now pins `eggfetch-core` 0.2.0 on the unchanged lean
   `standard-http1` + `redirects` + Rustls native-roots profile. Strict
   bounded redirects, the native request/body `Timeout.total`, 1 MiB metadata /

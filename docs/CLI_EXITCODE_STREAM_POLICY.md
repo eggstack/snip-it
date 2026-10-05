@@ -1,7 +1,10 @@
 # CLI Exit Code and Stream Policy
 
-This document specifies the current behavior and planned contract for snp CLI
-exit codes and stdout/stderr stream usage.
+**Evergreen policy** for snp CLI exit codes and stdout/stderr stream usage.
+The authoritative code table is [`EXIT_CODES.md`](EXIT_CODES.md); this document
+covers stream discipline and the cases that are easy to get wrong. The
+"planned contract" language has been retired — the contract is implemented and
+stable via `CliOutcome` (`src/outcome.rs`).
 
 ## Current Behavior
 
@@ -21,9 +24,9 @@ verified reference is [`docs/EXIT_CODES.md`](EXIT_CODES.md).
 | 5 | `AMBIGUOUS` | Multiple snippets match filter |
 | 6 | `VALIDATION_FAILED` | Data validation failure |
 | 7 | `SYNC_FAILED` | Sync operation failure |
-| 8 | `EXECUTION_FAILED` | Output-file execution failure (timeout/spawn) |
+| 8 | `EXECUTION_FAILED` | Snippet execution (child process) failed **wrapper** — used only when the child produced no exit code of its own; otherwise the child's code is propagated. Timeout/spawn failures are a subset, not the definition. See `EXIT_CODES.md`. |
 | 9 | `CONFLICT_OR_REFUSED` | Lock conflict, kernel refusal |
-| 10 | `UNSAFE_REPAIRS` | Repair refused: unsafe repairs require manual review |
+| 10 | `UNSAFE_REPAIRS` | Valid invocation found repairs, but all are unsafe and await an operator decision (**not** a usage error — deliberately distinct from exit 2) |
 
 Selection semantics: `run_snippet_selection()` returns `SelectionOutcome`
 (Selected or Cancelled). For `run`, `clip`, and `search`, cancellation is
@@ -72,6 +75,8 @@ flags. Without flags, output uses the default relevance ordering.
   1 on `SnipError`.
 - **Sort flags**: `--sort <mode>` and `--favorites-first` are accepted.
   Sorting affects the TUI display order but not the exit code or output.
+- **Also accepts**: `--sync` (opportunistic sync before selecting; see
+  `architecture/auto_sync.md`) and `--library`.
 
 #### `snp clip` (alias `c`)
 
