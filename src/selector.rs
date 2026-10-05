@@ -615,7 +615,7 @@ pub fn resolve_exact_target(
 ///
 /// Side-effect-free counterpart to [`resolve_selector`] for deterministic
 /// read paths (`snp get`, MCP). It consumes the canonical
-/// [`crate::library::readonly_library_sources`] resolver, so legacy
+/// `library::readonly_library_sources` resolver, so legacy
 /// single-file handling, primary resolution, and path construction cannot
 /// drift from the library layer. A `Primary` scope with no visible source
 /// preserves the historical "No primary library" error; an `all` scope with

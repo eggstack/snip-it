@@ -174,7 +174,7 @@ pub fn is_stale(contents: &LockIdentity) -> bool {
 
 /// Check whether a process with the given PID is alive.
 ///
-/// Delegates to the shared implementation in [`crate::utils::process`] so
+/// Delegates to the shared `utils::process::is_process_alive` implementation so
 /// liveness semantics stay identical across all lock implementations.
 #[cfg(unix)]
 pub fn process_alive(pid: u32) -> bool {
@@ -183,7 +183,7 @@ pub fn process_alive(pid: u32) -> bool {
 
 /// Check whether a process with the given PID is alive.
 ///
-/// Delegates to the shared implementation in [`crate::utils::process`] so
+/// Delegates to the shared `utils::process::is_process_alive` implementation so
 /// liveness semantics stay identical across all lock implementations.
 #[cfg(not(unix))]
 pub fn process_alive(pid: u32) -> bool {

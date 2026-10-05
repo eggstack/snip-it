@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serialized TOML" rule, the 24-case golden corpus, durability classes, and
   fail-closed parsing) — both covering invariants that previously existed only
   in `AGENTS.md` prose or not at all.
+- **`cargo doc` is warning-free**: fixed the three remaining `private_intra_doc_links`
+  warnings (`execution_lock.rs` `process_alive`, `validate_cmd.rs` `run`,
+  `selector.rs` `resolve_selector_readonly`) by converting links to `pub(crate)`
+  items into plain code-span text. `docs/PUBLIC_API.md` records the rule: only
+  items re-exported from `src/lib.rs` may be intra-doc-linked from a public doc
+  comment.
 
 ### Fixed
 - `snp --help` listed exit codes 0–9; exit 10 (`UNSAFE_REPAIRS`) is now listed.

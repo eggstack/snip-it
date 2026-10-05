@@ -665,7 +665,7 @@ fn truncate_cmd(s: &str) -> String {
 
 /// Run validation.
 ///
-/// Read-only: uses [`LibraryManager::new`] plus the canonical read-only
+/// Read-only: uses `LibraryManager::new` plus the canonical read-only
 /// resolver. Never migrates legacy state and never creates files.
 pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<CliOutcome> {
     let mgr = LibraryManager::new()?;

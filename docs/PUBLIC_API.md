@@ -449,24 +449,31 @@ the root `snip-it` library no longer exposes a generated-proto module.
     save path.  The doc comment says it's "available for callers that
     hand-write TOML."  Consider whether it should remain public.
 
-### Doc warnings to fix
+### Doc warnings
 
-Verified against `cargo doc --no-deps --workspace` (clean tree). Exactly **3**
-warnings remain, all the same class: a public doc comment links to a
-`pub(crate)` item, so the link only resolves with `--document-private-items`.
+`cargo doc --no-deps --workspace` is **warning-free** on `main`.
 
-1. **`src/auto_sync/execution_lock.rs:177`** — `process_alive` links to private
-   `crate::utils::process`. Rephrase as plain text or drop the intra-doc link.
-2. **`src/commands/validate_cmd.rs:668`** — `run` links to private
-   `LibraryManager::new`. Same fix.
-3. **`src/selector.rs:618`** — `resolve_selector_readonly` links to private
-   `crate::library::readonly_library_sources`. Same fix.
+The three warnings that used to appear were all the same class — a public doc
+comment linking to a `pub(crate)` item, which only resolves under
+`--document-private-items`. All three were converted to plain code-span text,
+naming the real symbol:
 
-The previously listed `error.rs:137` → `FailureClass` warning no longer occurs;
-`FailureClass` is defined in `src/sync_failure.rs:24` and the link is gone.
+| Site | Was | Now |
+|------|-----|-----|
+| `src/auto_sync/execution_lock.rs:177,186` | `[`crate::utils::process`]` | `` `utils::process::is_process_alive` `` |
+| `src/commands/validate_cmd.rs:668` | `[`LibraryManager::new`]` | `` `LibraryManager::new` `` |
+| `src/selector.rs:618` | `[`crate::library::readonly_library_sources`]` | `` `library::readonly_library_sources` `` |
+
+Rule of thumb: `utils`, `library`, `commands`, and most other modules are
+`pub(crate)`, so **only items re-exported from `src/lib.rs` may be
+intra-doc-linked** from a public doc comment. Name anything else in backticks.
+
+An earlier listed warning (`error.rs:137` → `FailureClass`) no longer occurs;
+`FailureClass` is defined in `src/sync_failure.rs:24`.
 
 Note: `cargo doc` warnings are **not** covered by `check.sh` (which runs
-`clippy`, not rustdoc). Run it explicitly when touching public doc comments.
+`clippy`, not rustdoc). Run it explicitly when touching public doc comments —
+otherwise a new broken link reaches `main` unnoticed.
 
 ---
 
