@@ -17,6 +17,7 @@ pub use theme::get_theme;
 pub use variables::{VariablePromptResult, prompt_variables};
 
 use std::io;
+use std::io::IsTerminal;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -524,6 +525,19 @@ pub enum SnippetSelection {
 }
 
 pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<SnippetSelection>> {
+    // Interactive TUI needs a real terminal. Without one, `ratatui::init()`
+    // panics inside the terminal setup and the process aborts with SIGABRT,
+    // which is a terrible experience for a piped command or a CI job. Fail
+    // with an actionable error instead, and point at the non-interactive
+    // spelling of the same intent.
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "interactive TUI requires a terminal; stdin/stdout is not a tty.\n\
+             For non-interactive use, prefer `snp get --query <text> --field command`\n\
+             (deterministic, no TUI, no execution) or `snp list --json`.",
+        ));
+    }
     select_snippet_inner(params)
 }
 

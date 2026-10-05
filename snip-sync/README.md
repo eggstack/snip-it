@@ -48,7 +48,7 @@ In another terminal, register the client and sync:
 
 ```bash
 snp register --server http://127.0.0.1:50051
-snp sync --push-only
+snp sync run --push-only
 ```
 
 Registration creates the account, stores the server URL and device ID in the
@@ -60,7 +60,7 @@ For multiple environments, register once, then securely provision that same
 API key, server URL, and a unique device ID to each environment that should
 share the libraries. Registering each environment independently creates
 isolated accounts. After the first client seeds the server, use
-`snp sync --pull-only` on new environments and then set
+`snp sync run --pull-only` on new environments and then set
 `sync_direction = "Bidirectional"` in the client `sync.toml` for normal use.
 See [USER_GUIDE.md](../USER_GUIDE.md#syncing-one-account-across-environments)
 for the client-side settings example.
@@ -173,7 +173,7 @@ Register the client using the proxy's HTTPS URL, not the backend port:
 
 ```bash
 snp register --server https://sync.example.com
-snp sync --push-only
+snp sync run --push-only
 ```
 
 The client uses the operating system's trusted certificate roots for HTTPS, so

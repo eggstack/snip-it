@@ -50,11 +50,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment.
 
 ### Fixed
+- **Interactive commands no longer abort without a terminal.** `snp select`,
+  `run`, `clip`, and `search` entered the ratatui selector unconditionally;
+  without a tty, `ratatui::init()` panicked and the process died with SIGABRT
+  (exit 134) plus a Rust backtrace note. The selector now guards its single
+  `ratatui::init()` call site and returns exit 1 with a message pointing at
+  `snp get --query <text> --field command` and `snp list --json`. Covered by
+  `tests/tui_requires_terminal.rs`; the interactive path is still covered by
+  `tests/pty_integration.rs`.
 - `snp --help` listed exit codes 0–9; exit 10 (`UNSAFE_REPAIRS`) is now listed.
 - `src/utils/config.rs` module docs claimed per-platform config resolution
   (AppData on Windows, Application Support on macOS). There is no `#[cfg]`
   branch: every platform uses `$XDG_CONFIG_HOME`/`~/.config` plus `/snp`, with
   a one-way macOS legacy migration.
+
+### Documentation
+- **README restructured around the quickstart**, cut from 348 to 233 lines. It
+  now opens with install and a runnable 60-second example, keeps a full command
+  table, and defers detail to `USER_GUIDE.md`, `docs/`, and
+  `snip-sync/README.md` instead of duplicating it.
+- **Wrong command spelling fixed in three user-facing files.** `--push-only`,
+  `--pull-only`, and `--dry-run` are flags of the `sync run` subcommand, so the
+  documented `snp sync --push-only` failed with `unexpected argument found`.
+  Corrected to `snp sync run --push-only` in `README.md`, `USER_GUIDE.md`, and
+  `snip-sync/README.md`. Note that `SyncCommands::Run` is documented as the
+  default when no subcommand is given, and bare `snp sync` does work, but the
+  flags themselves are only accepted after the explicit `run` word.
+- **Keychain guidance corrected in the user docs.** `USER_GUIDE.md` described
+  `SNP_ALLOW_PLAINTEXT_API_KEY=true` as permitting plaintext storage "when
+  keychain storage fails" and recommended it for headless provisioning. There is
+  no such fallback: a release build refuses the save outright, and the env var
+  is compiled in only under `test-support`, so it is ignored entirely.
+- `README.md` config table no longer implies every file exists on a fresh
+  install (a new install creates only `snippets.toml` and `logs/`) and now
+  documents `logs/`.
 
 ### Fixed
 - **snip-sync HTTP parity (server-lifecycle-http M004)**: Restored the pre-migration wire

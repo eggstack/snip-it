@@ -412,7 +412,7 @@ SNIP_SYNC_ALLOW_HTTP=true snip-sync serve
 
 # Terminal 2: register this environment and seed the server.
 snp register --server http://127.0.0.1:50051
-snp sync --push-only
+snp sync run --push-only
 ```
 
 `SNIP_SYNC_ALLOW_HTTP=true` is intentionally required for direct plaintext
@@ -425,9 +425,9 @@ upload, but it does not download changes made elsewhere. Use the command flags
 for one-off operations:
 
 ```bash
-snp sync --push-only
-snp sync --pull-only
-snp sync --dry-run
+snp sync run --push-only
+snp sync run --pull-only
+snp sync run --dry-run
 ```
 
 For regular multi-environment use, set the direction in
@@ -457,10 +457,10 @@ account and API key on every invocation; it does not join an existing account.
 Therefore:
 
 1. Register one environment against the remote HTTPS endpoint.
-2. Use `snp sync --push-only` there to create and seed the server libraries.
+2. Use `snp sync run --push-only` there to create and seed the server libraries.
 3. Provision the same API key, server URL, and a unique device ID to each other
    environment.
-4. Run `snp sync --pull-only` once on each new environment, then switch all of
+4. Run `snp sync run --pull-only` once on each new environment, then switch all of
    them to `Bidirectional` for normal use.
 
 Registering separately on the other environments creates isolated accounts
@@ -487,9 +487,12 @@ sync_direction = "Bidirectional"
 ```
 
 The API key is normally represented as `@keychain` after snp stores it in the
-OS keychain. When provisioning a headless environment, use its secret manager
-or set `SNP_ALLOW_PLAINTEXT_API_KEY=true` only when you deliberately accept a
-protected plaintext `sync.toml`. Do not commit this file.
+OS keychain. For a headless environment, use the platform's secret manager to
+provision the key, then run `snp register` — snp will write only the
+`@keychain` marker to `sync.toml`. Note that snp **refuses** to save a plaintext
+key rather than falling back: if the keychain is unavailable the write fails
+with `keychain unavailable, refusing to store API key in plaintext`. Do not
+commit `sync.toml` either way.
 
 ## Auto-sync
 
@@ -744,7 +747,7 @@ Useful environment variables:
 | --- | --- | --- |
 | `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | `0` for direct terminal runs |
 | `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds | `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | Permit plaintext API-key storage when keychain storage fails | unset |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | Test-only seam. Forces plaintext API-key storage **and** forbids keychain access. Compiled in only under `test-support`; ignored by a release build | unset |
 | `SNP_ALLOW_DIR_FSYNC_FAILURE` | Allow atomic writes to continue when the filesystem rejects parent-directory fsync; weakens power-loss durability | unset |
 | `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
