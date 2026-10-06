@@ -9,11 +9,63 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    /// Per-thread config-directory override. Tests run in parallel threads
+    /// inside one process, so an `XDG_CONFIG_HOME` mutation would race with
+    /// every other test that resolves a path. A thread-local override keeps
+    /// each test hermetic without touching process-global environment state.
+    static CONFIG_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// RAII override of [`get_config_dir`] for the current thread.
+///
+/// Compiled only into unit-test builds, so production binaries cannot be
+/// steered by it. Restores the previous value on drop, including on assertion
+/// panic, so a failing test cannot leak the redirect into the tests that run
+/// beside it.
+///
+/// ```ignore
+/// let tmp = tempfile::TempDir::new().unwrap();
+/// let _guard = ScopedConfigDir::new(tmp.path().join("snp"));
+/// ```
+#[cfg(test)]
+#[derive(Debug)]
+pub struct ScopedConfigDir {
+    previous: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl ScopedConfigDir {
+    /// Points [`get_config_dir`] at `dir` for the current thread.
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
+        let previous = CONFIG_DIR_OVERRIDE.with(|slot| slot.replace(Some(dir)));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScopedConfigDir {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        CONFIG_DIR_OVERRIDE.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
 /// Returns the path to the user's snp config directory without touching
 /// the filesystem. Callers that need the directory to exist (and to have
 /// restrictive permissions on Unix) should call [`ensure_config_dir`]
 /// once at startup.
 pub fn get_config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
+        return dir;
+    }
+
     std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
@@ -215,6 +267,24 @@ mod tests {
         let a = get_config_dir();
         let b = get_config_dir();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_scoped_config_dir_overrides_and_restores() {
+        let before = get_config_dir();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("snp");
+
+        {
+            let _guard = ScopedConfigDir::new(&target);
+            assert_eq!(get_config_dir(), target);
+            // Nested overrides unwind in LIFO order.
+            let inner = tmp.path().join("nested");
+            let _inner = ScopedConfigDir::new(&inner);
+            assert_eq!(get_config_dir(), inner);
+        }
+
+        assert_eq!(get_config_dir(), before, "override must unwind on drop");
     }
 
     #[test]

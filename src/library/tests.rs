@@ -6,6 +6,36 @@ use std::collections::HashSet;
 use std::path::Path;
 use tempfile::TempDir;
 
+/// Private temp directory that also points this thread's resolved config
+/// directory at `<tmp>/.config/snp`.
+///
+/// `save_library` derives its gate and local-data-lock paths from the config
+/// directory rather than from the target library path, so a bare `TempDir`
+/// still let unit tests touch the developer's real `~/.config/snp/` and
+/// contend on one process-wide lock file. Binding the override to the temp
+/// dir's lifetime makes every test hermetic and independent.
+struct TestDir {
+    tmp: TempDir,
+    _config_dir: crate::utils::config::ScopedConfigDir,
+}
+
+impl TestDir {
+    fn new() -> Self {
+        let tmp = TempDir::new().expect("test helper: temp dir");
+        let config_home = tmp.path().join(".config");
+        std::fs::create_dir_all(&config_home).expect("test helper: create config home");
+        let config_dir = crate::utils::config::ScopedConfigDir::new(config_home.join("snp"));
+        Self {
+            tmp,
+            _config_dir: config_dir,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        self.tmp.path()
+    }
+}
+
 #[cfg(unix)]
 fn file_mode(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
@@ -74,7 +104,7 @@ fn test_snp_serializes_to_pet_table_name() {
 
 #[test]
 fn test_library_save_load_roundtrip() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("test_library.toml");
 
     let snippets = Snippets {
@@ -105,7 +135,7 @@ fn test_library_save_load_roundtrip() {
 
 #[test]
 fn test_library_save_load_roundtrip_with_escaped_brackets() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("test_library.toml");
 
     let snippets = Snippets {
@@ -135,7 +165,7 @@ fn test_library_save_load_roundtrip_with_escaped_brackets() {
 
 #[test]
 fn test_library_load_with_invalid_escapes() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("invalid_escapes.toml");
 
     std::fs::write(
@@ -160,7 +190,7 @@ Command = "sudo iptables-restore \< /path/to/rules"
 
 #[test]
 fn test_library_load_empty_file() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("empty.toml");
 
     std::fs::write(&path, "").unwrap();
@@ -172,7 +202,7 @@ fn test_library_load_empty_file() {
 
 #[test]
 fn test_library_backup_nonexistent() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("nonexistent.toml");
 
     let backup_result = backup_library(&path).unwrap();
@@ -296,7 +326,7 @@ fn test_validate_library_name_rejects_toml_suffix() {
 
 #[test]
 fn test_add_existing_library_promotes_first_to_primary() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let mut mgr = LibraryManager::with_config_dir(temp_dir.path().to_path_buf()).unwrap();
     std::fs::create_dir_all(temp_dir.path().join("libraries")).unwrap();
     std::fs::write(temp_dir.path().join("libraries").join("imported.toml"), "").unwrap();
@@ -359,7 +389,7 @@ fn test_validate_library_name_valid() {
 
 #[test]
 fn test_save_library_atomic_write() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("test.toml");
     let snippets = Snippets {
         snippets: vec![Snippet {
@@ -392,7 +422,7 @@ fn test_save_library_atomic_write() {
 
 #[test]
 fn test_create_library_uses_private_atomic_write() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let mut mgr = LibraryManager {
         config_dir: temp_dir.path().to_path_buf(),
         libraries_dir: temp_dir.path().join("libraries"),
@@ -415,7 +445,7 @@ fn test_create_library_uses_private_atomic_write() {
 
 #[test]
 fn test_delete_library_restores_config_when_file_deletion_fails() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let config_dir = temp_dir.path().to_path_buf();
     let libraries_dir = config_dir.join("libraries");
     let blocked_path = libraries_dir.join("blocked.toml");
@@ -449,7 +479,7 @@ fn test_delete_library_restores_config_when_file_deletion_fails() {
 
 #[test]
 fn test_add_server_library_uses_private_atomic_write() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let mut mgr = LibraryManager {
         config_dir: temp_dir.path().to_path_buf(),
         libraries_dir: temp_dir.path().join("libraries"),
@@ -474,7 +504,7 @@ fn test_add_server_library_uses_private_atomic_write() {
 
 #[test]
 fn test_save_config_invalidates_libraries_toml_cache() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let config_dir = temp_dir.path().to_path_buf();
     let libraries_dir = config_dir.join("libraries");
     let premade_dir = config_dir.join("premade");
@@ -518,7 +548,7 @@ is_primary = true
 
 #[test]
 fn test_backup_library_names_do_not_collide() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("snippets.toml");
     std::fs::write(&path, "test content").unwrap();
 
@@ -534,7 +564,7 @@ fn test_backup_library_names_do_not_collide() {
 
 #[test]
 fn test_save_premade_library_path_traversal() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let mgr = LibraryManager {
         config_dir: temp_dir.path().to_path_buf(),
         libraries_dir: temp_dir.path().join("libraries"),
@@ -551,7 +581,7 @@ fn test_save_premade_library_path_traversal() {
 
 #[test]
 fn test_save_premade_library_valid() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let mgr = LibraryManager {
         config_dir: temp_dir.path().to_path_buf(),
         libraries_dir: temp_dir.path().join("libraries"),
@@ -570,7 +600,7 @@ fn test_save_premade_library_valid() {
 
 #[test]
 fn test_deduplication_on_load() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("dup.toml");
     let toml_content = r#"
 [[Snippets]]
@@ -1043,7 +1073,7 @@ fn assert_command_survives_pretty_roundtrip(label: &str, command: &str) {
 }
 
 fn assert_command_survives_save_load(label: &str, command: &str) {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("matrix.toml");
     let library = snippet_with_command(command);
     save_library(&path, &library).unwrap_or_else(|e| panic!("save failed for {label}: {e}"));
@@ -1170,7 +1200,7 @@ fn test_serialization_matrix_escaped_angle_brackets_with_crlf() {
 
 #[test]
 fn test_serialization_matrix_description_with_tab_and_trailing_space() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("desc.toml");
     let library = snippet_with_description("echo test", "  hello\t");
     save_library(&path, &library).unwrap();
@@ -1180,7 +1210,7 @@ fn test_serialization_matrix_description_with_tab_and_trailing_space() {
 
 #[test]
 fn test_serialization_matrix_tag_with_internal_tab() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("tag.toml");
     let library = Snippets {
         snippets: vec![Snippet {
@@ -1199,7 +1229,7 @@ fn test_serialization_matrix_tag_with_internal_tab() {
 
 #[test]
 fn test_serialization_matrix_repeated_save_load_idempotent() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("idempotent.toml");
     let command = "echo\there\r\nwith\ttabs and trailing space ";
 
@@ -1243,7 +1273,7 @@ command = \"ping \\<website\\>\"
 tag = []
 output = \"\"
 ";
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("legacy.toml");
     std::fs::write(&path, legacy_toml).unwrap();
 
@@ -1258,7 +1288,7 @@ fn test_serialization_matrix_no_normalization_strip_or_trim() {
     // content is unchanged across every round. This guards against any
     // silent normalization (trim, line-ending rewrite, escape collapse)
     // creeping back into the pipeline.
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("norewrite.toml");
     let command = "echo start\there\t with trailing tab\tand trailing space \r\nand CRLF\r";
 
@@ -1286,7 +1316,7 @@ fn test_serialization_matrix_no_normalization_strip_or_trim() {
 
 #[test]
 fn test_malformed_library_returns_err_and_creates_backup() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("corrupt.toml");
     std::fs::write(&path, "invalid = [toml").unwrap();
 
@@ -1308,7 +1338,7 @@ fn test_malformed_library_returns_err_and_creates_backup() {
 
 #[test]
 fn test_malformed_libraries_toml_causes_library_manager_error() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let config_path = temp_dir.path().join("libraries.toml");
     std::fs::write(&config_path, "invalid = [toml").unwrap();
 
@@ -1330,7 +1360,7 @@ fn test_malformed_libraries_toml_causes_library_manager_error() {
 
 #[test]
 fn test_missing_library_file_returns_empty() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("nonexistent.toml");
     let loaded = load_library(&path).unwrap();
     assert!(loaded.snippets.is_empty());
@@ -1338,7 +1368,7 @@ fn test_missing_library_file_returns_empty() {
 
 #[test]
 fn test_empty_library_file_returns_empty() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("empty.toml");
     std::fs::write(&path, "").unwrap();
     let loaded = load_library(&path).unwrap();
@@ -1347,14 +1377,14 @@ fn test_empty_library_file_returns_empty() {
 
 #[test]
 fn test_missing_libraries_toml_returns_default_manager() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let result = LibraryManager::with_config_dir(temp_dir.path().to_path_buf());
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_empty_libraries_toml_returns_default_manager() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let config_path = temp_dir.path().join("libraries.toml");
     std::fs::write(&config_path, "").unwrap();
     let result = LibraryManager::with_config_dir(temp_dir.path().to_path_buf());
@@ -1367,7 +1397,7 @@ fn test_empty_libraries_toml_returns_default_manager() {
 
 #[test]
 fn test_missing_id_deterministic_across_loads() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("legacy.toml");
     std::fs::write(
         &path,
@@ -1393,7 +1423,7 @@ command = "echo hello"
 
 #[test]
 fn test_content_distinct_missing_ids_receive_distinct_ids() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("distinct.toml");
     std::fs::write(
         &path,
@@ -1418,7 +1448,7 @@ command = "echo b"
 
 #[test]
 fn test_identical_missing_ids_receive_distinct_repeatable_ids() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("identical.toml");
     std::fs::write(
         &path,
@@ -1446,7 +1476,7 @@ command = "echo same"
 
 #[test]
 fn test_first_duplicate_id_kept_later_replaced() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("dup_ids.toml");
     std::fs::write(
         &path,
@@ -1473,7 +1503,7 @@ command = "echo 2"
 
 #[test]
 fn test_valid_unique_ids_unchanged() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("unique_ids.toml");
     std::fs::write(
         &path,
@@ -1498,7 +1528,7 @@ command = "echo 2"
 
 #[test]
 fn test_save_persists_provisional_ids() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("persist.toml");
     std::fs::write(
         &path,
@@ -1524,7 +1554,7 @@ command = "echo persist"
 
 #[test]
 fn test_reload_after_persistence_no_different_ids() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("reload.toml");
     std::fs::write(
         &path,
@@ -1548,7 +1578,7 @@ command = "echo stable"
 
 #[test]
 fn test_id_length_below_server_maximum() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TestDir::new();
     let path = temp_dir.path().join("length.toml");
     std::fs::write(
         &path,
@@ -1626,7 +1656,7 @@ fn write_lib_file(libs_dir: &std::path::Path, name: &str) {
 
 #[test]
 fn test_readonly_primary_named_all_resolution() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();
@@ -1659,7 +1689,7 @@ fn test_readonly_primary_named_all_resolution() {
 
 #[test]
 fn test_readonly_missing_library_error() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();
@@ -1675,7 +1705,7 @@ fn test_readonly_missing_library_error() {
 
 #[test]
 fn test_readonly_resolution_creates_nothing() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();
@@ -1716,7 +1746,7 @@ fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn test_inspect_library_index_primary_states() {
     // No libraries.
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     std::fs::create_dir_all(config_dir.join("libraries")).unwrap();
     write_index(&config_dir, &[]);
@@ -1727,7 +1757,7 @@ fn test_inspect_library_index_primary_states() {
     assert!(inspection.orphan_files.is_empty());
 
     // No primary with libraries.
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();
@@ -1741,7 +1771,7 @@ fn test_inspect_library_index_primary_states() {
     ));
 
     // Primary file missing.
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();
@@ -1760,7 +1790,7 @@ fn test_inspect_library_index_primary_states() {
 
 #[test]
 fn test_inspect_library_index_orphan_files() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TestDir::new();
     let config_dir = tmp.path().join("cfg");
     let libs_dir = config_dir.join("libraries");
     std::fs::create_dir_all(&libs_dir).unwrap();

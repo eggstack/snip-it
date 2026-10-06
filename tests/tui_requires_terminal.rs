@@ -53,7 +53,8 @@ fn tui_commands_fail_cleanly_without_a_terminal() {
 
         // A clean failure is exit 1. The regression was SIGABRT (no exit code).
         assert_eq!(
-            code, 1,
+            code,
+            1,
             "{command}: expected exit 1, got {code}\nstderr: {}",
             String::from_utf8_lossy(&out.stderr)
         );
@@ -81,7 +82,10 @@ fn get_works_without_a_terminal() {
     let (_tmp, config_dir) = setup_test_env();
     seed_snippet(&config_dir);
 
-    let out = run_without_tty(&config_dir, &["get", "--query", "guarded", "--field", "command"]);
+    let out = run_without_tty(
+        &config_dir,
+        &["get", "--query", "guarded", "--field", "command"],
+    );
     assert!(
         out.status.success(),
         "snp get must work without a tty\nstderr: {}",

@@ -801,6 +801,11 @@ pub(crate) fn run_sync_with_limits(
 
     for lib_name in &libraries_to_sync {
         if recovered.contains(lib_name) {
+            // Count it: the library is done, it just needed no upload work.
+            // Skipping the increment left the final progress line short of
+            // its own denominator (e.g. "[1/2]") whenever a library was
+            // finished by the recovery-marker path.
+            completed += 1;
             continue;
         }
         completed += 1;
@@ -853,16 +858,21 @@ pub(crate) fn run_sync_with_limits(
                         let has_failures = response.skipped_count > 0;
 
                         if direction == SyncDirection::Push {
+                            // The upload reached the server either way, so the
+                            // library counts as pushed. Skipped records are a
+                            // partial failure, not a merge conflict: counting
+                            // them as conflicts reported an encryption or
+                            // storage rejection as if two devices had raced.
+                            status.pushed += 1;
                             if !has_failures {
                                 if let Err(e) = mgr.update_last_sync(lib_name, new_timestamp) {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
-                                status.pushed += 1;
                             } else {
-                                status.conflicts += 1;
+                                status.failed += 1;
                                 results.push((
                                     lib_name.clone(),
-                                    true,
+                                    false,
                                     format!(
                                         "{} snippets skipped (will retry)",
                                         response.skipped_count
@@ -976,19 +986,35 @@ pub(crate) fn run_sync_with_limits(
                                 {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
+                                // Bidirectional sync uploads too, so the
+                                // library counts as pushed here as well.
+                                status.pushed += 1;
                                 status.add_pulled(server_snippets.len());
+
+                                let mut notes = Vec::new();
                                 if !conflicts.is_empty() {
-                                    results.push((
-                                        lib_name.clone(),
-                                        true,
-                                        format!(
-                                            "{} snippets overwritten by another device",
-                                            conflicts.len()
-                                        ),
+                                    status.conflicts = status.conflicts.saturating_add(
+                                        u32::try_from(conflicts.len()).unwrap_or(u32::MAX),
+                                    );
+                                    notes.push(format!(
+                                        "{} snippets overwritten by another device",
+                                        conflicts.len()
                                     ));
-                                } else {
-                                    results.push((lib_name.clone(), true, String::new()));
                                 }
+                                if has_failures {
+                                    // Records were dropped: client-side
+                                    // encryption failures, rows the server
+                                    // refused to store, or payloads that failed
+                                    // to decrypt. Merging everything else and
+                                    // exiting 0 told the user the library was in
+                                    // sync while data was missing.
+                                    status.failed += 1;
+                                    notes.push(format!(
+                                        "{} snippets skipped (will retry)",
+                                        response.skipped_count
+                                    ));
+                                }
+                                results.push((lib_name.clone(), !has_failures, notes.join("; ")));
                             }
                             Err(e) => {
                                 status.failed += 1;
@@ -1180,7 +1206,15 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
                     folders: local_snip.folders.clone(),
                     favorite: local_snip.favorite,
                     created_at: local_snip.created_at,
-                    updated_at: server_snip.updated_at,
+                    // `choose_version` returns `Remote` for `(false, true)`
+                    // *without* comparing timestamps — deletion wins outright.
+                    // Taking `server_snip.updated_at` verbatim would therefore
+                    // lower the local timestamp whenever the tombstone is
+                    // older, regressing the record below a watermark other
+                    // clients already synced past. Mirrors the local-tombstone
+                    // arm below. No resurrection is implied: the record is
+                    // still marked deleted.
+                    updated_at: local_snip.updated_at.max(server_snip.updated_at),
                     device_id: local_snip.device_id.clone(),
                     deleted: true,
                 }),
@@ -1461,6 +1495,64 @@ mod tests {
         let ids: Vec<&str> = merged.snippets.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&"1"));
         assert!(ids.contains(&"2"));
+    }
+
+    #[test]
+    fn test_older_server_tombstone_does_not_regress_local_updated_at() {
+        // `choose_version` returns `Remote` for (live, deleted) without
+        // comparing timestamps, so an older tombstone must not lower the local
+        // `updated_at` — doing so regresses the record below a watermark other
+        // clients already synced past. Deletion still wins (no resurrection).
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 500)],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "deleted".to_string(),
+            command: "echo deleted".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: true,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets.len(), 1);
+        assert!(
+            merged.snippets[0].deleted,
+            "deletion must still win regardless of timestamp"
+        );
+        assert_eq!(
+            merged.snippets[0].updated_at, 500,
+            "older tombstone must not regress the local updated_at"
+        );
+        assert_eq!(merged.snippets[0].description, "local");
+        assert_eq!(merged.snippets[0].command, "echo 1");
+    }
+
+    #[test]
+    fn test_newer_server_tombstone_still_adopts_its_timestamp() {
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 100)],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "deleted".to_string(),
+            command: "echo deleted".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "d".to_string(),
+            deleted: true,
+            encrypted: false,
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        assert_eq!(merged.snippets[0].updated_at, 200);
     }
 
     #[test]

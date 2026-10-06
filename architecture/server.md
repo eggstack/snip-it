@@ -154,13 +154,23 @@ deleted)`, `idx_libraries_user`.
 - **Field limits** (configurable, defaults): `max_command_length` 1024,
   `max_description_length` 1024, `max_tags` 50, `max_tag_length` 100,
   `max_id_length` 128, `max_device_id_length` 128,
-  `max_api_key_length` 512. Plaintext snippets require a non-blank
-  command; encrypted snippets require a non-blank payload but skip the
-  length cap (ciphertext).
+  `max_api_key_length` 512, `max_encrypted_payload_length` 1 MiB.
+  Plaintext snippets require a non-blank command and are capped by
+  `max_command_length`. Encrypted snippets require a non-blank payload but
+  are bounded by `max_encrypted_payload_length` instead, measured on the
+  ciphertext: `command` then holds the whole
+  `{description, command, tags}` blob, and anything larger than the gRPC
+  ceiling could be stored but never downloaded again.
 - **Batch/page bounds**: at most 10,000 snippets per `Push`/`Sync`
   request (`DEFAULT_MAX_SYNC_SNIPPETS`); every `limit` is clamped to
   `MAX_REQUEST_LIMIT = 1000`. Omitted limits default to 1000 (`sync`),
-  100 (`get_snippets`), 50 (`list_libraries`).
+  100 (`get_snippets`), 50 (`list_libraries`). Download pages are *also*
+  bounded by encoded bytes: `fit_page_to_byte_ceiling()` trims trailing
+  rows so the encoded page stays under
+  `grpc_max_message_size - 64 KiB` envelope reserve (minus `skipped_ids`
+  bytes), sets `has_more`, and always keeps at least one row. Without this,
+  row-count paging alone could produce a page tonic cannot encode, which
+  returns `OUT_OF_RANGE` and makes the library permanently undownloadable.
 - **Transport bounds**: `grpc_max_message_size` defaults to 4 MiB and is
   applied symmetrically (`max_decoding_message_size` +
   `max_encoding_message_size`); per-request `timeout()` defaults to 30 s

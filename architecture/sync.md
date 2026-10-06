@@ -172,6 +172,20 @@ Further rules:
    retried next time. Partial per-library failures accumulate in
    `SyncStatus`; the run reports them without aborting sibling libraries.
 
+`SyncStatus` counters are deliberately narrow so the summary cannot invert a
+cause: `pushed` counts libraries whose upload RPC succeeded (Push *and*
+Bidirectional — bidirectional uploads too), `pulled` counts snippets merged,
+`conflicts` counts snippets genuinely overwritten by another device as reported
+by `merge_and_save`, and `failed` counts dropped records — client-side
+encryption failures, rows the server refused to store (reported back in
+`skipped_ids`), and payloads that failed to decrypt. Any `failed > 0` returns
+`PartialSyncFailure`, so a run that dropped data exits nonzero instead of
+looking like a clean sync.
+
+The server's `skipped_ids` are folded into the client's skip accounting by
+`accumulate_page`. Before that they were silently discarded, which hid exactly
+the failures above.
+
 ## Merge (`merge_snippets`)
 
 Live versions order by the deterministic key
@@ -228,9 +242,11 @@ wins still keep local `output`; new server-only snippets start with empty
   | gRPC max message (server) | 4 MiB |
   | Client upload ceiling | 3.5 MiB |
   | `command` / `description` | 1024 chars |
+  | encrypted payload (`command` when `encrypted`) | 1 MiB |
   | tags / tag length / id / device_id | 50 / 100 / 128 / 128 chars |
   | API key | 512 chars |
   | `Sync` page (`MAX_REQUEST_LIMIT`) | 1000 records |
+  | `Sync` / `GetSnippets` page | also bounded to the 4 MiB encode ceiling |
   | Server sync-set cap | 10 000 snippets |
   | Client premade caps | 10 000 entries, 4 MiB content |
 

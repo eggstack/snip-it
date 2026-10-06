@@ -32,6 +32,26 @@ pub enum DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
+/// Result of [`Database::upsert_snippet_in_tx`].
+///
+/// `snippets.id` is a *global* primary key, so an insert that collides with a
+/// row owned by a different user or library cannot be written at all. SQLite
+/// reports a false `WHERE` on `DO UPDATE` as a silent no-op (0 rows affected,
+/// no error), which is why the outcome has to be classified explicitly instead
+/// of treating "no rows affected" as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertOutcome {
+    /// The row was inserted or updated.
+    Written,
+    /// A newer version of the same record already exists under the same user
+    /// and library; last-write-wins correctly kept it.
+    Stale,
+    /// A row with the same id already belongs to a different user and/or
+    /// library. The write was discarded — reporting this as `Stale` would
+    /// silently lose the snippet.
+    ForeignScope,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Snippet {
     pub id: String,
@@ -590,7 +610,7 @@ impl Database {
         snippet: &Snippet,
         user_id: &str,
         library_id: &str,
-    ) -> DbResult<()> {
+    ) -> DbResult<UpsertOutcome> {
         let tags_json = serde_json::to_string(&snippet.tags).unwrap_or_else(|_| "[]".to_string());
         let deleted = snippet.deleted as i32;
         let encrypted = snippet.encrypted as i32;
@@ -601,7 +621,7 @@ impl Database {
         // When updated_at and device_id are equal, fall back to content
         // comparison (command, description) to provide a deterministic
         // winner that mirrors the client's fingerprint tie-break.
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
@@ -632,7 +652,28 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        Ok(())
+        if result.rows_affected() > 0 {
+            return Ok(UpsertOutcome::Written);
+        }
+
+        // Zero rows written. Either the existing record under this same
+        // user/library is newer (normal last-write-wins dedupe), or the id is
+        // already held by a different scope and the write was dropped. Only a
+        // scope probe can tell them apart.
+        let foreign: Option<(String, String)> = sqlx::query_as(
+            "SELECT user_id, library_id FROM snippets \
+             WHERE id = ? AND (user_id != ? OR library_id != ?) LIMIT 1",
+        )
+        .bind(&snippet.id)
+        .bind(user_id)
+        .bind(library_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        Ok(match foreign {
+            Some(_) => UpsertOutcome::ForeignScope,
+            None => UpsertOutcome::Stale,
+        })
     }
 
     pub async fn get_latest_timestamp(&self, user_id: &str, library_id: &str) -> DbResult<i64> {

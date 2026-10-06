@@ -715,6 +715,34 @@ pub fn expand_command(command: &str, values: &[(String, String)]) -> String {
                 }
             }
 
+            // `extract_variable_tokens` and this scanner are two separate
+            // parsers. If they disagree on one token, matching purely by
+            // position leaves `token_idx` stuck on the bad entry and every
+            // *later* variable in the command silently fails to expand too.
+            // Resynchronize on the next token with the same content so a
+            // single disagreement stays local.
+            let current_matches = tokens
+                .get(token_idx)
+                .is_some_and(|t| t.content == var_content.trim());
+            let resync_offset = if current_matches {
+                None
+            } else {
+                tokens
+                    .iter()
+                    .skip(token_idx + 1)
+                    .position(|t| t.content == var_content.trim())
+            };
+            if let Some(offset) = resync_offset {
+                let found = token_idx + 1 + offset;
+                tracing::debug!(
+                    variable = %var_content.trim(),
+                    expected_position = token_idx,
+                    found_position = found,
+                    "variable token stream out of sync; resynchronized"
+                );
+                token_idx = found;
+            }
+
             if let Some(token) = tokens
                 .get(token_idx)
                 .filter(|t| t.content == var_content.trim())

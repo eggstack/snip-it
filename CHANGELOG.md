@@ -50,6 +50,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment.
 
 ### Fixed
+- **Silent permanent data loss on the sync server.** `snippets.id` is a
+  *global* primary key, so pushing a snippet whose id already exists under a
+  different user or library wrote zero rows. SQLite reports the discarded
+  `ON CONFLICT … DO UPDATE … WHERE` as a no-op with no error, and the handler
+  counted it as `accepted`, replying `success: true` with empty `skipped_ids`.
+  Identical content in two libraries of one install yields the same
+  deterministic `legacy-<sha256>` id, so this was reachable by copying a
+  snippet between libraries. `upsert_snippet_in_tx` now returns an
+  `UpsertOutcome`; a cross-scope collision counts as rejected in `push` and
+  appears in `skipped_ids` in `sync`. A genuine last-write-wins dedupe still
+  reports as accepted.
+- **Sync no longer exits 0 when records were dropped.** `skipped_count > 0`
+  (client-side encryption failures, server-refused rows, or payloads that
+  failed to decrypt) only incremented `conflicts`, so a run that silently lost
+  snippets still reported success. Skips now count as `failed`, which returns
+  `PartialSyncFailure`. `conflicts` counts only snippets genuinely overwritten
+  by another device, and `pushed` now also increments for bidirectional sync
+  (which uploads too). The client also folds the server's `skipped_ids` into
+  its own accounting instead of discarding them.
+- **Libraries could become permanently undownloadable.** Downloads were paged
+  by row count only, while the 4 MiB gRPC encode ceiling is enforced on
+  encoding, where tonic fails with `OUT_OF_RANGE` rather than truncating. A
+  large page could be pushed successfully and then never downloaded by any
+  client. Response pages are now trimmed to the encoded-byte budget (with a
+  64 KiB envelope reserve, `skipped_ids` bytes, and always at least one row)
+  and set `has_more`. Encrypted payloads are also bounded by a new
+  `max_encrypted_payload_length` (default 1 MiB) instead of being unlimited,
+  and `OutOfRange` is no longer retried.
+- **A 0-byte `local-data.lock` hung every mutation forever.** The acquisition
+  loop retried the empty-record arm without a bound, and a failed `write_all`
+  (or a SIGKILL between `create_new` and `write_all`) leaves exactly that file
+  behind. `save_library`, `snp new`, and `snp edit` then hung with no output
+  and no timeout, and no in-code path could clear it. The arm now mirrors the
+  transaction lock's ladder — bounded retries, then quarantine, then a
+  deadline error — and a failed `write_all` deletes the file it just created.
+- **Stale-lock reclaim could steal a live lock.** `quarantine_local_data_lock`
+  renamed the lock file without re-checking that the record it had observed was
+  still there, so a concurrent acquirer that reclaimed and re-created the lock
+  first could have its live lock renamed away, admitting two writers into the
+  critical section. The reclaim now verifies the record still matches before
+  renaming.
+- **A crashed transaction writer's partial record could be quarantined while
+  still live.** The malformed arm quarantined immediately, even though the arm
+  above it exists because a half-written record is observable. Malformed and
+  partially written records now share the same bounded retry ladder before
+  quarantine.
+- **Corrupt auto-sync state reported as "nothing to do".** `preflight_check`
+  returned `Err(String)` for three different conditions and the caller mapped
+  all of them to `NothingToDo` (exit 0), so corruption never incremented
+  `consecutive_failures`, never engaged backoff, and was invisible in
+  `snp status`. It now returns a typed `PreflightError`; rollback and
+  unreadable/corrupt markers go through `record_failure`. A pending-state read
+  error now records a failure too, instead of exiting nonzero with no durable
+  record and no backoff.
+- **`snp premade list/get/search/update` panicked with an empty API key.** Those
+  four subcommands checked only `enabled`, so a headerless legacy `sync.toml`
+  (`api_key` is `#[serde(default)]`) reached `add_api_key_metadata`'s
+  `debug_assert!`. They now require both `enabled` and a non-empty key, and
+  every authenticated `SyncClient` method fails fast with a typed error naming
+  `snp register --force` instead of sending an unauthenticated request.
+- **An older server tombstone could regress a local snippet's `updated_at`.**
+  `choose_version` returns `Remote` for (live, deleted) without comparing
+  timestamps, so writing the tombstone's `updated_at` verbatim lowered the
+  local value below a watermark other clients had already synced past. The
+  remote-tombstone arm now uses `.max(..)`, matching the local-tombstone arm.
+  Deletion still wins outright — no resurrection.
+- **Progress counter could not reach its denominator.** Libraries completed by
+  the recovery-marker path skipped the increment, so the last line printed was
+  e.g. `[1/2]`.
+- **Unit tests no longer mutate the real `~/.config/snp/`.** `save_library`
+  derives its gate and local-data-lock paths from the config directory rather
+  than the target library path, so library and `run_exact` unit tests wrote
+  `audit.log`, `usage.toml` (counters accumulated across every run) and
+  `.transaction/` into the developer's home directory, and contended on one
+  process-wide lock file — which made
+  `test_serialization_matrix_makefile_leading_tabs_with_trailing_newline` fail
+  on a 30 s local-data-lock timeout. Tests now bind a per-test, thread-local
+  config-directory override (`ScopedConfigDir`, `#[cfg(test)]` only), so unit
+  tests are hermetic and parallel-safe again.
+- **`/metrics` auth failures were invisible.** The HTTP leaf returned 401
+  without incrementing `snip_sync_auth_failures_total`, so the metric could
+  never observe brute force against a password-protected endpoint.
+  `Basic` auth-scheme matching is now case-insensitive per RFC 9110 §11.1
+  (`basic …` was rejected).
+- `cargo fmt --check` failed on committed code (`tests/tui_requires_terminal.rs`),
+  so `scripts/check.sh` aborted at its second step and Linux CI was red on
+  `main`.
 - **Interactive commands no longer abort without a terminal.** `snp select`,
   `run`, `clip`, and `search` entered the ratatui selector unconditionally;
   without a tty, `ratatui::init()` panicked and the process died with SIGABRT

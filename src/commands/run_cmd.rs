@@ -428,8 +428,21 @@ mod tests {
         }
     }
 
+    /// `run_exact` writes an audit-log entry and a usage counter, both of
+    /// which resolve their paths from the config directory. Point this thread
+    /// at a temp dir so the tests never mutate the developer's real
+    /// `~/.config/snp/` (and never contend on its local-data lock).
+    fn isolated_config_dir() -> (tempfile::TempDir, crate::utils::config::ScopedConfigDir) {
+        let tmp = tempfile::TempDir::new().expect("test temp dir");
+        let config_home = tmp.path().join(".config");
+        std::fs::create_dir_all(&config_home).expect("test config home");
+        let guard = crate::utils::config::ScopedConfigDir::new(config_home.join("snp"));
+        (tmp, guard)
+    }
+
     #[test]
     fn test_run_exact_without_sync_does_not_require_runtime() {
+        let (_tmp, _config_dir) = isolated_config_dir();
         let snippet = Snippet {
             id: "test-sync-path".to_string(),
             description: "test sync path".to_string(),
@@ -442,6 +455,7 @@ mod tests {
 
     #[test]
     fn test_run_exact_accepts_do_sync_and_runtime_params() {
+        let (_tmp, _config_dir) = isolated_config_dir();
         let snippet = Snippet {
             id: "test-param-sig".to_string(),
             description: "test param sig".to_string(),

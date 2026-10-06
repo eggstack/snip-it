@@ -146,7 +146,13 @@ fn metrics_response(
     };
 
     let valid = get_header(request_headers, "authorization")
-        .and_then(|value| value.strip_prefix("Basic ").map(str::to_owned))
+        .and_then(|value| {
+            // RFC 9110 §11.1: the auth-scheme token is case-insensitive.
+            let (scheme, rest) = value.split_once(' ')?;
+            scheme
+                .eq_ignore_ascii_case("basic")
+                .then(|| rest.trim_start().to_owned())
+        })
         .and_then(|encoded| {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()
         })
@@ -158,6 +164,11 @@ fn metrics_response(
             bool::from(padded.ct_eq(expected.as_bytes())) && decoded.len() == expected.len()
         });
     if !valid {
+        // Count the failure so a password-protected `/metrics` is covered by
+        // `snip_sync_auth_failures_total`, exactly like the gRPC path
+        // (`SnippetSyncService::record_auth_failure`). Without it the metric
+        // could never observe HTTP brute force.
+        state.metrics.auth_failures.inc();
         return (
             401,
             b"Authentication required".to_vec(),

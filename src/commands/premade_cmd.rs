@@ -3,12 +3,35 @@ use crate::error::SnipResult;
 use crate::library::LibraryManager;
 use crate::sync::SyncClient;
 
+/// Guard shared by every `snp premade` subcommand: sync must be enabled *and*
+/// an API key must be configured.
+///
+/// Both halves are required. `sync.toml` deserializes `api_key` with
+/// `#[serde(default)]`, so a headerless legacy config parses with `enabled =
+/// true` and an empty key. Checking only `enabled` let those four subcommands
+/// reach `add_api_key_metadata` with an empty key, which tripped its assertion
+/// in debug builds and otherwise sent an unauthenticated request the server
+/// rejects with a bare 401 instead of the actionable message printed here.
+///
+/// Returns `false` when the caller should stop and report success without
+/// contacting the server (matching the existing "not configured" behaviour).
+fn require_sync_credentials(sync_settings: &crate::config::SyncSettings) -> bool {
+    if !sync_settings.enabled {
+        eprintln!("Sync is not enabled. Configure sync settings first.");
+        return false;
+    }
+    if sync_settings.api_key.is_empty() {
+        eprintln!("Sync is enabled but no API key is configured. Run 'snp register --force'.");
+        return false;
+    }
+    true
+}
+
 /// Lists all premade libraries available on the sync server.
 pub fn run_list(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !require_sync_credentials(&sync_settings) {
         return Ok(());
     }
 
@@ -48,8 +71,7 @@ pub fn run_get(
 ) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !require_sync_credentials(&sync_settings) {
         return Ok(());
     }
 
@@ -145,8 +167,7 @@ pub fn run_get(
 pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !require_sync_credentials(&sync_settings) {
         return Ok(());
     }
 
@@ -158,8 +179,7 @@ pub fn run_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
 pub fn run_search(query: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !require_sync_credentials(&sync_settings) {
         return Ok(());
     }
 
@@ -205,8 +225,7 @@ pub fn run_search(query: String, runtime: &tokio::runtime::Runtime) -> SnipResul
 pub fn run_update(name: String, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     let sync_settings = get_sync_settings();
 
-    if !sync_settings.enabled {
-        eprintln!("Sync is not enabled. Configure sync settings first.");
+    if !require_sync_credentials(&sync_settings) {
         return Ok(());
     }
 

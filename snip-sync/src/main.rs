@@ -156,8 +156,9 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     let cors_allowed_origins = config.cors_allowed_origins.clone();
 
     tracing::info!(
-        "Input validation config: max_command={}, max_description={}, max_tags={}, max_tag_length={}, request_timeout={}s",
+        "Input validation config: max_command={}, max_encrypted_payload={}, max_description={}, max_tags={}, max_tag_length={}, request_timeout={}s",
         config.max_command_length,
+        config.max_encrypted_payload_length,
         config.max_description_length,
         config.max_tags,
         config.max_tag_length,

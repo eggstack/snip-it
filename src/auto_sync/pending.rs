@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const PENDING_FILE_NAME: &str = "auto-sync-pending.toml";
-pub const STALE_PENDING_THRESHOLD_MS: u64 = 5 * 60 * 1000;
 const SCHEMA_VERSION: u32 = 2;
 
 /// How long to wait for the cross-process pending lock before giving up.
@@ -732,11 +731,6 @@ created_at_unix_ms = 1700000000000"#;
         assert_eq!(crc32(b""), 0);
         assert_ne!(crc32(b"hello"), 0);
         assert_eq!(crc32(b"hello"), crc32(b"hello"));
-    }
-
-    #[test]
-    fn test_stale_threshold_is_five_minutes() {
-        assert_eq!(STALE_PENDING_THRESHOLD_MS, 300_000);
     }
 
     #[test]

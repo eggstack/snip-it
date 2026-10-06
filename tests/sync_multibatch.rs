@@ -42,6 +42,7 @@ async fn build_file_service(db_path: &str) -> SnipSyncService {
         db_max_connections: 5,
         premade_dir: PathBuf::from("premade-libraries"),
         max_command_length: 1024,
+        max_encrypted_payload_length: snip_sync::DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH,
         max_description_length: 1024,
         max_tags: 50,
         max_tag_length: 100,

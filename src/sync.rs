@@ -93,6 +93,16 @@ impl Default for SyncRetryConfig {
 
 impl SyncRetryConfig {
     /// Returns `true` if the gRPC error status code is retryable.
+    ///
+    /// `OutOfRange` is deliberately excluded: tonic raises it when a message
+    /// cannot be encoded or decoded within the configured size limit, which is
+    /// a deterministic verdict about the payload rather than a transient
+    /// condition. Retrying only burns the whole backoff ladder before
+    /// surfacing an error the caller cannot act on differently.
+    ///
+    /// `ResourceExhausted` stays retryable on purpose — the server uses it for
+    /// rate limiting (`Status::resource_exhausted("Rate limit exceeded")`), and
+    /// `RetryBackoff::RateLimitAware` gives it a dedicated backoff.
     pub fn is_retryable_grpc_error(status: &tonic::Status) -> bool {
         !matches!(
             status.code(),
@@ -101,6 +111,7 @@ impl SyncRetryConfig {
                 | Code::AlreadyExists
                 | Code::PermissionDenied
                 | Code::Unauthenticated
+                | Code::OutOfRange
         )
     }
 }
@@ -272,11 +283,17 @@ fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipErro
 }
 
 /// Add the API key as gRPC `authorization` metadata to a request.
+///
+/// Callers must have gone through [`SyncClient::require_api_key`] first. If an
+/// empty key still reaches here the header is omitted and the request goes out
+/// unauthenticated, which the server rejects with a bare 401 — loud enough in
+/// the logs to diagnose, and never a panic.
 pub(crate) fn add_api_key_metadata<T>(request: &mut tonic::Request<T>, api_key: &str) {
-    debug_assert!(!api_key.is_empty(), "api_key must not be empty");
-    if !api_key.is_empty()
-        && let Ok(val) = format!("Bearer {api_key}").parse()
-    {
+    if api_key.is_empty() {
+        tracing::error!("refusing to attach an empty API key to a sync request");
+        return;
+    }
+    if let Ok(val) = format!("Bearer {api_key}").parse() {
         request.metadata_mut().insert("authorization", val);
     }
 }
@@ -713,6 +730,12 @@ impl SyncClient {
         server_decrypt_failed_count: &mut usize,
         all_skipped_ids: &mut Vec<String>,
     ) {
+        // The server reports records it refused to store (validation failure,
+        // upsert failure, or an id already held under a different user or
+        // library). Folding them in keeps `skipped_count` honest instead of
+        // discarding a partial failure the server told us about.
+        all_skipped_ids.extend(response.skipped_ids.iter().cloned());
+
         for s in &response.snippets {
             match decrypt_snippet(api_key, s) {
                 Ok(ds) => all_server_snippets.push(ds),
@@ -752,6 +775,24 @@ impl SyncClient {
         })
     }
 
+    /// Ensure an API key is configured before building an authenticated
+    /// request.
+    ///
+    /// `sync.toml` deserializes `api_key` with `#[serde(default)]`, so a
+    /// headerless legacy config parses fine with an empty key. Checking here
+    /// fails fast with the actionable registration hint, instead of burning
+    /// the whole retry/backoff ladder on requests that can only ever come back
+    /// `Unauthenticated`.
+    fn require_api_key(&self) -> SnipResult<()> {
+        if self.settings.api_key.is_empty() {
+            return Err(SnipError::runtime_error(
+                "Sync API key missing",
+                Some("No API key is configured. Run 'snp register --force' to provision one."),
+            ));
+        }
+        Ok(())
+    }
+
     /// Upload a batch of encrypted snippets via the PushSnippets RPC.
     async fn push_snippets_batch(
         &mut self,
@@ -759,6 +800,7 @@ impl SyncClient {
         library_id: &str,
     ) -> SnipResult<()> {
         self.ensure_budget()?;
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         // Build the request inside the retry body from the borrowed slice:
         // a failed attempt consumes its owned message, so cloning the full
@@ -801,6 +843,12 @@ impl SyncClient {
         request: SyncRequest,
         api_key: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
+        if api_key.is_empty() {
+            return Err(SnipError::runtime_error(
+                "Sync API key missing",
+                Some("No API key is configured. Run 'snp register --force' to provision one."),
+            ));
+        }
         let request = std::sync::Arc::new(request);
         let response = retry_grpc_unified!(
             self.limits,
@@ -876,6 +924,7 @@ impl SyncClient {
     /// Lists all libraries on the sync server.
     pub async fn list_libraries(&mut self) -> SnipResult<Vec<Library>> {
         self.ensure_budget()?;
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let mut all_libraries = Vec::new();
         let mut offset = 0i32;
@@ -936,6 +985,7 @@ impl SyncClient {
     /// Creates a new library on the sync server.
     pub async fn create_library(&mut self, name: &str) -> SnipResult<Library> {
         self.ensure_budget()?;
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let name_str = name.to_string();
         let response = retry_grpc_unified!(
@@ -970,6 +1020,7 @@ impl SyncClient {
 
     /// Lists all premade libraries available on the server.
     pub async fn list_premade_libraries(&mut self) -> SnipResult<Vec<PremadeLibrary>> {
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         // Premade RPCs historically ignore the automatic-sync deadline and run
         // unbounded (manual-only path); preserve `None` limits here.
@@ -1001,6 +1052,7 @@ impl SyncClient {
 
     /// Downloads a premade library's content from the server.
     pub async fn get_premade_library(&mut self, filename: &str) -> SnipResult<String> {
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let filename_str = filename.to_string();
         // Preserve historical unbounded behavior for premade RPCs.
@@ -1044,6 +1096,7 @@ impl SyncClient {
         &mut self,
         query: &str,
     ) -> SnipResult<Vec<PremadeLibrary>> {
+        self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
         let query_str = query.to_string();
         // Preserve historical unbounded behavior for premade RPCs.
@@ -1504,6 +1557,8 @@ mod tests {
             tonic::Status::already_exists("test"),
             tonic::Status::permission_denied("test"),
             tonic::Status::unauthenticated("test"),
+            // Deterministic encode/decode size failure — retrying cannot help.
+            tonic::Status::out_of_range("message too large"),
         ];
         for status in &non_retryable {
             assert!(

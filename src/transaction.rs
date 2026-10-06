@@ -1050,6 +1050,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
     let content = toml::to_string_pretty(&info)
         .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
     let mut empty_retries = 0u32;
+    let mut malformed_retries = 0u32;
 
     // Single acquisition loop: create_new, write immediately, classify existing owner.
     loop {
@@ -1102,7 +1103,15 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                     }
                 };
                 let existing: TransactionLockInfo = match toml::from_str(&content) {
-                    Ok(info) => info,
+                    Ok(info) => {
+                        // A readable record resets both ladders: a waiter that
+                        // sees scattered empty or partially-written reads over
+                        // a long legitimate acquisition must not eventually
+                        // quarantine a perfectly good lock.
+                        empty_retries = 0;
+                        malformed_retries = 0;
+                        info
+                    }
                     Err(_) if content.trim().is_empty() => {
                         // Empty file — another writer just called
                         // create_new but hasn't written yet. Retry briefly,
@@ -1124,9 +1133,23 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                         continue;
                     }
                     Err(_) => {
-                        // Genuinely malformed lock — quarantine, then loop back.
-                        tracing::warn!("Malformed transaction lock record, quarantining");
-                        quarantine_stale_lock(&lock_path)?;
+                        // Malformed *or* partially written. The arm above
+                        // exists precisely because "another writer just called
+                        // create_new but hasn't written yet" is observable, and
+                        // a record that is only partly written looks malformed
+                        // too. Quarantining immediately would rename away a
+                        // live owner's lock and let a second acquirer into the
+                        // critical section, so give it the same bounded ladder
+                        // before reclaiming.
+                        malformed_retries = malformed_retries.saturating_add(1);
+                        if malformed_retries > 200 {
+                            tracing::warn!(
+                                "Malformed transaction lock record did not become valid; quarantining"
+                            );
+                            quarantine_stale_lock(&lock_path)?;
+                            malformed_retries = 0;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                 };

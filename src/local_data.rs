@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Mirrors the transaction lock record so that both locks use the same
 /// reclaim and release protocol.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalDataLockInfo {
     /// Schema version for forward compatibility.
     pub schema_version: u32,
@@ -127,6 +127,8 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut backoff = std::time::Duration::from_millis(10);
+    let mut empty_retries = 0u32;
+    let mut malformed_retries = 0u32;
 
     // Pre-serialize the lock record so we can write it to the file
     // handle immediately, minimizing the empty-file window between
@@ -147,9 +149,18 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 // reader that sees empty content will retry instead
                 // of quarantining (see below).
                 use std::io::Write;
-                file.write_all(content.as_bytes()).map_err(|e| {
-                    SnipError::io_error("write local-data lock record", lock_path.clone(), e)
-                })?;
+                if let Err(e) = file.write_all(content.as_bytes()) {
+                    // The file was created by this call and is empty. Leaving
+                    // it behind makes every later acquirer spin forever on an
+                    // unparseable record, so drop it before reporting.
+                    drop(file);
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(SnipError::io_error(
+                        "write local-data lock record",
+                        lock_path,
+                        e,
+                    ));
+                }
                 if let Err(e) = file.sync_all() {
                     tracing::warn!(error = %e, "failed to sync local-data lock record");
                 }
@@ -186,18 +197,62 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                 };
 
                 let existing: LocalDataLockInfo = match toml::from_str(&content) {
-                    Ok(info) => info,
+                    Ok(info) => {
+                        // A readable record resets the ladder below: a waiter
+                        // that sees scattered empty reads over a long
+                        // legitimate acquisition must not eventually quarantine
+                        // a perfectly good lock.
+                        empty_retries = 0;
+                        malformed_retries = 0;
+                        info
+                    }
                     Err(_) if content.trim().is_empty() => {
-                        // Empty file — another writer just called
-                        // create_new but hasn't written yet. Retry
-                        // instead of quarantining.
+                        // Empty file — normally another writer just called
+                        // create_new but hasn't written yet. Retry briefly,
+                        // then reclaim a file left behind by a crashed writer.
+                        // Without this ladder a 0-byte leftover (failed
+                        // write_all, or SIGKILL between create_new and
+                        // write_all) would spin forever: the record can
+                        // never become valid, so no reclaim path is reachable.
+                        empty_retries = empty_retries.saturating_add(1);
+                        let is_old = fs::metadata(&lock_path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+                            .is_some_and(|age| age > std::time::Duration::from_millis(100));
+                        if empty_retries > 200 || (empty_retries > 50 && is_old) {
+                            tracing::warn!(
+                                "Empty local-data lock record did not become valid; quarantining"
+                            );
+                            quarantine_local_data_lock(&lock_path, None)?;
+                            empty_retries = 0;
+                        } else if std::time::Instant::now() >= deadline {
+                            return Err(SnipError::runtime_error(
+                                "Local data lock held",
+                                Some(
+                                    "Timed out waiting for local data lock after 30 seconds; the \
+                                     lock record stayed empty, which usually means a writer was \
+                                     interrupted between creating and writing the lock file.",
+                                ),
+                            ));
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                     Err(_) => {
-                        // Genuinely malformed lock — quarantine, then loop back.
-                        tracing::warn!("Malformed local-data lock record, quarantining");
-                        quarantine_local_data_lock(&lock_path)?;
+                        // Malformed *or* partially written. A record that is
+                        // only partly written looks malformed too, so it gets
+                        // the same bounded ladder as the empty arm rather than
+                        // being quarantined out from under a live owner.
+                        malformed_retries = malformed_retries.saturating_add(1);
+                        if malformed_retries > 200 {
+                            tracing::warn!(
+                                "Malformed local-data lock record did not become valid; quarantining"
+                            );
+                            quarantine_local_data_lock(&lock_path, None)?;
+                            malformed_retries = 0;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                 };
@@ -210,7 +265,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                             pid = existing.pid,
                             "Reclaiming stale local-data lock (owner process is dead)"
                         );
-                        quarantine_local_data_lock(&lock_path)?;
+                        quarantine_local_data_lock(&lock_path, Some(&existing))?;
                         continue;
                     }
                     Some(observed) => {
@@ -239,7 +294,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                             pid = existing.pid,
                             "Local-data lock owner PID reused (start token mismatch), reclaiming"
                         );
-                        quarantine_local_data_lock(&lock_path)?;
+                        quarantine_local_data_lock(&lock_path, Some(&existing))?;
                         continue;
                     }
                 }
@@ -253,9 +308,51 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
 
 /// Quarantine a stale or malformed local-data lock by renaming it.
 ///
+/// When `observed` is supplied, the record currently at `lock_path` must still
+/// match it before the rename happens. Reading the record and checking the
+/// owner's liveness are non-atomic, so without this check a writer that
+/// decided to reclaim could rename away a *live* lock that another writer had
+/// already reclaimed and re-acquired in the meantime — silently putting two
+/// processes inside the critical section. Passing `None` (malformed or empty
+/// record) skips verification because there is no owner identity to compare,
+/// which is the same trade-off `Drop` makes for unparseable content.
+///
 /// If the lock file has already been quarantined by a concurrent writer
 /// (race on stale-lock reclaim), the `NotFound` error is treated as success.
-fn quarantine_local_data_lock(lock_path: &Path) -> SnipResult<PathBuf> {
+fn quarantine_local_data_lock(
+    lock_path: &Path,
+    observed: Option<&LocalDataLockInfo>,
+) -> SnipResult<PathBuf> {
+    if let Some(expected) = observed {
+        match fs::read_to_string(lock_path) {
+            Ok(content) => match toml::from_str::<LocalDataLockInfo>(&content) {
+                Ok(current) if &current == expected => {}
+                Ok(_) => {
+                    // A different record is in place: the stale observation is
+                    // obsolete and the current owner must not be disturbed.
+                    tracing::debug!(
+                        "local-data lock record changed since it was observed; not quarantining"
+                    );
+                    return Ok(lock_path.to_path_buf());
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "local-data lock record is no longer parseable; not quarantining"
+                    );
+                    return Ok(lock_path.to_path_buf());
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SnipError::io_error(
+                    "read local-data lock before quarantine",
+                    lock_path.to_path_buf(),
+                    e,
+                ));
+            }
+        }
+    }
+
     let quarantine_name = format!("local-data.lock.quarantine.{}", uuid::Uuid::new_v4());
     let quarantine_path = lock_path
         .parent()
@@ -306,6 +403,19 @@ pub fn transaction_dir() -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Count quarantine files left behind in `dir`.
+    fn count_quarantines(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("local-data.lock.quarantine.")
+            })
+            .count()
+    }
 
     #[test]
     fn test_acquire_and_release_local_data_lock() {
@@ -389,6 +499,84 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_byte_local_data_lock_is_reclaimed_not_spun_on() {
+        // A 0-byte lock file is what a crashed writer leaves behind: the
+        // record can never parse, so without a bounded ladder the acquirer
+        // would spin forever instead of reclaiming.
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("local-data.lock");
+        fs::write(&lock_path, "").unwrap();
+
+        let lock = acquire_local_data_lock(dir.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&lock_path).unwrap(),
+            toml::to_string_pretty(&lock.info).unwrap(),
+            "reclaimed lock must be replaced by a live ownership record"
+        );
+        let quarantines = count_quarantines(dir.path());
+        assert_eq!(quarantines, 1, "empty leftover lock should be quarantined");
+        drop(lock);
+        assert!(!lock_path.exists(), "live owner must remove its own lock");
+    }
+
+    #[test]
+    fn test_quarantine_does_not_steal_a_live_lock() {
+        // The record that triggered a reclaim can be replaced by a live lock
+        // before the rename happens. The reclaim must then leave that lock
+        // alone, or two processes end up inside the critical section.
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("local-data.lock");
+
+        let observed = LocalDataLockInfo {
+            schema_version: 1,
+            pid: 99999,
+            nonce: "stale-nonce".to_string(),
+            created_at_unix_ms: 0,
+            start_token: Some("stale-start-token".to_string()),
+        };
+        fs::write(&lock_path, toml::to_string_pretty(&observed).unwrap()).unwrap();
+
+        // A different, live-looking owner now holds the path.
+        let live = LocalDataLockInfo {
+            schema_version: 1,
+            pid: std::process::id(),
+            nonce: "live-nonce".to_string(),
+            created_at_unix_ms: 1,
+            start_token: Some("live-start-token".to_string()),
+        };
+        fs::write(&lock_path, toml::to_string_pretty(&live).unwrap()).unwrap();
+
+        quarantine_local_data_lock(&lock_path, Some(&observed)).unwrap();
+
+        assert!(lock_path.exists(), "live lock must not be quarantined away");
+        assert_eq!(
+            fs::read_to_string(&lock_path).unwrap(),
+            toml::to_string_pretty(&live).unwrap(),
+            "live record must be untouched"
+        );
+        assert_eq!(count_quarantines(dir.path()), 0);
+    }
+
+    #[test]
+    fn test_quarantine_removes_lock_that_still_matches_observed() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("local-data.lock");
+        let observed = LocalDataLockInfo {
+            schema_version: 1,
+            pid: 99999,
+            nonce: "stale-nonce".to_string(),
+            created_at_unix_ms: 0,
+            start_token: Some("stale-start-token".to_string()),
+        };
+        fs::write(&lock_path, toml::to_string_pretty(&observed).unwrap()).unwrap();
+
+        quarantine_local_data_lock(&lock_path, Some(&observed)).unwrap();
+
+        assert!(!lock_path.exists());
+        assert_eq!(count_quarantines(dir.path()), 1);
+    }
+
+    #[test]
     fn test_malformed_local_data_lock_quarantined() {
         let dir = TempDir::new().unwrap();
         let lock_path = dir.path().join("local-data.lock");
@@ -397,17 +585,11 @@ mod tests {
         // Acquisition should quarantine the malformed lock and succeed
         let lock = acquire_local_data_lock(dir.path()).unwrap();
         assert!(lock.lock_path.exists());
-        // Quarantine file should exist
-        let quarantines: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("local-data.lock.quarantine.")
-            })
-            .collect();
-        assert_eq!(quarantines.len(), 1, "malformed lock should be quarantined");
+        assert_eq!(
+            count_quarantines(dir.path()),
+            1,
+            "malformed lock should be quarantined"
+        );
         drop(lock);
     }
 }

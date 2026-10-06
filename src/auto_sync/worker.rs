@@ -88,8 +88,18 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
             Ok(state) => state,
             Err(pending::PendingError::NotFound) => return WorkerOutcome::NothingToDo,
             Err(error) => {
-                tracing::error!(%error, "auto-sync helper could not read pending state");
-                return WorkerOutcome::Failed;
+                // Record the failure, not just the exit code: a temporarily
+                // unreadable marker (NFS hiccup, `EACCES` during a concurrent
+                // rename) is exactly the transient case the backoff machinery
+                // exists for, but without `record_failure` the status file kept
+                // `consecutive_failures = 0` / `next_attempt_at_unix_ms = 0`
+                // and the next mutation re-spawned immediately.
+                return record_sync_failure(
+                    state_dir,
+                    UNKNOWN_PENDING_GENERATION,
+                    failure_class_for_pending_error(&error),
+                    &error.to_string(),
+                );
             }
         };
         let observed = match debounce(
@@ -120,9 +130,16 @@ fn run_locked(state_dir: &Path, lock: SyncExecutionLock, policy: &AutoSyncPolicy
         };
         let observed = match preflight_check(state_dir, &observed) {
             Ok(state) => state,
-            Err(error) => {
-                tracing::debug!(%error, "auto-sync helper preflight found no executable work");
-                return WorkerOutcome::NothingToDo;
+            Err(PreflightError::NothingToDo) => return WorkerOutcome::NothingToDo,
+            Err(PreflightError::Failed { class, message }) => {
+                // A corrupt or unreadable marker is a failed cycle, not an
+                // absent one. Collapsing it into `NothingToDo` logged at
+                // `debug`, wrote no status, emitted no event, and exited 0 —
+                // so corruption never incremented `consecutive_failures`, never
+                // engaged backoff, and was invisible in `snp status`. The same
+                // cycle's debounce branch already records this class of problem
+                // as a failure.
+                return record_sync_failure(state_dir, pending_state.generation, class, &message);
             }
         };
         let outcome = execute_sync(state_dir, policy, observed.generation);
@@ -296,20 +313,84 @@ pub fn debounce(
     }
 }
 
-pub fn preflight_check(state_dir: &Path, observed: &PendingState) -> Result<PendingState, String> {
+/// Why a [`preflight_check`] rejected the observed pending state.
+///
+/// The three conditions are semantically different and must not share a
+/// single `Err(String)`: "the marker is gone, so there is nothing to do" is a
+/// clean exit, while "the marker is corrupt" and "the marker could not be read"
+/// are failed cycles that must be recorded (status file, backoff, lifecycle
+/// event, nonzero exit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreflightError {
+    /// The marker was removed between debounce and preflight. Nothing to do.
+    NothingToDo,
+    /// The marker is present but unusable, or could not be read.
+    Failed {
+        class: FailureClass,
+        message: String,
+    },
+}
+
+impl std::fmt::Display for PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NothingToDo => write!(f, "pending marker removed, nothing to do"),
+            Self::Failed { message, .. } => write!(f, "{message}"),
+        }
+    }
+}
+
+/// Map a pending-marker read error onto a failure class.
+///
+/// A transient I/O or lock error must engage backoff; corruption must require
+/// repair. Collapsing both would either spin on a corrupt marker or silently
+/// retry damage.
+fn failure_class_for_pending_error(error: &pending::PendingError) -> FailureClass {
+    use pending::PendingError;
+    match error {
+        // Transient by assumption: the marker is on disk, the read just failed
+        // (NFS hiccup, `EACCES` during a concurrent rename). Bounded backoff
+        // then requires attention.
+        PendingError::Io(_) | PendingError::Lock(_) => FailureClass::Transient,
+        // Corruption: the bytes on disk are wrong and re-reading will not help.
+        PendingError::Deserialize(_)
+        | PendingError::IntegrityMismatch { .. }
+        | PendingError::Corrupted(_) => FailureClass::LocalFailure,
+        // Defensive: `NotFound` is handled before this point, and the
+        // remaining variants do not describe a marker read failure.
+        PendingError::NotFound | PendingError::Serialize(_) | PendingError::Scheduling(_) => {
+            FailureClass::Internal
+        }
+    }
+}
+
+/// Generation to attribute to a failure recorded before the marker could be
+/// read. The marker's own generation is unknown in that case; `0` is the
+/// "unknown" sentinel already used by the status schema for pre-generation
+/// work.
+const UNKNOWN_PENDING_GENERATION: u64 = 0;
+
+pub fn preflight_check(
+    state_dir: &Path,
+    observed: &PendingState,
+) -> Result<PendingState, PreflightError> {
     match pending::read_state_from_dir(state_dir) {
         Ok(state) if state.generation < observed.generation => {
             let generation = state.generation;
-            adopt_generation_reset(observed, state).ok_or_else(|| {
-                format!(
-                    "pending generation rollback: observed {} after {}",
-                    generation, observed.generation
-                )
+            adopt_generation_reset(observed, state).ok_or_else(|| PreflightError::Failed {
+                class: FailureClass::Internal,
+                message: format!(
+                    "pending generation rollback: observed {generation} after {}",
+                    observed.generation
+                ),
             })
         }
         Ok(state) => Ok(state),
-        Err(pending::PendingError::NotFound) => Err("pending marker removed, nothing to do".into()),
-        Err(error) => Err(format!("corrupt pending state: {error}")),
+        Err(pending::PendingError::NotFound) => Err(PreflightError::NothingToDo),
+        Err(error) => Err(PreflightError::Failed {
+            class: failure_class_for_pending_error(&error),
+            message: format!("corrupt or unreadable pending state: {error}"),
+        }),
     }
 }
 

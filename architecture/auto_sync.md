@@ -187,8 +187,14 @@ unit test); `schedule_existing_pending` schedules already-recorded intent
    each time; newer generations restart the deadline, marker removal
    cancels, corruption fails the cycle as `Internal`. The
    cleared-and-recreated reset is adopted as a fresh full window.
-2. **Preflight.** Re-reads the marker; rollback without a newer timestamp
-   fails, removal means nothing to do.
+2. **Preflight.** Re-reads the marker. `preflight_check()` returns
+   `Result<PendingState, PreflightError>`, which keeps its three conditions
+   apart: removal → `NothingToDo` → exit 0; an unadoptable generation
+   rollback → `Failed { class: Internal }`; an unreadable or corrupt marker
+   → `Failed { class }` (`Transient` for `Io`/`Lock`, `LocalFailure` for
+   `Deserialize`/`IntegrityMismatch`/`Corrupted`). Both failure shapes go
+   through `record_failure` — status file, backoff, `sync_completed` event,
+   nonzero exit — so corruption can never be reported as a no-op cycle.
 3. **Execute.** Honours configured direction, builds a `new_current_thread`
    runtime (client keeps `rt-multi-thread`), and calls
    `run_sync_with_limits(.., Some(SyncRunLimits{deadline, request_timeout}))`

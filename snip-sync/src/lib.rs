@@ -35,6 +35,7 @@ pub use metrics::Metrics;
 pub use premade::PremadeManager;
 pub use rate_limiter::RateLimiter;
 
+use prost::Message;
 use serde::Deserialize;
 use snip_proto::{
     CreateLibraryRequest, CreateLibraryResponse, DeleteLibraryRequest, DeleteLibraryResponse,
@@ -83,6 +84,13 @@ fn strip_port(addr: &str) -> String {
 }
 
 pub const DEFAULT_MAX_COMMAND_LENGTH: usize = 1024;
+// Encrypted records carry description + command + tags as one AES-256-GCM
+// payload in `command`, base64-expanded (~1.37x the plaintext JSON). The cap
+// is deliberately far above `max_command_length` so ordinary snippets are
+// unaffected; its job is to make storage bounded and to guarantee a single
+// record can always be transported, since anything larger than the gRPC
+// message ceiling could be stored but never downloaded again.
+pub const DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH: usize = 1024 * 1024; // 1 MiB
 pub const DEFAULT_MAX_DESCRIPTION_LENGTH: usize = 1024;
 pub const DEFAULT_MAX_TAGS: usize = 50;
 pub const DEFAULT_MAX_TAG_LENGTH: usize = 100;
@@ -98,6 +106,54 @@ pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: u32 = 4 * 1024 * 1024; // 4 MiB
 /// their own default page size when the client omits one (`sync` → 1000,
 /// `get_snippets` → 100, `list_libraries` → 50); all are clamped here.
 pub const MAX_REQUEST_LIMIT: i32 = 1000;
+
+/// Bytes held back from the gRPC encode ceiling for the response envelope
+/// (status message, `skipped_ids`, scalar fields, and protobuf framing).
+const RESPONSE_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
+
+/// Encoded-byte budget available to the `snippets` array of one response,
+/// given the configured gRPC ceiling and any other variable-length payload the
+/// envelope already carries.
+fn page_byte_ceiling(grpc_ceiling: usize, envelope_bytes: usize) -> usize {
+    grpc_ceiling
+        .saturating_sub(RESPONSE_ENVELOPE_RESERVE_BYTES)
+        .saturating_sub(envelope_bytes)
+}
+
+/// Drop trailing rows from a response page until its encoded size fits
+/// `ceiling`; returns whether anything was dropped.
+///
+/// Downloads are paged by *row count*, but tonic hard-fails an over-size
+/// encoding with `OUT_OF_RANGE` instead of truncating. Without this bound a
+/// library whose rows happen to be large can be pushed successfully and then
+/// never downloaded again, by any client, for any page size. The caller sets
+/// `has_more` from the return value so the remainder is still fetched.
+fn fit_page_to_byte_ceiling(snippets: &mut Vec<ProtoSnippet>, ceiling: usize) -> bool {
+    let mut used = 0usize;
+    let mut kept = 0usize;
+    for snippet in snippets.iter() {
+        let len = snippet.encoded_len();
+        // Always keep at least one row. A single record larger than the whole
+        // ceiling cannot be made to fit, and returning an empty page would
+        // stall the client's pagination loop rather than make progress.
+        if kept > 0 && used.saturating_add(len) > ceiling {
+            break;
+        }
+        used = used.saturating_add(len);
+        kept += 1;
+    }
+    let truncated = kept < snippets.len();
+    if truncated {
+        tracing::info!(
+            dropped = snippets.len() - kept,
+            kept_bytes = used,
+            ceiling_bytes = ceiling,
+            "Response page trimmed to fit the gRPC encode ceiling"
+        );
+        snippets.truncate(kept);
+    }
+    truncated
+}
 
 #[derive(Deserialize, Default)]
 pub struct ConfigFile {
@@ -132,6 +188,7 @@ pub struct PremadeConfig {
 #[derive(Deserialize, Default)]
 pub struct LimitsConfig {
     pub max_command_length: Option<usize>,
+    pub max_encrypted_payload_length: Option<usize>,
     pub max_description_length: Option<usize>,
     pub max_tags: Option<usize>,
     pub max_tag_length: Option<usize>,
@@ -169,6 +226,7 @@ pub struct Config {
     pub db_max_connections: u32,
     pub premade_dir: PathBuf,
     pub max_command_length: usize,
+    pub max_encrypted_payload_length: usize,
     pub max_description_length: usize,
     pub max_tags: usize,
     pub max_tag_length: usize,
@@ -361,6 +419,12 @@ impl Config {
             max_command_length: parse_env(env, "MAX_COMMAND_LENGTH")?
                 .or(server.limits.as_ref().and_then(|l| l.max_command_length))
                 .unwrap_or(DEFAULT_MAX_COMMAND_LENGTH),
+            max_encrypted_payload_length: parse_env(env, "MAX_ENCRYPTED_PAYLOAD_LENGTH")?
+                .or(server
+                    .limits
+                    .as_ref()
+                    .and_then(|l| l.max_encrypted_payload_length))
+                .unwrap_or(DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH),
             max_description_length: parse_env(env, "MAX_DESCRIPTION_LENGTH")?
                 .or(server
                     .limits
@@ -463,6 +527,13 @@ impl Config {
             return Err(ConfigLoadError::InvalidRange {
                 name: "MAX_COMMAND_LENGTH",
                 value: self.max_command_length.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.max_encrypted_payload_length == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "MAX_ENCRYPTED_PAYLOAD_LENGTH",
+                value: self.max_encrypted_payload_length.to_string(),
                 reason: "must be nonzero".into(),
             });
         }
@@ -771,6 +842,13 @@ impl SnipSyncService {
             return Err(Status::invalid_argument("Snippet command is required"));
         }
 
+        if snippet.encrypted && snippet.command.len() > self.config.max_encrypted_payload_length {
+            return Err(Status::invalid_argument(format!(
+                "Encrypted payload exceeds maximum length of {} bytes",
+                self.config.max_encrypted_payload_length
+            )));
+        }
+
         if snippet.encrypted && (snippet.command.is_empty() || snippet.command.trim().is_empty()) {
             return Err(Status::invalid_argument(
                 "Encrypted snippet payload is required",
@@ -1025,9 +1103,10 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more = offset.saturating_add(snippets.len() as i32) < total;
+        let page_len = snippets.len() as i32;
+        let has_more_by_rows = offset.saturating_add(page_len) < total;
 
-        let proto_snippets: Vec<ProtoSnippet> = snippets
+        let mut proto_snippets: Vec<ProtoSnippet> = snippets
             .into_iter()
             .map(|s| ProtoSnippet {
                 id: s.id,
@@ -1041,6 +1120,12 @@ impl SnippetSync for SnipSyncService {
                 encrypted: s.encrypted,
             })
             .collect();
+
+        let truncated = fit_page_to_byte_ceiling(
+            &mut proto_snippets,
+            page_byte_ceiling(self.config.grpc_max_message_size as usize, 0),
+        );
+        let has_more = has_more_by_rows || truncated;
 
         self.record_request_duration("get_snippets", start);
 
@@ -1177,7 +1262,22 @@ impl SnippetSync for SnipSyncService {
                 .upsert_snippet_in_tx(&mut tx, &db_snippet, &user_id, &library_id)
                 .await
             {
-                Ok(_) => accepted += 1,
+                Ok(db::UpsertOutcome::Written | db::UpsertOutcome::Stale) => accepted += 1,
+                Ok(db::UpsertOutcome::ForeignScope) => {
+                    // `snippets.id` is a global primary key, so this snippet
+                    // cannot be stored alongside the identically-identified one
+                    // in another user or library. Reporting it as accepted
+                    // would tell the client the upload succeeded while the
+                    // snippet is silently absent from the server.
+                    rejected += 1;
+                    tracing::error!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        user_id = %user_id,
+                        library_id = %library_id,
+                        "Snippet rejected: id already exists under a different user or library"
+                    );
+                }
                 Err(e) => {
                     tracing::warn!(
                         request_id = %request_id,
@@ -1323,18 +1423,34 @@ impl SnippetSync for SnipSyncService {
                 encrypted: snippet.encrypted,
             };
 
-            if let Err(e) = self
+            match self
                 .db
                 .upsert_snippet_in_tx(&mut tx, &db_snippet, &user_id, &library_id)
                 .await
             {
-                tracing::warn!(
-                    request_id = %request_id,
-                    snippet_id = %snippet.id,
-                    reason = %e,
-                    "Snippet skipped: upsert failed"
-                );
-                skipped_ids.push(snippet.id.clone());
+                Ok(db::UpsertOutcome::Written | db::UpsertOutcome::Stale) => {}
+                Ok(db::UpsertOutcome::ForeignScope) => {
+                    // See `push_snippets`: the global primary key makes this
+                    // write impossible. Report it in `skipped_ids` so the
+                    // client sees a partial failure instead of a clean sync.
+                    tracing::error!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        user_id = %user_id,
+                        library_id = %library_id,
+                        "Snippet skipped: id already exists under a different user or library"
+                    );
+                    skipped_ids.push(snippet.id.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        snippet_id = %snippet.id,
+                        reason = %e,
+                        "Snippet skipped: upsert failed"
+                    );
+                    skipped_ids.push(snippet.id.clone());
+                }
             }
         }
 
@@ -1371,7 +1487,32 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more = offset.saturating_add(snippets.len() as i32) < total;
+        let has_more_by_rows = offset.saturating_add(snippets.len() as i32) < total;
+
+        let mut proto_snippets: Vec<ProtoSnippet> = snippets
+            .into_iter()
+            .map(|s| ProtoSnippet {
+                id: s.id,
+                description: s.description,
+                command: s.command,
+                tags: s.tags,
+                created_at: s.created_at,
+                updated_at: s.updated_at,
+                device_id: s.device_id,
+                deleted: s.deleted,
+                encrypted: s.encrypted,
+            })
+            .collect();
+
+        // Bound the page by encoded bytes before deciding `has_more`: the
+        // timestamp watermark below must be withheld whenever rows remain to
+        // be fetched, including rows dropped here for size.
+        let skipped_bytes: usize = skipped_ids.iter().map(|id| id.len() + 8).sum();
+        let truncated = fit_page_to_byte_ceiling(
+            &mut proto_snippets,
+            page_byte_ceiling(self.config.grpc_max_message_size as usize, skipped_bytes),
+        );
+        let has_more = has_more_by_rows || truncated;
 
         let timestamp = if has_more {
             // Don't advance timestamp when paginating — client needs to fetch remaining pages
@@ -1387,21 +1528,6 @@ impl SnippetSync for SnipSyncService {
                     Status::internal("Internal error")
                 })?
         };
-
-        let proto_snippets: Vec<ProtoSnippet> = snippets
-            .into_iter()
-            .map(|s| ProtoSnippet {
-                id: s.id,
-                description: s.description,
-                command: s.command,
-                tags: s.tags,
-                created_at: s.created_at,
-                updated_at: s.updated_at,
-                device_id: s.device_id,
-                deleted: s.deleted,
-                encrypted: s.encrypted,
-            })
-            .collect();
 
         let skipped_count = skipped_ids.len() as i32;
 
@@ -1811,6 +1937,7 @@ mod tests {
             db_max_connections: 5,
             premade_dir: PathBuf::from("premade-libraries"),
             max_command_length: 1024,
+            max_encrypted_payload_length: DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH,
             max_description_length: 1024,
             max_tags: 50,
             max_tag_length: 100,
@@ -2170,6 +2297,317 @@ mod tests {
         let resp = service.get_snippets(req).await;
         assert!(resp.is_err());
         assert_eq!(resp.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_id_across_libraries_is_rejected_not_silently_dropped() {
+        // `snippets.id` is a global primary key. Pushing the same id into a
+        // second library of the same user writes zero rows, and SQLite raises
+        // no error for the discarded `DO UPDATE`. Counting that as accepted
+        // would tell the client the upload succeeded while the snippet is
+        // absent from the server forever.
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let work = service
+            .create_library(Request::new(CreateLibraryRequest {
+                api_key: api_key.clone(),
+                name: "work".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+        let personal = service
+            .create_library(Request::new(CreateLibraryRequest {
+                api_key: api_key.clone(),
+                name: "personal".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let snippet = ProtoSnippet {
+            id: "legacy-abc123".to_string(),
+            description: "git status".to_string(),
+            command: "git status".to_string(),
+            tags: vec![],
+            created_at: chrono::Utc::now().timestamp(),
+            updated_at: chrono::Utc::now().timestamp(),
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let first = service
+            .push_snippets(Request::new(PushSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: work.clone(),
+                snippets: vec![snippet.clone()],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(first.accepted_count, 1);
+        assert_eq!(first.rejected_count, 0);
+
+        let second = service
+            .push_snippets(Request::new(PushSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: personal.clone(),
+                snippets: vec![snippet],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            second.rejected_count, 1,
+            "cross-library id collision must be rejected, not accepted"
+        );
+        assert_eq!(
+            second.accepted_count, 0,
+            "the dropped write must not be counted as accepted"
+        );
+        assert!(!second.success, "a partial upload must not report success");
+
+        // The snippet really is only stored under the first library.
+        let other = service
+            .get_snippets(Request::new(GetSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: personal.clone(),
+                limit: 100,
+                offset: 0,
+                since: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(other.snippets.is_empty());
+
+        // And `sync` reports the same collision in `skipped_ids`.
+        let sync = service
+            .sync(Request::new(SyncRequest {
+                api_key: api_key.clone(),
+                local_snippets: vec![ProtoSnippet {
+                    id: "legacy-abc123".to_string(),
+                    description: "git status".to_string(),
+                    command: "git status".to_string(),
+                    tags: vec![],
+                    created_at: chrono::Utc::now().timestamp(),
+                    updated_at: chrono::Utc::now().timestamp(),
+                    device_id: "device-1".to_string(),
+                    deleted: false,
+                    encrypted: false,
+                }],
+                last_sync_timestamp: 0,
+                library_id: personal,
+                limit: 100,
+                offset: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            sync.skipped_ids,
+            vec!["legacy-abc123".to_string()],
+            "sync must surface the skipped id instead of reporting a clean run"
+        );
+        assert_eq!(sync.skipped_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_older_version_in_same_library_is_accepted_as_stale() {
+        // A genuine last-write-wins dedupe also writes zero rows, but it must
+        // NOT be reported as a rejection — only a foreign-scope collision is.
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+        let library_id = service
+            .create_library(Request::new(CreateLibraryRequest {
+                api_key: api_key.clone(),
+                name: "work".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let now = chrono::Utc::now().timestamp();
+        let newer = ProtoSnippet {
+            id: "snippet-1".to_string(),
+            description: "newer".to_string(),
+            command: "echo newer".to_string(),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let older = ProtoSnippet {
+            description: "older".to_string(),
+            command: "echo older".to_string(),
+            created_at: now - 500,
+            updated_at: now - 500,
+            ..newer.clone()
+        };
+
+        for snippet in [newer, older] {
+            let push = service
+                .push_snippets(Request::new(PushSnippetsRequest {
+                    api_key: api_key.clone(),
+                    library_id: library_id.clone(),
+                    snippets: vec![snippet],
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(push.accepted_count, 1);
+            assert_eq!(push.rejected_count, 0, "stale write is not a rejection");
+        }
+
+        let list = service
+            .get_snippets(Request::new(GetSnippetsRequest {
+                api_key,
+                library_id,
+                limit: 100,
+                offset: 0,
+                since: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(list.snippets.len(), 1);
+        assert_eq!(list.snippets[0].command, "echo newer");
+    }
+
+    #[test]
+    fn test_fit_page_to_byte_ceiling_keeps_page_within_budget() {
+        // Each row is ~1 KiB of command. With a 4 KiB budget only some rows
+        // fit; the rest must be dropped *and reported* so the client still
+        // paginates. Dropping them silently would lose records.
+        let row = |i: usize| ProtoSnippet {
+            id: format!("snippet-{i}"),
+            description: "d".repeat(1024),
+            command: "c".repeat(1024),
+            tags: vec![],
+            created_at: 1,
+            updated_at: 1,
+            device_id: "dev".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        let mut page: Vec<ProtoSnippet> = (0..10).map(row).collect();
+        let budget = 4 * 1024usize;
+
+        let truncated = fit_page_to_byte_ceiling(&mut page, budget);
+
+        assert!(truncated, "page must report that rows were dropped");
+        assert!(!page.is_empty(), "at least one row must always be kept");
+        assert!(
+            page.len() < 10,
+            "rows beyond the byte budget must be dropped, got {}",
+            page.len()
+        );
+        assert!(
+            page.iter().map(|s| s.encoded_len()).sum::<usize>() <= budget,
+            "kept rows must fit the budget"
+        );
+        // Dropping is a tail-trim, so the prefix is preserved and the client
+        // can resume from `offset + kept`.
+        assert_eq!(page[0].id, "snippet-0");
+    }
+
+    #[test]
+    fn test_fit_page_to_byte_ceiling_keeps_at_least_one_oversized_row() {
+        // A single row larger than the whole budget cannot be made to fit.
+        // Returning an empty page would stall the client forever, so the row is
+        // returned anyway and left for the transport to report.
+        let mut page = vec![ProtoSnippet {
+            id: "huge".to_string(),
+            description: String::new(),
+            command: "x".repeat(64 * 1024),
+            tags: vec![],
+            created_at: 1,
+            updated_at: 1,
+            device_id: "dev".to_string(),
+            deleted: false,
+            encrypted: true,
+        }];
+        let truncated = fit_page_to_byte_ceiling(&mut page, 1024);
+        assert_eq!(page.len(), 1, "an oversized row must still be returned");
+        assert!(!truncated, "nothing was actually dropped");
+    }
+
+    #[test]
+    fn test_fit_page_to_byte_ceiling_noop_when_page_fits() {
+        let mut page = vec![ProtoSnippet {
+            id: "small".to_string(),
+            description: "d".to_string(),
+            command: "echo hi".to_string(),
+            tags: vec![],
+            created_at: 1,
+            updated_at: 1,
+            device_id: "dev".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+        assert!(!fit_page_to_byte_ceiling(&mut page, 1024 * 1024));
+        assert_eq!(page.len(), 1);
+    }
+
+    #[test]
+    fn test_page_byte_ceiling_reserves_envelope_space() {
+        assert_eq!(
+            page_byte_ceiling(4 * 1024 * 1024, 0),
+            4 * 1024 * 1024 - RESPONSE_ENVELOPE_RESERVE_BYTES
+        );
+        assert_eq!(
+            page_byte_ceiling(4 * 1024 * 1024, 2048),
+            4 * 1024 * 1024 - RESPONSE_ENVELOPE_RESERVE_BYTES - 2048
+        );
+        // Absurd envelope payloads must saturate, never wrap into a huge budget.
+        assert_eq!(page_byte_ceiling(1024, 1024 * 1024), 0);
+    }
+
+    #[tokio::test]
+    async fn test_oversized_encrypted_payload_is_rejected() {
+        // Encrypted records previously skipped every size check, so storage
+        // was unbounded and a record larger than the gRPC ceiling could be
+        // stored but never downloaded.
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+        let library_id = service
+            .create_library(Request::new(CreateLibraryRequest {
+                api_key: api_key.clone(),
+                name: "work".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let push = service
+            .push_snippets(Request::new(PushSnippetsRequest {
+                api_key,
+                library_id,
+                snippets: vec![ProtoSnippet {
+                    id: "huge".to_string(),
+                    description: String::new(),
+                    command: "x".repeat(DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH + 1),
+                    tags: vec![],
+                    created_at: 1,
+                    updated_at: 1,
+                    device_id: "dev".to_string(),
+                    deleted: false,
+                    encrypted: true,
+                }],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(push.rejected_count, 1, "oversized payload must be rejected");
+        assert_eq!(push.accepted_count, 0);
     }
 
     #[tokio::test]
