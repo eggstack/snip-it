@@ -39,7 +39,7 @@ Upstream references:
 
 - `https://github.com/eggstack/eggfetch/blob/main/crates/eggfetch-core/Cargo.toml` and corresponding `src/{client,request,response,redirect,timeout,error}.rs`.
 - `https://github.com/eggstack/eggserve/blob/main/crates/eggserve-server/Cargo.toml`, `src/{lib,config,service}.rs`.
-- `https://github.com/eggstack/eggserve/blob/main/crates/eggserve-primitives/Cargo.toml`; `https://github.com/eggstack/eggserve/releases/tag/v0.4.0` (release notes). Eggserve-server 0.4.0 requires primitives 0.2.2.
+- `https://github.com/eggstack/eggserve/blob/main/crates/eggserve-primitives/Cargo.toml`; published API documentation at `https://docs.rs/eggserve-server/0.4.0/eggserve_server/` and `https://docs.rs/eggserve-primitives/0.2.2/eggserve_primitives/`. Eggserve-server 0.4.0 requires primitives 0.2.2.
 - Direct historical comparisons against `eggfetch` v0.2.0 and `eggserve` v0.2.0 show the audited longstanding surface retained. Eggserve `into_parts` and disabling total connection lifetime were introduced after that older tag; verify current downstream 0.2.1 behavior in the existing Snip-it tests rather than inferring from v0.2.0.
 
 Concrete Snip-it files: `src/update.rs`, `snip-sync/src/{http,orchestration,main}.rs`, `tests/architecture.rs`, `tests/snip_sync_lifetime.rs`, `architecture/{update,server}.md`, `plans/000-long-term-specification.md`. `tests/architecture.rs::snp_updater_pins_lean_eggfetch_profile` explicitly asserts `=0.2.0` and must be updated. Some version comments are historical evidence; distinguish them from current-state statements.
