@@ -1020,13 +1020,40 @@ impl Drop for TransactionLock {
     }
 }
 
+/// Upper bound on how long [`acquire_transaction_lock`] may spin on a lock
+/// file it cannot read, reclaim, or observe. Defense in depth: every arm of
+/// the acquisition loop is expected to resolve, and this guarantees the CLI
+/// cannot hang without an error or a timeout even if a new arm is added.
+const LOCK_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether a lock-file I/O error kind should be treated as transient lock
+/// contention (retry) rather than a hard failure.
+///
+/// On Windows a just-deleted file can briefly surface `PermissionDenied`
+/// while in a pending-delete state, so it retries like `AlreadyExists`.
+/// On Unix a `PermissionDenied` here is a genuine misconfiguration (a lock
+/// file owned by another UID, or a `.transaction` directory that is not
+/// traversable) and is stable, not transient: retrying it spins forever
+/// without an error or a timeout.
+#[cfg(windows)]
+fn is_transient_lock_contention(kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::PermissionDenied
+}
+
+/// Unix has no pending-delete aliasing: permission errors fail fast.
+#[cfg(not(windows))]
+fn is_transient_lock_contention(_kind: std::io::ErrorKind) -> bool {
+    false
+}
+
 /// Acquire a local mutation transaction lock.
 ///
 /// Uses an atomic file-create to ensure only one transaction can proceed
 /// at a time. If an existing lock is found, observes the process identified
 /// by the lock record's PID. Dead or reused owners are quarantined and
 /// the acquisition loop retries with `create_new(true)`. Returns an error
-/// if the lock is held by a live process.
+/// if the lock is held by a live process, or once `LOCK_ACQUIRE_TIMEOUT`
+/// elapses without the lock becoming resolvable.
 pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult<TransactionLock> {
     create_private_dir(state_dir)?;
 
@@ -1051,6 +1078,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
         .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
     let mut empty_retries = 0u32;
     let mut malformed_retries = 0u32;
+    let deadline = std::time::Instant::now() + LOCK_ACQUIRE_TIMEOUT;
 
     // Single acquisition loop: create_new, write immediately, classify existing owner.
     loop {
@@ -1066,8 +1094,14 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                 // reader that sees empty content will retry instead
                 // of quarantining (see below).
                 use std::io::Write;
-                file.write_all(content.as_bytes())
-                    .map_err(|e| SnipError::io_error("write lock record", lock_path.clone(), e))?;
+                if let Err(e) = file.write_all(content.as_bytes()) {
+                    // The file was created by this call and is empty. Leaving
+                    // it behind makes every later acquirer spin through the
+                    // empty-content ladder, so drop it before reporting.
+                    drop(file);
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(SnipError::io_error("write lock record", lock_path, e));
+                }
                 if let Err(e) = file.sync_all() {
                     tracing::warn!(error = %e, "failed to sync transaction lock record");
                 }
@@ -1078,7 +1112,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                 // On Windows, a just-deleted file can briefly return
                 // PermissionDenied when in a pending-delete state.
                 // Treat it the same as AlreadyExists.
-                || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                || is_transient_lock_contention(e.kind()) =>
             {
                 // Lock exists — read and classify the owner.
                 // Handle TOCTOU: another writer may have removed the lock
@@ -1088,10 +1122,22 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                     Err(e)
                         if e.kind() == std::io::ErrorKind::NotFound
                         // On Windows, a pending-delete file may be unreadable.
-                        || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                        || is_transient_lock_contention(e.kind()) =>
                     {
-                        // Lock was removed or is in a transient state — loop back and retry.
+                        // Lock was removed or is in a transient state — loop
+                        // back and retry. Bounded by `deadline` so no error
+                        // kind can wedge this loop forever.
                         std::thread::sleep(std::time::Duration::from_millis(1));
+                        if std::time::Instant::now() >= deadline {
+                            return Err(SnipError::runtime_error(
+                                "Transaction lock acquisition timed out",
+                                Some(&format!(
+                                    "Gave up waiting for {} after {} seconds.",
+                                    lock_path.display(),
+                                    LOCK_ACQUIRE_TIMEOUT.as_secs()
+                                )),
+                            ));
+                        }
                         continue;
                     }
                     Err(e) => {

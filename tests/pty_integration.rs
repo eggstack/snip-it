@@ -31,13 +31,74 @@ use tempfile::TempDir;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+/// PTY output accumulated live by the drain thread.
+///
+/// Shared so the test can observe that the TUI has painted *before* sending
+/// keystrokes, instead of guessing with a fixed sleep.
+type PtyOutput = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+
+/// Upper bound on how long the TUI has to produce its first screenful before
+/// the test gives up. Generous on purpose: this replaces a fixed 2 s sleep,
+/// which was the only thing standing between a merely slow start and a hang.
+const PTY_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Upper bound on how long the child may take to exit after the last key.
+const PTY_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Block until the child has painted and then gone quiet for `settle`,
+/// or until it has exited on its own.
+///
+/// Writing keystrokes before the child installs its input reader loses them,
+/// after which the TUI waits forever and the run only ends at the exit
+/// timeout. Under load the fixed sleep that used to guard this was not long
+/// enough, so the test failed on a slow host rather than on a real defect.
+///
+/// Not every command paints: `snp new --command-stdin` reads stdin and exits
+/// silently, and its keys are the stdin bytes themselves, so waiting for a
+/// screen that never appears would deadlock the test. The quiet timer covers
+/// that case, and an already-exited child short-circuits outright.
+fn wait_for_pty_ready(
+    child: &mut Box<dyn portable_pty::Child + Send + Sync>,
+    output: &PtyOutput,
+    settle: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + PTY_READY_TIMEOUT;
+    let mut last_len = 0usize;
+    let mut quiet_since: Option<std::time::Instant> = None;
+
+    while std::time::Instant::now() < deadline {
+        let len = output.lock().unwrap().len();
+        if len != last_len {
+            // Any new bytes mean the screen is still changing.
+            last_len = len;
+            quiet_since = Some(std::time::Instant::now());
+        } else if let Some(since) = quiet_since
+            && since.elapsed() >= settle
+        {
+            return true;
+        }
+
+        if len == 0 && matches!(child.try_wait(), Ok(Some(_))) {
+            return true;
+        }
+
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Never settled. Send the keys anyway rather than failing a test whose
+    // subject is not startup timing.
+    eprintln!("warning: snp PTY output did not settle within {PTY_READY_TIMEOUT:?}");
+    true
+}
+
 /// Read PTY output using `libc::poll` + `libc::read` on a non-blocking fd.
 /// A hard deadline ensures the thread terminates even if the kernel
-/// never signals POLLHUP (observed on some CI runners).
-fn drain_pty_output(fd: std::os::unix::io::RawFd) -> Vec<u8> {
+/// never signals POLLHUP (observed on some CI runners). It outlives both
+/// waits in `run_snp_pty_with_delay` so the drain cannot give up before the
+/// output it is waiting for has been produced.
+fn drain_pty_output(fd: std::os::unix::io::RawFd, sink: PtyOutput) {
     let mut buf = [0u8; 4096];
-    let mut output = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + PTY_READY_TIMEOUT + PTY_EXIT_TIMEOUT;
     loop {
         if std::time::Instant::now() >= deadline {
             break;
@@ -61,9 +122,8 @@ fn drain_pty_output(fd: std::os::unix::io::RawFd) -> Vec<u8> {
         if n <= 0 {
             break;
         }
-        output.extend_from_slice(&buf[..n as usize]);
+        sink.lock().unwrap().extend_from_slice(&buf[..n as usize]);
     }
-    output
 }
 
 fn snp_bin() -> PathBuf {
@@ -149,14 +209,18 @@ fn run_snp_pty_with_delay(
     assert!(drain_fd >= 0, "dup failed");
     let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
     unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
+    let output: PtyOutput = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let drain_sink = std::sync::Arc::clone(&output);
     let drain = std::thread::spawn(move || {
-        let out = drain_pty_output(drain_fd);
+        drain_pty_output(drain_fd, drain_sink);
         unsafe { libc::close(drain_fd) };
-        out
     });
 
-    // Give the TUI time to start up and render
-    std::thread::sleep(initial_delay);
+    // Wait for the child to paint (or exit) instead of sleeping a fixed
+    // amount. `initial_delay` is now the quiet period required after output
+    // stops changing, so a slow host waits longer instead of dropping keys on
+    // the floor.
+    wait_for_pty_ready(&mut child, &output, initial_delay);
 
     // Write keys directly to the master pty fd.
     let raw_fd = pair.master.as_raw_fd().expect("master pty fd");
@@ -165,8 +229,9 @@ fn run_snp_pty_with_delay(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for child with a generous timeout
-    let timeout = Duration::from_secs(10);
+    // Wait for the child. Generous, because the failure this guards against
+    // is a slow host, not a fast one.
+    let timeout = PTY_EXIT_TIMEOUT;
     let start = std::time::Instant::now();
     let exit_code = loop {
         match child.try_wait() {
@@ -177,8 +242,8 @@ fn run_snp_pty_with_delay(
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let output = drain.join().unwrap();
-                    let output_str = String::from_utf8_lossy(&output);
+                    let _ = drain.join();
+                    let output_str = String::from_utf8_lossy(&output.lock().unwrap()).to_string();
                     panic!("snp process timed out after {timeout:?}\nOUTPUT: {output_str}");
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -187,8 +252,8 @@ fn run_snp_pty_with_delay(
         }
     };
 
-    let output = drain.join().unwrap();
-    let output_str = String::from_utf8_lossy(&output).to_string();
+    let _ = drain.join();
+    let output_str = String::from_utf8_lossy(&output.lock().unwrap()).to_string();
     (exit_code, output_str)
 }
 
@@ -235,10 +300,11 @@ fn run_bash_capture_pty(
             drain_orig_bash | libc::O_NONBLOCK,
         )
     };
+    let bash_output: PtyOutput = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bash_sink = std::sync::Arc::clone(&bash_output);
     let drain = std::thread::spawn(move || {
-        let out = drain_pty_output(drain_fd_bash);
+        drain_pty_output(drain_fd_bash, bash_sink);
         unsafe { libc::close(drain_fd_bash) };
-        out
     });
 
     std::thread::sleep(Duration::from_millis(700));
@@ -281,11 +347,11 @@ fn run_bash_capture_pty(
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let output = drain.join().unwrap();
+                    let _ = drain.join();
                     panic!(
                         "bash PTY capture timed out after {timeout:?}; sentinel={:?}\nOUTPUT: {}",
                         sentinel_path,
-                        String::from_utf8_lossy(&output)
+                        String::from_utf8_lossy(&bash_output.lock().unwrap())
                     );
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -294,8 +360,11 @@ fn run_bash_capture_pty(
         }
     };
 
-    let output = drain.join().unwrap();
-    (exit_code, String::from_utf8_lossy(&output).to_string())
+    let _ = drain.join();
+    (
+        exit_code,
+        String::from_utf8_lossy(&bash_output.lock().unwrap()).to_string(),
+    )
 }
 
 // -----------------------------------------------------------------------
@@ -558,10 +627,11 @@ fn test_pty_stdin_readable() {
     assert!(drain_fd >= 0, "dup failed");
     let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
     unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
+    let helper_output: PtyOutput = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let helper_sink = std::sync::Arc::clone(&helper_output);
     let drain = std::thread::spawn(move || {
-        let out = drain_pty_output(drain_fd);
+        drain_pty_output(drain_fd, helper_sink);
         unsafe { libc::close(drain_fd) };
-        out
     });
 
     std::thread::sleep(Duration::from_millis(500));
@@ -592,8 +662,8 @@ fn test_pty_stdin_readable() {
         }
     }
 
-    let output = drain.join().unwrap();
-    let output_str = String::from_utf8_lossy(&output);
+    let _ = drain.join();
+    let output_str = String::from_utf8_lossy(&helper_output.lock().unwrap()).to_string();
     eprintln!("PTY output: {output_str:?}");
 
     assert!(
@@ -626,10 +696,11 @@ fn test_pty_basic_echo() {
     assert!(drain_fd >= 0, "dup failed");
     let drain_orig = unsafe { libc::fcntl(drain_fd, libc::F_GETFL) };
     unsafe { libc::fcntl(drain_fd, libc::F_SETFL, drain_orig | libc::O_NONBLOCK) };
+    let helper_output: PtyOutput = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let helper_sink = std::sync::Arc::clone(&helper_output);
     let drain = std::thread::spawn(move || {
-        let out = drain_pty_output(drain_fd);
+        drain_pty_output(drain_fd, helper_sink);
         unsafe { libc::close(drain_fd) };
-        out
     });
 
     // Wait for child to exit with timeout
@@ -653,8 +724,8 @@ fn test_pty_basic_echo() {
         }
     }
 
-    let output = drain.join().unwrap();
-    let output_str = String::from_utf8_lossy(&output);
+    let _ = drain.join();
+    let output_str = String::from_utf8_lossy(&helper_output.lock().unwrap()).to_string();
     eprintln!("PTY output: {output_str:?}");
 
     assert!(

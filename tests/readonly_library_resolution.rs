@@ -113,6 +113,81 @@ fn legacy_single_file_get_resolves_without_writes() {
 }
 
 #[test]
+fn legacy_single_file_list_resolves_without_writes() {
+    // `snp list` resolved through `get_library_path`, which calls the
+    // *mutating* `ensure_library_mode()`. On a legacy checkout that made a
+    // plain read-only command create `libraries/`, write `libraries.toml`,
+    // bump the generation, and `fs::copy` the legacy file — leaving the
+    // original `snippets.toml` behind as a second, now-inert copy.
+    let (_tmp, config_dir) = setup_test_env();
+    write_legacy_snippets(&config_dir);
+    assert!(!config_dir.join("libraries").exists());
+    let before = file_snapshot(&config_dir);
+
+    let output = snp_in(&config_dir).args(["list"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "legacy list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("echo legacy"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    assert!(
+        !config_dir.join("libraries").exists(),
+        "read-only list must not migrate legacy state"
+    );
+    assert_eq!(file_snapshot(&config_dir), before);
+}
+
+#[test]
+fn list_all_scope_spans_every_library() {
+    // `list` bypassed `LibraryScope::from_filter_arg`, so the documented
+    // cross-library scope failed with a misleading "Library 'all' does not
+    // exist" while `get --library all` worked.
+    let (_tmp, config_dir) = setup_test_env();
+    write_two_libraries(&config_dir);
+
+    let output = snp_in(&config_dir)
+        .args(["list", "--library", "all"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "list --library all failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("echo work"), "{stdout}");
+    assert!(stdout.contains("echo personal"), "{stdout}");
+}
+
+#[test]
+fn library_named_all_is_rejected() {
+    // Without a reserved-name check `snp library create all` succeeded, and
+    // `--library all` then meant two different things depending on the
+    // surface — with the wrong scope returned silently on the resolver paths.
+    let (_tmp, config_dir) = setup_test_env();
+
+    let output = snp_in(&config_dir)
+        .args(["library", "create", "all"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "'all' must be rejected as a library name"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("all"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn primary_named_and_all_scopes_resolve() {
     let (_tmp, config_dir) = setup_test_env();
     write_two_libraries(&config_dir);

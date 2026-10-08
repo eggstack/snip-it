@@ -4,8 +4,8 @@
 > they operate on.
 >
 > Read this before adding a `--library` flag. `src/selector.rs` owns the
-> canonical scope model; `src/commands/mod.rs::get_library_path` is the
-> single-library path and does **not** understand `"all"`.
+> canonical scope model; `src/library::readonly_library_sources` is the
+> read-only path and **does** understand `"all"`.
 
 ---
 
@@ -13,13 +13,15 @@
 
 | Path | Entry point | Understands `"all"`? | Used by |
 |------|-------------|----------------------|----------|
-| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:61-68`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), any selector-based resolution |
-| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:91`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp list`, `snp new`, `snp edit` |
+| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-71`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP |
+| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:773`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`) |
+| Single-library path | `commands::get_library_path` (`src/commands/mod.rs`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
 
-`"all"` is defined in exactly one place (`LibraryScope::from_filter_arg`) and is
-covered by unit tests in `src/selector.rs`. A command that wants cross-library
-support must route through the selector; adding `"all"` handling to the
-single-library path would fork the rule.
+`"all"` is defined in exactly one place (`LibraryScope::from_filter_arg`), with
+`readonly_library_sources` consuming the same rule, and it is covered by unit
+tests in `src/selector.rs` and `src/library/manager.rs`. A command that wants
+cross-library support must route through one of those two; adding `"all"`
+handling to `get_library_path` would fork the rule.
 
 ---
 
@@ -49,16 +51,21 @@ The name is matched against library filenames (case-insensitive). If the library
 
 ### All Libraries (`--library all`)
 
-Supported **only on the selector path**, i.e. `snp get`:
+Supported on the selector path and on the read-only path:
 
 ```
-snp get --library all --query deploy
+snp get  --library all --query deploy   # selector path
+snp list --library all                  # read-only path (concatenates every library)
 ```
 
-`snp list --library all` is **not** supported and fails with a
-`library_not_found` error for `"all"` — `list` uses the single-library path
-(`src/commands/list_cmd.rs:64`). There is no `--all-libraries` flag anywhere in
-the CLI.
+`snp search --library all` is **not** supported: the interactive selector edits
+and deletes inside one library file, so it takes the single-library path and
+rejects the scope with an explicit error naming the supported alternatives.
+There is no `--all-libraries` flag anywhere in the CLI.
+
+`all` is a reserved library name. `validate_library_name`
+(`src/library/model.rs`) rejects `snp library create all`, so the keyword can
+never be ambiguous between "the library named all" and "every library".
 
 ### Library ID (sync-linked libraries)
 
@@ -72,8 +79,8 @@ For sync-linked libraries, the **library ID** is the filename stem (e.g., `my-wo
 |----------|----------|
 | No `--library` flag | Use primary library |
 | `--library <name>` | Match by filename (case-insensitive), error if not found |
-| `--library all` (selector path only) | Union of all visible libraries |
-| `--library all` (single-library path) | Error: `library_not_found` |
+| `--library all` (selector or read-only path) | Union of all visible libraries |
+| `--library all` (single-library path) | Error: unsupported for this command |
 | Primary library not set | Error with guidance to run `snp library create` or `snp library set-primary` |
 
 ---
@@ -98,8 +105,8 @@ When `--library all` is used with a selector-based command:
 - `snp list --csv` uses the same six columns; there is **no `library` column**
   (`src/commands/list_cmd.rs:171`).
 
-Because `list` is single-library by construction, it has no source-library
-identity to report.
+Because `list` never reports a source library, it has no library identity in its
+output even when `--library all` concatenates several libraries.
 
 ---
 
@@ -107,8 +114,8 @@ identity to report.
 
 - `snp list` warns and ignores `--library` when `--config` is set, because
   `--config` names an explicit file path (`src/commands/list_cmd.rs:58-59`).
-- `--library` help text advertises `"all"` only where the selector path backs
-  the command (currently `snp get`). Do not copy that wording onto a
+- `--library` help text advertises `"all"` only where the selector or read-only
+  path backs the command (`snp get`, `snp list`). Do not copy that wording onto a
   single-library command.
 
 ---

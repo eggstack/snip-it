@@ -195,8 +195,8 @@ fn parse_on_disk(contents: &str) -> Result<PendingOnDisk, PendingError> {
         )?;
         if on_disk.integrity != expected {
             return Err(PendingError::IntegrityMismatch {
-                expected: on_disk.integrity.clone(),
-                got: expected,
+                expected,
+                got: on_disk.integrity.clone(),
             });
         }
         return Ok(on_disk);

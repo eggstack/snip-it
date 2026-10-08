@@ -9,6 +9,7 @@ pub struct SearchArgs {
     pub filter: Option<String>,
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub sync: bool,
+    /// Library to search; `all` is not supported by the interactive selector
     #[arg(short, long)]
     pub library: Option<String>,
     /// Sort mode for snippet ordering
@@ -28,6 +29,20 @@ pub fn run(
     sort_opts: Option<crate::sort::SortOptions>,
     runtime: Option<&tokio::runtime::Runtime>,
 ) -> SnipResult<()> {
+    // The interactive selector edits and deletes within a single library file,
+    // so it cannot take a cross-library scope. Without this guard the lookup
+    // failed with "Library 'all' does not exist", which is false — `all` is
+    // the scope keyword owned by `LibraryScope::from_filter_arg`, and it does
+    // work for `snp get`, `list`, and MCP. Say what is actually true.
+    if library.as_deref() == Some("all") {
+        return Err(crate::error::SnipError::runtime_error(
+            "Library 'all' is not supported by 'snp search'",
+            Some(
+                "The interactive selector operates on one library. Use 'snp list --library all' to list every library, or 'snp get --library all' to fetch a snippet by id.",
+            ),
+        ));
+    }
+
     // Propagate --config to the snippet selection pipeline. The pipeline
     // takes a library *name*, so derive one from the config file stem.
     // Surface the derivation so errors are not confusing when the stem

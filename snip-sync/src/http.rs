@@ -114,6 +114,16 @@ async fn handle_request(
     if status == 405 {
         response_headers.push(("allow", "GET, HEAD".to_owned()));
     }
+    // RFC 9110 §11.1: a 401 response MUST carry a `WWW-Authenticate`
+    // challenge. Without it a client cannot learn the scheme, and browsers
+    // will not prompt for credentials — so a password-protected `/metrics`
+    // was unreachable through standard HTTP auth flows.
+    if status == 401 {
+        response_headers.push((
+            "www-authenticate",
+            "Basic realm=\"metrics\", charset=\"UTF-8\"".to_owned(),
+        ));
+    }
     if let Some(origin) = get_header(request_headers, "origin")
         && origin_allowed(&cors, &origin)
     {

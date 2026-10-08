@@ -114,6 +114,38 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
     Ok(path)
 }
 
+/// Loads snippets for a read-only command across the resolved library scope.
+///
+/// Uses [`crate::library::readonly_library_sources`], which performs no
+/// migration and creates no files or directories. It also routes `"all"`
+/// through [`crate::selector::LibraryScope::from_filter_arg`], the single
+/// definition of the keyword, so `--library all` means the same thing here as
+/// on `snp get`, exact-mode `run`/`clip`/`edit`, and MCP.
+///
+/// Returns the resolved sources (empty when no library is configured) together
+/// with the concatenation of their snippets, in resolution order.
+pub fn load_readonly_snippets(
+    library: Option<&str>,
+) -> SnipResult<(
+    Vec<crate::library::ResolvedLibrarySource>,
+    crate::library::Snippets,
+)> {
+    let sources = crate::library::readonly_library_sources(library)?;
+
+    let mut merged = crate::library::Snippets::default();
+    for source in &sources {
+        let loaded = crate::library::load_library(&source.path)?;
+        merged.snippets.extend(loaded.snippets);
+        for folder in loaded.folders {
+            if !merged.folders.contains(&folder) {
+                merged.folders.push(folder);
+            }
+        }
+    }
+
+    Ok((sources, merged))
+}
+
 /// Initializes a LibraryManager with library mode enabled, handling errors gracefully.
 pub fn init_library_manager() -> SnipResult<crate::library::LibraryManager> {
     let mut mgr = crate::library::LibraryManager::new()?;

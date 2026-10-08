@@ -461,6 +461,7 @@ impl SyncClient {
 
         let mut all_server_snippets = Vec::new();
         let mut server_decrypt_failed_count = 0usize;
+        let mut push_rejected_count = 0usize;
         let mut offset = 0;
         let total_batches = batches.len();
 
@@ -507,6 +508,7 @@ impl SyncClient {
                         has_more,
                         snippets_len,
                         encrypt_failed_count,
+                        push_rejected_count,
                     )
                     .await;
             }
@@ -553,6 +555,7 @@ impl SyncClient {
                         has_more,
                         snippets_len,
                         encrypt_failed_count,
+                        push_rejected_count,
                     )
                     .await;
             }
@@ -561,9 +564,12 @@ impl SyncClient {
                 // response page). Preserve the original typed error instead
                 // of flattening to SyncRequestFailed.
                 for (batch_idx, batch) in batches.iter().enumerate() {
-                    self.push_snippets_batch(batch, library_id)
-                        .await
-                        .map_err(|e| add_batch_context(e, batch_idx + 1, total_batches))?;
+                    match self.push_snippets_batch(batch, library_id).await {
+                        Ok(rejected) => {
+                            push_rejected_count = push_rejected_count.saturating_add(rejected)
+                        }
+                        Err(e) => return Err(add_batch_context(e, batch_idx + 1, total_batches)),
+                    }
                 }
 
                 // All uploads complete. Request the authoritative first
@@ -607,6 +613,7 @@ impl SyncClient {
                         has_more,
                         snippets_len,
                         encrypt_failed_count,
+                        push_rejected_count,
                     )
                     .await;
             }
@@ -633,6 +640,7 @@ impl SyncClient {
         first_has_more: bool,
         first_snippets_len: usize,
         encrypt_failed_count: usize,
+        push_rejected_count: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
         if !first_has_more || first_snippets_len == 0 {
             // Take ownership of the accumulated vectors for the final response.
@@ -643,6 +651,7 @@ impl SyncClient {
                 skipped,
                 encrypt_failed_count,
                 *server_decrypt_failed_count,
+                push_rejected_count,
                 server_timestamp,
                 message,
                 total_count,
@@ -699,6 +708,7 @@ impl SyncClient {
                     skipped,
                     encrypt_failed_count,
                     *server_decrypt_failed_count,
+                    push_rejected_count,
                     server_timestamp,
                     message,
                     total_count,
@@ -754,11 +764,15 @@ impl SyncClient {
         all_skipped_ids: Vec<String>,
         encrypt_failed_count: usize,
         server_decrypt_failed_count: usize,
+        push_rejected_count: usize,
         server_timestamp: i64,
         message: String,
         total_count: i32,
     ) -> SnipResult<crate::proto::SyncResponse> {
-        let total_skipped = all_skipped_ids.len();
+        // `push_rejected_count` covers records the server refused individually during
+        // a multi-batch upload; those arrive as a count with no ids, so they
+        // contribute to `skipped_count` only.
+        let total_skipped = all_skipped_ids.len().saturating_add(push_rejected_count);
         let all_skipped_local = encrypt_failed_count > 0 && all_server_snippets.is_empty();
         let all_skipped_server = server_decrypt_failed_count > 0 && all_server_snippets.is_empty();
         let overall_success = !(all_skipped_local || all_skipped_server);
@@ -794,11 +808,15 @@ impl SyncClient {
     }
 
     /// Upload a batch of encrypted snippets via the PushSnippets RPC.
+    ///
+    /// Returns the number of records the server rejected individually.
+    /// `PushSnippetsResponse` carries counts but no per-record ids, so those
+    /// refusals are folded into `skipped_count` only.
     async fn push_snippets_batch(
         &mut self,
         snippets: &[crate::proto::Snippet],
         library_id: &str,
-    ) -> SnipResult<()> {
+    ) -> SnipResult<usize> {
         self.ensure_budget()?;
         self.require_api_key()?;
         let api_key = Zeroizing::new(self.settings.api_key.clone());
@@ -823,13 +841,23 @@ impl SyncClient {
             RetryBackoff::Standard
         )?;
         let inner = response.into_inner();
-        if !inner.success {
+        let rejected = usize::try_from(inner.rejected_count).unwrap_or(usize::MAX);
+        if !inner.success && rejected == 0 {
+            // `success` is `rejected == 0`, so this is a whole-request
+            // failure: auth, unknown library, transport-level refusal. Let it
+            // abort the run.
             return Err(SnipError::sync_failure(
                 crate::error::SyncFailureKind::SyncRequestFailed,
                 Some(&inner.message),
             ));
         }
-        Ok(())
+        // A non-zero `rejected_count` means individual records were refused
+        // (validation failure, cross-scope id collision) while the rest of the
+        // batch was stored. Returning `Err` for that turned one bad record into
+        // a permanent whole-library failure that also blocked every remaining
+        // batch. Report it as a per-record skip instead, matching how the
+        // single-batch `Sync` transport already handles the same condition.
+        Ok(rejected)
     }
 
     /// Retry logic for sync requests via the unified executor.
@@ -1324,31 +1352,6 @@ pub fn decrypt_snippet(
         deleted: snippet.deleted,
         encrypted: false,
     })
-}
-
-/// Detects if any server snippets have a device_id that doesn't match the
-/// expected local device_id, indicating a potential conflict from another device.
-pub fn detect_device_conflict(
-    server_snippets: &[crate::proto::Snippet],
-    expected_device_id: &str,
-) -> Vec<String> {
-    if expected_device_id.is_empty() {
-        tracing::debug!("device_id is empty; skipping cross-device conflict check");
-        return Vec::new();
-    }
-    let mut conflicting_ids = Vec::new();
-    for s in server_snippets {
-        if !s.device_id.is_empty() && s.device_id != expected_device_id {
-            tracing::warn!(
-                "Device conflict detected: snippet {} has device_id '{}', expected '{}'",
-                s.id,
-                s.device_id,
-                expected_device_id
-            );
-            conflicting_ids.push(s.id.clone());
-        }
-    }
-    conflicting_ids
 }
 
 /// Measure the encoded size of a `SyncRequest` carrying the given batch.
@@ -1847,55 +1850,6 @@ mod tests {
             RetryBackoff::Standard
         );
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_detect_device_conflict_empty_device_id() {
-        let snippets = vec![crate::proto::Snippet {
-            id: "1".to_string(),
-            description: String::new(),
-            command: String::new(),
-            tags: vec![],
-            created_at: 0,
-            updated_at: 0,
-            device_id: "other-device".to_string(),
-            deleted: false,
-            encrypted: false,
-        }];
-        assert!(detect_device_conflict(&snippets, "").is_empty());
-    }
-
-    #[test]
-    fn test_detect_device_conflict_no_conflict() {
-        let snippets = vec![crate::proto::Snippet {
-            id: "1".to_string(),
-            description: String::new(),
-            command: String::new(),
-            tags: vec![],
-            created_at: 0,
-            updated_at: 0,
-            device_id: "device-a".to_string(),
-            deleted: false,
-            encrypted: false,
-        }];
-        assert!(detect_device_conflict(&snippets, "device-a").is_empty());
-    }
-
-    #[test]
-    fn test_detect_device_conflict_with_mismatch() {
-        let snippets = vec![crate::proto::Snippet {
-            id: "1".to_string(),
-            description: String::new(),
-            command: String::new(),
-            tags: vec![],
-            created_at: 0,
-            updated_at: 0,
-            device_id: "device-b".to_string(),
-            deleted: false,
-            encrypted: false,
-        }];
-        let conflicts = detect_device_conflict(&snippets, "device-a");
-        assert_eq!(conflicts, vec!["1".to_string()]);
     }
 
     #[test]

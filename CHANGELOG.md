@@ -145,6 +145,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `snp get --query <text> --field command` and `snp list --json`. Covered by
   `tests/tui_requires_terminal.rs`; the interactive path is still covered by
   `tests/pty_integration.rs`.
+- **A local deletion could be silently erased and then resurrected.** The
+  merge retained a local record only when it was not a tombstone, so a
+  tombstone missing from the server response was dropped from the library and
+  persisted. The server response is a delta (`updated_at >= since`), so this is
+  guaranteed in pull-only mode, where nothing is uploaded yet the merge still
+  ran: the deletion never reached the server *and* the record of the intent was
+  erased, so no later sync could propagate it. A local tombstone is now retained
+  until the server acknowledges it (returns it with `deleted == true`), at which
+  point the `Equivalent` arm retires the record. Covered by
+  `test_unacknowledged_local_tombstone_is_preserved` and
+  `test_acknowledged_local_tombstone_is_retired`.
+- **Bidirectional sync reported skipped records as success.** `skipped_count >
+  0` incremented `conflicts` and recorded the library as *succeeded*, so the run
+  exited 0, the pending generation was cleared, and refused records were never
+  retried. Bidirectional is the default direction, and the pull-only branch
+  already handled the same condition correctly. Both branches now increment
+  `failed`, record the library as failed, and never count skips as merge
+  conflicts.
+- **Missing-library recovery advanced `last_sync` and deleted its marker despite
+  dropped records.** `success` does not imply a clean upload — the server
+  reports refused rows in `skipped_ids` without flipping it — and a freshly
+  re-created library returns no server rows, so a retry in which *every* record
+  was refused still reported success. The partial failure was reported as
+  "Re-linked and synced" with no durable trace. The watermark and the
+  `<library>.sync_recovery` marker are now gated on `skipped_count == 0`.
+- **Libraries skipped by the server pre-flight never incremented `failed`.** A
+  failed `create_library`, a failed `link_server_library`, a missing library
+  file, an unlinked library, and a fail-closed `load_library` all just
+  `continue`d. None touched `status.failed`, so `run_sync_with_limits` returned
+  `Ok(())`, exited 0, cleared the pending generation, and the library was never
+  uploaded or retried. Each now records a failed result.
+- **One refused record made a multi-batch upload a permanent library failure.**
+  `push_snippets_batch` returned `Err` whenever the server reported
+  `success: false`, which it sets for `rejected != 0`. The `?` then aborted the
+  batch loop, so remaining batches were never sent, and the same record was
+  re-sent on every subsequent sync. Per-record refusals (validation failure,
+  cross-scope id collision) are now folded into `skipped_count` and the run
+  continues, matching how the single-batch `Sync` transport already handled the
+  identical condition.
+- **`snp list` silently migrated a legacy checkout on disk.** It resolved its
+  library through `get_library_path`, which calls the *mutating*
+  `ensure_library_mode()`. On a config dir holding only `snippets.toml` with no
+  `libraries/`, a plain `snp list` created `libraries/`, copied the legacy file,
+  wrote `libraries.toml`, and bumped the generation — and `fs::copy` never
+  removed the source, leaving `snippets.toml` as a second, now-inert copy that
+  silently lost later edits. `list` now resolves through the canonical read-only
+  `library::readonly_library_sources`, which performs no migration. This also
+  restores the documented invariant that read-only paths never call the
+  mutating resolver (`snp get --query` and MCP already wrote nothing).
+- **`--library all` failed on `snp list`.** `get_library_path` did a plain
+  `get_library_by_filename("all")` lookup, bypassing the single definition of
+  the keyword in `LibraryScope::from_filter_arg`, so `list --library all` and
+  `search --library all` both failed with a misleading "Library 'all' does not
+  exist" while `get --library all` worked. `list` now resolves through the
+  read-only path and supports the scope; `search` takes the single-library path
+  (its selector edits and deletes inside one library file) and now rejects
+  `--library all` with an error naming the supported alternatives instead of
+  claiming the library does not exist.
+- **A library could be named `all`.** `validate_library_name` had no reserved-name
+  check, so `snp library create all` succeeded and then `--library all` meant
+  two different things depending on the surface — and the wrong scope was
+  returned silently on the resolver paths. `all` is now rejected, and
+  `docs/LIBRARY_SCOPE.md` updated to match.
+- **The transaction lock could hang forever on `PermissionDenied`.** The
+  acquisition loop retried read failures with `sleep(1ms); continue` and no
+  deadline, and the Windows-motivated `PermissionDenied` retry was applied
+  unconditionally. On Unix that condition is stable, not transient (a lock file
+  owned by another UID, or a `.transaction` directory that is not traversable),
+  so the CLI hung with no error and no timeout — including `snp repair`,
+  `snp restore`, and the mutation gate used by `save_library`. It now uses the
+  same platform-gated `is_transient_lock_contention` helper as `local_data.rs`,
+  plus a 30 s deadline as defense in depth.
+- **A failed `write_all` left a 0-byte `transaction.lock`.** `create_new`
+  succeeded, the write failed, and the `?` propagated with the empty file left on
+  disk, so every later acquirer ran the empty-content ladder to exhaustion. The
+  file is now removed before the error is reported, mirroring `local_data.rs`.
+- **The gRPC rate limiter was keyed on the unvalidated API key.** Every
+  authenticated RPC passed the raw, request-supplied key to the limiter as the
+  bucket identity *before* `get_user_by_api_key` validated it, so every distinct
+  attacker-chosen key got a fresh `rate_limit_per_minute` budget and the limiter
+  imposed no aggregate request ceiling. It now keys on the peer address, reusing
+  the trusted-proxy / `x-forwarded-for` handling already applied to `register`.
+  (This is not an Argon2 amplification DoS: `db.rs` does an indexed
+  `api_key_prefix` lookup first, so random keys never reach Argon2id.)
+- **Read-only devices reported phantom overwrites.** `conflicting_ids` was
+  computed from "server row has a foreign `device_id`" before the merge and never
+  cross-checked against `choose_version`, so `"N snippets overwritten by another
+  device"` and `status.conflicts` were emitted even when the local copy won or
+  the content was byte-identical. The conflict list is now derived from the merge
+  — only ids where `choose_version` returned `Remote` — and the superseded
+  `sync::detect_device_conflict` was removed.
+- **`/metrics` returned 401 without `WWW-Authenticate`.** RFC 9110 §11.1 requires
+  the challenge header; without it a password-protected `/metrics` was
+  unreachable through standard HTTP auth flows. The header is now sent on the 401
+  and asserted in `tests/snip_sync_lifetime.rs`.
+- **`PRAGMA foreign_keys=ON` was applied to one pooled connection.**
+  `foreign_keys` is a per-connection SQLite setting (unlike `journal_mode`,
+  which lives in the file header), so with no `after_connect` hook it was active
+  on at most 1 of 5 connections, leaving the schema's declared FKs unenforced on
+  the rest. No current exploitable consequence — there are no hard `DELETE`s and
+  every query is scoped by `user_id` — but the pragma now moves to
+  `SqlitePoolOptions::after_connect`.
+- **Certificate regeneration could leave the directory with neither key nor
+  cert.** `generate_dev_certs` deleted the old pair first and, when the second
+  rename failed, explicitly removed the newly installed key — contradicting the
+  comment promising to keep working material available. The old pair is now
+  staged as sibling backups and restored on any failure.
+- **`IntegrityMismatch` reported stored and computed values swapped.** The
+  constructor was called with the stored value as `expected` and the recomputed
+  one as `got`, so the diagnostic pointed an operator debugging marker corruption
+  at the wrong value.
+- **"gRPC server listening" was logged after the server had stopped.** The
+  `tracing::info!` sat after the `.await` on `serve_with_incoming_shutdown`, so
+  it fired once the gRPC server had terminated, duplicating the correct bind-time
+  log on every run.
+- **`tests/pty_integration.rs` used fixed sleeps and failed under host load.** The
+  helper slept a hard-coded delay before writing keys, assuming the TUI had
+  installed its input reader. Under load the keys were written before anyone read
+  them and the TUI waited forever until the fixed 10 s exit timeout — the only
+  failure in the full serial suite, and it passed 3/3 in isolation. The helper now
+  waits for the TUI to render and go quiet before sending keys, and the exit
+  timeout is a named 30 s constant.
+
 - `snp --help` listed exit codes 0–9; exit 10 (`UNSAFE_REPAIRS`) is now listed.
 - `src/utils/config.rs` module docs claimed per-platform config resolution
   (AppData on Windows, Application Support on macOS). There is no `#[cfg]`

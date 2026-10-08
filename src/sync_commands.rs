@@ -80,7 +80,6 @@ fn handle_library_not_found(
     lib_name: &str,
     lib_path: &std::path::Path,
     snippets: &Snippets,
-    sync_settings: &SyncSettings,
     client: &mut sync::SyncClient,
     mgr: &mut library::LibraryManager,
     runtime: &tokio::runtime::Runtime,
@@ -295,31 +294,47 @@ fn handle_library_not_found(
     match retry_result {
         Ok(retry_response) if retry_response.success => {
             let server_snippets = retry_response.snippets;
-            match merge_and_save(
-                lib_path,
-                lib_name,
-                snippets,
-                &server_snippets,
-                &sync_settings.device_id,
-            ) {
+            match merge_and_save(lib_path, lib_name, snippets, &server_snippets) {
                 Ok((_merged, _backup, _conflicts)) => {
-                    if let Err(e) = mgr.update_last_sync(lib_name, retry_response.server_timestamp)
+                    // `success` does not imply a clean upload: the server
+                    // reports refused rows in `skipped_ids` without flipping
+                    // it, and a freshly re-created library returns no server
+                    // rows at all. Advancing the watermark or removing the
+                    // recovery marker here would leave no durable trace that
+                    // records were dropped, so they would never be retried.
+                    let has_failures = retry_response.skipped_count > 0;
+                    if !has_failures
+                        && let Err(e) =
+                            mgr.update_last_sync(lib_name, retry_response.server_timestamp)
                     {
                         status.failed += 1;
                         results.push((lib_name.to_string(), false, e.to_string()));
                         return;
                     }
-                    if recovery_marker.exists()
+                    if !has_failures
+                        && recovery_marker.exists()
                         && let Err(e) = fs::remove_file(&recovery_marker)
                     {
                         tracing::warn!(library = %lib_name, error = %e, "Failed to remove recovery marker");
                     }
                     status.add_pulled(server_snippets.len());
-                    results.push((
-                        lib_name.to_string(),
-                        true,
-                        "Re-linked and synced".to_string(),
-                    ));
+                    if has_failures {
+                        status.failed += 1;
+                        results.push((
+                            lib_name.to_string(),
+                            false,
+                            format!(
+                                "Re-linked; {} snippets skipped (will retry)",
+                                retry_response.skipped_count
+                            ),
+                        ));
+                    } else {
+                        results.push((
+                            lib_name.to_string(),
+                            true,
+                            "Re-linked and synced".to_string(),
+                        ));
+                    }
                 }
                 Err(e) => {
                     status.failed += 1;
@@ -340,7 +355,6 @@ fn handle_library_not_found(
 
 fn check_and_complete_recovery_markers(
     libraries_dir: &Path,
-    sync_settings: &SyncSettings,
     client: &mut sync::SyncClient,
     mgr: &mut library::LibraryManager,
     runtime: &tokio::runtime::Runtime,
@@ -389,15 +403,7 @@ fn check_and_complete_recovery_markers(
                     };
                     let before = results.len();
                     handle_library_not_found(
-                        &lib_name,
-                        &lib_path,
-                        &snippets,
-                        sync_settings,
-                        client,
-                        mgr,
-                        runtime,
-                        status,
-                        results,
+                        &lib_name, &lib_path, &snippets, client, mgr, runtime, status, results,
                     );
                     if results.len() > before
                         && results.last().is_some_and(|(_, success, _)| *success)
@@ -606,9 +612,14 @@ fn merge_and_save(
     lib_name: &str,
     snippets: &Snippets,
     server_snippets: &[ProtoSnippet],
-    device_id: &str,
 ) -> SnipResult<(Snippets, Option<String>, Vec<String>)> {
-    let conflicting_ids = sync::detect_device_conflict(server_snippets, device_id);
+    // Derive the conflict list from the merge, not from the presence of a
+    // foreign `device_id`. A row touched by another device is not an
+    // overwrite: it can still resolve to the local copy (identical content, or
+    // an older remote timestamp), and a remote tombstone is a deletion, not an
+    // overwrite. Reporting those as "N snippets overwritten by another device"
+    // made a read-only device report phantom overwrites on every sync.
+    let conflicting_ids = overwritten_by_remote(snippets, server_snippets);
     if !conflicting_ids.is_empty() {
         tracing::warn!(
             library = %lib_name,
@@ -735,6 +746,12 @@ pub(crate) fn run_sync_with_limits(
         ));
     }
 
+    // Libraries that failed the server pre-flight below cannot sync, so they
+    // must be reported as failures rather than silently dropped: a silent
+    // `continue` left `status.failed` at zero, exited 0, cleared the pending
+    // generation, and the library was never uploaded or retried.
+    let mut preflight_failures: Vec<(String, String)> = Vec::new();
+
     for lib_name in &libraries_to_sync {
         let lib_path = mgr.get_libraries_dir().join(format!("{lib_name}.toml"));
 
@@ -761,6 +778,10 @@ pub(crate) fn run_sync_with_limits(
 
                     if let Err(e) = mgr.link_server_library(lib_name, &new_id) {
                         tracing::warn!(library = %lib_name, error = %e, "Failed to link library in config");
+                        preflight_failures.push((
+                            lib_name.clone(),
+                            format!("Failed to link library to server: {e}"),
+                        ));
                     }
 
                     tracing::info!(
@@ -771,6 +792,10 @@ pub(crate) fn run_sync_with_limits(
                 }
                 Err(e) => {
                     tracing::error!(library = %lib_name, error = %e, "Failed to create library on server");
+                    preflight_failures.push((
+                        lib_name.clone(),
+                        format!("Failed to create library on server: {e}"),
+                    ));
                     continue;
                 }
             }
@@ -782,10 +807,15 @@ pub(crate) fn run_sync_with_limits(
     let mut status = SyncStatus::new();
     let mut results: Vec<(String, bool, String)> = Vec::new();
 
+    // Surface pre-flight failures before any library work starts.
+    for (lib_name, message) in preflight_failures {
+        status.failed += 1;
+        results.push((lib_name, false, message));
+    }
+
     let libraries_dir = mgr.get_libraries_dir().clone();
     let recovered = match check_and_complete_recovery_markers(
         &libraries_dir,
-        sync_settings,
         &mut client,
         &mut mgr,
         runtime,
@@ -809,6 +839,12 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
         completed += 1;
+        // Already reported as failed by the server pre-flight above; do not
+        // count the same library twice.
+        if results.iter().any(|(n, _, _)| n == lib_name) {
+            tracing::warn!(library = %lib_name, "Skipping sync after failed server pre-flight");
+            continue;
+        }
         if std::io::stdout().is_terminal() {
             print!("\r[{completed}/{total}] Syncing {lib_name}...");
             std::io::Write::flush(&mut std::io::stdout()).ok();
@@ -818,6 +854,12 @@ pub(crate) fn run_sync_with_limits(
 
         if !lib_path.exists() {
             tracing::warn!(library = %lib_name, "Library file not found, skipping sync");
+            status.failed += 1;
+            results.push((
+                lib_name.clone(),
+                false,
+                "Library file not found".to_string(),
+            ));
             continue;
         }
 
@@ -825,6 +867,12 @@ pub(crate) fn run_sync_with_limits(
 
         if library_id.is_empty() {
             tracing::warn!(library = %lib_name, "Library not linked to server, skipping");
+            status.failed += 1;
+            results.push((
+                lib_name.clone(),
+                false,
+                "Library not linked to server".to_string(),
+            ));
             continue;
         }
 
@@ -832,6 +880,8 @@ pub(crate) fn run_sync_with_limits(
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(library = %lib_name, error = %e, "Failed to load library");
+                status.failed += 1;
+                results.push((lib_name.clone(), false, e.to_string()));
                 continue;
             }
         };
@@ -884,13 +934,7 @@ pub(crate) fn run_sync_with_limits(
 
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(
-                            &lib_path,
-                            lib_name,
-                            &snippets,
-                            &server_snippets,
-                            &sync_settings.device_id,
-                        ) {
+                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
                                 if !has_failures
                                     && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
@@ -899,31 +943,35 @@ pub(crate) fn run_sync_with_limits(
                                 }
 
                                 status.add_pulled(server_snippets.len());
-                                if has_failures {
-                                    status.conflicts += 1;
-                                }
 
-                                if has_failures {
-                                    results.push((
-                                        lib_name.clone(),
-                                        true,
-                                        format!(
-                                            "{} snippets skipped (will retry)",
-                                            response.skipped_count
-                                        ),
+                                let mut notes = Vec::new();
+                                if !conflicts.is_empty() {
+                                    status.conflicts = status.conflicts.saturating_add(
+                                        u32::try_from(conflicts.len()).unwrap_or(u32::MAX),
+                                    );
+                                    notes.push(format!(
+                                        "{} snippets overwritten by another device",
+                                        conflicts.len()
                                     ));
-                                } else if !conflicts.is_empty() {
-                                    results.push((
-                                        lib_name.clone(),
-                                        true,
-                                        format!(
-                                            "{} snippets overwritten by another device",
-                                            conflicts.len()
-                                        ),
-                                    ));
-                                } else {
-                                    results.push((lib_name.clone(), true, String::new()));
                                 }
+                                if has_failures {
+                                    // Records were dropped: client-side
+                                    // encryption failures, rows the server
+                                    // refused to store, or payloads that failed
+                                    // to decrypt. Reporting this library as
+                                    // succeeded told the user it was in sync
+                                    // while data was missing, and cleared the
+                                    // pending generation so the dropped records
+                                    // were never retried. Bidirectional is the
+                                    // default direction, so this was the path
+                                    // that mattered.
+                                    status.failed += 1;
+                                    notes.push(format!(
+                                        "{} snippets skipped (will retry)",
+                                        response.skipped_count
+                                    ));
+                                }
+                                results.push((lib_name.clone(), !has_failures, notes.join("; ")));
                             }
                             Err(e) => {
                                 status.failed += 1;
@@ -948,7 +996,6 @@ pub(crate) fn run_sync_with_limits(
                             lib_name,
                             &lib_path,
                             &snippets,
-                            sync_settings,
                             &mut client,
                             &mut mgr,
                             runtime,
@@ -972,13 +1019,7 @@ pub(crate) fn run_sync_with_limits(
                         let new_timestamp = response.server_timestamp;
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(
-                            &lib_path,
-                            lib_name,
-                            &snippets,
-                            &server_snippets,
-                            &sync_settings.device_id,
-                        ) {
+                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
                                 let has_failures = response.skipped_count > 0;
                                 if !has_failures
@@ -1038,7 +1079,6 @@ pub(crate) fn run_sync_with_limits(
                             lib_name,
                             &lib_path,
                             &snippets,
-                            sync_settings,
                             &mut client,
                             &mut mgr,
                             runtime,
@@ -1185,6 +1225,30 @@ fn choose_version(local: &Snippet, remote: &ProtoSnippet) -> VersionWinner {
     }
 }
 
+/// Ids whose server copy actually won the merge, i.e. genuine overwrites.
+///
+/// These are the only records that deserve the "N snippets overwritten by
+/// another device" note and a `status.conflicts` increment. A server row with
+/// a foreign `device_id` is not enough: `choose_version` still resolves ties
+/// by timestamp, device id, and fingerprint, so a stale or byte-identical
+/// remote copy leaves the local version in place.
+fn overwritten_by_remote(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Vec<String> {
+    let local_by_id: std::collections::HashMap<_, _> =
+        local.snippets.iter().map(|s| (&s.id, s)).collect();
+
+    server_snippets
+        .iter()
+        .filter_map(|server_snip| {
+            let local_snip = local_by_id.get(&server_snip.id)?;
+            matches!(
+                choose_version(local_snip, server_snip),
+                VersionWinner::Remote
+            )
+            .then(|| server_snip.id.clone())
+        })
+        .collect()
+}
+
 fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippets {
     let local_by_id: std::collections::HashMap<_, _> =
         local.snippets.iter().map(|s| (s.id.clone(), s)).collect();
@@ -1273,9 +1337,24 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
     }
 
     for local_snip in &local.snippets {
-        if !seen_ids.contains(&local_snip.id) && !local_snip.deleted {
-            merged_snippets.push(local_snip.clone());
+        if seen_ids.contains(&local_snip.id) {
+            continue;
         }
+        // A live snippet absent from the server response was simply never
+        // uploaded; keep it.
+        //
+        // A *tombstone* absent from the server response is a deletion the
+        // server has not acknowledged yet. The response is a delta
+        // (`updated_at >= since`), so a tombstone is missing whenever the
+        // server row sits below the `last_sync` watermark — guaranteed in
+        // pull-only mode, where nothing is uploaded at all. Dropping it
+        // here erased the record of the intent: the deletion could never be
+        // propagated, and the server's live copy would resurrect on the next
+        // sync that did cross the watermark. Retain it so the tombstone is
+        // re-uploaded until the server acknowledges it (at which point the id
+        // appears in `seen_ids` and the `Equivalent if local_snip.deleted`
+        // arm above retires the record).
+        merged_snippets.push(local_snip.clone());
     }
 
     // `sort_by_cached_key` computes each snippet's version key once (O(n)
@@ -1633,7 +1712,86 @@ mod tests {
     }
 
     #[test]
-    fn test_local_deleted_snippet_not_preserved() {
+    fn test_overwritten_by_remote_requires_remote_to_win() {
+        // A foreign device_id alone is not an overwrite. Here the local copy
+        // is newer, so the local version survives and nothing is reported.
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 500)],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("1", "server", "echo 1", 100)];
+
+        assert!(overwritten_by_remote(&local, &server).is_empty());
+    }
+
+    #[test]
+    fn test_overwritten_by_remote_reports_genuine_overwrite() {
+        // Same foreign device, but the server copy is newer, so it wins.
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 100)],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("1", "server", "echo 1", 900)];
+
+        assert_eq!(
+            overwritten_by_remote(&local, &server),
+            vec!["1".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_overwritten_by_remote_ignores_identical_content() {
+        // Byte-identical copies resolve to `Equivalent`, not an overwrite, so
+        // a read-only device no longer reports phantom overwrites.
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "same".to_string(),
+                command: "echo same".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: String::new(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 200,
+                device_id: "shared".to_string(),
+                deleted: false,
+            }],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            id: "1".to_string(),
+            description: "same".to_string(),
+            command: "echo same".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 200,
+            device_id: "shared".to_string(),
+            deleted: false,
+            encrypted: false,
+        }];
+
+        assert!(overwritten_by_remote(&local, &server).is_empty());
+    }
+
+    #[test]
+    fn test_overwritten_by_remote_skips_server_only_records() {
+        // No local counterpart: nothing was overwritten, it was downloaded.
+        let local = Snippets {
+            snippets: vec![],
+            folders: vec![],
+        };
+        let server = vec![make_server_snippet("9", "new", "echo 9", 900)];
+
+        assert!(overwritten_by_remote(&local, &server).is_empty());
+    }
+
+    #[test]
+    fn test_unacknowledged_local_tombstone_is_preserved() {
+        // The server response is a delta, so a local tombstone can be absent
+        // even though the server has not yet seen the deletion. Retaining it
+        // is what allows the deletion to be retried; erasing it lost the
+        // intent permanently and let the server's copy resurrect.
         let local = Snippets {
             snippets: vec![Snippet {
                 id: "1".to_string(),
@@ -1653,7 +1811,39 @@ mod tests {
         let server = vec![];
 
         let merged = merge_snippets(&local, &server);
-        assert_eq!(merged.snippets.len(), 0);
+        assert_eq!(merged.snippets.len(), 1);
+        assert!(merged.snippets[0].deleted);
+        assert_eq!(merged.snippets[0].id, "1");
+    }
+
+    #[test]
+    fn test_acknowledged_local_tombstone_is_retired() {
+        // Once the server echoes the tombstone back the id lands in
+        // `seen_ids`, both sides agree it is deleted, and the record can be
+        // dropped without losing the intent (the server holds it).
+        let local = Snippets {
+            snippets: vec![Snippet {
+                id: "1".to_string(),
+                description: "deleted locally".to_string(),
+                command: "echo 1".to_string(),
+                tags: vec![],
+                folders: vec![],
+                output: String::new(),
+                favorite: false,
+                created_at: 100,
+                updated_at: 100,
+                device_id: "d".to_string(),
+                deleted: true,
+            }],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            deleted: true,
+            ..make_server_snippet("1", "deleted locally", "echo 1", 100)
+        }];
+
+        let merged = merge_snippets(&local, &server);
+        assert!(merged.snippets.is_empty());
     }
 
     #[test]

@@ -170,15 +170,26 @@ impl Database {
             })?;
         }
 
+        // `foreign_keys` is a **per-connection** SQLite setting (unlike
+        // `journal_mode`, which SQLite persists in the database file header).
+        // Running the pragma against the pool set it on whichever single
+        // connection it happened to check out — at most 1 of
+        // `max_connections` — leaving the schema's declared FKs unenforced on
+        // the rest. `after_connect` runs for every connection the pool opens.
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("PRAGMA foreign_keys=ON").execute(conn).await?;
+                    Ok(())
+                })
+            })
             .connect_with(options)
             .await?;
 
         sqlx::query("PRAGMA journal_mode=WAL")
             .execute(&pool)
             .await?;
-        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
 
         sqlx::query(
             "

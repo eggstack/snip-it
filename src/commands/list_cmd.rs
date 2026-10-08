@@ -1,4 +1,4 @@
-use crate::commands::{get_library_path, load_snippets};
+use crate::commands::load_snippets;
 use crate::error::SnipResult;
 use crossterm::style::{Color, Stylize, style};
 use fuzzy_matcher::FuzzyMatcher;
@@ -11,6 +11,7 @@ pub struct ListArgs {
     pub filter: Option<String>,
     #[arg(short, long)]
     pub config: Option<PathBuf>,
+    /// Library to list; `all` lists every library
     #[arg(short, long)]
     pub library: Option<String>,
     #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -61,14 +62,18 @@ pub fn run(
     let snippets = if config.is_some() {
         load_snippets(&config)?
     } else {
-        let lib_path = match get_library_path(library)? {
-            Some(p) => p,
-            None => {
-                eprintln!("No library found. Create one with 'snp library create <name>'");
-                return Ok(());
-            }
-        };
-        crate::library::load_library(&lib_path)?
+        // Read-only resolution: this command must never migrate a legacy
+        // single-file checkout or otherwise mutate library state. Routing
+        // through `get_library_path` called `ensure_library_mode()`, which
+        // created `libraries/`, copied the legacy file (leaving the original
+        // behind as a second, now-inert copy), wrote `libraries.toml`, and
+        // bumped the generation — all from a plain `snp list`.
+        let (sources, merged) = crate::commands::load_readonly_snippets(library.as_deref())?;
+        if sources.is_empty() {
+            eprintln!("No library found. Create one with 'snp library create <name>'");
+            return Ok(());
+        }
+        merged
     };
 
     let matcher = crate::selector::shared_fuzzy_matcher();

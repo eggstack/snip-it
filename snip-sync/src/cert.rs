@@ -76,8 +76,6 @@ pub fn generate_dev_certs(force: bool, out_dir: Option<PathBuf>) -> Result<(), S
         }
     }
 
-    // Only replace existing material after OpenSSL has produced both files.
-    // This keeps a working certificate available if generation fails.
     if !force && (key_path.exists() || cert_path.exists()) {
         cleanup();
         return Err(format!(
@@ -85,26 +83,63 @@ pub fn generate_dev_certs(force: bool, out_dir: Option<PathBuf>) -> Result<(), S
             dir.display()
         ));
     }
+
+    // Only replace existing material after OpenSSL has produced both files, and
+    // keep the previous pair recoverable until the new pair is fully installed.
+    // Deleting the old files first (as this used to) meant a failure on the
+    // second rename left the directory with neither key nor cert — strictly
+    // worse than the working material this is meant to protect. Both renames
+    // stay inside `dir`, so staging through sibling backup names is cheap.
+    let backup_key = dir.join(format!("key.pem.backup.{}", uuid::Uuid::new_v4()));
+    let backup_cert = dir.join(format!("cert.pem.backup.{}", uuid::Uuid::new_v4()));
+    let mut key_backed_up = false;
+    let mut cert_backed_up = false;
+
     if key_path.exists() {
-        fs::remove_file(&key_path).map_err(|e| {
+        fs::rename(&key_path, &backup_key).map_err(|e| {
             cleanup();
-            format!("Failed to remove old key: {}", e)
+            format!("Failed to back up old key: {}", e)
         })?;
+        key_backed_up = true;
     }
     if cert_path.exists() {
-        fs::remove_file(&cert_path).map_err(|e| {
+        fs::rename(&cert_path, &backup_cert).map_err(|e| {
+            if key_backed_up {
+                let _ = fs::rename(&backup_key, &key_path);
+            }
             cleanup();
-            format!("Failed to remove old cert: {}", e)
+            format!("Failed to back up old cert: {}", e)
         })?;
+        cert_backed_up = true;
     }
     if let Err(e) = fs::rename(&temp_key_path, &key_path) {
+        if key_backed_up {
+            let _ = fs::rename(&backup_key, &key_path);
+        }
+        if cert_backed_up {
+            let _ = fs::rename(&backup_cert, &cert_path);
+        }
         cleanup();
         return Err(format!("Failed to install key: {}", e));
     }
     if let Err(e) = fs::rename(&temp_cert_path, &cert_path) {
+        // Drop the half-installed pair, then put the previous material back.
         let _ = fs::remove_file(&key_path);
+        if key_backed_up {
+            let _ = fs::rename(&backup_key, &key_path);
+        }
+        if cert_backed_up {
+            let _ = fs::rename(&backup_cert, &cert_path);
+        }
         cleanup();
         return Err(format!("Failed to install certificate: {}", e));
+    }
+    // Both files are in place; the backups are no longer needed.
+    if key_backed_up {
+        let _ = fs::remove_file(&backup_key);
+    }
+    if cert_backed_up {
+        let _ = fs::remove_file(&backup_cert);
     }
 
     println!("Generated self-signed dev certificates:");

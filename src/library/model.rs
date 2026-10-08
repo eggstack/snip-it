@@ -210,6 +210,17 @@ pub(crate) fn validate_library_name(name: &str) -> Result<(), (&'static str, &'s
             "Library name cannot end with '.toml' (the extension is added automatically)",
         ));
     }
+    // `all` is the cross-library scope keyword owned by
+    // `LibraryScope::from_filter_arg` (src/selector.rs). A library actually
+    // named `all` could never be addressed exclusively by the resolver
+    // surfaces, and `--library all` silently returned the wrong scope on them
+    // instead of an error.
+    if name == "all" {
+        return Err((
+            "Invalid library name",
+            "Library name cannot be 'all' (reserved as the cross-library scope keyword). Use 'snp list --library all' to target every library.",
+        ));
+    }
     Ok(())
 }
 

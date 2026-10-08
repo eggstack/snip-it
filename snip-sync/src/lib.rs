@@ -745,16 +745,51 @@ impl SnipSyncService {
         }
     }
 
-    pub async fn authenticate_and_rate_limit(&self, api_key: &str) -> Result<String, Status> {
-        self.authenticate_and_rate_limit_with_duration(api_key, None)
+    /// Derive the rate-limit bucket identity for an inbound request.
+    ///
+    /// Deliberately **not** the API key. The key is request-supplied and is
+    /// not validated until `db.get_user_by_api_key` runs, so keying the limiter
+    /// on it meant every distinct attacker-chosen key got its own budget of
+    /// `rate_limit_per_minute` and the limiter imposed no aggregate request
+    /// ceiling on the authenticated gRPC surface. The peer address is bounded
+    /// by the number of real callers, and `x-forwarded-for` is honoured only
+    /// from a configured trusted proxy.
+    fn peer_rate_limit_key<T>(&self, request: &Request<T>) -> String {
+        let peer_ip = request
+            .extensions()
+            .get::<SocketAddr>()
+            .map(|addr| addr.ip().to_string());
+
+        match peer_ip {
+            Some(ref ip) if self.config.trusted_proxies.contains(ip) => request
+                .metadata()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|header| header.split(',').next())
+                .map(|s| strip_port(s.trim()))
+                .unwrap_or_else(|| ip.clone()),
+            Some(ip) => ip,
+            None => "unknown".to_string(),
+        }
+    }
+
+    pub async fn authenticate_and_rate_limit(
+        &self,
+        api_key: &str,
+        rate_limit_key: &str,
+    ) -> Result<String, Status> {
+        self.authenticate_and_rate_limit_with_duration(api_key, rate_limit_key, None)
             .await
     }
 
     /// Like `authenticate_and_rate_limit`, but records request duration on
     /// failure so the histogram captures latency for error responses.
+    ///
+    /// `rate_limit_key` must come from [`Self::peer_rate_limit_key`].
     pub async fn authenticate_and_rate_limit_with_duration(
         &self,
         api_key: &str,
+        rate_limit_key: &str,
         start: Option<std::time::Instant>,
     ) -> Result<String, Status> {
         if api_key.is_empty() {
@@ -776,7 +811,7 @@ impl SnipSyncService {
         if !self
             .rate_limiter
             .allow(
-                api_key,
+                rate_limit_key,
                 self.config.rate_limit_per_minute as usize,
                 Duration::from_secs(60),
             )
@@ -949,26 +984,9 @@ impl SnippetSync for SnipSyncService {
         self.record_request("register");
         tracing::info!(request_id = %request_id, "Register request");
 
-        // Use peer IP address for rate limiting (device_id is client-controlled)
-        // tonic populates request.extensions() with the peer SocketAddr
-        let peer_ip = request
-            .extensions()
-            .get::<SocketAddr>()
-            .map(|addr| addr.ip().to_string());
-
-        let rate_limit_key = if let Some(ref ip) = peer_ip
-            && self.config.trusted_proxies.contains(ip)
-        {
-            request
-                .metadata()
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|header| header.split(',').next())
-                .map(|s| strip_port(s.trim()))
-                .unwrap_or_else(|| ip.clone())
-        } else {
-            peer_ip.unwrap_or_else(|| "unknown".to_string())
-        };
+        // Use peer IP address for rate limiting (device_id is client-controlled).
+        // tonic populates request.extensions() with the peer SocketAddr.
+        let rate_limit_key = self.peer_rate_limit_key(&request);
 
         if !self
             .rate_limiter
@@ -1036,11 +1054,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("get_snippets");
         tracing::info!(request_id = %request_id, "GetSnippets request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("get_snippets", false);
@@ -1146,11 +1165,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("push_snippets");
         tracing::info!(request_id = %request_id, "PushSnippets request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("push_snippets", false);
@@ -1329,11 +1349,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("sync");
         tracing::info!(request_id = %request_id, "Sync request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("sync", false);
@@ -1568,11 +1589,12 @@ impl SnippetSync for SnipSyncService {
         self.record_request("create_library");
         self.record_library_op("create");
         tracing::info!(request_id = %request_id, "CreateLibrary request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("create_library", false);
@@ -1624,11 +1646,12 @@ impl SnippetSync for SnipSyncService {
         self.record_request("list_libraries");
         self.record_library_op("list");
         tracing::info!(request_id = %request_id, "ListLibraries request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("list_libraries", false);
@@ -1684,11 +1707,12 @@ impl SnippetSync for SnipSyncService {
         self.record_request("delete_library");
         self.record_library_op("delete");
         tracing::info!(request_id = %request_id, "DeleteLibrary request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("delete_library", false);
@@ -1742,11 +1766,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("list_premade_libraries");
         tracing::info!(request_id = %request_id, "ListPremadeLibraries request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let _req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("list_premade_libraries", false);
@@ -1793,11 +1818,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("get_premade_library");
         tracing::info!(request_id = %request_id, "GetPremadeLibrary request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("get_premade_library", false);
@@ -1864,11 +1890,12 @@ impl SnippetSync for SnipSyncService {
         let start = std::time::Instant::now();
         self.record_request("search_premade_libraries");
         tracing::info!(request_id = %request_id, "SearchPremadeLibraries request");
+        let rate_limit_key = self.peer_rate_limit_key(&request);
         let api_key = self.request_api_key(&request, &request.get_ref().api_key);
         let req = request.into_inner();
 
         let _user_id = self
-            .authenticate_and_rate_limit_with_duration(&api_key, Some(start))
+            .authenticate_and_rate_limit_with_duration(&api_key, &rate_limit_key, Some(start))
             .await
             .inspect_err(|_| {
                 self.record_request_finished("search_premade_libraries", false);

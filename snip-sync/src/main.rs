@@ -280,9 +280,14 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
     let grpc_shutdown_rx = shutdown_tx.subscribe();
+    // No "listening" log after this expression: that point is only reached
+    // once `serve_with_incoming_shutdown` has already terminated, so a log
+    // there would emit a startup line at shutdown time on every run. The
+    // bind-time log above (right after pre-binding both listeners) is the
+    // real startup signal.
     let grpc_handle = tokio::spawn(async move {
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(grpc_listener);
-        let result = tonic::transport::Server::builder()
+        tonic::transport::Server::builder()
             .timeout(timeout)
             .add_service(
                 SnippetSyncServer::new(grpc_service)
@@ -294,15 +299,7 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
                 let _ = rx.recv().await;
                 tracing::info!("Shutdown signal received, stopping gRPC server...");
             })
-            .await;
-
-        tracing::info!(
-            "gRPC server listening on http://{} (timeout: {}s)",
-            grpc_addr,
-            timeout.as_secs()
-        );
-
-        result
+            .await
     });
 
     // Wait for the first terminal event: a process signal, or an

@@ -367,11 +367,25 @@ fn http_metrics_auth_and_cors_preflight_contract() {
         "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
     );
     assert!(unauthorized.starts_with("HTTP/1.1 401"), "{unauthorized}");
+    // RFC 9110 §11.1: a 401 must carry a challenge, otherwise clients cannot
+    // learn the scheme and browsers will not prompt for credentials.
+    assert!(
+        unauthorized
+            .to_ascii_lowercase()
+            .contains("www-authenticate: basic realm=\"metrics\""),
+        "{unauthorized}"
+    );
     let invalid = http_response(
         http_addr,
         "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic !!!\r\nConnection: close\r\n\r\n",
     );
     assert!(invalid.starts_with("HTTP/1.1 401"), "{invalid}");
+    assert!(
+        invalid
+            .to_ascii_lowercase()
+            .contains("www-authenticate: basic realm=\"metrics\""),
+        "{invalid}"
+    );
     let authorized = http_response(
         http_addr,
         "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic dXNlcjpwYXNz\r\nConnection: close\r\n\r\n",
