@@ -39,12 +39,13 @@ maps to `closed`.
 | Updater transport | closed | `plans/subsystems/updater-transport-roadmap.md` | M001-M005 closed | None. `snp` on lean `eggfetch-core 0.2.0`; `snip-sync` on `curl` by measurement. |
 | CLI, library, selector, sync-policy consolidation | closed | `plans/subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 closed | None. Duplicate policy deleted; parity and retry unified. |
 | Local MCP integration | closed | `plans/subsystems/mcp-integration-roadmap.md` | M001 closed | None. Read-only stdio adapter with search parity and registration. |
+| Eggstack dependency refresh | **active** | `plans/subsystems/eggstack-dependency-refresh-roadmap.md` | M001 **ready** | Both prerequisite lines closed. Target `eggfetch-core =0.2.2`, `eggserve-server =0.4.0`, `eggserve-primitives =0.2.2`; source signatures audited, downstream build/parity unverified. |
 
 ## Dependency-ready implementation plans
 
-None. All registered milestones are closed. Register new work here only
-after dependency and handoff review per `plans/003-planning-process.md`
-§10.
+| Subsystem | Milestone | Status | Plan | Hard dependencies | Blocker |
+|---|---|---|---|---|---|
+| Eggstack dependency refresh | M001 coordinated eggfetch/eggserve upgrade | **ready** | `plans/implementation/eggstack-dependency-refresh/001-upgrade-eggfetch-and-eggserve.md` | Updater transport M005 closed; server lifecycle M004 closed | None |
 
 ## Current execution order and dependency gates
 
@@ -73,6 +74,8 @@ retry unification with compatibility preserved.
 **MCP gate:** M001 closed the read-only local adapter plus registration
 against the canonical selector contract. No execution, mutation,
 networked, or daemonized MCP surface exists.
+
+**Next handoff:** Execute Eggstack dependency refresh M001 on the registered plan branch; preserve lean `snp` Eggfetch and server `curl`, prove HTTP wire/lifecycle parity, update version-specific architecture guard and docs, and measure both binaries before closure. No publication is part of this milestone.
 
 ## Blocked work
 
