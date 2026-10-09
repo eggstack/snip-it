@@ -371,11 +371,11 @@ with opt-in). Folders/favorite/sync metadata/credentials never searchable.
 **Source**: `src/update.rs` (client), `snip-sync/src/update.rs` (server)
 **Deep dive**: [update.md](update.md)
 
-- `snp update` uses in-process `eggfetch-core =0.2.0` (`standard-http1`+`redirects`+
+- `snp update` uses in-process `eggfetch-core =0.2.2` (`standard-http1`+`redirects`+
   `tls-rustls`+`tls-native-roots` only; strict redirects + native `Timeout.total`,
   initial-HTTPS guard). Transport tests live in `src/update.rs` (`test-support`)
   with a std-only loopback fixture.
-- `snip-sync update` keeps external `curl`: the 0.2.0 lean-profile trial grew the
+- `snip-sync update` keeps external `curl`: the 0.2.0 lean-profile trial (historical) grew the
   server +34% past the 10% gate. Pinned in `tests/architecture.rs`.
 
 ---

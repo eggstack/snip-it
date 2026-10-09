@@ -47,8 +47,8 @@ manager.
 ```
 
 Dependencies (`snip-sync/Cargo.toml`): `tonic 0.14` (+ `prost 0.14`,
-`snip-proto` stubs), `eggserve-server =0.2.1` +
-`eggserve-primitives =0.2.1` with default features off, `sqlx 0.9`
+`snip-proto` stubs), `eggserve-server =0.4.0` +
+`eggserve-primitives =0.2.2` with default features off, `sqlx 0.9`
 (`sqlite`, `runtime-tokio`, `chrono`), `argon2 0.6`, `sha2`, `subtle`,
 `prometheus 0.14`, `tokio` (`macros`, `rt-multi-thread`, `signal`),
 `tokio-stream`, `clap 4.5`, `dirs 7.0`, `semver`, `libc` /
@@ -194,7 +194,7 @@ deleted)`, `idx_libraries_user`.
 
 **File**: `snip-sync/src/http.rs` (~209 lines). One concrete two-route
 leaf service built with `eggserve_server::service_fn_head`; only
-`eggserve-server =0.2.1` and `eggserve-primitives =0.2.1` are used.
+`eggserve-server =0.4.0` and `eggserve-primitives =0.2.2` are used.
 
 | Endpoint | Methods | Auth | Body |
 |----------|---------|------|------|
@@ -358,7 +358,7 @@ tag supplies the asset + `.sha256` sidecar, and the candidate must print
 the `__self-replace` helper with `MoveFileExW`). It deliberately shells
 out to external `curl` (`--proto =https`, TLS 1.2+, 10 s connect / 60 s
 total, byte caps) instead of sharing `snp`'s in-process `eggfetch-core`
-transport: the Plan 017 lean-profile trial grew the server from
+transport: the Plan 017 lean-profile trial (historical; retained) grew the server from
 3,833,152 to 5,145,224 bytes (+34.23%), past the 10% material-growth
 gate. Do not consolidate without re-running that measurement.
 

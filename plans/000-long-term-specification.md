@@ -171,11 +171,13 @@ scope.
 
 ## 8. Transport and runtime policy
 
-- `snp update` uses in-process `eggfetch-core =0.2.0`
+- `snp update` uses in-process `eggfetch-core` (exact version pinned in
+  `Cargo.toml`, currently `=0.2.2` per user-directed Eggstack refresh M001;
+  was `=0.2.0` at Plan 017 adoption)
   (`standard-http1` plus `redirects` plus `tls-rustls` plus
   `tls-native-roots` only; strict eggfetch redirects plus native
   `Timeout.total`; snip-it keeps the initial-HTTPS guard).
-  `snip-sync update` keeps external `curl`: the fresh 0.2.0 lean-profile
+  `snip-sync update` keeps external `curl`: the historical 0.2.0 lean-profile
   trial grew the server from 3,833,152 to 5,145,224 bytes (+34.23%), past
   the 10% gate. `tests/architecture.rs` pins the no-`curl`/lean-profile/
   delegated-timeout properties.

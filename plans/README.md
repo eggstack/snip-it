@@ -62,7 +62,7 @@ Closure records and archive
 | Updater transport | `subsystems/updater-transport-roadmap.md` | M001-M005 (self-update, consolidation, timeout, 0.1.7, 0.2.0) | closed |
 | CLI, library, selector, sync-policy consolidation | `subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 (CLI, inspection, boundaries, parity, retry) | closed |
 | Local MCP integration | `subsystems/mcp-integration-roadmap.md` | M001 (server + registration) | closed |
-| Eggstack dependency refresh | `subsystems/eggstack-dependency-refresh-roadmap.md` | M001 (eggfetch/eggserve adoption and parity) | ready |
+| Eggstack dependency refresh | `subsystems/eggstack-dependency-refresh-roadmap.md` | M001 (eggfetch/eggserve adoption and parity) | closed |
 
 Pre-convention flat-plan mapping: `000` → archived direction (superseded
 by canonical docs plus `distribution-release`/`mcp-integration`);

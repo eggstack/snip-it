@@ -9,7 +9,7 @@ crates.io selects the stable version, the exact component GitHub tag
 supplies the binary + checksum, and the installed executable changes only
 after the candidate passes integrity and identity checks — but they use
 deliberately different transports. The client fetches in-process via
-`eggfetch-core =0.2.0`; the server shells out to external `curl`. That split
+`eggfetch-core =0.2.2`; the server shells out to external `curl`. That split
 is a measured footprint tradeoff, pinned by architecture tests.
 
 **Sources**: `src/update.rs`, `snip-sync/src/update.rs`,
@@ -27,7 +27,7 @@ is a measured footprint tradeoff, pinned by architecture tests.
 `src/update.rs:550-581`) + the `version`-identity probe (`validate_candidate`,
 `src/update.rs:679`), and atomically replace the executable.
 
-- **Pinned dependency** (`Cargo.toml:132`): `eggfetch-core = "=0.2.0"`,
+- **Pinned dependency** (`Cargo.toml:132`): `eggfetch-core = "=0.2.2"`,
   `default-features = false`, features exactly `standard-http1`,
   `redirects`, `tls-rustls`, `tls-native-roots` — the lean HTTP/1.1 route,
   no broad `http1` alias, no automatic decompression (release bytes must
@@ -68,7 +68,7 @@ connect 10 s / max 60 s, byte caps, and the same initial-HTTPS guard
 widens it to loopback HTTP, mirroring the client seam).
 
 **Why**: Plan 017's controlled same-toolchain lean `eggfetch-core 0.2.0`
-trial grew the deliberately small server binary from **3,833,152 → 5,145,224
+trial (historical; retained) grew the deliberately small server binary from **3,833,152 → 5,145,224
 bytes (+34.23%)**, past the plan's 10% material-growth gate. The module
 header (`snip-sync/src/update.rs:7-13`) records this; do not consolidate the
 adapter without re-running the measurement and preserving equivalent
@@ -81,7 +81,7 @@ behavior (checksum contract, identity probe, lifecycle-aware restart).
 | Test | Pin |
 |------|-----|
 | `snp_updater_does_not_shell_out_to_curl` (`:172`) | `src/update.rs` contains no `"curl"` / `curl_protocol` (server file explicitly excluded) |
-| `snp_updater_pins_lean_eggfetch_profile` (`:201`) | `Cargo.toml` pins `=0.2.0` with `standard-http1` + `redirects` |
+| `snp_updater_pins_lean_eggfetch_profile` (`:201`) | `Cargo.toml` pins `=0.2.2` with `standard-http1` + `redirects` |
 | `snp_updater_delegates_redirects_and_total_timeout` (`:221`) | `src/update.rs` uses `RedirectPolicy::strict`, contains no `tokio::time::timeout`, no `safe_get` / `is_redirect_status` / `redirect_location` / `redirect_target` / `follow_redirects(false)` |
 
 ## Transport Tests
@@ -91,7 +91,7 @@ Updater transport tests live in `src/update.rs` under `test-support`
 (`TcpListener` on `127.0.0.1:0`, `src/update.rs:1130`) — no Tokio test
 runtime, no external network. Production-policy cases pass
 `allow_http = false` explicitly so the HTTPS-only rule is proven in-tree;
-the downgrade-rejection case is qualified by eggfetch 0.2.0 behavior and
+the downgrade-rejection case is qualified by eggfetch 0.2.2 behavior and
 asserts via `RedirectDowngradePolicy::Deny`
 (`src/update.rs:1650-1683`). Endpoint overrides (`SNIP_UPDATE_CRATES_API_URL`,
 `SNIP_UPDATE_RELEASE_BASE_URL`) exist only under `test-support` /

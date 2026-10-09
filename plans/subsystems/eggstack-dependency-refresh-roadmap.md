@@ -1,6 +1,6 @@
 # Eggstack Dependency Refresh Roadmap
 
-Status: active (M001 ready)
+Status: closed (M001 closed; see `plans/closure/eggstack-dependency-refresh/001-status.md`)
 
 Long-term references:
 
@@ -67,7 +67,7 @@ All prior milestones are hard closed prerequisites. Registry handoff is ready. N
 
 ### M001 — Bump and qualify Eggstack direct crates
 
-Class: infrastructure. Status: ready.
+Class: infrastructure. Status: closed.
 
 Dependencies: closed updater M005, server lifecycle M004; upstream 0.2.2/0.4.0 publication.
 
@@ -75,7 +75,7 @@ Deliverable: pins, lockfile, necessary minimal consumer fixes, focused tests, do
 
 Implementation: `plans/implementation/eggstack-dependency-refresh/001-upgrade-eggfetch-and-eggserve.md`.
 
-Closure: `plans/closure/eggstack-dependency-refresh/001-status.md` (create only after implementation evidence).
+Closure: `plans/closure/eggstack-dependency-refresh/001-status.md` (accepted; M001 closed).
 
 Exit: both binaries build, all qualified behavior remains, no unjustified binary-size or dependency-graph expansion, and registry/closure evidence is accepted.
 
@@ -111,4 +111,4 @@ M001 closes only after its required tests, size evaluation, current docs, and cl
 
 | Milestone | Status | Implementation plan | Closure record | Blocker |
 |---|---|---|---|---|
-| M001 coordinated upgrade | ready | `plans/implementation/eggstack-dependency-refresh/001-upgrade-eggfetch-and-eggserve.md` | `plans/closure/eggstack-dependency-refresh/001-status.md` (pending) | None |
+| M001 coordinated upgrade | closed | `plans/implementation/eggstack-dependency-refresh/001-upgrade-eggfetch-and-eggserve.md` | `plans/closure/eggstack-dependency-refresh/001-status.md` (accepted) | None |
