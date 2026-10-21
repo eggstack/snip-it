@@ -13,7 +13,10 @@ provides guidelines and information for contributors.
   the gRPC stubs. The generated `snip-proto/src/snip_proto.rs` is
   committed, and the `snip-proto` crate's checked-in stubs are used directly, so a
   plain `cargo build` does not need `protoc`.
-- **OpenSSL headers** (Linux) — required by `tonic`'s TLS backend.
+- **C toolchain** — `ring` (the TLS backend behind `tonic/tls-ring` and
+  `eggfetch-core/tls-rustls`) builds native code, so a working C compiler is
+  required. No OpenSSL: the tree is rustls-only and `Cargo.lock` contains no
+  `openssl-sys`.
 
 ### Getting Started
 
