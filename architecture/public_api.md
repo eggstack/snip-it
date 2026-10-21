@@ -5,8 +5,9 @@
 ## Overview
 
 
-`snip-it` is a **binary** crate. Its library half (`src/lib.rs`) exists for
-three reasons: the `snp` binary is a separate crate in the same package and
+`snip-it` is a package with **two** targets: the `snp` binary (`src/main.rs`)
+and the `snip_it` library (`src/lib.rs`). The library half exists for three
+reasons: the `snp` binary is a separate crate in the same package and
 can only see `pub` items; integration tests under `tests/` need to reach
 internal machinery (`sync::SyncClient`, proto types, transaction helpers);
 and a few types must be `pub` for `#[derive(clap::ValueEnum)]` on CLI
@@ -55,10 +56,10 @@ the four stable modules:
 
 | Module | Supported surface |
 |---|---|
-| `config` | `SyncSettings`, `AutoSyncFailureMode`, `SyncDirection`, `DEFAULT_SERVER_URL`, `AUTO_SYNC_DEBOUNCE_MAX`, … (`src/config/sync_settings.rs:24-131`) |
+| `config` | `SyncSettings`, `AutoSyncFailureMode`, `SyncDirection`, `DEFAULT_SERVER_URL`, `AUTO_SYNC_DEBOUNCE_MAX`, … (`src/config/sync_settings.rs:24-132`) |
 | `error` | `SnipError`, `SnipResult`, `SyncFailureKind` (`src/error.rs`) |
 | `outcome` | `CliOutcome`, `exit_code::*`, `OutputContext`, `ColorPolicy`, `OutputMode` (`src/outcome.rs`) |
-| `sort` | `SnippetSort`, `SortOptions`, `rank_snippets` (`src/sort.rs:37-51`, `:113-119`) |
+| `sort` | `SnippetSort`, `SortOptions`, `rank_snippets` (`src/sort.rs:40-54`, `:116-122`) |
 
 **Stable means:** the item stays `pub`, keeps its name and signature, and
 its variants are not removed. `#[non_exhaustive]` on `SnipError`,
@@ -72,7 +73,7 @@ Declared at `src/lib.rs:32-51` and `src/lib.rs:67-69`.
 | Module | Role | Why it is `pub` |
 |---|---|---|
 | `auto_sync` | Detached debounce worker, pending marker, policy | The binary spawns the worker; integration tests drive pending-state scenarios |
-| `commands` | CLI command implementations (`src/commands/mod.rs:8-32`) | One module per subcommand; the binary calls every handler |
+| `commands` | CLI command implementations (`src/commands/mod.rs:8-32`) | One module per subcommand plus shared helpers (`backup_archive`, `doctor_report`, `pet_analysis`); the binary calls every handler |
 | `logging` | File logging + audit log | The binary initializes logging at startup |
 | `mcp` | Local read-only MCP adapter | The `snp mcp serve` subcommand and MCP integration tests |
 | `process_file_lock` | Kernel-backed cross-process lock | Used by the auto-sync lock and the server singleton |
@@ -88,7 +89,7 @@ Root-level TUI glue types are also `#[doc(hidden)]`:
 |---|---|
 | `SnippetData` (`src/lib.rs:104-111`) | Parallel vectors for TUI display |
 | `ProcessResult` (`src/lib.rs:117-131`) | Per-snippet loop control inside the selection callback |
-| `SelectionOutcome` (`src/lib.rs:147-158`) | Raw TUI selection result |
+| `SelectionOutcome` (`src/lib.rs:147-157`) | Raw TUI selection result |
 
 **`#[doc(hidden)]` means:** the item is `pub` so the binary and integration
 tests can reach it, but it is **not** part of the supported external API and
@@ -141,8 +142,8 @@ not a warning.
 
 **What it does not cover.** The smoke test pins the *Tier 1* surface only.
 Tier 2 (`#[doc(hidden)]`) modules are covered indirectly by the integration
-tests that use them (`tests/` has ~50 targets), not by a single contract
-test. A change to `#[doc(hidden)] pub` items will not be caught by
+tests that use them (`tests/` has 51 top-level targets), not by a single
+contract test. A change to `#[doc(hidden)] pub` items will not be caught by
 `public_api_smoke.rs` — it is caught by whichever integration test happens to
 use the item, or not at all.
 
@@ -170,18 +171,26 @@ is why they are called out explicitly in `AGENTS.md`.
 `run_snippet_selection` is the **single** TUI entry point: it resolves the
 library, loads the usage index, builds the one-shot usage map, calls
 `ui::select_snippet`, and optionally triggers a background sync
-(`src/commands/mod.rs:338-416`). It takes `Option<&tokio::runtime::Runtime>`
+(`src/commands/mod.rs:338-496`). It takes `Option<&tokio::runtime::Runtime>`
 and errors when `do_sync` is true but the runtime is `None`
 (`src/commands/mod.rs:353-362`).
 
 `load_readonly_snippets` is the read-only sibling of `load_snippets`. It
 calls `library::readonly_library_sources()`
-(`src/library/manager.rs:773-776`), which performs **no** migration and
-creates **no** files or directories. Routing a read-only command through the
-mutating `get_library_path` would reintroduce recovery side effects — that
-is the reason the two functions are separate.
+(`src/library/manager.rs:784-787`), which resolves the visible libraries
+without creating library files or rewriting library metadata. Routing a
+read-only command through the mutating `get_library_path` would reintroduce
+recovery side effects — that is the reason the two functions are separate.
 
-> `mcp/tools.rs:234` defines its **own** local `load_snippets`. It is a
+> One caveat to the "no migration" claim: `readonly_library_sources()`
+> constructs a `LibraryManager` (`src/library/manager.rs:41-92`), and
+> `LibraryManager::new()` calls `migrate_macos_config_dir()`
+> (`src/utils/config.rs:166-179`). On macOS with a legacy config directory
+> present, that migration **does** create directories and move files — so
+> "read-only" means "does not mutate the snippet library", not "never touches
+> the filesystem".
+
+> `src/mcp/tools.rs:234` defines its **own** local `load_snippets`. It is a
 > different function with a different signature (`Option<&str>` →
 > `Vec<LoadedSnippet>`) and is unrelated to `commands::load_snippets`.
 
@@ -224,11 +233,11 @@ reasons."*
 ## Key Files
 
 
-- `src/lib.rs` — the whole contract: module tiers (`:26-70`), root re-exports (`:72-80`), hidden root types (`:82-140`)
+- `src/lib.rs` — the whole contract: module tiers (`:26-70`), root re-exports (`:72-80`), hidden root types (`:99-158`)
 - `src/library/mod.rs` — `pub(crate)` module whose public types are re-exported at the root
-- `src/utils/atomic.rs` — the atomic-write surface re-exported at the root (`:19`, `:40`, `:81`, `:273`, `:345`)
-- `src/config/sync_settings.rs` — the supported `config` surface (`:24-131`, `:419-420`)
-- `src/sort.rs` — the supported `sort` surface (`:37-51`, `:113-119`)
+- `src/utils/atomic.rs` — the atomic-write surface re-exported at the root (`Durability` `:24`, `AtomicWriteOptions` `:45`, `AtomicWriteReport` `:86`, `write_private_atomic` `:278`, `atomic_replace` `:350`)
+- `src/config/sync_settings.rs` — the supported `config` surface (`:24-132`, `:419-420`)
+- `src/sort.rs` — the supported `sort` surface (`:40-54`, `:116-122`)
 - `src/commands/mod.rs` — load-bearing re-exports (`:127`, `:157`, `:206`, `:243`, `:274`, `:338`)
 - `src/ui/mod.rs` — load-bearing TUI re-exports (`:16-17`, `:62`, `:499-513`, `:527`)
 - `tests/public_api_smoke.rs` — the executable Tier 1 contract
@@ -264,9 +273,11 @@ reasons."*
 - **`snip_it::proto` is `pub(crate)`.** Protocol types come from the
   separate `snip-proto` crate, not from `snip_it::proto`
   (`src/lib.rs:43`).
-- **`docs/PUBLIC_API.md` still lists `sync::detect_device_conflict()`**
-  (`docs/PUBLIC_API.md:172`). That function was **removed** in commit
-  `1920075`; only the `docs/` table is stale.
+- **`sync::detect_device_conflict()` no longer exists.** It was **removed**
+  in commit `1920075`; there is no `detect_device_conflict` anywhere under
+  `src/`, and `docs/PUBLIC_API.md` no longer lists it either (line 172 is now
+  `SyncClient::get_premade_library()`). Conflict counts come from the sync
+  module's own resolution path — do not reintroduce the helper.
 - **`mcp::tools::load_snippets` is not `commands::load_snippets`.** Same
   name, different module, different signature.
 - **Adding a `pub` item to `src/lib.rs` root changes the public API.** There

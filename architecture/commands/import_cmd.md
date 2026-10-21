@@ -10,7 +10,7 @@ The currently supported external format is the **Pet TOML** export — a file co
 
 ## CLI arguments
 
-The import command is a subcommand group with exactly one member, `pet` (`src/main.rs:336-367`):
+The import command is a subcommand group with exactly one member, `pet` (`src/main.rs:337-367`):
 
 ```rust
 #[derive(Debug, Subcommand)]
@@ -41,7 +41,7 @@ enum ImportSubcommands {
 | Flag | Type | Default | Effect |
 |---|---|---|---|
 | `PATH` (positional) | `PathBuf` | — | The Pet TOML file to import. |
-| `-l`, `--library <NAME>` | `Option<String>` | derived from the file stem | Destination library name. When omitted, `derive_library_name` sanitizes the file stem (lowercase, non-alphanumerics → `-`, collapsed runs, trimmed) (`import_cmd.rs:48-80`). |
+| `-l`, `--library <NAME>` | `Option<String>` | derived from the file stem | Destination library name. When omitted, `derive_library_name` sanitizes the file stem (lowercase, non-alphanumerics → `-`, collapsed runs, trimmed) (`import_cmd.rs:48-89`). |
 | `--merge` | flag | off | Import into an existing library, skipping exact duplicates. Mutually exclusive with `--replace`. |
 | `--replace` | flag | off | Replace the destination library entirely (with a backup). Mutually exclusive with `--merge`. |
 | `--dry-run` | flag | off | Analyse and report without writing any file. |
@@ -49,7 +49,7 @@ enum ImportSubcommands {
 | `--report <FORMAT>` | `ReportFormat` | `human` | `human` (stderr) or `json` (stdout). |
 | `--report-file <PATH>` | `Option<PathBuf>` | `None` | Additionally write the JSON report to this file (skipped in dry-run). |
 
-Mode resolution happens in the dispatcher (`src/main.rs:785-791`): `--replace` → `Replace`, else `--merge` → `Merge`, else `Create`.
+Mode resolution happens in the dispatcher (`src/main.rs:786-792`): `--replace` → `Replace`, else `--merge` → `Merge`, else `Create`.
 
 ```rust
 pub enum ImportMode {
@@ -185,7 +185,7 @@ pub struct PetImportReport {
 
 ## Exit codes
 
-`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:774-803`). Failures map through the canonical table in `src/outcome.rs:46-70`:
+`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:775-804`). Failures map through the canonical table in `src/outcome.rs:46-70`:
 
 | Outcome | Exit code |
 |---|---|
@@ -211,10 +211,10 @@ let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 - The gate and the local-data lock are derived from the **config directory**, not from the target library path (`:223-224`). This is what makes the gate effective for every library, including ones outside the default config root.
 - Import therefore takes the **local-data lock only** — no transaction lock, no journal. The lock hierarchy position is *below* `snp restore`, which takes both.
 
-`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:625-631`), so two more import paths are covered:
+`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:636-642`), so two more import paths are covered:
 
 - `mgr.ensure_library_mode()` (`import_cmd.rs:192`) reaches the gate only when a single-file migration is actually needed, via `migrate_from_single_file` (`src/library/manager.rs:163-168`, `:181-183`, which takes the gate and the local-data lock).
-- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:573-574`).
+- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:585-586`).
 
 `backup_library` (used in merge and replace) is a plain copy, not a journaled operation.
 

@@ -6,8 +6,9 @@
 
 `src/utils/config.rs` resolves the snp config directory, exposes the
 per-file path helpers built on top of it, performs the one-way macOS legacy
-migration, and provides the `#[cfg(test)]`-only `ScopedConfigDir` override
-that keeps unit tests out of the developer's real `~/.config/snp/`.
+migration, and provides the `#[cfg(any(test, feature = "test-support"))]`-only
+`ScopedConfigDir` override that keeps unit tests out of the developer's real
+`~/.config/snp/`.
 
 **File**: `src/utils/config.rs` (303 lines, including the unit-test tail that
 starts at `src/utils/config.rs:234`).
@@ -34,7 +35,8 @@ pub fn get_config_dir() -> PathBuf
 it is safe to call from any layer, including read-only paths. It resolves, in
 order:
 
-1. **The test-only thread-local override** — `#[cfg(test)]` only; see
+1. **The test-only thread-local override** —
+   `#[cfg(any(test, feature = "test-support"))]` only; see
    [Test-Only Config Directory Override](#test-only-config-directory-override).
 2. **`$XDG_CONFIG_HOME/snp`** when `XDG_CONFIG_HOME` is set **and non-empty**
    (`src/utils/config.rs:69-72`). An empty value is filtered out and falls
@@ -66,7 +68,7 @@ Idempotent: calling it twice returns the same path and succeeds both times
   (`src/utils/config.rs:106-113`).
 
 Call it once during startup before any I/O inside the config directory.
-Individual I/O helpers (logging init at `src/logging.rs:158`, library
+Individual I/O helpers (logging init at `src/logging.rs:177`, library
 creation, premade downloads, audit logging) also call it defensively in case
 the startup hook was skipped.
 
@@ -171,33 +173,33 @@ the canonical one:
 Files are **moved**, not copied — the legacy directory is removed once empty.
 
 The migration is triggered from `LibraryManager::new()`
-(`src/library/manager.rs:42-46`); a failure is logged as a warning and does
+(`src/library/manager.rs:42-45`); a failure is logged as a warning and does
 not abort startup.
 
 ## Test-Only Config Directory Override
 
 ```rust
 // src/utils/config.rs:15-22
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CONFIG_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 // src/utils/config.rs:35-39
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct ScopedConfigDir {
     previous: Option<PathBuf>,
 }
 
 // src/utils/config.rs:41-49
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ScopedConfigDir {
     pub fn new(dir: impl Into<PathBuf>) -> Self
 }
 
 // src/utils/config.rs:51-57
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ScopedConfigDir {
     fn drop(&mut self) { /* restore previous */ }
 }
@@ -219,7 +221,7 @@ lookup:
 ```rust
 // src/utils/config.rs:63-67
 pub fn get_config_dir() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(dir) = CONFIG_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
         return dir;
     }
@@ -253,22 +255,29 @@ With the paths derived from the config directory
 redirected per test, each test gets its own gate, its own journal directory,
 and its own lock.
 
-### Scope: unit tests only
+### Scope: tests and the `test-support` feature
 
-**This is a unit-test-only seam.** `#[cfg(test)]` appears on the struct and on
-both impls, so the type does not exist in a release build and production
-binaries cannot be steered by it. Integration tests under `tests/**` compile
-the crate **without** `cfg(test)`, so `ScopedConfigDir` is **unreachable from
-`tests/**` — those tests isolate by setting `XDG_CONFIG_HOME` instead.
+**This is a test-only seam.** `#[cfg(any(test, feature = "test-support"))]`
+appears on the struct and on both impls, so the type does not exist in a
+release build and production binaries cannot be steered by it.
 
-All three in-tree callers are in-crate unit tests that need the audit log,
-usage counters, or the local-data lock to land in a `TempDir` instead of the
-developer's real config directory:
+Integration tests under `tests/**` compile the crate **without** `cfg(test)`,
+so `ScopedConfigDir` is unreachable from them *unless* they enable the
+`test-support` feature. The crate root re-exports it as
+`#[doc(hidden)] pub use utils::config::ScopedConfigDir;`
+(`src/lib.rs:97`) under the same cfg, so an integration test that needs it
+must be declared with `required-features = ["test-support"]`. In-tree,
+`tests/identity_contract.rs` is the only such target (`Cargo.toml:84`); every
+other integration test isolates by setting `XDG_CONFIG_HOME` instead.
+
+The three in-crate unit-test callers need the audit log, usage counters, or
+the local-data lock to land in a `TempDir` instead of the developer's real
+config directory:
 
 | Caller | What it isolates |
 |--------|------------------|
 | `src/library/tests.rs:16-37` | `TestDir` helper — holds the guard for the lifetime of a `TempDir` |
-| `src/logging.rs:601-607` | The audit-log sentinel test (the log path resolves from the config dir) |
+| `src/logging.rs:623-626` | The audit-log sentinel test (the log path resolves from the config dir) |
 | `src/commands/run_cmd.rs:435-439` | `isolated_config_dir()` — audit entry + usage counter + local-data lock |
 
 All three keep the guard alive for the duration of the test, and none of them
@@ -300,7 +309,9 @@ parallel lib tests.
   *and* tightened on an existing directory.
 - **`derive_sync_state_dir()` is the auto-sync state root.** The pending
   marker, worker lock, execution lock, and status file live there.
-- **The test override is compiled out of release builds.**
+- **The test override is compiled out of release builds.** It is
+  `#[cfg(any(test, feature = "test-support"))]`, and release builds enable
+  neither `cfg(test)` nor the `test-support` feature.
 
 ## Gotchas
 
@@ -314,8 +325,12 @@ parallel lib tests.
   segment is joined before the final `snp`.
 - **Do not derive a lock path from a library path.** The local-data lock must
   be the config-directory one, or two libraries stop excluding each other.
-- **`ScopedConfigDir` is not available to integration tests.** `tests/**`
-  compiles the crate without `cfg(test)`; use `XDG_CONFIG_HOME` there.
+- **`ScopedConfigDir` is not available to integration tests by default.**
+  `tests/**` compiles the crate without `cfg(test)`; use `XDG_CONFIG_HOME`
+  there. The one exception is a target declared with
+  `required-features = ["test-support"]`, which unlocks the `#[doc(hidden)]`
+  re-export at `src/lib.rs:97` — `tests/identity_contract.rs` is the only
+  in-tree user.
 - **`ScopedConfigDir` does not cross thread boundaries.** Spawned worker
   threads see the real config directory.
 - **`migrate_macos_config_dir()` moves, it does not copy.** A destination

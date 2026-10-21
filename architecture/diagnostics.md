@@ -28,7 +28,7 @@ sync/auto-sync state machine ([sync.md](sync.md),
 
 | Type | Location | Shape |
 |------|----------|-------|
-| `DiagnosticSeverity` | `:10` | `Info` (informational) / `Warning` (recoverable; imported with changes) / `Error` (cannot proceed safely) — serde round-trips |
+| `DiagnosticSeverity` | `:11` | `Info` (informational) / `Warning` (recoverable; imported with changes) / `Error` (cannot proceed safely) — serde round-trips |
 | `SourceSpan` | `:22` | Byte-offset `{ start, end }` into the source file |
 | `CompatibilityDiagnostic` | `:29` | `code`, `severity`, `message`, `entry_index?`, `field?`, `suggestion?`, `span?` (`span` is `skip_serializing_if = "Option::is_none"`, `:36`) |
 | `ImportDuplicate` | `:42` | `source_index`, `destination_index`, `description`, `reason` |
@@ -76,7 +76,7 @@ Each consumer maps the *same* view into *its own* semantics:
 |----------|-----------|---------------------|-------|
 | validate | `src/commands/validate_cmd.rs:374` (`validate_index`) | `ValidationDiagnostic` / `Severity` / `Repairability` (`validate_cmd.rs:48`, `:32`, `:40`) | `E-INDEX-MISSING-FILE` (`:384`), `W-ORPHAN-FILE` (`:405`), `E-PRIMARY-MISSING` (`:423`), `W-NO-PRIMARY` (`:445`) |
 | doctor | `src/commands/doctor_cmd.rs:563` | `CompatibilityDiagnostic` (shared) | `compat.primary_library.ok` (`:576`), `compat.primary_library.missing` (`:588`), `compat.library_manager.error` (`:602`) |
-| repair | `src/commands/repair_cmd.rs:381` | repair-plan specific | — |
+| repair | `src/commands/repair_cmd.rs:392` | repair-plan specific | — |
 | status | `src/status_snapshot.rs:549` | `StatusDiagnostic` / `status_snapshot::DiagnosticSeverity` (`status_snapshot.rs:123`, `:131`) | — |
 
 Why it stays split:
@@ -343,11 +343,13 @@ Import mirrors it with `PetImportReport::new(source, dest, dry_run, strict)`
 | `test_diagnostic_counts` | `:188` | the `(info, warning, error)` triple |
 | `test_pet_import_report_new` | `:205` | import envelope defaults |
 | `test_doctor_report_new` | `:221` | doctor envelope defaults (`dry_run = true`) |
+| `test_version` | `:234` | `version()` returns the crate version |
 | `test_diagnostic_severity_serialization` | `:240` | severity serde round-trip |
 | `test_compatibility_diagnostic_serialization` | `:255` | diagnostic serde round-trip |
 | `test_source_span_serialization` | `:281` | span shape |
 | `test_diagnostic_span_skip_none` | `:290` | `skip_serializing_if` on `span` |
 | `test_diagnostic_ordering_preserved` | `:308` | order is preserved through serde |
+| `test_severity_ranking` | `:328` | severity ordering (Info < Warning < Error) |
 | `test_diagnostic_codes_follow_convention` | `:342` | `E-`/`W-`/`I-` prefix convention |
 | `test_strict_mode_error_classification` | `:368` | strict-mode severity classification |
 | `test_diagnostic_bounded_message` | `:412` | message length bounds |

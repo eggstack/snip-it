@@ -4,7 +4,7 @@
 
 ## Overview
 
-`src/sort.rs` (1334 LOC, 47 unit tests) is the shared, deterministic ranking
+`src/sort.rs` (1337 LOC, 47 unit tests) is the shared, deterministic ranking
 model for snippets. One function — `rank_snippets()` — orders a slice of
 snippet indices by a chosen mode, with an orthogonal favorites-first grouping
 and a fixed tie-break chain. It serves the CLI (`--sort`, `--favorites-first`),
@@ -20,7 +20,7 @@ which mirrors the ordering rules but is not `rank_snippets` — see
 
 ---
 
-## Key types — `src/sort.rs:37-92`
+## Key types — `src/sort.rs:40-95`
 
 ```rust
 pub enum SnippetSort {
@@ -52,7 +52,7 @@ struct RankedSnippet {
 ```
 
 `SnippetSort` is `clap::ValueEnum` (kebab-case), `#[non_exhaustive]`
-(`src/sort.rs:36`), `Copy`, and `Default = Relevance`.
+(`src/sort.rs:36,39`), `Copy`, and `Default = Relevance`.
 
 ### What each mode orders by
 
@@ -65,15 +65,15 @@ struct RankedSnippet {
 | `Description` | lowercased `description` | — | **ascending** | ASCII lowercase, so `A`–`Z` |
 | `Command` | lowercased `command` | — | **ascending** | ASCII lowercase |
 
-Implementation: `src/sort.rs:157-194`.
+Implementation: `src/sort.rs:160-197`.
 
 `desc_lower` is skipped entirely under `Relevance` and `cmd_lower` is
-computed only for `Command` (`src/sort.rs:134`), so timestamp and usage
+computed only for `Command` (`src/sort.rs:132-134`), so timestamp and usage
 orderings pay no string-allocation cost.
 
 ---
 
-## Key function — `src/sort.rs:113-228`
+## Key function — `src/sort.rs:116-231`
 
 ```rust
 pub fn rank_snippets(
@@ -90,31 +90,31 @@ original `snippets` slice is never reordered or mutated.
 
 ### The tie-break chain
 
-The comparator (`src/sort.rs:147-225`) applies, in this order:
+The comparator (`src/sort.rs:150-228`) applies, in this order:
 
 | Level | Key | Direction | Source |
 |---|---|---|---|
-| 1 | `favorite` | `true` before `false` | `:150-155` |
-| 2 | primary key (the `SnippetSort` variant) | per mode, see the table above | `:157-194` |
-| 3 | fuzzy score | descending; `Some` before `None` | `:198-208` — **skipped when the primary mode is `Relevance`** |
-| 4 | lowercased description | ascending | `:212-217` — **skipped when the primary mode is `Relevance`** |
-| 5 | original index | ascending | `:220-224` |
+| 1 | `favorite` | `true` before `false` | `:153-158` |
+| 2 | primary key (the `SnippetSort` variant) | per mode, see the table above | `:160-197` |
+| 3 | fuzzy score | descending; `Some` before `None` | `:199-211` — **skipped when the primary mode is `Relevance`** |
+| 4 | lowercased description | ascending | `:213-220` — **skipped when the primary mode is `Relevance`** |
+| 5 | original index | ascending | `:222-227` |
 
 Two properties fall out of this shape:
 
 - **Favorites-first is orthogonal.** It is compared *before* the primary key
-  (`:150-155`, with `.reverse()` so `true` wins), so favorites form one
+  (`:153-158`, with `.reverse()` so `true` wins), so favorites form one
   contiguous block and the selected mode still orders *within* each block.
 - **`Relevance` short-circuits.** Levels 3 and 4 are explicitly skipped for
-  `Relevance` (`:198`, `:212`), so the `Relevance` order is exactly
+  `Relevance` (`:201`, `:215`), so the `Relevance` order is exactly
   *fuzzy score → original index*. That is why `Relevance` with no scores
   degenerates to plain file order.
 
 ### Stability
 
 `rank_snippets` uses `sort_by` (Rust's **stable** sort,
-`src/sort.rs:146`) **and** ends the comparator with an ascending original
-index (`:220-224`). The result is therefore deterministic regardless of the
+`src/sort.rs:150`) **and** ends the comparator with an ascending original
+index (`:222-227`). The result is therefore deterministic regardless of the
 sort algorithm's stability: *same inputs → same output order, always*.
 Level 5 is the final, total tie-break.
 
@@ -132,7 +132,7 @@ and arrives through the `fuzzy_scores` map.
 | MCP `snippets_search` — `src/mcp/tools.rs:111` | inline `shared_fuzzy_matcher().fuzzy_match()` (`src/mcp/tools.rs:103`) | `Some(&scores)` |
 
 When the caller passes `None`, or the map has no entry for an index,
-`fuzzy_score` is `None` (`src/sort.rs:125`) and the snippet sorts after every
+`fuzzy_score` is `None` (`src/sort.rs:128`) and the snippet sorts after every
 scored snippet under `Relevance`.
 
 **Empty query ⇒ no scores.** `score_fuzzy_matches` returns every non-deleted
@@ -152,23 +152,23 @@ fuzzy score only separates otherwise-identical recency.
 
 The `usage` argument is an **optional parallel slice** of `UsageData`, one
 entry per snippet, indexed the same way as `indices`
-(`src/sort.rs:104-105`).
+(`src/sort.rs:107-108`).
 
 ```rust
-let u = usage.and_then(|u| u.get(idx)).cloned().unwrap_or_default();  // :124
+let u = usage.and_then(|u| u.get(idx)).cloned().unwrap_or_default();  // :127
 ```
 
 **A snippet with no usage record** gets `UsageData::default()`
 (`src/usage.rs:31-34`) — `use_count: 0`, `last_used_at: None`. There is no
 sentinel and no error: a never-used snippet simply sorts last under
-`LastUsed` (`None` after every `Some`, `src/sort.rs:171-179`) and ties at
-`use_count = 0` under `MostUsed` (`:180-191`).
+`LastUsed` (`None` after every `Some`, `src/sort.rs:174-182`) and ties at
+`use_count = 0` under `MostUsed` (`:183-194`).
 
 `UsageData` is produced by `UsageIndex::get_usage(id)`
-(`src/usage.rs:100-111`), which returns the same zeroed default when no
+(`src/usage.rs:100-108`), which returns the same zeroed default when no
 entry exists for the ID. The index is persisted at
 `~/.config/snp/usage.toml` as a TOML array-of-tables (`[[entries]]`, keyed by
-snippet ID — `src/usage.rs:11-16,42-54`) and loads **fail-open**
+snippet ID — `src/usage.rs:11-16,41-54`) and loads **fail-open**
 (`src/usage.rs:127-140`): a missing or unreadable file yields an empty index
 (`:128-131`); a corrupt file is warned about, backed up, and reset to empty
 (`:132-139`) — usage history is low-value data and never blocks loading.
@@ -188,7 +188,7 @@ is documented in [usage.md](usage.md).
 |---|---|---|---|---|
 | `snp list` | `src/commands/list_cmd.rs:135` | `--sort` (default `Relevance`) | `--favorites-first` | only for `LastUsed` / `MostUsed` |
 | `SnippetSelector::resolve` (fuzzy path) | `src/selector.rs:431` | `Relevance` | `false` (via `..Default::default()`, `src/selector.rs:427-430`) | `None` |
-| MCP `snippets_search` | `src/mcp/tools.rs:111` | `Relevance` | `false` (explicit, `src/mcp/tools.rs:117`) | `None` |
+| MCP `snippets_search` | `src/mcp/tools.rs:111` | `Relevance` | `false` (explicit, `src/mcp/tools.rs:118`) | `None` |
 
 ---
 
@@ -208,7 +208,7 @@ reviewer must know:
 | `Relevance` member | yes | **no** — `SortMode` has no `Relevance` variant |
 
 `SortMode::Command` is initial-only, mapped from `--sort command` and never
-produced by the interactive sort toggles (`src/ui/state.rs:12-14`).
+produced by the interactive sort toggles (`src/ui/state.rs:13-15`).
 
 The TUI comparator short-circuits entirely when there is nothing to sort by:
 `sort_mode == None && !has_filter && !favorites_first` → early return
@@ -232,11 +232,11 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
 | Path | Role |
 |---|---|
 | `src/sort.rs` | `SnippetSort`, `SortOptions`, `rank_snippets`, the tie-break chain |
-| `src/sort.rs:113-228` | `rank_snippets` — projection, comparator, final index tie-break |
-| `src/sort.rs:230-1334` | 47 unit tests — every mode, favorites-first × usage, divergent metadata, relevance ties, determinism |
+| `src/sort.rs:116-231` | `rank_snippets` — projection, comparator, final index tie-break |
+| `src/sort.rs:233-1337` | 47 unit tests — every mode, favorites-first × usage, divergent metadata, relevance ties, determinism |
 | `src/usage.rs` | `UsageIndex` / `UsageData` — the persisted usage records the sort reads |
 | `src/usage.rs:31-34` | `UsageData` — `use_count` + `last_used_at`, `Default` = zeroed |
-| `src/usage.rs:100-111` | `get_usage()` — zeroed default for an unknown snippet ID |
+| `src/usage.rs:100-108` | `get_usage()` — zeroed default for an unknown snippet ID |
 | `src/usage.rs:127-140` | `load_from()` — fail-open load with corrupt-file backup |
 | `src/commands/list_cmd.rs:122-138` | Builds the optional usage slice and passes the optional fuzzy scores |
 | `src/selector.rs:425-437` | `Relevance` ranking inside the selector's fuzzy path |
@@ -267,13 +267,12 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
 
 ## Gotchas
 
-- **The module docstring and the code disagree.** `src/sort.rs:7-13` lists
-  the chain as *primary key → favorites → fuzzy → description → index*, but
-  the code compares **favorites first** (`:150-155`). The code is
-  authoritative; the docstring is stale.
-- The docstring also lists the chain as 5 numbered items but omits that
-  levels 3 and 4 are *skipped* for `Relevance` — the code comments at
-  `:198` and `:212` state it explicitly.
+- **The module docstring and the code agree.** `src/sort.rs:9-16` lists the
+  chain as *favorites-first → primary key → fuzzy → description → index*,
+  matching the code (`favorites` are compared first, `:153-158`). The
+  docstring also states that the fuzzy level is skipped when the primary sort
+  is already `Relevance` and that the description level is skipped for
+  `Relevance` — the code comments at `:201` and `:215` say the same.
 - `usage` is indexed by **snippet index**, not by position in `indices`.
   Passing a slice built in a different order silently mis-attributes usage.
 - `UsageData` for a missing record is `use_count: 0` / `last_used_at: None` —
@@ -294,4 +293,4 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
 - `SnippetSort` is `#[non_exhaustive]` — a `match` on it needs a wildcard
   arm.
 - `src/sort.rs` is ~230 lines of logic and ~1100 lines of tests; the test
-  module starts at `src/sort.rs:230`.
+  module starts at `src/sort.rs:233`.

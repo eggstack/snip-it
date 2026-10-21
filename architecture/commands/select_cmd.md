@@ -16,7 +16,7 @@ modals in raw mode. It is the machine-facing endpoint behind the
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
 | `-f/--filter` | `Option<String>` | – | Initial TUI filter |
-| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:600`) |
+| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:601`) |
 | `-l/--library` | `Option<String>` | – | Library scope |
 | `--raw` | bool | `false` | Emit stored bytes verbatim (conflicts with `--expanded`) |
 | `--expanded` | bool | `false` | Prompt for variables, emit expanded text (conflicts with `--raw`) |
@@ -53,9 +53,13 @@ unused (`select_cmd.rs:72`); the mode is derived from `expanded` alone.
    - `Selected + None` → internal contract error (bug).
 
 File output uses `atomic_replace` with
-`Durability::DurableUserData` (temp-file + rename,
+`Durability::DurableUserData` (temp-file + atomic rename,
 `select_cmd.rs:110-117`): a cancelled selection preserves a pre-existing
-caller file, and a racing symlink cannot redirect the write.
+caller file, and a racing symlink cannot redirect the write — the final
+`fs::rename` replaces the destination directory entry and never follows a
+link (`src/utils/atomic.rs:412`). Note that `DurableUserData` does *not*
+enable `reject_symlink`; that flag is `SensitiveConfig`-only
+(`src/utils/atomic.rs:62`).
 
 ## Mutation vs read-only
 
@@ -80,7 +84,7 @@ invisible to the sync subsystem.
 ## Tokio runtime
 
 `select` is a local-only command: it never initializes the global Tokio
-runtime. `src/main.rs:605-612` does not pass `&RUNTIME`, and
+runtime. `src/main.rs:606-613` does not pass `&RUNTIME`, and
 `run_snippet_selection` is called with `runtime=None`
 (`select_cmd.rs:91`).
 
@@ -92,7 +96,7 @@ runtime. `src/main.rs:605-612` does not pass `&RUNTIME`, and
   newline via `println!`, `select_cmd.rs:119`) or atomically in the file.
 - Contract violations → `runtime_error` (exit 1), signaling a bug, not
   user error. Atomic-write I/O errors propagate as `io_error`.
-- `src/main.rs:605-613` returns the `CliOutcome` directly.
+- `src/main.rs:606-613` returns the `CliOutcome` directly.
 
 ## Key invariants
 
@@ -128,11 +132,11 @@ runtime. `src/main.rs:605-612` does not pass `&RUNTIME`, and
 - `src/commands/shell_cmd.rs` — the `__snp_select` bash/zsh/fish
   consumers of `--output-file`.
 - `src/outcome.rs` — `CliOutcome` and the exit-code table.
-- `src/main.rs` — dispatch (`src/main.rs:599-613`).
+- `src/main.rs` — dispatch (`src/main.rs:600-614`).
 
 ## File / line references
 
 - `SelectArgs`: `src/commands/select_cmd.rs:11`; `OutputMode`: `:35`
 - `process_snippet`: `:40`; `run`: `:69`
 - Shared loop: `src/commands/mod.rs:338`; atomic write: `src/utils/atomic.rs:350`
-- Dispatch: `src/main.rs:599-613`; consumers: `src/commands/shell_cmd.rs:74-123`
+- Dispatch: `src/main.rs:600-614`; consumers: `src/commands/shell_cmd.rs:74-123`

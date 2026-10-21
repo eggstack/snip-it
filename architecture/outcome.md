@@ -38,7 +38,7 @@ pub enum CliOutcome {
 ```
 
 Each variant maps to a stable exit code via `CliOutcome::exit_code()`
-(`src/outcome.rs:74-91`).
+(`src/outcome.rs:74-90`).
 
 ## Exit Code Table
 
@@ -75,18 +75,18 @@ The constants live in `outcome::exit_code` (`src/outcome.rs:46-70`).
   return this code directly.
 
 - **`UNSAFE_REPAIRS` (10)** is not a `CliOutcome` variant either — see
-  [Exit code 10](#exit-code-10-the-one-code-without-an-outcome).
+  [Exit code 10](#exit-code-10--the-one-code-without-an-outcome).
 
 ## Exit code 10 — the one code without an outcome
 
 
-`exit_on_repair_status()` (`src/main.rs:375-387`) maps
+`exit_on_repair_status()` (`src/main.rs:375-388`) maps
 `commands::repair_cmd::RepairExitStatus` straight to a process exit code and
 calls `std::process::exit` **inside** the handler:
 
 | `RepairExitStatus` | Exit code | Mechanism |
 |--------------------|-----------|-----------|
-| `Clean` / `Repaired` / `DryRun` | 0 | implicit return, no `exit` call |
+| `Clean` / `Repaired` / `FindingsSafe` / `DryRun` | 0 | implicit return, no `exit` call |
 | `PartialFailure` | 1 (`GENERAL_ERROR`) | `std::process::exit(1)` |
 | `UnsafeOnly` | 10 (`UNSAFE_REPAIRS`) | `std::process::exit(10)` |
 
@@ -96,7 +96,7 @@ usage error, and scripts must be able to distinguish the two
 (`src/main.rs:369-374`).
 
 Because the exit happens inside the handler, `handle_repair`
-(`src/main.rs:431-435`) never returns and there is deliberately **no**
+(`src/main.rs:432-436`) never returns and there is deliberately **no**
 `CliOutcome` variant for it. A reviewer looking for "the variant that maps to
 10" in `src/outcome.rs` will not find one — that is by design, not an
 omission.
@@ -119,13 +119,13 @@ impl CliOutcome {
 }
 ```
 
-`main()` performs the final conversion (`src/main.rs:1017-1032`):
+`main()` performs the final conversion (`src/main.rs:1018-1033`):
 
 | Handler result | Behavior | Source |
 |----------------|----------|--------|
-| `Ok(CliOutcome::Success)` | fall through, exit 0 | `src/main.rs:1018` |
-| `Ok(other)` | `std::process::exit(other.exit_code())` | `src/main.rs:1023` |
-| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1025-1031` |
+| `Ok(CliOutcome::Success)` | fall through, exit 0 | `src/main.rs:1019` |
+| `Ok(other)` | `std::process::exit(other.exit_code())` | `src/main.rs:1024` |
+| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1026-1032` |
 
 There is no `From<SnipError> for CliOutcome`. A handler that wants code 3, 4,
 5, 6, 7, or 9 returns the matching `CliOutcome` variant instead of
@@ -133,13 +133,18 @@ propagating the error; a handler with nothing more specific returns
 `Err(SnipError)` and the process exits 1. See
 [core.md](core.md#error--outcome--exit-code).
 
-Two commands bypass `CliOutcome` entirely and call `std::process::exit`
+Two command paths bypass `CliOutcome` entirely and call `std::process::exit`
 themselves:
 
 - `repair` / `data repair` — exit 1 or 10 via `exit_on_repair_status`
-  (`src/main.rs:375-387`, `src/main.rs:431-435`).
-- `run` / `clip` — exit the child's code (fallback 8) after a failed
-  execution (`src/main.rs:518`, `src/main.rs:542`).
+  (`src/main.rs:375-388`, `src/main.rs:432-436`).
+- `run` (exact and TUI) — exit the child's code (fallback 8) after a failed
+  execution (`src/main.rs:519`, `src/main.rs:543`).
+
+`snp clip` does **not** propagate the child's exit code: the exact path
+returns `CliOutcome::Success` unconditionally (`src/main.rs:563`) and the TUI
+path returns `SnipResult<()>`, so a clipboard failure surfaces as
+`Err(SnipError)` → exit 1, not as the child's code.
 
 ## Relationship to Other Outcome Types
 
@@ -179,12 +184,12 @@ is the authoritative field-level reference; this is the emitter index.
 |---|---|---|---|
 | `snp list --json` | `--json` | Bare **array** of snippet objects (`description`, `command`, `output`, `tags`, `folders`, `favorite`) — no wrapper | none |
 | `snp get --json` | `--json` | Object: `schema`, `id`, `description`, `command`, `expanded`, `tags`, `library`, `library_id` (`src/commands/get_cmd.rs:66-77`) | `schema: 1` |
-| `snp status --json` | `--json` | Object: `StatusSnapshot` (`src/status_snapshot.rs:18-19`) | `schema: u32` |
+| `snp status --json` | `--json` | Object: `StatusSnapshot` (`src/status_snapshot.rs:17-29`) | `schema: u32` |
 | `snp doctor --report json` | `--report json` | Object: diagnostic report with findings + remediation | per report |
 | `snp validate --json` | `--json` | Object: `ValidationReport` — `schema_version`, `tool_version`, `strict_mode`, … (`src/commands/validate_cmd.rs:60-63`) | `schema_version: "1.0.0"` (string) |
-| `snp backup --json` | `--json` | Object: `BackupManifest` (`src/commands/backup_archive.rs:349-351`) | `schema: 1` |
+| `snp backup --json` | `--json` | Object: `BackupManifest` (`src/commands/backup_archive.rs:349-355`) | `schema: 1` |
 | `snp restore --json` | `--json` | Object: restore plan/result (`mode`, `manifest_schema`, `manifest_version`, `files_in_backup`, …) (`src/commands/restore_cmd.rs:1094-1098`) | `manifest_schema` (from the manifest) |
-| `snp repair --json` | `--json` | Object: `items`, `backups`, `applied`, `skipped`, `failed`, `exit_status` (`src/commands/repair_cmd.rs:986-994`) | `exit_status` string |
+| `snp repair --json` | `--json` | Object: `items`, `backups`, `applied`, `skipped`, `failed`, `exit_status` (`src/commands/repair_cmd.rs:997-1005`) | `exit_status` string |
 | `snp import --report json` | `--report json` | Object: import report (`analysis_mode`, `duplicates`, `diagnostics`, `normalizations`, `detected_capabilities`) | per report |
 | Local MCP tools | — | JSON object in `structuredContent` **and** a text content item | per tool |
 
@@ -202,17 +207,18 @@ Rules that hold for every emitter (from `docs/JSON_SCHEMAS.md`):
 
 `repair --json` is the only emitter that also reports the repair exit status
 inline (`exit_status` ∈ `clean` / `repaired` / `partial_failure` /
-`unsafe_only` / `dry_run`, `src/commands/repair_cmd.rs:996-1002`).
+`unsafe_only` / `findings_safe` / `dry_run`,
+`src/commands/repair_cmd.rs:1007-1014`).
 
 ## Tests
 
 
 Unit tests in `src/outcome.rs` verify:
 
-- All variants map to their documented exit codes (`src/outcome.rs:283-297`)
+- All variants map to their documented exit codes (`src/outcome.rs:278-299`)
 - `ExecutionFailed` with a child code propagates that code
 - `PersistenceFailed` maps to general error (1)
-- All exit codes are distinct (no collisions) (`src/outcome.rs:351-375`)
+- All exit codes are distinct (no collisions) (`src/outcome.rs:348-375`)
 - `OutputContext` suppresses ANSI in machine modes
 - `OutputContext` strips ANSI sequences when `suppress_ansi()` is true
 
@@ -280,8 +286,8 @@ trailing newline.
 
 Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
 
-- **Exit codes are implemented and stable** (0–10 via `CliOutcome`,
-  table above). Stream separation is **aspirational**: human-readable
+- **Exit codes are implemented and stable** (0–10 per the table above; 10
+  bypasses `CliOutcome`). Stream separation is **aspirational**: human-readable
   output still goes to stdout in several commands; only `import`/`doctor`
   JSON splits are clean (JSON → stdout, human → stderr).
 - Enforced today: data only on stdout, diagnostics on stderr
@@ -294,8 +300,12 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
   via `exit_on_repair_status` for `UnsafeOnly` (10) / `PartialFailure` (1).
 - Detached auto-sync worker codes are internal, not part of the public
   contract. With `auto_sync_failure = "error"`, a post-commit spawn
-  failure surfaces exit 1 via `SnipError::Runtime` — local mutation stays
-  committed; worker-side failures surface via logs / `snp doctor` only.
+  failure is logged at error level only
+  (`src/auto_sync/notification.rs:242-253`) — the command still exits 0 and
+  the local mutation stays committed; the pending marker is preserved for
+  recovery, and `report_notification_result` prints a stderr warning
+  (`src/auto_sync/notification.rs:43-55`). Worker-side failures surface via
+  logs / `snp doctor` only.
 - Cancellation: `run`/`clip`/`search` treat TUI cancel as success
   (exit 0); `snp select` maps cancel → `CliOutcome::Cancelled` → exit 4
   at the CLI boundary. Failed `run` records no usage metadata.
@@ -310,9 +320,11 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
   never from command code; `UNSAFE_REPAIRS` (10) has no variant.
 - `ExecutionFailed` propagates the child code when known (0–255),
   else 8 (spawn failure, signal kill, `SNP_COMMAND_TIMEOUT`).
-- Every exit code 0–10 has exactly one producer. Code 2 belongs to Clap,
-  code 10 belongs to `exit_on_repair_status`, and codes 0/1/3–9 belong to
-  `CliOutcome::exit_code()`.
+- Every exit code 0–10 has a defined producer. Code 2 belongs to Clap, code
+  10 belongs to `exit_on_repair_status`, and codes 0/3–9 belong to
+  `CliOutcome::exit_code()`. Code 1 has three producers —
+  `CliOutcome::PersistenceFailed`, the `Err(SnipError)` boundary in
+  `main()`, and `RepairExitStatus::PartialFailure`.
 - Never leak secrets through `diagnostic()` or stdout payloads; machine
   output must stay pipe-safe (no prompts, no ANSI, exact bytes).
 
@@ -331,9 +343,10 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
   use them to distinguish two different failure families.
 - **`Exit code 2` is Clap-only.** A command that validates its own arguments
   should return `ValidationFailed` (6), not try to produce 2.
-- **`ExecutionFailed { child_code: None }` is 8**, but the `run`/`clip`
-  paths bypass `CliOutcome` and exit directly with the child's code
-  (`src/main.rs:518`, `src/main.rs:542`).
+- **`ExecutionFailed { child_code: None }` is 8**, but the `run` paths bypass
+  `CliOutcome` and exit directly with the child's code
+  (`src/main.rs:519`, `src/main.rs:543`). `snp clip` never propagates a
+  child's code — it exits 1 on error.
 - **JSON output has no shared envelope.** `list --json` is a bare array;
   `get --json` is a bare object; `repair --json` is an object with an
   `exit_status` field. Consumers must not assume a wrapper key.
@@ -344,8 +357,8 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
 
 
 - `src/outcome.rs` — `CliOutcome` (`:16-40`), `exit_code::*` 0–10 (`:46-70`), `exit_code()` mapper (`:72-91`), `ColorPolicy` / `OutputMode` / `OutputContext` (`:95-149`), guards (`:151-272`), tests (`:274-376`)
-- `src/main.rs` — the outcome → process boundary (`:1017-1032`) and the exit-10 path (`:375-387`)
-- `src/commands/repair_cmd.rs:986-1002` — the `repair --json` `exit_status` mapping
+- `src/main.rs` — the outcome → process boundary (`:1018-1033`) and the exit-10 path (`:375-388`)
+- `src/commands/repair_cmd.rs:1007-1014` — the `repair --json` `exit_status` mapping
 - `src/commands/get_cmd.rs:66-77` — the versioned `get --json` object
 - `src/commands/list_cmd.rs:150-163` — the bare-array `list --json` shape
 - `docs/EXIT_CODES.md` — the stable code table and child-code rules

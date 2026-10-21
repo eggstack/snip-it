@@ -62,7 +62,7 @@ group).
    (`:40`). The client opens a TLS channel (a transport failure becomes
    `sync_failure(ConnectFailed)`) and issues the `Register` RPC through
    `retry_grpc_unified!` with `None::<SyncRunLimits>` (unbounded) and
-   `RetryBackoff::Standard` (`src/sync.rs:922-950`). A response with
+   `RetryBackoff::Standard` (`src/sync.rs:922-951`). A response with
    `success == false` becomes `sync_failure(RegistrationFailed)` carrying
    the server message.
 4. **Persist.** On success the handler builds a **fresh** `SyncSettings`
@@ -144,7 +144,7 @@ for the `Register` RPC. `RUNTIME` is the global `LazyLock` runtime in
 
 Startup policy: `Commands::Register(_)` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:969-972`) — a registration does
+`StartupServices::Logging` (`src/main.rs:970-972`) — a registration does
 not reschedule pending auto-sync work.
 
 ## Auto-sync trigger
@@ -156,14 +156,21 @@ with their stored IDs.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1025-1031`).
+exit **1** (`src/main.rs:1026-1032`).
 
 | Situation | Result |
 |-----------|--------|
 | Already registered without `--force` | exit 0, guidance printed |
-| TLS/channel failure | `sync_failure(ConnectFailed)` → exit 1 |
-| Server returns `success = false` | `sync_failure(RegistrationFailed)` → exit 1 |
+| TLS/channel failure | client raises `sync_failure(ConnectFailed)`, re-wrapped as `runtime_error("Registration failed")` → exit 1 |
+| Server returns `success = false` | client raises `sync_failure(RegistrationFailed)`, re-wrapped as `runtime_error("Registration failed")` → exit 1 |
 | `save_sync_settings` fails | printed + propagated → exit 1 |
+
+> The typed sync-failure kind does **not** survive the command boundary:
+> `register_cmd.rs:71-76` converts every client error into
+> `SnipError::runtime_error("Registration failed", Some(&e.to_string()))`,
+> so `SyncFailureKind::ConnectFailed` / `RegistrationFailed` never reach the
+> CLI outcome mapping. The exit code is still 1 and the original message is
+> preserved verbatim in the detail field.
 
 There is no `CliOutcome` on this path and no exit-2 (usage) case: clap
 rejects unknown flags before the handler runs.
@@ -194,7 +201,7 @@ in tests requires `unsafe` (edition 2024).
 |------|------|
 | `src/commands/register_cmd.rs` | `RegisterArgs` + the `run` handler |
 | `src/main.rs:117-119`, `:726-728` | Clap wiring and dispatch |
-| `src/sync.rs:922-950` | `SyncClient::register` — TLS channel + `Register` RPC |
+| `src/sync.rs:922-951` | `SyncClient::register` — TLS channel + `Register` RPC |
 | `src/sync.rs:800-808` | `require_api_key` — typed missing-key error |
 | `src/sync.rs:291-299` | `add_api_key_metadata` — refuses an empty key |
 | `src/config/sync_settings.rs` | `SyncSettings`, `save`/`load`, keychain migration, `DEFAULT_SERVER_URL` |

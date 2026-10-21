@@ -51,7 +51,7 @@ pub struct SyncOptions {
 ```
 
 The clap surface is declared inline in `src/main.rs:274-288` (not as an
-`*Args` struct) and is mapped into `SyncOptions` at `src/main.rs:676-694`.
+`*Args` struct) and is mapped into `SyncOptions` at `src/main.rs:679-695`.
 `--push-only` and `--pull-only` are mutually exclusive
 (`conflicts_with = "pull_only"` / `"push_only"`, `src/main.rs:280-285`).
 
@@ -320,7 +320,7 @@ Returns a `CliOutcome` directly (the only sync subcommand that does).
 | Situation | Outcome | Exit |
 |-----------|---------|------|
 | No marker | `Success` (`No pending sync work`) | 0 |
-| Marker corrupt | `ValidationFailed` | 6 |
+| Marker corrupt (`PendingError::Corrupted`) | `ValidationFailed` | 6 |
 | Marker unreadable (other I/O) | `PersistenceFailed` | 1 |
 | Non-tty without `--force` | `ConflictOrRefused` | 9 |
 | Interactive answer other than `y`/`yes` | `Success` (`Aborted`) | 0 |
@@ -365,8 +365,10 @@ artifacts whose metadata is diagnostic only.
 > `execution_lock` (`:899`) and `worker_lock` (`:901`) to
 > `auto_sync::execution_lock::execution_lock_path` and
 > `auto_sync::lock::lock_path`. Because the scan never produces those
-> artifact names, the branches are unreachable in production — the only
-> *reachable* reference to the worker-lock path is this one.
+> artifact names (the permission scan emits the status file's basename),
+> the branches are unreachable in production. The worker-lock path is
+> otherwise reached through `auto_sync::paths::worker_lock`
+> (`src/auto_sync/mod.rs:43-45`).
 
 ## Mutation vs read-only
 
@@ -374,7 +376,7 @@ artifacts whose metadata is diagnostic only.
 |------------|-------|-------|
 | `sync run` | mutating | Writes merged libraries, `libraries.toml` (`last_sync`, linkage), the auto-sync status file, and the pending marker |
 | `sync run --dry-run` | read-only | Prints only; returns before linking |
-| `sync run --servers` | read-only (remote) | Lists server libraries; writes nothing locally |
+| `sync run --servers` | read-only (remote) | Lists server libraries; no snippet data written — but the execution lock file is still taken (`:189-210`) |
 | `sync config --show` | read-only | Prints only |
 | `sync config` (setters) | mutating | Writes `sync.toml` |
 | `sync retry` | mutating | Same as `run` plus a generation-matched pending clear |
@@ -387,18 +389,18 @@ None of these call
 `gate_mutation_on_interrupted_transactions()` directly. The library writes
 go through `LibraryManager`, whose mutators call `gate_mutation()` →
 `transaction::gate_mutation_on_interrupted_transactions`
-(`src/library/manager.rs:625-631`).
+(`src/library/manager.rs:636-642`).
 
 ## Tokio runtime
 
 `RUNTIME` is a `LazyLock<tokio::runtime::Runtime>` in `src/main.rs:22-27`.
-`sync run` and `sync retry` touch it (`src/main.rs:695`, `:710`); the
+`sync run` and `sync retry` touch it (`src/main.rs:696`, `:711`); the
 control subcommands (`config`, `clear-failure`, `discard-pending`,
 `repair`) do not, so they never construct a runtime.
 
 Startup policy: `Commands::Sync { .. }` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:969-970`), i.e. pending auto-sync
+`StartupServices::Logging` (`src/main.rs:970-973`), i.e. pending auto-sync
 is not auto-rescheduled before an explicit sync.
 
 ## Auto-sync interaction
@@ -421,7 +423,7 @@ instead of collapsing a corrupt or unreadable marker into `NothingToDo`
 
 - `SnipResult<()>` handlers: **every** `Err` reaches `main` as
   `eprintln!("error: {e}")` + `std::process::exit(1)`
-  (`src/main.rs:1025-1031`). Despite `docs/EXIT_CODES.md` listing 7
+  (`src/main.rs:1026-1031`). Despite `docs/EXIT_CODES.md` listing 7
   (`SYNC_FAILED`) and `CliOutcome::SyncFailed` mapping to it
   (`src/outcome.rs:82`), **no `snp sync` path produces exit 7** —
   `CliOutcome::SyncFailed` is never constructed anywhere in `src/`.

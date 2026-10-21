@@ -142,7 +142,7 @@ shim, not a migration.
 `snip-sync/src/premade.rs:13` defines a **separate, private**
 `fix_invalid_toml_escapes` with the same name and the same purpose. It is
 used when the server parses uploaded premade libraries
-(`snip-sync/src/premade.rs:166`, `:292`).
+(`snip-sync/src/premade.rs:165`, `:294`).
 
 The duplication is a consequence of the workspace split: `snip-sync` does not
 depend on the `snip-it` binary crate, so it cannot call

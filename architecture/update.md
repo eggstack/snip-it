@@ -19,8 +19,8 @@ the crate-version-to-tag contract beyond what the code pins, the server's HTTP
 leaf (see [server.md](server.md)), or the update server's gRPC surface.
 
 **Sources**: `src/update.rs` (1769 lines), `snip-sync/src/update.rs` (778),
-`src/main.rs:70-83` (CLI flags), `src/main.rs:451-465` (dispatch),
-`tests/architecture.rs:163-256` (source-level pins).
+`src/main.rs:70-83` (CLI flags), `src/main.rs:452-466` (dispatch),
+`tests/architecture.rs:163-258` (source-level pins).
 
 ## Module Map
 
@@ -30,15 +30,15 @@ leaf (see [server.md](server.md)), or the update server's gRPC surface.
 | `snip-sync/src/update.rs` | Server updater: same strategy over external `curl`, with lifecycle-aware stop/restart |
 | `src/main.rs:70-83` | `snp update --dry-run/--locked` and the hidden `__self-replace` subcommand |
 | `snip-sync/src/cli.rs:50-68` | `snip-sync update --dry-run/--locked` and the hidden `SelfReplace` subcommand |
-| `tests/architecture.rs:163-256` | Pins that lock the two-transport split at source level |
+| `tests/architecture.rs:163-258` | Pins that lock the two-transport split at source level |
 
 ## The Two-Transport Split
 
 | | `snp update` (client) | `snip-sync update` (server) |
 |---|---|---|
 | Transport | in-process `eggfetch-core` | external `curl` subprocess |
-| Dependency | `eggfetch-core = { version = "=0.2.2", default-features = false, features = ["standard-http1", "redirects", "tls-rustls", "tls-native-roots"] }` (`Cargo.toml:132-137`) | none — `curl` must be on `PATH` |
-| Redirect handling | `RedirectPolicy::strict(10)` inside eggfetch | `curl --location` (curl's own default redirect cap) |
+| Dependency | `eggfetch-core = { version = "=0.2.2", default-features = false, features = ["standard-http1", "redirects", "tls-rustls", "tls-native-roots"] }` (`Cargo.toml:141-146`) | none — `curl` must be on `PATH` |
+| Redirect handling | `RedirectPolicy::strict(10)` inside eggfetch | `curl --location` (no `--max-redirs`; curl's own default applies — see Gotchas) |
 | Overall deadline | native per-request `Timeout.total` (60 s) | `curl --max-time 60` |
 | Initial-URL scheme | HTTPS only in production (`build_allow_http()` is `test-support` only) | HTTPS only in production (`validate_https_url`; `test-helpers` widens it) |
 | Tag / asset | `v{version}` / `snp-{target}[.exe]` (`src/update.rs:535`, `:539`) | `snip-sync-v{version}` / `snip-sync-{target}[.exe]` (`snip-sync/src/update.rs:316`, `:320`) |
@@ -83,8 +83,8 @@ Update {
 ```
 
 Dispatched through the global runtime: `RUNTIME.block_on(update::run(dry_run, locked))`
-(`src/main.rs:451-457`). `snp update` is classified
-`SuppressConfiguration` + `Logging` (`src/main.rs:981-991`).
+(`src/main.rs:452-458`). `snp update` is classified
+`SuppressConfiguration` + `Logging` (`src/main.rs:982-992`).
 
 - **`--dry-run`** stops before any download or write: `run()` prints the plan
   and returns `Ok(())` (`src/update.rs:93-96`), via `print_dry_run()`
@@ -100,7 +100,7 @@ Dispatched through the global runtime: `RUNTIME.block_on(update::run(dry_run, lo
   (`src/update.rs:641-650`), so the resolved dependency graph is always the
   locked one. The same is true of the server
   (`snip-sync/src/update.rs:54`, `pub fn run(dry_run: bool, _locked: bool)`;
-  its always-locked `cargo install` is at `snip-sync/src/update.rs:417-423`).
+  its always-locked `cargo install` is at `snip-sync/src/update.rs:419-424`).
 
 ### Version Resolution
 
@@ -171,7 +171,7 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
 }
 ```
 
-- **Lean feature profile** (`Cargo.toml:132-137`): `default-features = false`
+- **Lean feature profile** (`Cargo.toml:141-146`): `default-features = false`
   plus exactly `standard-http1`, `redirects`, `tls-rustls`,
   `tls-native-roots` — the lean HTTP/1.1 route with native-root TLS. No broad
   `http1` alias.
@@ -234,7 +234,7 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
   (`src/update.rs:850-859`); the helper performs `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`
   (`run_self_replace_helper`, `src/update.rs:868`). The hidden subcommand is
-  declared at `src/main.rs:76-83` and dispatched at `src/main.rs:458-465`; it
+  declared at `src/main.rs:76-83` and dispatched at `src/main.rs:459-466`; it
   is a no-op error on non-Windows.
 
 ### Cargo Fallback
@@ -286,12 +286,12 @@ the CLI `--locked` flag.
 | Test | Pin |
 |------|-----|
 | `snp_updater_does_not_shell_out_to_curl` (`:172`) | `src/update.rs` contains no `"curl"` / `curl_protocol` in non-comment lines (the server file is explicitly excluded from the scan) |
-| `snp_updater_pins_lean_eggfetch_profile` (`:201`) | `Cargo.toml` contains `eggfetch-core = { version = "=0.2.2"` plus `"standard-http1"` and `"redirects"` |
-| `snp_updater_delegates_redirects_and_total_timeout` (`:221`) | `src/update.rs` contains `RedirectPolicy::strict` and contains no `tokio::time::timeout`, `fn safe_get`, `fn is_redirect_status`, `fn redirect_location`, `fn redirect_target`, `follow_redirects(false)` |
+| `snp_updater_pins_lean_eggfetch_profile` (`:202`) | `Cargo.toml` contains `eggfetch-core = { version = "=0.2.2"` plus `"standard-http1"` and `"redirects"` |
+| `snp_updater_delegates_redirects_and_total_timeout` (`:222`) | `src/update.rs` contains `RedirectPolicy::strict` and contains no `tokio::time::timeout`, `fn safe_get`, `fn is_redirect_status`, `fn redirect_location`, `fn redirect_target`, `follow_redirects(false)` |
 
 > **Resolved.** The dependabot bump `bd8e988` raised the pin in
-> `Cargo.toml:132` from `=0.2.0` to `=0.2.2`, which left
-> `tests/architecture.rs:207` asserting a literal string that no longer
+> `Cargo.toml:141` from `=0.2.0` to `=0.2.2`, which left
+> `tests/architecture.rs:208-211` asserting a literal string that no longer
 > matched the manifest — `snp_updater_pins_lean_eggfetch_profile` failed on
 > `main`. The assertion now pins `=0.2.2`, matching the manifest. **Any
 > future bump of this pin must update the test string in the same change**,
@@ -321,8 +321,9 @@ no second HTTP client, no Tokio test runtime, no external network.
   updater *selects* the strict policy (`follow`, `max_redirects ==
   MAX_REDIRECTS`, `downgrade == RedirectDowngradePolicy::Deny`) rather than
   re-testing eggfetch's own redirect engine. The comment there notes that
-  downgrade rejection itself is qualified by eggfetch 0.2.2 behavior — the
-  pinned dependency is `=0.2.2` (`Cargo.toml:132`), matching the version
+  downgrade rejection itself is qualified by eggfetch 0.2.2 behavior
+  (`src/update.rs:1650-1654`) — the
+  pinned dependency is `=0.2.2` (`Cargo.toml:141`), matching the version
   asserted by `tests/architecture.rs`. The qualification should be
   re-confirmed whenever the pin moves.
 - Endpoint overrides (`SNIP_UPDATE_CRATES_API_URL`,
@@ -337,8 +338,8 @@ no second HTTP client, no Tokio test runtime, no external network.
 - `snip-sync/src/update.rs` — server updater: `curl` adapter, lifecycle-aware stop/restart, size-gate rationale
 - `snip-sync/src/cli.rs:50-68` — server `update` flags and the hidden `SelfReplace` subcommand
 - `src/main.rs:70-83` — client `update` flags and the hidden `__self-replace` subcommand
-- `Cargo.toml:132-137` — the lean `eggfetch-core` feature set
-- `tests/architecture.rs:163-256` — the source-level pins on the split
+- `Cargo.toml:141-146` — the lean `eggfetch-core` feature set
+- `tests/architecture.rs:163-258` — the source-level pins on the split
 
 ## Invariants
 
@@ -360,9 +361,9 @@ no second HTTP client, no Tokio test runtime, no external network.
 - **`--locked` is a no-op flag.** Both updaters bind it as `_locked`
   (`src/update.rs:80`, `snip-sync/src/update.rs:54`). The Cargo fallback
   always passes `--locked` to `cargo install` anyway
-  (`src/update.rs:641-650`, `snip-sync/src/update.rs:417-423`), so the effective
+  (`src/update.rs:641-650`, `snip-sync/src/update.rs:419-424`), so the effective
   behavior is "always locked".
-- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:142` uses an
+- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:141` uses an
   exact version. The manifest currently says `=0.2.2`, and the architecture
   test asserts the same pin (see [Architecture Pins](#architecture-pins)).
 - **The `curl` adapter has no explicit redirect-depth bound.** It relies on

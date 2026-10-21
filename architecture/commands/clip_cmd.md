@@ -24,11 +24,11 @@ sites outside it — see *Direct clipboard call sites* below.
 | `-l/--library` | `Option<String>` | – | Library scope |
 | `--sort` | `SnippetSort` | `Relevance` | Ordering |
 | `--favorites-first` | bool | `false` | Favorites rank first |
-| `--id` | `Option<String>` | – | Exact UUID bypass (conflict with the other selectors + filter) |
+| `--id` | `Option<String>` | – | Exact snippet ID bypass (conflict with the other selectors + filter) |
 | `--description-exact` | `Option<String>` | – | Exact description bypass |
 | `--command-exact` | `Option<String>` | – | Exact command bypass |
 
-`src/main.rs:546-584` routes exact selectors through
+`src/main.rs:547-585` routes exact selectors through
 `resolve_exact_target` → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -110,9 +110,10 @@ fails, so it does not wipe the newer content.
 
 The clear runs on a **detached thread**, not at process exit. If the
 process exits before the interval elapses, the clear never happens
-(`src/clipboard.rs:73-74`). The auto-clear is a best-effort security
-measure, not a guarantee — do not describe it as "the clipboard is
-cleared when the command exits".
+(`src/clipboard.rs:73-74` documents it; the spawn is
+`src/clipboard.rs:82`, and the handle is dropped, never joined). The
+auto-clear is a best-effort security measure, not a guarantee — do not
+describe it as "the clipboard is cleared when the command exits".
 
 `clipboard_auto_clear_seconds` is cached per process
 (`src/clipboard.rs:32-60`); `invalidate_clipboard_settings_cache()`
@@ -150,7 +151,7 @@ Without `--sync`, copying leaves no sync intent.
 ## Tokio runtime
 
 `clip` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:560` and `src/main.rs:581` pass
+but only for `--sync`. `src/main.rs:561` and `src/main.rs:582` pass
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
 `--sync` is set. `run_exact` (`clip_cmd.rs:73-82`) errors with
 `runtime_error("sync requested but no runtime")` if `do_sync` is true and
@@ -198,7 +199,7 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 - `src/ui/mod.rs` — the visual-range multi-select direct call site.
 - `src/commands/cron_cmd.rs` — the second direct call site.
 - `src/logging.rs` — `audit_log`.
-- `src/main.rs` — dispatch (`src/main.rs:546-584`).
+- `src/main.rs` — dispatch (`src/main.rs:547-585`).
 
 ## File / line references
 
@@ -206,4 +207,4 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 - `copy_to_clipboard`: `:40`; `process_snippet`: `:51`
 - `run_exact`: `:68`; `run`: `:99`
 - Clipboard primitives: `src/clipboard.rs:151-205`
-- Dispatch: `src/main.rs:546-584`
+- Dispatch: `src/main.rs:547-585`

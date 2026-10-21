@@ -38,8 +38,15 @@ This document has two jobs:
 
 **snip-it** (`snp`) is a terminal snippet manager: a fast fuzzy-search TUI over
 locally stored snippet libraries, with clipboard delivery, shell integration,
-variable expansion, an AI-agent (MCP) surface, and optional end-to-end
-encrypted multi-device sync against a self-hosted server.
+variable expansion, an AI-agent (MCP) surface, and optional encrypted
+multi-device sync against a self-hosted server.
+
+> **On "end-to-end encryption":** snippet *bodies* are encrypted with
+> AES-256-GCM under an Argon2id-derived key, and the server stores only
+> ciphertext it cannot read. But the API key is sent as a `Bearer` token on
+> every request (`src/sync.rs:291-299`), so anything that observes that token
+> can re-derive the key. The guarantee is transport + at-rest protection, not
+> server-blindness. See [encryption.md](encryption.md).
 
 Four things make it unusual, and they are where most of the engineering
 complexity lives:
@@ -47,16 +54,47 @@ complexity lives:
 1. **Everything is a local TOML file.** There is no database in the client.
    Snippets live in `~/.config/snp/libraries/*.toml`, and every mutation goes
    through an atomic-write + transaction-journal path.
-2. **Sync is peer-merged, never server-wins.** Conflict resolution is
-   `(updated_at, device_id, SHA-256(synced fields))`, and a deletion always
-   beats live content. The server stores ciphertext it cannot read.
-3. **Read-only commands must have zero side effects.** A plain `snp list` may
-   not migrate metadata, create directories, or bump a generation. This
-   distinction is enforced by a separate read-only resolver and is repeatedly
-   load-bearing.
+2. **Sync is peer-merged on the client, never role-dependent.** Conflict
+   resolution is `(updated_at, device_id, SHA-256(synced fields))`, and a
+   deletion always beats live content. The server applies a *different*,
+   weaker rule (see [§7](#7-cross-cutting-invariants)) — the no-resurrection
+   guarantee lives only on the client. The server stores snippet bodies as
+   ciphertext, but the API key reaches it as a bearer token — see the
+   trust-boundary note above.
+3. **Read-only paths are separated by a distinct resolver.** A plain `snp list`
+   may not migrate metadata, create directories, or bump a generation. This is
+   enforced by a separate read-only resolver (`resolve_selector_readonly` /
+   `readonly_library_sources`) and is repeatedly load-bearing. The separation is
+   per *call site*, not per command — and it has known edges: the macOS config
+   migration and the `.corrupt` quarantine files are reachable from otherwise
+   read-only commands. See [selector.md](selector.md) and
+   [commands/validate_cmd.md](commands/validate_cmd.md).
 4. **Locks are kernel-backed and hierarchical.** Cross-process exclusion uses
    `flock`/`LockFileEx`, with a strict acquisition order and a bounded retry
    ladder, so a crashed process degrades to quarantine rather than a hang.
+
+### The three processes
+
+| Process | What it is | Where it runs |
+|---------|-----------|---------------|
+| `snp` | The interactive CLI. One invocation, one user-visible action. | Foreground, in the user's terminal |
+| `snp auto-sync-worker` | A **detached** helper spawned by `snp` after a local mutation. Hidden subcommand, `--state-dir` only, stdio detached from the parent. It holds the `SyncExecutionLock` for the whole cycle. | Background, orphaned from the parent |
+| `snip-sync` | The self-hosted sync server. Tonic gRPC on one listener, the EggServe HTTP/1 leaf (`/health`, `/metrics`) on another. | Usually another machine |
+
+```
+  user terminal                     user machine                     sync host
+  ┌──────────────┐                  ┌──────────────────┐             ┌────────────┐
+  │ snp          │  mutation        │ ~/.config/snp/   │  gRPC+TLS   │ snip-sync  │
+  │  └─ spawn ───┼─────────────────▶│ libraries/*.toml │◀────────────│  tonic     │
+  │              │  detached        │ .transaction/    │  ciphertext │  EggServe  │
+  │              │  worker          │ auto-sync-*.toml │  (AES-GCM)  │  SQLite    │
+  └──────────────┘                  └──────────────────┘             └────────────┘
+```
+
+The worker is the **only** thing that talks to the server on the user's
+behalf without the user asking. It exists so a mutation never blocks on the
+network. The manual `snp sync run` path uses the *same* `SyncExecutionLock`,
+so a manual sync and an auto-sync can never overlap.
 
 ---
 
@@ -72,7 +110,6 @@ snip-it/                 Main crate — binary "snp" (+ a library for binary/tes
   plans/                 Planning registry + roadmaps (plans/registry.md is authoritative)
   scripts/               check.sh, release-check.sh, build_themes.py, installers
   themes/                50 Halloy TOML themes (bundled by build_themes.py)
-  premade-libraries/     Premade snippet library files
   packaging/             Dist packaging; demo/ + assets/ hold demos and screenshots
 snip-proto/              Protobuf schema + checked-in tonic stubs (proto/sync.proto)
 snip-sync/               Sync server — tonic gRPC + EggServe HTTP/1 leaf + SQLite (~11k LOC)
@@ -184,6 +221,7 @@ Every source module, what it owns, and where it is documented in depth.
 
 | Module | Source | Owns | Deep dive |
 |--------|--------|------|-----------|
+| Auto-sync root | `src/auto_sync/mod.rs` | subsystem root, re-exports, policy plumbing | [auto_sync.md](auto_sync.md) |
 | Execution lock | `src/auto_sync/execution_lock.rs` | `SyncExecutionLock` — exclusive ownership of the sync cycle | [auto_sync.md](auto_sync.md) |
 | Worker lock | `src/auto_sync/lock.rs` | backward-compatible re-exports | [auto_sync.md](auto_sync.md) |
 | Worker | `src/auto_sync/worker.rs` | detached worker entry point, holds the lock for the cycle | [auto_sync.md](auto_sync.md) |
@@ -198,8 +236,9 @@ Every source module, what it owns, and where it is documented in depth.
 ### 5.6 Commands
 
 One module per command; the canonical `*Args` struct lives beside its
-handler. `snp data` is an alias group over the same handlers, and the
-single-path `handle_*` functions in `main.rs` keep both spellings identical.
+handler. `snp data` is a **mirror group** over the same handlers — a separate
+Clap subcommand group, not a Clap `alias` — and the single-path `handle_*`
+functions in `main.rs` keep both spellings identical.
 
 | Module | Source | Owns | Deep dive |
 |--------|--------|------|-----------|
@@ -300,6 +339,7 @@ listener.
 | Module | Source | Owns | Deep dive |
 |--------|--------|------|-----------|
 | Schema | `snip-proto/proto/sync.proto` | the `SnippetSync` gRPC service | [proto.md](proto.md) |
+| Crate root | `snip-proto/src/lib.rs` | module wiring, re-exports of the generated stubs | [proto.md](proto.md) |
 | Stubs | `snip-proto/src/snip_proto.rs` | **generated, checked in** — never edit by hand | [proto.md](proto.md) |
 
 ---
@@ -329,6 +369,12 @@ module.
 | Learn the keybindings | `snp keybindings` |
 | Check data health | `snp validate`, `snp doctor` |
 | Check sync health | `snp status` |
+
+> `snp list` and `snp get` never execute snippet commands and never mutate
+> snippet data. `snp validate` and `snp status` are read-only **with respect to
+> snippet data**, but they can still write a `.corrupt` quarantine file or
+> trigger the macOS config migration. See
+> [commands/validate_cmd.md](commands/validate_cmd.md).
 
 ### 6.3 Execute & deliver
 
@@ -370,10 +416,10 @@ module.
 | Shell completions | `snp completions bash\|zsh\|fish\|…` |
 | Update | `snp update` (`--dry-run`, `--locked`) |
 
-> `snp data` is an **alias group**, not a separate implementation: `data
-> validate|backup|restore|repair|status` route to the same handlers as the
-> top-level commands. The single-path `handle_*` functions in `main.rs` keep
-> the two spellings identical.
+> `snp data` is a **mirror group**, not a separate implementation and not a
+> Clap `alias`: `data validate|backup|restore|repair|status` route to the same
+> handlers as the top-level commands. The single-path `handle_*` functions in
+> `main.rs` keep the two spellings identical.
 
 ---
 
@@ -387,28 +433,65 @@ when violated.
 A read-only command may not migrate metadata, create directories, or bump a
 generation. Read paths use `resolve_selector_readonly` and
 `library::readonly_library_sources`; the **mutating** `resolve_selector` and
-`ensure_library_mode()` are for writes only. Picking the wrong one
-reintroduces recovery side effects into plain `snp list`.
+`ensure_library_mode()` must not be reached from a read path. Picking the
+wrong one reintroduces recovery side effects into plain `snp list`.
+
+The split is not "read-only command" vs "mutating command" — it is per
+*call site*. `resolve_exact_target` is in the **mutating** family (it calls
+`resolve_selector`), so `snp run --id`, `snp clip --id`, and `snp edit --id`
+**can** rewrite library metadata even though they are not writing snippet
+data. `snp get` and MCP must never reach it. See [selector.md](selector.md).
 
 ### Gate every local mutation
 
 `gate_mutation_on_interrupted_transactions()` runs before any local mutating
 operation. One journal → auto-rollback. Multiple or incomplete journals →
-refuse and direct the user to `snp repair`. Journals live under
-`<config>/.transaction/`; transaction APIs take `.transaction`, while
-pending-marker APIs take the state dir.
+refuse and direct the user to `snp repair`. Corrupt journals and
+`RecoveryClass::UnsafeFailed` also refuse (fail-closed) **before** the
+one-journal path. Journals live under `<config>/.transaction/`; transaction
+APIs take `.transaction`, while pending-marker APIs take the state dir.
+
+### Writes go through the atomic layer, with named durability classes
+
+`atomic_replace` + `AtomicWriteOptions::for_durability()` is the only
+sanctioned write for user data; `write_private_atomic` (no class argument)
+handles snippet and library files. All four classes apply `mode(0o600)` to
+the temp file; they differ in **fsync** behavior:
+
+| Class | File fsync | Parent-dir fsync |
+|-------|-------------|-----------------|
+| `DurableUserData` | yes | required (hard error) |
+| `SensitiveConfig` | yes (+ symlink rejection) | required (hard error) |
+| `RecoverableMetadata` | no | best-effort (warns, continues) |
+| `EphemeralCoordination` | no | none |
+
+> **Windows hazard.** `parent_dir_sync_durable` returns `Err` on non-Unix
+> (`src/utils/atomic.rs:180-186`), and `atomic_replace` calls
+> `sync_parent_dir` unconditionally (`src/utils/atomic.rs:434`). So on Windows
+> an `atomic_replace` with a durable class **replaces the target and then
+> returns an error** — and never returns the `AtomicWriteReport`. A caller that
+> treats `Err` as "not written" is wrong on Windows.
+> `write_private_atomic` is unaffected (its dir sync is `#[cfg(unix)]`).
 
 ### Locks are kernel-backed and ordered
 
 `flock` (Unix) / `LockFileEx` (Windows) via `process_file_lock.rs` — server
 singleton, auto-sync execution/worker/pending locks. Owned-record +
 PID-reclaim (`create_new` + `ProcessIdentity::observe` + quarantine) for the
-transaction and local-data locks. `Drop` releases **without unlinking**, so
-lock files may hold stale metadata. `kill(pid,0)`: only `ESRCH` proves
-absence — `EPERM`/unknown means live. Linux start tokens use
-`/proc/<pid>/stat` field 22.
+transaction and local-data locks. The **kernel-backed** family releases on
+`Drop` **without unlinking**, so lock files may hold stale metadata; the
+**owned-record** family unlinks only when nonce, PID, **and** start token all
+match. `kill(pid,0)`: only `ESRCH` proves absence — `EPERM`/unknown means
+live. Linux start tokens use `/proc/<pid>/stat` field 22.
 
-### Conflicts are never role-dependent
+> **Known asymmetry.** The local-data lock's reclaim path re-reads and verifies
+> ownership before quarantining; the **transaction lock's does not** — it
+> renames by path alone (`src/transaction.rs:1268`). A reclaimer that judged an
+> owner dead and then renamed can rename away a lock that was reclaimed and
+> re-acquired in the interim, putting two processes inside the transaction
+> critical section. See [process_file_lock.md](process_file_lock.md).
+
+### Client conflicts are never role-dependent
 
 Live conflicts order by `(updated_at, device_id, SHA-256(synced fields))`.
 Deletion beats live content regardless of timestamp (no resurrection).
@@ -416,6 +499,29 @@ Deletion beats live content regardless of timestamp (no resurrection).
 fingerprint — the wire type (`snip_proto::Snippet`, imported as `ProtoSnippet`
 in `src/sync_commands.rs`) carries only `id`, `description`, `command`, `tags`,
 `created_at`, `updated_at`, `device_id`, `deleted`, and `encrypted`.
+
+**This is the CLIENT rule, and it is the only place it holds.** The server
+uses a *different* rule: a SQL last-write-wins upsert on
+`(updated_at, device_id, command, description)` with no SHA-256, where
+`deleted` is an ordinary column (`snip-sync/src/db.rs:646-650`). A newer live
+row therefore **overwrites a tombstone on the server** — the server does not
+guarantee no resurrection. The no-resurrection guarantee lives in the client's
+`choose_version` (`src/sync_commands.rs:1199`), so it only holds if the client
+re-merges locally. See [server.md](server.md) and [sync.md](sync.md).
+
+### Server `snippets.id` is global, and a cross-library push is dropped
+
+`snippets.id` is a global `TEXT PRIMARY KEY`, not per user/library. The upsert
+is guarded by `WHERE excluded.user_id = snippets.user_id AND excluded.library_id
+= snippets.library_id`, so pushing the same content-derived ID under a
+different library updates nothing and inserts nothing — the snippet is dropped
+for that library. The server probes the scope to tell this apart from a normal
+last-write-wins dedupe (`snip-sync/src/db.rs:666-687`) and reports it as
+`UpsertOutcome::ForeignScope` — rejected on the push path, `skipped_ids` on
+the sync path. The write is still discarded, and because `last_sync` only
+advances when `skipped_count == 0`, **a library that contains a content-copy
+of a snippet in another library can never complete a sync until that content
+changes.** See [server.md](server.md) and [sync.md](sync.md).
 
 ### Search has three surfaces and one definition
 
@@ -482,7 +588,9 @@ snp run [--filter FOO] [--sync]
   │         │    ├─ keyboard navigation
   │         │    └─ variable prompting when the command has <name> placeholders
   │         ├─ expand_snippet_command()    → shell expansion
-  │         ├─ Command::new(shell).arg("-c").arg(cmd)
+  │         ├─ Command::new(shell).arg(shell_arg_flag()).arg(cmd)
+  │         │    └─ shell_arg_flag() = "-c" (Unix) / "/C" (Windows);
+  │         │       $SHELL with a /bin/sh fallback — a test asserts both are accepted
   │         ├─ audit_log()                 → structured log
   │         └─ if --sync: sync_commands::run_default_sync()
   │              └─ sync::sync_encrypted()  → gRPC bidirectional merge
@@ -504,12 +612,33 @@ command mutates
   │
   ├─ gate_mutation_on_interrupted_transactions()      ← refuse if journals are broken
   ├─ acquire local-data lock  (owned record + PID reclaim + quarantine)
-  ├─ transaction::begin()      → journal written to <config>/.transaction/
+  ├─ transaction::begin_transaction()  → journal written to <config>/.transaction/
   ├─ stage files → commit → CleaningUp → journal removed
   └─ auto_sync::notify_mutation()
         ├─ write pending marker (monotonic generation)
         └─ schedule_sync()  → debounce → spawn detached worker
 ```
+
+The journal state machine (`src/transaction.rs:307-354`) has nine variants —
+`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `Committed`,
+`RollingBack`, `RolledBack`, `CleaningUp`, `Failed` — with two live paths:
+
+```
+Prepared → Committing{pos}  → CleaningUp{outcome, step} → (journal removed)
+Prepared → RollingBack{pos} → CleaningUp{outcome, step} → (journal removed)
+```
+
+`BackupsDurable`, `Committed`, and `RolledBack` are **legacy** recovery-only
+states (older journals); new code paths do not produce them. `Failed` is
+defined and classified as `RecoveryClass::UnsafeFailed`, but is **never
+written by any production path** — it exists only in the enum, the classifier,
+and tests, so that gate arm is currently unreachable from new code.
+
+`CleaningUp` is interruptible and restartable: each destructive step is
+persisted before it runs, and recovery resumes from the last recorded
+`next_step`. **The journal's absence is the terminal indicator** — a crash
+mid-transaction leaves the journal behind, which is what the mutation gate
+detects.
 
 The local commit always completes before remote work begins. A remote failure
 never rolls back a local commit.
@@ -568,10 +697,14 @@ give defaults.
 51 integration test targets in `tests/`, plus 4 shared modules in
 `tests/support/`: `TestEnvironment` (isolated TempDir + `XDG_CONFIG_HOME`
 override), `RecordingServer`, `EventSink`. Tests never touch the real
-config, keychain, or ports.
+config, keychain, or ports. `src/test_failpoints.rs` supplies the
+`test-support`-gated `SNP_TEST_FAILPOINT` / `SNP_TEST_INJECT_ERROR` seams.
 
-`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on all test commands — never
-remove that seam. `set_var` in tests needs `unsafe` (edition 2024).
+`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on every spawned test command that
+can reach the credential store — never remove that seam. (`pty_integration.rs`
+and the `snp --version` spawn in `transaction_crash_recovery.rs` do not set
+it; neither reaches sync settings.) `set_var` in tests needs `unsafe`
+(edition 2024).
 
 | Class | Execution | Representative targets |
 |-------|-----------|------------------------|
@@ -591,6 +724,15 @@ remove that seam. `set_var` in tests needs `unsafe` (edition 2024).
 `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers`,
 `identity_contract` (and the `process_lock_helper` bin) gate compilation on it.
 
+**Every test seam is `test-support`-gated and compiled out of production
+builds.** The eight are `SNP_TEST_EVENTS_DIR`, `SNP_TEST_FAILPOINT`,
+`SNP_TEST_INJECT_ERROR`, `SNP_TEST_MUTATION_BARRIER_DIR`,
+`SNP_SKIP_WORKER_SPAWN`, `SNP_ALLOW_DIR_FSYNC_FAILURE`,
+`SNP_ALLOW_PLAINTEXT_API_KEY`, and `SNP_TEST_CREDENTIAL_FILE`. Setting an env
+var in a production binary does nothing —
+`scripts/ci/test-production-seams.sh` proves it by grepping the production
+binary for the variable name.
+
 **Test isolation is not optional.** `save_library` derives the mutation gate
 and the local-data-lock path from the **config directory**, not from the target
 library path. Any test that calls it in-process must redirect the config dir —
@@ -607,6 +749,20 @@ Full detail: [test-infrastructure.md](test-infrastructure.md).
 ## Deep-Dive Index
 
 One document per discrete component. Each is written to be audited against.
+
+**Picking a deep dive for a review.** Read the doc for the component you are
+touching, then the "Gotchas" section at its end — that is where the traps live.
+
+| If you are reviewing… | Start with | Then read |
+|----------------------|-------------|-----------|
+| A new subcommand or flag | [cli.md](cli.md), [commands/mod.md](commands/mod.md) | [outcome.md](outcome.md), the command's own doc |
+| Anything that writes snippet data | [persistence.md](persistence.md) | [process_file_lock.md](process_file_lock.md), [utils/atomic.md](utils/atomic.md) |
+| Anything that touches sync | [sync.md](sync.md) | [encryption.md](encryption.md), [auto_sync.md](auto_sync.md), [server.md](server.md) |
+| Search, filtering, or selectors | [selector.md](selector.md) | [sort.md](sort.md), [mcp.md](mcp.md) |
+| The TUI or themes | [tui.md](tui.md) | [ui.md](ui.md), [clipboard.md](clipboard.md) |
+| The agent-facing surface | [mcp.md](mcp.md) | [selector.md](selector.md) (search parity) |
+| Locking, crashes, or recovery | [persistence.md](persistence.md) | [auto_sync.md](auto_sync.md), [process_file_lock.md](process_file_lock.md) |
+| Layer/dependency questions | [core.md](core.md) | `../docs/LOGICAL_LAYERS.md` (enforced by `tests/architecture.rs`) |
 
 ### CLI, core & library
 
@@ -640,7 +796,7 @@ One document per discrete component. Each is written to be audited against.
 | File | Subject |
 |------|---------|
 | [sync.md](sync.md) | Sync client, merge logic, conflict resolution, failure classification |
-| [encryption.md](encryption.md) | AES-256-GCM + Argon2id end-to-end encryption |
+| [encryption.md](encryption.md) | AES-256-GCM + Argon2id snippet-body encryption, and the trust boundary |
 | [config.md](config.md) | Sync settings, keychain API key, TOML cache |
 | [auto_sync.md](auto_sync.md) | Auto-sync policy, worker, debounce, pending markers, locks |
 | [status.md](status.md) | Status snapshot, `snp status`, diagnostic codes |
@@ -719,15 +875,22 @@ One document per discrete component. Each is written to be audited against.
 | File | Subject |
 |------|---------|
 | [`../docs/README.md`](../docs/README.md) | **Index of reference docs** — current contracts vs archived snapshots |
+| [`../docs/USER_GUIDE.md`](../docs/USER_GUIDE.md) | End-user walkthrough: libraries, variables, import, shell integration, sync |
+| [`../docs/COMMANDS.md`](../docs/COMMANDS.md) | Every `snp` subcommand and its flags (`snp --help` is authoritative) |
 | [`../docs/LOGICAL_LAYERS.md`](../docs/LOGICAL_LAYERS.md) | Target layer architecture (enforced by `tests/architecture.rs`) |
 | [`../docs/PUBLIC_API.md`](../docs/PUBLIC_API.md) | Stable public surface of `src/lib.rs` |
 | [`../docs/EXIT_CODES.md`](../docs/EXIT_CODES.md) | Exit codes 0–10 and the `CliOutcome` mapping |
+| [`../docs/CLI_EXITCODE_STREAM_POLICY.md`](../docs/CLI_EXITCODE_STREAM_POLICY.md) | stdout/stderr discipline and easy-to-miss exit cases |
 | [`../docs/COMMAND_CONTRACTS.md`](../docs/COMMAND_CONTRACTS.md) | Per-command behavioral contract |
 | [`../docs/JSON_SCHEMAS.md`](../docs/JSON_SCHEMAS.md) | Machine-readable JSON envelopes |
 | [`../docs/LIBRARY_SCOPE.md`](../docs/LIBRARY_SCOPE.md) | `--library` resolution and the selector vs single-library paths |
 | [`../docs/IDENTITY_CONTRACT.md`](../docs/IDENTITY_CONTRACT.md) | Deterministic snippet IDs, library identity |
 | [`../docs/PERSISTENCE_INVENTORY.md`](../docs/PERSISTENCE_INVENTORY.md) | Every persisted artifact, path, durability class |
+| [`../docs/MCP.md`](../docs/MCP.md) | Read-only stdio MCP tools and protocol |
 | [`../docs/THREAT_MODEL.md`](../docs/THREAT_MODEL.md) | Assets, adversaries, trust boundaries |
+| [`../docs/COMPATIBILITY.md`](../docs/COMPATIBILITY.md) | Backward-compatibility and deprecation rules |
+| [`../docs/SUPPLY_CHAIN_POLICY.md`](../docs/SUPPLY_CHAIN_POLICY.md) | Dependency, license, `cargo-deny` policy |
+| [`../docs/PET_COMPATIBILITY.md`](../docs/PET_COMPATIBILITY.md) | Behavioral matrix vs. `pet` import |
 | [`../AGENTS.md`](../AGENTS.md) | Authoritative verify commands, gotchas, invariants |
 | [`../AGENTS.override.md`](../AGENTS.override.md) | Session pitfall notes |
 | [`../plans/registry.md`](../plans/registry.md) | Authoritative planning status |

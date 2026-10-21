@@ -94,10 +94,15 @@ performs no migration and creates no files or directories, then loads each
 resolved source with `load_library` and concatenates the snippets
 (`mod.rs:136-144`). Folders are unioned without duplicates (`mod.rs:139-142`).
 
-It routes the literal `"all"` through
-`crate::selector::LibraryScope::from_filter_arg` — the single definition of
-the keyword — so `--library all` means the same thing here as on `snp get`,
-exact-mode `run`/`clip`/`edit`, and MCP.
+It delegates the `"all"` scope to
+`crate::library::readonly_library_sources` →
+`LibraryManager::resolve_readonly_sources`
+(`src/library/manager.rs:248-278`), which matches the literal itself and
+returns every visible library. `LibraryScope::from_filter_arg`
+(`src/selector.rs:65`) is the keyword owner for the *selector* paths
+(`snp get`, exact-mode `run`/`clip`/`edit`); both layers agree that `"all"`
+means "every visible library", so `--library all` means the same thing here
+as on `snp get`, exact-mode `run`/`clip`/`edit`, and MCP.
 
 **Consumers**: `snp list` (`src/commands/list_cmd.rs:71`), `snp get` via
 `resolve_selector_readonly` (`src/selector.rs:629`), and the MCP
@@ -285,8 +290,8 @@ CliOutcome::ExecutionFailed` (exit 8, or the child code via
   selection loop, and the canonical explicit-sync path.
 - `src/selector.rs` — `LibraryScope`, `searchable_text`, `exact_selector`,
   `resolve_selector` (mutating) vs `resolve_selector_readonly`.
-- `src/library/manager.rs` — `ensure_library_mode` (mutating) and
-  `readonly_library_sources` (read-only) behind both resolvers.
+- `src/library/manager.rs` — `ensure_library_mode` (mutating, `:163`) and
+  `readonly_library_sources` (read-only, `:784`) behind both resolvers.
 - `src/library/persistence.rs` — `load_library` / `save_library`, the
   gate → lock → atomic-write persistence path.
 - `src/utils/variables.rs` — `parse_variables`, `expand_command`,

@@ -261,10 +261,10 @@ fails with a *wrong* message.
 |---|---|---|
 | `snp get` | `exact_selector()` + `resolve_selector_readonly()` — `src/commands/get_cmd.rs:149,168` | **works** |
 | `snp list` | `commands::load_readonly_snippets()` → `library::readonly_library_sources()` — `src/commands/list_cmd.rs:71` | **works** |
-| MCP (`snippets_list`, `snippets_search`, `snippet_get`) | `LibraryScope::from_filter_arg()` + `resolve_selector_readonly()` — `src/mcp/tools.rs:146,160` | **works** |
+| MCP (`snippets_list`, `snippets_search`, `snippet_get`) | list/search go through `load_snippets()` → `library::readonly_library_sources()` (`src/mcp/tools.rs:64,77,253-254`); `snippet_get` uses `LibraryScope::from_filter_arg()` + `resolve_selector_readonly()` (`src/mcp/tools.rs:146,160`) | **works** |
 | exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` → `resolve_selector()` — `src/selector.rs:604` | **works** |
 | `snp search` | explicit guard — `src/commands/search_cmd.rs:37-44` | **rejected** (see below) |
-| `snp new`, `snp edit` (single-library mutating path) | `commands::get_library_path()` — `src/commands/mod.rs:91-113` | **fails** with `library_not_found` |
+| `snp new`, `snp edit` (single-library mutating path) | `commands::get_library_path()` — `src/commands/mod.rs:91-115` | **fails** with `library_not_found` |
 
 ### Why `snp search --library all` is rejected
 
@@ -279,11 +279,11 @@ cross-library scope has no coherent write target. Before this guard, the
 lookup failed with `"Library 'all' does not exist"`, which was false —
 `all` is the scope keyword, and it *does* work for `snp get`, `snp list`, and
 MCP. `SnipError::Runtime` maps to exit code **1**
-(`src/main.rs:1025-1030`).
+(`src/main.rs:1026-1032`).
 
 ### Why `commands::get_library_path` does not understand `all`
 
-`src/commands/mod.rs:91-113` resolves a library by **filename** and never
+`src/commands/mod.rs:91-115` resolves a library by **filename** and never
 consults `LibraryScope`:
 
 ```rust
@@ -332,7 +332,7 @@ pub struct SearchFields {
 | `Default` (`:98-105`) | ✅ | ❌ | generic default |
 | `description_and_command()` (`:109-114`) | ❌ | ❌ | historical minimum |
 | `fuzzy_default()` (`:117-119`) | ✅ | ❌ | alias of `default()`; used by `SnippetSelector::resolve` |
-| `with_output()` (`:122-127`) | ✅ | ✅ | `snp list --search-output`, MCP `search_output: true` |
+| `with_output()` (`:122-127`) | ✅ | ✅ | the opt-in contract; `snp list --search-output` and MCP `search_output: true` set `include_output` inline (`src/commands/list_cmd.rs:80-83`, `src/mcp/tools.rs:79-82`) |
 
 ### `searchable_text`
 
@@ -374,8 +374,8 @@ surfaces call `shared_fuzzy_matcher().fuzzy_match()` directly on the same
 | Surface | Entry point | Field set | Scorer |
 |---|---|---|---|
 | `snp get --query` | `src/selector.rs:418-419` | `SearchFields::fuzzy_default()` — description + command + tags | `score_fuzzy_matches()` (`:166`) |
-| `snp list --filter` | `src/commands/list_cmd.rs:86-108` | `include_tags: true`, `include_output: --search-output` (`:80-83`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:100`) |
-| MCP `snippets_search` | `src/mcp/tools.rs:74-127` | `include_tags: true`, `include_output: search_output` (`:79-83`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:103`) |
+| `snp list --filter` | `src/commands/list_cmd.rs:86-107` | `include_tags: true`, `include_output: --search-output` (`:80-83`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:100`) |
+| MCP `snippets_search` | `src/mcp/tools.rs:74-127` | `include_tags: true`, `include_output: search_output` (`:79-82`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:103`) |
 
 Consequences a reviewer should hold onto:
 
@@ -388,7 +388,7 @@ Consequences a reviewer should hold onto:
   `deleted`), and credentials / keychain data are **never** searchable on
   any surface.
 - `snp list --filter` filters out snippets with empty searchable text
-  before matching (`src/commands/list_cmd.rs:94-97`).
+  before matching (`src/commands/list_cmd.rs:94-99`).
 - MCP `snippets_search` additionally applies the `tags` filter
   (`src/mcp/tools.rs:91-93`) — the CLI has no equivalent flag.
 
@@ -448,7 +448,7 @@ resolver produced it.
 | `snp get` | `src/commands/get_cmd.rs:149,168` | `resolve_selector_readonly` | primary / named / all |
 | `snp list` | `src/commands/list_cmd.rs:71` | `load_readonly_snippets` → `readonly_library_sources` | primary / named / all |
 | MCP `snippet_get` | `src/mcp/tools.rs:145-160` | `resolve_selector_readonly` | primary / named / all |
-| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` — `src/selector.rs:604`, called from `src/main.rs:503,549,639` | `resolve_selector` (mutating) | primary / named / all |
+| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` — `src/selector.rs:604`, called from `src/main.rs:504,550,638` | `resolve_selector` (mutating) | primary / named / all |
 | `snp search` | `src/commands/search_cmd.rs:37-44` | interactive TUI | primary / named only |
 
 `snp get` reads the requested `--resolution` policy
@@ -491,15 +491,15 @@ MCP `snippet_get` requires **exactly one** of `id` (case-sensitive),
 | `src/selector.rs:24-26` | `shared_fuzzy_matcher()` — the single `SkimMatcherV2` instance |
 | `src/selector.rs:32-44` | `contains_ignore_ascii_case()` — allocation-free ASCII substring check |
 | `src/commands/get_cmd.rs:149,168` | `snp get` builds a selector and resolves read-only |
-| `src/commands/list_cmd.rs:65-108` | `snp list` read-only load + inline fuzzy filter |
+| `src/commands/list_cmd.rs:65-107` | `snp list` read-only load + inline fuzzy filter |
 | `src/commands/search_cmd.rs:37-44` | The `snp search --library all` rejection |
-| `src/commands/mod.rs:91-113` | `get_library_path` — mutating, single-library, no `all` |
+| `src/commands/mod.rs:91-115` | `get_library_path` — mutating, single-library, no `all` |
 | `src/commands/mod.rs:127-147` | `load_readonly_snippets` — read-only multi-library load |
 | `src/library/manager.rs:248-289` | `resolve_readonly_sources` — the library-layer scope resolver |
 | `src/library/model.rs:154-161` | `library_not_found` — the message `get_library_path` produces for `all` |
-| `src/library/model.rs:213-223` | `validate_library_name` — `all` is reserved |
+| `src/library/model.rs:179-225` | `validate_library_name` — `all` is reserved |
 | `src/mcp/tools.rs:74-160` | MCP `snippets_search` / `snippet_get` |
-| `src/sort.rs:113-228` | `rank_snippets` — the `Relevance` ranking used by the query path |
+| `src/sort.rs:116-231` | `rank_snippets` — the `Relevance` ranking used by the query path |
 | `src/output.rs:93-110` | `for_scoring()` — the 512-byte bound on the `output` field |
 
 ---

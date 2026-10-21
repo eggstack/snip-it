@@ -4,11 +4,21 @@
 
 ## Overview
 
-End-to-end encryption for snippet sync (`src/encryption.rs`, 418 lines,
+Encrypted sync for snippet bodies (`src/encryption.rs`, 418 lines,
 sync-client layer). Snippet **bodies** are encrypted with the user's API key
 before transmission; the server stores and relays only ciphertext for those
-fields and never sees snippet content. Key derivation uses Argon2id; bulk
-encryption uses AES-256-GCM.
+fields. Key derivation uses Argon2id; bulk encryption uses AES-256-GCM.
+
+> **Trust boundary — read this before calling it "end-to-end".** The API key
+> *does* leave the client: it is sent as `Bearer <api_key>` in the gRPC
+> `authorization` metadata on every request (`src/sync.rs:291-299`), and the
+> server reads it from there (`snip-sync/src/lib.rs:1058`). The server stores
+> only an Argon2 hash of the key in `users.api_key`, so it cannot recover the
+> key from the database — but anything that can observe the bearer token (the
+> server process itself, a TLS-terminating proxy, a request log) can re-derive
+> the same Argon2id key and decrypt any payload it holds or relays. The
+> protection this design actually provides is **transport confidentiality and
+> at-rest obfuscation of snippet bodies**, not server-blindness.
 
 **Scope boundary — what is *not* encrypted.** `encrypt_snippet`
 (`src/sync.rs:1264-1294`) encrypts only
@@ -18,8 +28,8 @@ field. The routing and bookkeeping fields `id`, `created_at`, `updated_at`,
 `device_id`, and `deleted` are sent as **plaintext** proto fields — the server
 needs them for merge ordering and deletion tombstones. `output` is not in
 `ProtoSnippet` at all (local-only). So "the server never sees plaintext" means
-snippet *content*, not snippet *metadata*; do not assume `device_id` or
-`updated_at` are confidential.
+snippet *content* is not stored or relayed in the clear, not snippet
+*metadata*; do not assume `device_id` or `updated_at` are confidential.
 
 The merge, conflict resolution, and library-orchestration logic live in
 [sync.md](sync.md); the config and keychain plumbing live in
@@ -210,9 +220,12 @@ different keys → different hashes).
 
 - **Argon2 parameter changes break all existing encrypted payloads** — version
   the format first; never silently retune memory/time/parallelism.
-- **The API key never leaves the client.** The server sees ciphertext only;
-  errors and logs must never contain key material. `SyncSettings::drop`
-  zeroizes the key and `Debug` prints `[REDACTED]`
+- **The API key does leave the client.** It travels as a `Bearer <api_key>`
+  gRPC metadata header on every request (`src/sync.rs:291-299`), so the server
+  can re-derive the payload key; the confidentiality this module provides is
+  transport + at-rest, not server-blindness (see the trust-boundary note in the
+  Overview). Errors and logs must never contain key material.
+  `SyncSettings::drop` zeroizes the key and `Debug` prints `[REDACTED]`
   (`src/config/sync_settings.rs:134-169`).
 - **No AAD binds the ciphertext to context** (accepted for current use);
   integrity comes from the GCM tag over ciphertext+nonce.

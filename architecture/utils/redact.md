@@ -160,7 +160,7 @@ written to the durable auto-sync status file.
 ### Logging
 
 ```rust
-// src/logging.rs:295-316
+// src/logging.rs:314-334
 fn redact_command(command: &str) -> String {
     if command.len() > 256 {
         return "<very-long-command>".to_string();
@@ -188,7 +188,7 @@ layer** (`src/error.rs:190`, `:194`), so every consumer of the rendered error
 is covered — not just the logging path:
 
 ```rust
-// src/error.rs:186-206 (shape)
+// src/error.rs:181-208 (shape)
 SnipError::Command { command, args, source } => {
     let command = crate::utils::redact::redact_secrets(command);
     let args_display: Vec<String> = args.iter().map(|a| {
@@ -205,6 +205,12 @@ SnipError::Command { command, args, source } => {
 Each argument is redacted and then truncated to 37 characters plus `...` if
 it exceeds 40.
 
+> **Only `SnipError::Command` is redacted at the Display layer.**
+> `SnipError::Runtime { message, detail }` (`src/error.rs:209-215`) and
+> `SnipError::SyncFailure { kind, detail }` (`src/error.rs:216-222`) print
+> their `detail` **verbatim** — redaction does not reach them. Never put a
+> credential in a `runtime_error(msg, detail)`; the detail is echoed as-is.
+
 ### Consumer summary
 
 | Consumer | Site | Policy |
@@ -219,7 +225,7 @@ Backups do **not** use `redact_secrets`. They use a separate, line-oriented
 function in the backup module:
 
 ```rust
-// src/commands/backup_archive.rs:358-375
+// src/commands/backup_archive.rs:358-374
 pub(crate) fn redact_sync_config(content: &str) -> SnipResult<String>
 ```
 
@@ -254,9 +260,9 @@ key/value level. The message path only has to make a string safe to read.
 |------|------|
 | `src/utils/redact.rs` | The three regexes and `redact_secrets` |
 | `src/auto_sync/status.rs:26-27` | Re-export of the canonical function; `sanitize_message` at `:291-297` |
-| `src/logging.rs:295-316` | `redact_command` — whole-command replacement policy |
-| `src/error.rs:186-206` | `SnipError::Command` display-time redaction |
-| `src/commands/backup_archive.rs:358-375` | The separate backup redactor |
+| `src/logging.rs:314-334` | `redact_command` — whole-command replacement policy |
+| `src/error.rs:181-208` | `SnipError::Command` display-time redaction |
+| `src/commands/backup_archive.rs:358-374` | The separate backup redactor |
 | `src/commands/backup_cmd.rs:208` | Where the backup redactor is applied |
 
 ## Invariants
@@ -266,7 +272,9 @@ key/value level. The message path only has to make a string safe to read.
   bug.
 - **Credentials are never logged.** Every path that persists a
   human-readable string — the log file, the auto-sync status file, the
-  rendered error — passes it through the redactor first.
+  rendered `SnipError::Command` — passes it through the redactor first.
+  `SnipError::Runtime` and `SnipError::SyncFailure` are the exception: their
+  `detail` is printed verbatim, so a credential must never be placed there.
 - **Redaction is applied at the boundary, not at the source.** The
   auto-sync status file, the log record, and the `Display` output are the
   boundaries; the redactor is not sprinkled through the call graph.

@@ -49,7 +49,8 @@ deadline; local filesystem operations are not force-cancelled.
 
 ## Module layout (`src/auto_sync/`)
 
-Eleven modules (`src/auto_sync/mod.rs:5-14`):
+Eleven files — ten submodules declared at `src/auto_sync/mod.rs:5-14` plus
+`mod.rs` itself:
 
 | Module | Responsibility (one line) |
 |--------|---------------------------|
@@ -155,7 +156,7 @@ attempts inside one sync operation.
 ## Durable pending state (`pending.rs`, `pending_lock.rs`)
 
 `auto-sync-pending.toml` (`PENDING_FILE_NAME`, `src/auto_sync/pending.rs:8`),
-schema v2 (`SCHEMA_VERSION`, `:11`):
+schema v2 (`SCHEMA_VERSION`, `:9`):
 
 ```toml
 schema = 2
@@ -339,7 +340,7 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
    }
    ```
 
-   (`src/auto_sync/worker.rs:324-333`), returned by
+   (`src/auto_sync/worker.rs:323-332`), returned by
    `preflight_check(state_dir, observed) -> Result<PendingState, PreflightError>`
    (`:373-395`). The typed error keeps three semantically different conditions
    apart:
@@ -397,8 +398,8 @@ status file carries the retry state.
 
 | Lock | File | Acquired by | Guards | Acquisition mode |
 |------|------|-------------|--------|------------------|
-| `SyncExecutionLock` | `auto-sync-execution.lock` | The detached worker (whole cycle); manual `snp sync`, explicit `--sync`, cron | All actual sync work — no two syncs can run concurrently | Worker: `try_acquire` (`AlreadyHeld` → cheap exit, `src/auto_sync/execution_lock.rs:143-150`). Foreground: `wait_acquire`, 30 s default (`:152-159`, timeout from `:24`) |
-| `WorkerLock` (legacy) | `auto-sync-worker.lock` | **No production path acquires it** | Nothing at runtime — inspection/diagnostics only | `try_acquire_worker` (`src/auto_sync/execution_lock.rs:277-289`) and `wait_acquire_worker` (`:291-298`) exist but are reached only through the `lock.rs` re-export shim (`src/auto_sync/lock.rs:3-7`); the only live consumers are the status snapshot (`src/status_snapshot.rs:310-330`) and the `snp sync repair` permission-hardening path (`src/commands/sync_cmd.rs:900-902`) |
+| `SyncExecutionLock` | `auto-sync-execution.lock` | The detached worker (whole cycle); manual `snp sync`, explicit `--sync`, cron | All actual sync work — no two syncs can run concurrently | Worker: `try_acquire` (`AlreadyHeld` → cheap exit, `src/auto_sync/execution_lock.rs:143-147`). Foreground: `wait_acquire`, 30 s default (`:152-159`, timeout from `:24`) |
+| `WorkerLock` (legacy) | `auto-sync-worker.lock` | **No production path acquires it** | Nothing at runtime — inspection/diagnostics only | `try_acquire_worker` (`src/auto_sync/execution_lock.rs:277-281`) and `wait_acquire_worker` (`:291-298`) exist but are reached only through the `lock.rs` re-export shim (`src/auto_sync/lock.rs:3-7`); the only live consumers are the status snapshot (`src/status_snapshot.rs:310-330`) and the `snp sync repair` permission-hardening path (`src/commands/sync_cmd.rs:900-902`) |
 | `PendingTxnGuard` | `auto-sync-pending.lock` | Parent mutation commands and the worker | The pending marker's read-modify-write section only | `wait_acquire`, 10 s timeout (`src/auto_sync/pending_lock.rs:91-98`, `src/auto_sync/pending.rs:17`) |
 
 ### Acquisition order
@@ -464,8 +465,9 @@ Manual sync and cron keep their existing (unbounded) timeout behaviour.
 ## Trigger matrix (`notification.rs` + call sites)
 
 `notify_mutation(kind, origin)` resolves policy and calls
-`notify_local_mutation` (`src/auto_sync/notification.rs:57-68`), which performs
-one generation increment and one scheduling attempt
+`notify_local_mutation` (`src/auto_sync/notification.rs:57-68`), which
+delegates to `notify_local_mutation_with_dir` and performs one generation
+increment and one scheduling attempt
 (`src/auto_sync/notification.rs:83-133`). Results
 (`AutoSyncNotificationResult`):
 
@@ -518,7 +520,7 @@ observe-then-clear shape in `sync_cmd.rs`.
 `status_snapshot::capture_snapshot()` (which resolves them through
 `auto_sync::paths` with `process_alive` liveness probes) and maps each
 `StatusDiagnostic` to a dotted code via `map_snapshot_diagnostic`
-(`src/commands/doctor_cmd.rs:70-130`):
+(`src/commands/doctor_cmd.rs:70-134`):
 
 - `compat.sync.checked` (Info) summary carrying the top-level sync state.
 - `sync.config.load_failed` / `sync.config.not_configured` — configuration
@@ -532,9 +534,12 @@ observe-then-clear shape in `sync_cmd.rs`.
   by **substring match on the diagnostic message**, which the snapshot builds as
   `"Sync requires attention: {last_failure_class}"`. Because
   `last_failure_class` is only ever one of `transient`, `configuration`,
-  `local_failure`, `internal`, only three of the seven attention codes are
-  reachable through this path. See [status.md](status.md#diagnostic-codes) for
-  the full mapping.
+  `local_failure`, `internal`, only **two** of the **six** distinct attention
+  codes are reachable through this path: `sync.attention.configuration` (and
+  the fallback for `transient` / `internal`) and `sync.attention.local_persistence`.
+  `sync.attention.authentication`, `sync.attention.credential_store`,
+  `sync.attention.conflict`, and `sync.attention.partial` are unreachable.
+  See [status.md](status.md#diagnostic-codes) for the full mapping.
 
 See [status.md](status.md) for the `snp status` projection over the same
 artifacts.

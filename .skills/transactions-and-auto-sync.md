@@ -31,16 +31,20 @@ this before changing either.
 Prepared → Committing{next_commit_position} → CleaningUp{outcome, next_step} → journal removed
 Prepared → RollingBack{next_rollback_position} → CleaningUp{...} → journal removed
 Committing → CommittedLocal{pending} → CleaningUp → journal removed (restore pending-finalization path)
-Prepared → Failed(error_message) (persisted terminal; recovery refuses without repair)
 ```
 
 - Absence of a journal is the true terminal indicator; terminal states are never persisted.
 - `BackupsDurable`, `Committed`, `RolledBack` are legacy recovery-only states (older journals); new code paths don't produce them.
+- `Failed(error_message)` is defined and classified (`RecoveryClass::UnsafeFailed`) but is
+  **never written by any production path** — it currently exists only in the enum
+  definition, the classifier, and tests. The `UnsafeFailed` gate arm is therefore
+  unreachable from new code. Do not describe it as a "persisted terminal".
 - `Committing{next_commit_position}` uses completed-position semantics: progress is
   persisted only AFTER each verified atomic write, never before.
 - Rollback restores files in reverse order with hash verification after each action.
 - Interruptible states for recovery: `Prepared`, `BackupsDurable`, `Committing`,
-  `CommittedLocal`, `RollingBack`, `CleaningUp` (the latter two legacy states included).
+  `CommittedLocal`, `RollingBack`, `CleaningUp`. (The legacy states are
+  `BackupsDurable`, `Committed`, `RolledBack` — not `RollingBack`/`CleaningUp`.)
 - Restore uses the explicit sequence: `begin_transaction` →
   `advance_to_backups_durable` → `advance_to_committing` → `advance_to_committed_local`
   → `commit_transaction`.
@@ -55,8 +59,11 @@ Acquisition order: **`LocalDataLock` → `TransactionLock` → writes**. Never i
   `ESRCH` proves absence.
 - Ownership verification compares the OBSERVED start token at `existing.pid` against
   the persisted token (prevents misclassifying a live owner as PID reuse).
-- `Drop` releases the kernel lock WITHOUT unlinking the file; unlink only happens when
-  nonce AND start_token both match (prevents old owners deleting replacement locks).
+- `Drop` behavior differs by family. The **kernel-backed** `ProcessFileLock` releases
+  the lock WITHOUT unlinking the file (the file may hold stale metadata — it is
+  diagnostic only). The **owned-record** locks (`TransactionLock`, `LocalDataLock`)
+  unlink via `remove_owned_lock_file`, which requires nonce, **PID**, AND start
+  token to match (prevents old owners deleting replacement locks).
 - Malformed lock files are quarantined (`.quarantine.<uuid>`), never silently deleted.
 - `save_library_internal()` skips gate+lock for internal callers already holding locks.
 

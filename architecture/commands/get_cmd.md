@@ -21,15 +21,15 @@ scripts and CI, where the TUI is unavailable (see the tty guard in
 
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
-| `--id` | `Option<String>` | – | Exact snippet UUID (case-sensitive; conflicts with the other three selectors) |
+| `--id` | `Option<String>` | – | Exact snippet ID (case-sensitive; conflicts with the other three selectors) |
 | `--description-exact` | `Option<String>` | – | Exact description (case-insensitive) |
 | `--command-exact` | `Option<String>` | – | Exact command text (case-insensitive) |
 | `-q/--query` | `Option<String>` | – | Fuzzy query |
 | `-l/--library` | `Option<String>` | – | Scope: name or `all` |
-| `--field` | `Option<GetField>` | – | Single-field output (`command`/`description`/`id`/`tags`; conflicts with json/raw/expanded) |
+| `--field` | `Option<GetField>` | – | Single-field output (`command`/`description`/`id`/`tags`; conflicts with json/raw/expanded — runtime guard) |
 | `--raw` | bool | `false` | Stored bytes, no expansion, no trailing newline (conflicts with `--expanded`) |
 | `--expanded` | bool | `false` | Non-interactive expansion via defaults/`--var` (conflicts with `--raw`) |
-| `--json` | bool | `false` | Pretty `GetJsonOutput` (conflicts with raw/expanded/field) |
+| `--json` | bool | `false` | Pretty `GetJsonOutput` (conflicts with raw/expanded/field — runtime guard) |
 | `--resolution` | `ResolutionPolicy` | `Unique` | Multi-match policy (`unique`/`first`/`all`) |
 | `--var KEY=VALUE` | `Option<Vec<String>>` | – | Repeatable explicit assignments |
 
@@ -81,7 +81,7 @@ only by the exact-selector `run`/`clip`/`edit` paths.
 `get` never calls `gate_mutation_on_interrupted_transactions()`; it takes
 no lock and never saves.
 
-`src/main.rs:895` classifies `Commands::Get(_)` under
+`src/main.rs:896` classifies `Commands::Get(_)` under
 `StartupRecoveryPolicy::SuppressReadOnly` + `StartupServices::Minimal`, so
 startup recovery is suppressed and no network service is started.
 
@@ -89,9 +89,11 @@ startup recovery is suppressed and no network service is started.
 
 `--library all` is supported by `get`. The literal `"all"` is mapped by
 `LibraryScope::from_filter_arg` (`src/selector.rs:65`) inside
-`exact_selector` (`src/selector.rs:586`), the single definition of the
-keyword, so it means the same thing as on `snp list`, exact-mode
-`run`/`clip`/`edit`, and MCP.
+`exact_selector` (`src/selector.rs:586`) — the keyword owner for the
+selector paths — and `resolve_selector_readonly` then hands the same
+literal to `readonly_library_sources`
+(`src/library/manager.rs:278`), so it means the same thing as on
+`snp list`, exact-mode `run`/`clip`/`edit`, and MCP.
 
 Resolution semantics of `resolve_selector_readonly`
 (`src/selector.rs:623-674`):
@@ -127,7 +129,7 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - Usage errors (no selector, conflicting modes, bad `--var`) →
   `runtime_error` (exit 1/2 family).
 - JSON serialization failure → `runtime_error` (`get_cmd.rs:224-227`).
-- `src/main.rs:841-856` returns the `CliOutcome` directly.
+- `src/main.rs:842-857` returns the `CliOutcome` directly.
 
 ## Key invariants
 
@@ -136,8 +138,10 @@ None. No `notify_mutation`, no runtime, no explicit sync.
   MCP `search_output`); folders/favorite/sync metadata never searchable.
 - ID match is case-sensitive; description/command are case-insensitive
   — shared with run/clip/edit/MCP via `exact_selector`.
-- `--raw`/`--field` are byte-exact for scripting; default strips escape
-  sequences (`\<`/`\>`) for display.
+- `--raw` is byte-exact for scripting (no trailing newline); `--field`
+  suppresses the trailing newline too, but `--field command` without `--raw`
+  still strips escape sequences (`\<`/`\>`) for display. The default mode
+  strips them too.
 - Non-interactive expansion never prompts and never invents values.
 - Never route this command through `resolve_selector` — the mutating
   resolver reintroduces recovery side effects.
@@ -149,10 +153,11 @@ None. No `notify_mutation`, no runtime, no explicit sync.
   exit code, not the payload.
 - `--field` and `--raw` suppress the trailing newline; `--json` and
   `--expanded` do not. Scripts that compare bytes must pick the right mode.
-- `--expanded` and `--json` use *different* expansion routines
-  (`expand_without_prompt` vs `expand_command`); required variables with
-  no assignment stay verbatim in the `--expanded` output but would prompt
-  in the interactive path.
+- `--expanded` and `--json` both expand with the *non-interactive*
+  `expand_without_prompt` routine (`get_cmd.rs:279`), never
+  `expand_command` (the interactive path in `src/utils/variables.rs:644`);
+  required variables with no assignment stay verbatim in the `--expanded`
+  output but would prompt in the interactive path.
 
 ## Key Files
 
@@ -165,12 +170,12 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - `src/library/manager.rs` — `readonly_library_sources`, the read-only
   scope resolver.
 - `src/outcome.rs` — `CliOutcome` and the exit-code table.
-- `src/main.rs` — dispatch (`src/main.rs:841-856`).
+- `src/main.rs` — dispatch (`src/main.rs:842-857`).
 
 ## File / line references
 
 - `GetArgs`: `src/commands/get_cmd.rs:16`; `GetField`: `:55`
 - `GetJsonOutput`: `:68`; `run`: `:96`; `output_match`: `:198`
-- `expand_without_prompt`: `:279`; tests: `:332-434`
+- `expand_without_prompt`: `:279`; tests: `:332-433`
 - Selector: `src/selector.rs` (`exact_selector` `:579`,
   `resolve_selector_readonly` `:623`)

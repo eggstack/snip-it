@@ -41,11 +41,11 @@ pub struct BackupArgs {
 | `--format <FORMAT>` | `BackupFormat` | `directory` | Currently the only variant is `Directory` (`backup_archive.rs:15-17`). **The argument is accepted but ignored** — `run()` discards it with `let _ = format;` (`src/commands/backup_cmd.rs:49`). |
 | `--json` | flag | off | Emit a machine-readable JSON summary on **stdout**. The human summary always goes to **stderr**. |
 
-The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:260-261` dispatches to the same `handle_backup` (`src/main.rs:410-419`, `src/main.rs:828-830`).
+The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:260-261` dispatches to the same `handle_backup` (`src/main.rs:411-420`, `src/main.rs:829-831`).
 
 ## Control flow
 
-`run()` (`src/commands/backup_cmd.rs:42-255`) executes in this order:
+`run()` (`src/commands/backup_cmd.rs:42-260`) executes in this order:
 
 1. **Config directory must exist.** A missing config directory is a hard error (`src/commands/backup_cmd.rs:51-56`) — backup does not create the config tree.
 2. **Canonicalize the config directory** (`:57-59`). This becomes the containment root for every source file.
@@ -65,10 +65,10 @@ The `data` spelling is an alias, not a separate command: `DataCommands::Backup(B
    - `<config>/libraries.toml` if present (`:106-111`);
    - `<config>/usage.toml` only when `--include-usage` (`:112-119`);
    - `<config>/sync.toml` only when `--include-sync-state` (`:120-133`).
-8. **Validate every collected file**: canonical containment under the config root (`:101`, `:108`, `:115`, `:123` — `backup_archive.rs:257-280`), symlink/non-regular-file rejection (`backup_archive.rs:200-223`), and TOML well-formedness for library files and the index (`:144-150`, `backup_archive.rs:283-291`).
-9. **Build the manifest** (`:151-223`) and sort the file list by path (`:223`) so the manifest is deterministic.
+8. **Validate every collected file**: canonical containment under the config root (`:101`, `:108`, `:115`, `:123` — `backup_archive.rs:257-280`), symlink/non-regular-file rejection (`backup_archive.rs:200-223`), and TOML well-formedness for library files (`:144-150`) and for the index (`:151-155`) (`backup_archive.rs:283-291`).
+9. **Build the manifest entries** (`:156-222`) and sort the file list by path (`:223`) so the manifest is deterministic.
 10. **Write atomically** (`:228`): `atomic_write_backup` writes every file plus `manifest.toml` into the staging directory and then renames staging → final (`backup_archive.rs:295-333`). On any error the staging directory is removed (`:329-331`), so a failed backup never leaves a half-written final directory.
-11. **Emit the report** (`:229-255`).
+11. **Emit the report** (`:229-258`).
 
 ### What is included and excluded by default
 
@@ -118,7 +118,7 @@ pub struct BackupManifestEntry {
 | `snip_it_version` | The `snp` version that produced the backup (`crate::diagnostics::version()`). |
 | `layout` | Always `"directory"`. `restore` rejects anything else (`restore_cmd.rs:249-254`). |
 | `files[].path` | Backup-relative path, e.g. `libraries/work.toml`. |
-| `files[].kind` | `library`, `index`, `usage`, or `sync_config` (`BackupEntryKind`, `backup_archive.rs:22-38`). Unknown kinds fail deserialization. |
+| `files[].kind` | `library`, `index`, `usage`, or `sync_config` (`BackupEntryKind`, `backup_archive.rs:22-27`). Unknown kinds fail deserialization. |
 | `files[].size` | Exact byte length of the stored artifact. |
 | `files[].sha256` | Lowercase hex SHA-256 of the stored bytes (`sha256_hex`, `backup_archive.rs:226-236`). |
 
@@ -138,7 +138,7 @@ pub struct BackupManifestEntry {
   sync.toml               # only with --include-sync-state (redacted)
 ```
 
-Paths inside the manifest are validated against absolute paths, `..` traversal, NUL bytes, and reserved Windows device names (`BackupRelativePath::parse`, `backup_archive.rs:40-191`).
+Paths inside the manifest are validated against absolute paths, `..` traversal, NUL bytes, and reserved Windows device names — by `restore`'s own `validate_backup_path` (`restore_cmd.rs:604-725`). The shared `BackupRelativePath::parse` (`backup_archive.rs:40-197`) implements the same rules but is **not called** by either command — it is only `pub use`-re-exported by `backup_cmd.rs:5-7`.
 
 ### Archive destinations
 
@@ -151,7 +151,7 @@ The destination is always a **directory**. `--output` names the final directory;
 | `--json` | stdout | `{"backup_dir", "schema", "version", "file_count", "total_bytes"}` (`src/commands/backup_cmd.rs:229-242`). |
 | default | stderr | `Backup created: <dir>`, schema, version, file count, total size, then one line per manifest entry: `<kind> (<path>): <size> bytes, sha256:<first 16 hex chars>` (`:243-257`). The digest is **truncated to 16 hex characters** in the human output; the full digest is in the manifest. |
 
-`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:410-419`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:46-70` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
+`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:411-420`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:46-70` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
 
 ## Interaction with the transaction journal and locks
 

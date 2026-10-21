@@ -30,7 +30,7 @@ consumes the synced subset of the fields is in [sync.md](sync.md). The
 
 ## Key types
 
-### `Snippet` — `src/library/model.rs:29-60`
+### `Snippet` — `src/library/model.rs:30-60`
 
 ```rust
 pub struct Snippet {
@@ -54,9 +54,9 @@ pub struct Snippet {
   normalization assigns it.
 - Serde aliases keep `pet` compatibility: `[[snippets]]`/`[[Snippets]]`,
   `Description`, `Command`, `Tag` (`model.rs:15-22, 31-59`,
-  `tests.rs:20-54`).
+  `tests.rs:49-84`).
 
-### `Snippets` — `src/library/model.rs:14-22`
+### `Snippets` — `src/library/model.rs:15-22`
 
 ```rust
 pub struct Snippets {
@@ -66,7 +66,7 @@ pub struct Snippets {
 ```
 
 Serializes to `[[snippets]]` table array; `snp` always writes the
-lowercase `snippets` form (`tests.rs:57-73`).
+lowercase `snippets` form (`tests.rs:86-103`).
 
 ### `LibraryConfig` / `LibraryMeta` — `src/library/model.rs:65-103`
 
@@ -181,12 +181,12 @@ whitespace, or CRLF — the user gets no error, they get mangled snippets
 later.
 
 The specific historical trap: `quote_strings_containing_backslashes` once
-ran after serialization. Its regex could not distinguish a TOML
-triple-quoted multi-line string from an ordinary double-quoted string, and
-its single-quoted output preserved escape sequences like `\t` as a literal
-two-character pair. The helper survives only for callers that hand-write
-TOML — **it must never be applied to serialized output**
-(`src/utils/toml_helpers.rs:12-20`).
+ran after serialization. That older implementation could not distinguish a
+TOML triple-quoted multi-line string from an ordinary double-quoted string,
+and its single-quoted output preserved escape sequences like `\t` as a
+literal two-character pair. The helper survives only for callers that
+hand-write TOML — **it must never be applied to serialized output**
+(`src/utils/toml_helpers.rs:12-20, 181-193`).
 
 ### Golden-corpus rules
 
@@ -306,15 +306,15 @@ pub fn new() -> SnipResult<Self>                                  // manager.rs:
 pub fn ensure_library_mode(&mut self) -> SnipResult<()>           // manager.rs:163
 pub fn migrate_from_single_file(&mut self) -> SnipResult<()>      // manager.rs:181
 pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> // manager.rs:363
-pub fn delete_library(&mut self, filename: &str) -> SnipResult<()>      // manager.rs:418
-pub fn set_primary(&mut self, filename: &str) -> SnipResult<()>         // manager.rs:488
+pub fn delete_library(&mut self, filename: &str) -> SnipResult<()>      // manager.rs:429
+pub fn set_primary(&mut self, filename: &str) -> SnipResult<()>         // manager.rs:499
 pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()>
 pub fn link_server_library(&mut self, filename: &str, server_id: &str) -> SnipResult<()>
 pub fn relink_server_library(&mut self, filename: &str, server_id: &str, last_sync: Option<i64>) -> SnipResult<()>
 pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()>
 pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()>
 pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()>
-pub fn add_server_library(&mut self, server_name: &str, server_id: &str) -> SnipResult<PathBuf> // manager.rs:637
+pub fn add_server_library(&mut self, server_name: &str, server_id: &str) -> SnipResult<PathBuf> // manager.rs:648
 ```
 
 ### `ensure_library_mode()` — the MUTATING path
@@ -350,12 +350,12 @@ pub fn resolve_readonly_sources(
 
 pub fn readonly_library_sources(
     library: Option<&str>,
-) -> SnipResult<Vec<ResolvedLibrarySource>>             // manager.rs:773-776
+) -> SnipResult<Vec<ResolvedLibrarySource>>             // manager.rs:784-787
 ```
 
 `readonly_library_sources` is the process-level entry point: it constructs a
 `LibraryManager` and delegates to `resolve_readonly_sources`. It performs no
-migration and creates no files or directories (`manager.rs:768-776`).
+migration and creates no files or directories (`manager.rs:779-787`).
 
 `resolve_readonly_sources` never calls `ensure_library_mode`, never creates
 directories or files, and never rewrites metadata
@@ -386,11 +386,11 @@ used by `snp list`), `selector::resolve_selector_readonly()` (`snp get`), MCP
 > (`src/commands/list_cmd.rs:65-77`), which routes `"all"` through
 > `LibraryScope::from_filter_arg` so `--library all` means the same thing
 > here as on `snp get`, exact-mode `run`/`clip`/`edit`, and MCP
-> (`src/commands/mod.rs:117-133`).
+> (`src/commands/mod.rs:117-126`).
 >
 > `snp search` rejects `--library all` outright, because the interactive
 > selector edits and deletes within a single library file
-> (`src/commands/search_cmd.rs:32-45`).
+> (`src/commands/search_cmd.rs:32-44`).
 
 ### Index inspection
 
@@ -410,18 +410,18 @@ generic finding DSL was introduced (`manager.rs:291-297`).
   file is a no-op.
 - **Create**: validates name, rejects case-insensitive duplicates and
   existing files, writes `snippets = []` starter via `write_library_file`,
-  first library becomes primary (`manager.rs:363-412`).
+  first library becomes primary (`manager.rs:363-423`).
 - **Delete**: saves config *before* removing the file (crash leaves a
   recoverable orphan file, never a stale index pointer); promotes another
   library when primary is removed, preferring a server-linked one
-  (`manager.rs:418-485`). Restores the pre-delete config if file removal
+  (`manager.rs:429-496`). Restores the pre-delete config if file removal
   fails.
 - Every mutating method calls `gate_mutation()` + acquires the
   local-data lock first; `save_config()` writes `libraries.toml` via
-  `write_private_atomic` + cache invalidation (`manager.rs:755-765`).
+  `write_private_atomic` + cache invalidation (`manager.rs:766-776`).
 - `gate_mutation()` runs *before* any in-memory mutation, so a refused call
   leaves the manager clean for a retry after `snp repair`
-  (`manager.rs:621-631`).
+  (`manager.rs:636-642`).
 
 ### Config loading — fail closed
 
@@ -486,7 +486,7 @@ cross-library scope keyword in
 | `src/library/model.rs` | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `ResolvedLibrarySource`, `PrimaryState`, `LibraryIndexInspection`, and the pure helpers `library_not_found` / `find_orphaned_ids` / `validate_library_name` |
 | `src/library/persistence.rs` | `load_library`, `save_library`, `save_library_internal`, `backup_library`, `normalize_snippet_ids`, `deterministic_legacy_id`, `deterministic_duplicate_id` |
 | `src/library/manager.rs` | `LibraryManager` registry/primary behavior, `ensure_library_mode`, and the canonical read-only resolver `resolve_readonly_sources` / `readonly_library_sources` |
-| `src/library/tests.rs` | 96 in-crate unit tests: round-trip, `pet` compatibility, ID normalization, name validation |
+| `src/library/tests.rs` | 97 in-crate unit tests: round-trip, `pet` compatibility, ID normalization, name validation |
 | `src/migration.rs` | `SchemaVersion`, `get_schema_version`, `write_schema_version` (must use `toml::Table`) |
 | `src/utils/atomic.rs` | `write_private_atomic` / `atomic_replace` — the write primitives the save path uses |
 | `src/utils/config.rs` | `get_config_dir`, `derive_sync_state_dir`, and the `#[cfg(test)]` `ScopedConfigDir` override |

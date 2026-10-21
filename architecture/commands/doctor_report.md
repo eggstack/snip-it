@@ -17,7 +17,7 @@ pub enum DiagnosticReportFormat {
 }
 ```
 
-(`doctor_report.rs:8-14`.) The CLI flag is `--report` with `default_value = "human"` (`src/commands/doctor_cmd.rs:46-47`).
+(`doctor_report.rs:9-14`.) The CLI flag is `--report` with `default_value = "human"` (`src/commands/doctor_cmd.rs:46-47`).
 
 | Format | Stream | Producer |
 |---|---|---|
@@ -108,7 +108,7 @@ so `src/main.rs` can name it as `commands::doctor_cmd::DiagnosticReportFormat` w
 | `src/commands/doctor_report.rs` | This module: `DiagnosticReportFormat`, `emit_human_report`. |
 | `src/commands/doctor_cmd.rs` | The check orchestration that produces the report. |
 | `src/diagnostics.rs` | `DoctorReport`, `CompatibilityDiagnostic`, `ImportDuplicate`, `NormalizationRecord`, `diagnostic_counts`. |
-| `src/commands/pet_analysis.md` | The analysis layer behind the file-analysis report. |
+| `architecture/commands/pet_analysis.md` | The analysis layer behind the file-analysis report. |
 | `architecture/diagnostics.md` | The shared diagnostic model reference. |
 | `architecture/commands/doctor_cmd.md` | The command-side reference. |
 

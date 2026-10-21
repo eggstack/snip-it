@@ -104,7 +104,7 @@ the TUI `process_fn` callback.
 `Done(_)`. Usage metadata is recorded only when it is true
 (`src/commands/run_cmd.rs:175-184`), so a failed run records nothing.
 
-### `SelectionOutcome` — `src/lib.rs:147-158`
+### `SelectionOutcome` — `src/lib.rs:147-157`
 
 `#[doc(hidden)]`, `#[non_exhaustive]`. The raw result of the shared
 TUI selection loop (`run_snippet_selection`, `src/commands/mod.rs:338`).
@@ -136,7 +136,7 @@ The crate's single error type. `#[non_exhaustive]`, `Debug`.
 
 ```rust
 impl From<io::Error> for SnipError            // src/error.rs:238-255
-impl From<crate::encryption::CryptoError> for SnipError  // src/error.rs:316-…
+impl From<crate::encryption::CryptoError> for SnipError  // src/error.rs:316-331
 pub type SnipResult<T> = Result<T, SnipError>;           // src/error.rs:314
 ```
 
@@ -144,7 +144,7 @@ pub type SnipResult<T> = Result<T, SnipError>;           // src/error.rs:314
 (`src/error.rs:238-255`). `From<CryptoError>` maps both encryption and
 decryption failures onto `SyncFailureKind::EncryptionFailed` /
 `DecryptionFailed` — both classify as `FailureClass::Internal`, so the retry
-policy is preserved (`src/error.rs:316-330`).
+policy is preserved (`src/error.rs:316-331`).
 
 **No credentials are carried in `SnipError`.** Error messages are built from
 operation names, paths, and upstream details only; API keys and keychain
@@ -183,7 +183,7 @@ The mapping to `FailureClass` is a total, variant-by-variant match in
 `FailureClass::from_error()` (`src/sync_failure.rs:36-60`) — no string
 matching for typed sync failures. `SnipError::Runtime` falls back to
 substring heuristics over the combined message
-(`src/sync_failure.rs:61-90`).
+(`src/sync_failure.rs:61-104`).
 
 ## Error → outcome → exit code
 
@@ -193,11 +193,11 @@ There is **no** `From<SnipError> for CliOutcome` conversion, and no
 ```text
 command handler returns Err(SnipError)
         │
-        └──► main(): eprintln!("error: {e}"); exit 1      (src/main.rs:1025-1031)
+        └──► main(): eprintln!("error: {e}"); exit 1      (src/main.rs:1026-1032)
 
 command handler returns Ok(CliOutcome::X)
         │
-        └──► main(): exit(X.exit_code())                  (src/main.rs:1019-1023)
+        └──► main(): exit(X.exit_code())                  (src/main.rs:1019-1024)
 ```
 
 - A handler that wants a **specific** code (3, 4, 5, 6, 7, 9) returns the
@@ -208,7 +208,7 @@ command handler returns Ok(CliOutcome::X)
   parsing — no command returns it.
 - Exit code **10** (`UNSAFE_REPAIRS`) is **not** a `CliOutcome` variant. It
   is produced by the direct `exit_on_repair_status()` path in `main.rs`
-  (`src/main.rs:375-387`), which calls `std::process::exit` inside the
+  (`src/main.rs:375-388`), which calls `std::process::exit` inside the
   handler.
 
 `PersistenceFailed` deliberately maps to code 1 (`GENERAL_ERROR`) rather than
@@ -222,8 +222,8 @@ distinct user-facing category (`src/outcome.rs:81`, `docs/EXIT_CODES.md`).
 | Tier | Items | Meaning |
 |------|-------|---------|
 | **Supported public API** | `pub mod config`, `pub mod error`, `pub mod outcome`, `pub mod sort`; root re-exports `SnipError`, `SnipResult`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `load_library`, `save_library`, and the atomic-write helpers (`src/lib.rs:27-30`, `:72-80`) | Stable for external consumers |
-| **`#[doc(hidden)]` public** | `pub mod auto_sync`, `commands`, `logging`, `mcp`, `process_file_lock`, `selector`, `sync`, `ui`, `usage`, `transaction`; `SnippetData`, `ProcessResult`, `SelectionOutcome` (`src/lib.rs:33-51`, `:68-70`, `:104-131`, `:147-158`) | `pub` so the binary and integration tests can reach them, but **not** part of the supported external API |
-| **`pub(crate)` internal** | `mod clipboard`, `diagnostics`, `encryption`, `library`, `local_data`, `migration`, `output`, `status_snapshot`, `sync_commands`, `sync_failure`, `test_failpoints`, `utils`; `pub(crate) use snip_proto as proto` (`src/lib.rs:54-70`, `:53-70`) | Not reachable outside the crate. `library` is internal, but its types are re-exported at the root |
+| **`#[doc(hidden)]` public** | `pub mod auto_sync`, `commands`, `logging`, `mcp`, `process_file_lock`, `selector`, `sync`, `ui`, `usage`, `transaction`; `SnippetData`, `ProcessResult`, `SelectionOutcome` (`src/lib.rs:33-51`, `:67-69`, `:104-131`, `:147-157`) | `pub` so the binary and integration tests can reach them, but **not** part of the supported external API |
+| **`pub(crate)` internal** | `mod clipboard`, `diagnostics`, `encryption`, `library`, `local_data`, `migration`, `output`, `status_snapshot`, `sync_commands`, `sync_failure`, `test_failpoints`, `utils`; `pub(crate) use snip_proto as proto` (`src/lib.rs:54-70`, `:43`) | Not reachable outside the crate. `library` is internal, but its types are re-exported at the root |
 
 `transaction` is feature-dependent: `pub(crate) mod transaction` without the
 `test-support` feature (`src/lib.rs:65-66`), and `#[doc(hidden)] pub mod
@@ -242,7 +242,7 @@ and the stable-vs-internal policy live in **[public_api.md](public_api.md)**.
 - `src/library/model.rs` — `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, read-only resolution types
 - `src/lib.rs` — crate root: module tiers, root re-exports, `SnippetData` / `ProcessResult` / `SelectionOutcome`
 - `src/commands/mod.rs` — `get_snippet_data` (`:243`), `run_snippet_selection` (`:338`)
-- `src/main.rs` — the `Err(SnipError)` → exit 1 boundary (`:1025-1031`) and the exit-10 path (`:375-387`)
+- `src/main.rs` — the `Err(SnipError)` → exit 1 boundary (`:1026-1032`) and the exit-10 path (`:375-388`)
 
 ## Invariants
 
@@ -275,7 +275,7 @@ and the stable-vs-internal policy live in **[public_api.md](public_api.md)**.
 - **`ProcessResult::is_done()` is the usage-recording gate.** A `Failed`
   child writes no usage metadata.
 - **Exit 10 has no `CliOutcome` variant.** It only exists in
-  `exit_on_repair_status` (`src/main.rs:375-387`); a caller that tries to
+  `exit_on_repair_status` (`src/main.rs:375-388`); a caller that tries to
   match it on `CliOutcome` will not find it.
 - **`SnipError::Runtime` classification is substring-based** and therefore
   looser than the typed `SyncFailure` path — prefer `sync_failure()` for

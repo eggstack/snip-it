@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- **Architecture deep-dives re-verified against source**: Every one of the 61
+  `architecture/` component docs was audited line-by-line against the current
+  tree, and ~1,500 stale `file:line` citations and superseded claims were
+  corrected. `architecture/overview.md` gained a runtime-topology section
+  (the `snp` / detached `auto-sync-worker` / `snip-sync` process map), a
+  review-oriented "picking a deep dive" table, and explicit statements of the
+  invariants that were previously only implied: the server's weaker merge rule
+  versus the client's, the cross-library `snippets.id` drop, the
+  readonly-vs-mutating resolver split, the durability-class matrix, and the
+  nine-variant transaction state machine.
+- **Security claims corrected where they overclaimed**: the "end-to-end
+  encryption" wording was narrowed — snippet bodies are encrypted, but the API
+  key reaches the server as a bearer token on every request, so the guarantee
+  is transport + at-rest protection, not server-blindness. The crate
+  description, `.skills/encryption-module.md`, and `AGENTS.md` were aligned.
+- **`.skills/` durability and transaction rules corrected**: the durability
+  table's per-class fsync behavior was wrong in three of four rows; the
+  `Failed` journal state is not a "persisted terminal" (no production path
+  writes it); `RollingBack`/`CleaningUp` are not legacy states; and the
+  owned-record lock family unlinks on nonce **+ PID + start token**, not
+  nonce + start token.
+- **`AGENTS.md` cross-library push note updated**: the server now probes scope
+  and reports `UpsertOutcome::ForeignScope` rather than dropping the write
+  silently — but the write is still discarded, and `last_sync` does not
+  advance while `skipped_count > 0`, so a content-duplicated library cannot
+  complete a sync until the content changes.
 - **Agent-facing docs re-verified against source**: Audited every `.skills/`
   file, `architecture/` deep-dive, and `docs/` contract against the current
   codebase, and corrected claims that no longer held. Notable corrections:

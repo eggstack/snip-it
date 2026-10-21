@@ -31,7 +31,8 @@ Related: [sync_cmd.md](sync_cmd.md), [register_cmd.md](register_cmd.md),
 | `premade update <name>` | `u` | `run_update(name, &RUNTIME)` (`premade_cmd.rs:225`) | `GetPremadeLibrary` |
 
 `premade get` takes an optional positional `name`; the literal `all`
-selects the batch path (`src/main.rs:215`).
+selects the batch path (the check is at `src/main.rs:742`; the optional
+positional is declared at `src/main.rs:215`).
 
 ## The credential guard
 
@@ -115,7 +116,7 @@ Delegates to `sync_commands::run_premade_sync(&settings, runtime)`
 - and returns `sync_failure(PremadePartialFailure)` if **any** item
   failed (`:575-580`).
 
-Unlike `premade get --all`, `premade sync` **does** fail the command on a
+Unlike `premade get all`, `premade sync` **does** fail the command on a
 partial failure.
 
 ### `run_search` (`premade_cmd.rs:179`)
@@ -146,7 +147,7 @@ importing.
 
 ## The TOCTOU-safe canonical-path write
 
-`LibraryManager::save_premade_library` (`src/library/manager.rs:706-740`)
+`LibraryManager::save_premade_library` (`src/library/manager.rs:717-751`)
 is the only write path for the premade cache, and it is where the
 path-traversal defence lives:
 
@@ -198,7 +199,7 @@ Two independent checks:
    with the canonicalised premade directory. This is the check that
    survives a symlink pointing outside the cache.
 
-Note the asymmetry: `premade_exists` (`src/library/manager.rs:698-700`)
+Note the asymmetry: `premade_exists` (`src/library/manager.rs:709-711`)
 is a plain `Path::exists()` probe and does no canonicalisation — it is
 only used to decide whether to download, never to authorise a write.
 
@@ -208,25 +209,25 @@ only used to decide whether to download, never to authorise a write.
 |------------|-------|--------|
 | `premade list` | read-only (remote) | none |
 | `premade search` | read-only (remote) | none |
-| `premade get` | mutating (cache only) | `premade/.toml` |
-| `premade get all` | mutating (cache only) | `premade/.toml` for missing entries |
-| `premade sync` | mutating (cache only) | `premade/.toml` for missing entries |
-| `premade update` | mutating (cache only) | `premade/.toml` |
+| `premade get` | mutating (cache only) | `premade/<name>.toml` |
+| `premade get all` | mutating (cache only) | `premade/<name>.toml` for missing entries |
+| `premade sync` | mutating (cache only) | `premade/<name>.toml` for missing entries |
+| `premade update` | mutating (cache only) | `premade/<name>.toml` |
 
 The premade cache is outside the journaled snippet dataset, so there is
 no transaction gate (`gate_mutation_on_interrupted_transactions`) and no
 library-index write. `save_premade_library` does take the local-data
-lock (`acquire_local_data_lock`, `src/library/manager.rs:707`).
+lock (`acquire_local_data_lock`, `src/library/manager.rs:718`).
 
 ## Tokio runtime
 
 All five handlers take `&tokio::runtime::Runtime` and use
 `runtime.block_on(...)` for the RPCs. `RUNTIME` is the global `LazyLock`
-runtime in `src/main.rs:22-27`; dispatch is at `src/main.rs:738-751`.
+runtime in `src/main.rs:22-27`; dispatch is at `src/main.rs:739-752`.
 
 Startup policy: `Commands::Premade { .. }` uses
 `StartupRecoveryPolicy::Allow` and `StartupServices::Logging`
-(`src/main.rs:958-960`).
+(`src/main.rs:960`).
 
 ## Auto-sync trigger
 
@@ -236,7 +237,7 @@ imports it, and the import path is what notifies.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1025-1031`).
+exit **1** (`src/main.rs:1026-1032`).
 
 | Situation | Result |
 |-----------|--------|
@@ -244,7 +245,7 @@ exit **1** (`src/main.rs:1025-1031`).
 | `SyncClient::create` failure | `runtime_error("Failed to create sync client")` → exit 1 |
 | RPC failure | `runtime_error` naming the RPC → exit 1 |
 | `premade get` with no name, or `get all` reached as a name | `runtime_error("Invalid usage")` → exit 1 |
-| `premade get --all` with per-item failures | exit 0; failures printed inline |
+| `premade get all` with per-item failures | exit 0; failures printed inline |
 | `premade sync` with any per-item failure | `sync_failure(PremadePartialFailure)` → exit 1 |
 | `premade update` cache read error (not `NotFound`) | `io_error("read premade cache")` → exit 1 |
 
@@ -257,9 +258,9 @@ There is no `CliOutcome` on these paths.
 | `src/commands/premade_cmd.rs` | `require_sync_credentials` + the five handlers |
 | `src/sync_commands.rs:503-584` | `run_premade_sync` — the batch download helper |
 | `src/sync.rs` | `SyncClient` premade RPCs + `require_api_key` |
-| `src/library/manager.rs:698-740` | `premade_exists` / `save_premade_library` (traversal + canonical containment) |
+| `src/library/manager.rs:709-751` | `premade_exists` / `save_premade_library` (traversal + canonical containment) |
 | `src/config/sync_settings.rs` | `get_sync_settings` (non-failing load) |
-| `src/main.rs:209-225`, `:738-751` | Clap wiring and dispatch |
+| `src/main.rs:209-225`, `:739-752` | Clap wiring and dispatch |
 
 ## Invariants
 
@@ -276,7 +277,7 @@ There is no `CliOutcome` on these paths.
 
 - **`premade get all` is the positional literal `all`**, while
   `premade get <name>` where `<name>` is missing is a usage error.
-- **`premade get --all` swallows per-item failures; `premade sync` does
+- **`premade get all` swallows per-item failures; `premade sync` does
   not.** The two batch paths differ in exit behavior.
 - **`premade update` reports line-set differences, not a unified diff** —
   a line that moved counts as one added and one removed.

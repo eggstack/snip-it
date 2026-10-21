@@ -4,8 +4,8 @@
 
 ## Overview
 
-`src/commands/keybindings_cmd.rs` (80 lines) prints the static TUI
-keybindings reference: 74 `println!` lines covering the Normal-mode,
+`src/commands/keybindings_cmd.rs` (85 lines) prints the static TUI
+keybindings reference: 79 `println!` lines covering the Normal-mode,
 Insert-mode, theme-picker, and variable-prompt bindings.
 
 It is **documentation-as-code** — a hand-maintained mirror of the
@@ -19,10 +19,10 @@ integration — a different key surface).
 ## CLI surface
 
 `snp keybindings` (alias `k`) — `src/main.rs:105-107`, dispatched at
-`src/main.rs:673-675`.
+`src/main.rs:674-675`.
 
 No flags, no arguments, no JSON mode. `run() -> SnipResult<()>` prints
-the 74-line reference to stdout and returns `Ok(())`.
+the 79-line reference to stdout and returns `Ok(())`.
 
 ## This reference is hand-maintained and can drift
 
@@ -31,20 +31,27 @@ There is **no compile-time or test-time link** between
 literal `println!` list; the TUI is a `match key.code` tree. Nothing
 checks that they agree.
 
-**Real drift was found in all three of the following when this document
-was audited against the current source.** They are documented here
+**The command was rewritten upstream (it is now 85 lines, not 80).** The
+drifts that an earlier audit of this document recorded — insert-mode
+`j/k : alternative navigation`, theme-picker `gg : first theme`, the
+"Normal Mode comes first" ordering, and the undocumented `Tab` toggle —
+are **all fixed in the current text**: the reference now states that the
+selector starts in INSERT mode, prints `(any printable character is typed
+into the filter — j/k are literal here)`, prints `Ctrl+g : first theme`,
+and lists `Tab : toggle list display mode` in both Normal and Insert
+mode.
+
+The divergences that **remain today** are these. They are documented here
 because the *source* of truth is the TUI, and the command's own text is
 what is wrong:
 
 | The command prints | What the TUI actually does | Site |
 |--------------------|---------------------------|------|
-| `Insert Mode:` → `j/k   : alternative navigation` | **Wrong.** The insert-mode match has no `Char('j')` or `Char('k')` arm at all. `j` and `k` are ordinary printable characters and are **typed into the filter text** like any other letter. | `src/ui/mod.rs:1695-1762` |
-| `Theme Picker` → `gg    : first theme` | **Wrong.** The theme picker binds **`Ctrl+g`** for "first theme". `g` is not bound in the picker; only the normal-mode snippet list has a `gg` sequence. | `src/ui/mod.rs:1502` |
-| The reference is ordered `Normal Mode:` first | The TUI loop **starts in insert mode** (`insert_mode = true` at loop entry), so insert mode is the mode a user is actually in when the list first appears. Normal mode is entered by pressing `Esc`. | `src/ui/mod.rs:598` |
-
-A fourth gap: **`Tab` toggles the list display mode** in both normal and
-insert mode (`src/ui/mod.rs:1758-1760`, `:1796-1798`), and the reference
-does not mention it at all.
+| `Normal Mode:` → `y : copy and quit (copies without quitting in search mode)` | **Incomplete.** The reference documents only the normal-mode copy. In **visual mode** `y` copies the *commands of every row in the range*, `strip_escape_sequences`-processed and joined with `\n`, and leaves visual mode. The reference never mentions the range copy. | `src/ui/mod.rs:1623-1673` |
+| `Normal Mode:` — no `Ctrl+C` line | **Missing.** `Ctrl+C` exits the snippet selector (it is only listed under the *Variable Prompt*'s normal mode). | `src/ui/mod.rs:1566-1569` |
+| `Normal Mode:` — no `Enter` line | **Missing.** `Enter` in normal mode runs the selected snippet. | `src/ui/mod.rs:1772-1775` |
+| `Theme Picker` → `e/q : cancel & revert to previous theme` and `Esc : leave filter (back to picker normal mode)` | **Incomplete.** `Esc` cancels the picker **when the picker is already in normal mode** — it is bound together with `q`. The reference's `Esc` line describes only the filter-mode behaviour. | `src/ui/mod.rs:1438-1449` (`q`/`Esc`), `:1371-1375` (filter-mode `Esc`) |
+| `Insert Mode:` → `/ : start search` | **Wrong.** The insert-mode match has no `/` arm: `/` is an ordinary printable character typed into the filter. `/` is a **normal-mode** key. | `src/ui/mod.rs:1695-1762`, normal-mode `/` at `:1881-1887` |
 
 Treat the table above as the authority. When the TUI changes, this
 command's text must change with it — and until it does, `snp keybindings`
@@ -67,7 +74,7 @@ is wrong.
 | `Ctrl+b` / `Ctrl+u` / `PageUp` | page up (10 rows) | `:1688-1693` |
 | `v` | visual mode (character) | `:1574-1583` |
 | `V` | visual mode (line — to the end of the list) | `:1585-1594` |
-| `y` | copy and quit | `:1780-1788` (single) / `:1623-1673` (visual range) |
+| `y` | copy and quit (in visual mode: copy the range) | `:1780-1788` (single) / `:1623-1673` (visual range) |
 | `d` | delete the selected snippet (confirmed with `y`) | `:1789-1795`, confirmation at `:1557-1564` |
 | `i` | insert mode | `:1776-1779` |
 | `e` | open the theme picker | `:1891-1895` |
@@ -99,7 +106,10 @@ The insert-mode match has exactly these arms:
 | `Tab` | toggle the list display mode | `:1758-1760` |
 
 **There is no `j` / `k` navigation in insert mode** — they are inserted
-as text. The reference's `j/k : alternative navigation` line is wrong.
+as text. The current reference says so explicitly:
+`(any printable character is typed into the filter — j/k are literal here)`.
+There is likewise **no `/` arm in insert mode** — `/` is typed into the
+filter like any other printable character.
 
 ### List display mode
 
@@ -128,8 +138,11 @@ Opened with `e` in normal mode.
 | `e` / `q` | cancel & revert to the previous theme | `:1438-1461` |
 | `Esc` | leave the filter (back to picker normal mode) | `:1371-1375` |
 
-**`gg` is not bound in the theme picker** — only `Ctrl+g` is. The
-reference's `gg : first theme` line is wrong.
+**`gg` is not bound in the theme picker** — only `Ctrl+g` is, and the
+current reference now prints `Ctrl+g : first theme` correctly. Note that
+`Esc` is bound **twice**: in the picker's *filter* mode it leaves the
+filter (`:1371-1375`), but in the picker's *normal* mode it cancels the
+whole picker and reverts the theme, exactly like `q` (`:1438-1449`).
 
 In the picker's *filter* (insert) mode, `Esc` commits the typed filter
 and returns to picker normal mode (`:1371-1375`), `j`/`k` still move
@@ -139,9 +152,9 @@ between themes (`:1376-1399`), `Backspace` edits the filter
 
 ### Variable prompt (`src/ui/variables.rs`)
 
-A separate modal (`src/ui/mod.rs:7`, `:17`) that opens after a snippet
-with variables is selected. It is modal with INS/NOR modes and **starts
-in INS** (`src/ui/variables.rs:261`).
+A separate modal (declared at `src/ui/mod.rs:7`, re-exported at `:17`)
+that opens after a snippet with variables is selected. It is modal with
+INS/NOR modes and **starts in INS** (`src/ui/variables.rs:261`).
 
 Insert mode (`handle_insert_key`, `src/ui/variables.rs:508-594`):
 
@@ -165,7 +178,7 @@ Normal mode (`handle_normal_key`, `src/ui/variables.rs:596+`):
 | `l` / `→` | move the cursor right | `:633-637` |
 | `0` / `$` | move to the start / end of the field | `:638-647` |
 | `j` / `↓` | next variable | `:658-672` |
-| `k` / `↑` | previous variable | `:673-691` |
+| `k` / `↑` | previous variable | `:673-684` |
 | `Tab` | next variable (wraps) | `:685` |
 | `x` / `Delete` | delete the character at the cursor | `:648-652` |
 | `Backspace` | delete the character before the cursor | `:653-657` |
@@ -212,7 +225,7 @@ None. `snp keybindings` never touches the global `RUNTIME`
 
 Startup policy: `Commands::Keybindings` uses
 `StartupRecoveryPolicy::SuppressConfiguration` with
-`StartupServices::Logging` (`src/main.rs:981-991`).
+`StartupServices::Logging` (`src/main.rs:982-992`).
 
 ## Auto-sync trigger
 
@@ -228,13 +241,13 @@ success.
 
 | Path | Role |
 |------|------|
-| `src/commands/keybindings_cmd.rs` | The 74-line reference text |
+| `src/commands/keybindings_cmd.rs` | The 79-line reference text |
 | `src/ui/mod.rs` | The snippet-list TUI — normal/insert/theme-picker bindings |
 | `src/ui/variables.rs` | The variable prompt — its own INS/NOR bindings |
 | `src/clipboard.rs` | `copy_to_clipboard_auto` — the direct copy path |
 | `src/commands/clip_cmd.rs:40-49` | `copy_to_clipboard` — the auditing path that is bypassed |
 | `src/logging.rs` | `audit_log` |
-| `src/main.rs:105-107`, `:673-675` | Clap wiring and dispatch |
+| `src/main.rs:105-107`, `:674-675` | Clap wiring and dispatch |
 
 ## Invariants
 
@@ -264,10 +277,10 @@ update this command in the same PR:
 
 ## Gotchas
 
-- **Three of the printed descriptions are factually wrong today**
-  (insert-mode `j/k`, theme-picker `gg`, and the implied "you start in
-  normal mode"). The TUI is the source of truth.
-- **`Tab` (list display mode) is undocumented** in the reference.
+- **Five divergences between the printed text and the TUI are live right
+  now** (visual-mode range copy, missing normal-mode `Ctrl+C`, missing
+  normal-mode `Enter`, the theme picker's `Esc`-cancels, and insert-mode
+  `/`). The TUI is the source of truth — see the table above.
 - **`snp keybindings` is not a machine-readable contract** — it is prose
   in `println!` form, so it cannot be validated automatically.
 - **This is the only place the full interactive binding set is

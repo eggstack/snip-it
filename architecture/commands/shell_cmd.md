@@ -136,11 +136,11 @@ Every helper restores the prior buffer on any failure path.
 ## The shell-syntax validation used by `snp doctor`
 
 `snp doctor --check-shell <shell>` is implemented by `check_shell_init`
-(`src/commands/doctor_cmd.rs:1084-1194+`):
+(`src/commands/doctor_cmd.rs:1084-1225`):
 
 1. Map the shell name to `ShellType`; an unknown name produces a
    `compat.shell_init.<shell>.unknown` **Warning** diagnostic suggesting
-   bash, zsh, or fish (`:1085-1101`).
+   bash, zsh, or fish (`:1089-1101`).
 2. Generate the init code with the same `shell_cmd::generate_*` functions
    the CLI uses (`:1104-1108`) — the doctor and the CLI can never
    disagree about the text.
@@ -177,7 +177,7 @@ None. `snp shell init` never touches the global `RUNTIME`
 
 Startup policy: `Commands::Shell { .. }` uses
 `StartupRecoveryPolicy::SuppressConfiguration` with
-`StartupServices::Logging` (`src/main.rs:981-991`).
+`StartupServices::Logging` (`src/main.rs:982-992`).
 
 ## Auto-sync trigger
 
@@ -202,7 +202,7 @@ they cannot fail the `snp shell init` process.
 |------|------|
 | `src/commands/shell_cmd.rs` | `ShellIntegration`, `ShellType`, the three generators, `run` |
 | `src/main.rs:159-163`, `:228-236`, `:770-772` | Clap wiring and dispatch |
-| `src/commands/doctor_cmd.rs:1084-1194` | `check_shell_init` — the syntax validation |
+| `src/commands/doctor_cmd.rs:1084-1225` | `check_shell_init` — the syntax validation |
 | `src/commands/select_cmd.rs:61-115` | `snp select --output-file` — the lossless transport contract |
 | `src/commands/new_cmd.rs` | `snp new --command-stdin` — the stdin creation contract |
 
@@ -212,8 +212,10 @@ they cannot fail the `snp shell init` process.
   inspects and sources explicitly.
 - **Lossless transport.** Temp file + `read -d ''` for selection (stdout
   would add or mangle newlines); stdin pipe for creation (never `eval`).
-- **Exit code 4 (cancelled) is load-bearing.** Helpers restore the buffer
-  only on this code — keep `select_cmd`'s `Cancelled → 4` mapping stable.
+- **Exit code 4 (cancelled) is load-bearing.** Only that code is treated as
+  a clean "user cancelled" outcome (the helper restores the buffer and
+  returns 0); every other non-zero code restores the buffer *and*
+  propagates the code. Keep `select_cmd`'s `Cancelled → 4` mapping stable.
 - **The four public function names are identical across bash, zsh, and
   fish.**
 - **The doctor validates the same bytes the CLI prints** — both call

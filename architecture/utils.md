@@ -27,7 +27,7 @@ pointer.
 
 | Module | File | Lines | Role | Visibility | Deep dive |
 |--------|------|-------|------|------------|-----------|
-| `atomic` | `atomic.rs` | 699 | Durability-classed atomic file writes | `pub mod` | [utils/atomic.md](utils/atomic.md) |
+| `atomic` | `atomic.rs` | 704 | Durability-classed atomic file writes | `pub mod` | [utils/atomic.md](utils/atomic.md) |
 | `config` | `config.rs` | 303 | Config-directory resolution, path helpers, macOS migration | `pub mod` | [utils/config.md](utils/config.md) |
 | `process` | `process.rs` | 166 | Process-liveness checks, ownership-verified lock-file removal | `pub mod` | [utils/process.md](utils/process.md) |
 | `redact` | `redact.rs` | 72 | Best-effort secret redaction for display/log paths | `pub mod` | [utils/redact.md](utils/redact.md) |
@@ -77,7 +77,7 @@ dependencies.
 
 | Module | Consumer layers (representative call sites) |
 |--------|----------------------------------------------|
-| `config` | library (`src/library/manager.rs:15`), commands (`src/commands/backup_cmd.rs:13`, `restore_cmd.rs:7`, `repair_cmd.rs:863`, `doctor_cmd.rs:491`, `validate_cmd.rs:540`), diagnostics (`src/status_snapshot.rs:146`), UI (`src/ui/theme.rs:20`), usage (`src/usage.rs:21`), logging (`src/logging.rs:72`) |
+| `config` | library (`src/library/manager.rs:15`), commands (`src/commands/backup_cmd.rs:13`, `restore_cmd.rs:7`, `repair_cmd.rs:874`, `doctor_cmd.rs:491`, `validate_cmd.rs:540`), diagnostics (`src/status_snapshot.rs:146`), UI (`src/ui/theme.rs:20`), usage (`src/usage.rs:21`), logging (`src/logging.rs:72`) |
 | `variables` | commands (`src/commands/get_cmd.rs:11`, `src/commands/mod.rs:276`, `src/commands/import_cmd.rs:219`, `src/commands/doctor_cmd.rs:312`), UI (`src/ui/mod.rs:36-38`, `src/ui/variables.rs`) |
 | `toml_helpers` | commands (`src/commands/mod.rs:37`, `src/commands/pet_analysis.rs:5`), library (`src/library/persistence.rs:10`, `src/library/manager.rs:16`), config (`src/config/sync_settings.rs:16`) |
 | `atomic` | library (`src/library/persistence.rs`, `src/library/manager.rs`), config (`src/config/sync_settings.rs`), commands (`src/commands/{mod,select_cmd,import_cmd,restore_cmd,backup_archive}.rs`), auto-sync (`src/auto_sync/{pending,status}.rs`), transactions (`src/transaction.rs`), sync merge (`src/sync_commands.rs`), migration (`src/migration.rs`), UI (`src/ui/theme.rs`), usage (`src/usage.rs`) |
@@ -138,7 +138,8 @@ for O(1) membership probes. The only consumer is the TUI syntax highlighter
 ### Config Paths
 
 **File**: `src/utils/config.rs` (303 lines — path resolution, macOS migration,
-and the `#[cfg(test)]`-only `ScopedConfigDir` override).
+and the `#[cfg(any(test, feature = "test-support"))]`-only `ScopedConfigDir`
+override).
 
 Full reference: [utils/config.md](utils/config.md).
 
@@ -152,7 +153,7 @@ Full reference: [utils/config.md](utils/config.md).
 | `derive_sync_state_dir()` | Parent of the sync config path (`:227-232`) |
 | `get_legacy_macos_config_dir()` | Old macOS path if it exists (`:123-134`) |
 | `migrate_macos_config_dir()` | Move entries from the old path to the new one (`:166-210`) |
-| `ScopedConfigDir::new(dir)` | `#[cfg(test)]` thread-local config-dir override (`:35-57`) |
+| `ScopedConfigDir::new(dir)` | `#[cfg(any(test, feature = "test-support"))]` thread-local config-dir override (`:35-57`) |
 
 ### Atomic Writes, Temp Files, Process Liveness, Redaction
 
@@ -208,10 +209,13 @@ Full reference: [utils/config.md](utils/config.md).
 - **Adding a submodule means editing `src/utils/mod.rs` twice** — the `pub mod`
   declaration and (if it belongs at the `utils` root) the re-export block.
   Nothing else in the crate re-exports `utils` wholesale.
-- **`ScopedConfigDir` does not exist in a release build.** It is `#[cfg(test)]`
-  on the struct and both impls, so it is unreachable from `tests/**` (which
-  compile the crate without `cfg(test)`) and from production binaries. Unit
-  tests inside the crate are the only callers.
+- **`ScopedConfigDir` does not exist in a release build.** It is
+  `#[cfg(any(test, feature = "test-support"))]` on the struct and both impls,
+  so it is unreachable from production binaries. Integration tests reach it
+  only through the `#[doc(hidden)] pub use` at `src/lib.rs:97`, which requires
+  the `test-support` feature — `tests/identity_contract.rs` is the one
+  in-tree integration test that enables it (declared with
+  `required-features = ["test-support"]` in `Cargo.toml:84`).
 - **A thread-local override does not follow spawned threads.** A unit test
   that spawns a worker and expects the redirected config directory must set
   `XDG_CONFIG_HOME` instead.

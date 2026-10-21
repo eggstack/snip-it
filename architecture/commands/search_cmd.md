@@ -25,8 +25,9 @@ mutate (see *The delete shortcut* below).
 | `--favorites-first` | bool | `false` | Favorites rank first |
 
 No exact-selector flags (unlike `run`/`clip`/`get`/`edit`); no
-output-format flags — the detail block is fixed. `src/main.rs:585-597`
-passes `config: None` (the `--config` derivation below lives inside `run`).
+output-format flags — the detail block is fixed. `src/main.rs:586-599`
+passes `config: None` (`src/main.rs:595`); the `--config` derivation below
+lives inside `run`.
 
 ## Flow / steps
 
@@ -90,14 +91,14 @@ performs the trailing `run_explicit_sync` after a selection (and
 is false, `src/commands/mod.rs:444-448`). Search never notifies by
 itself.
 
-`src/main.rs:954` classifies `Commands::Search(_)` as a mutation command
+`src/main.rs:955` classifies `Commands::Search(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`), because the
 delete shortcut can mutate.
 
 ## Tokio runtime
 
 `search` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:596` passes
+but only for `--sync`. `src/main.rs:597` passes
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
 `--sync` is set and `None` otherwise. `run_snippet_selection`
 (`src/commands/mod.rs:353-362`) errors with
@@ -162,11 +163,11 @@ alternatives.
 - `src/selector.rs` — `LibraryScope::from_filter_arg`, the owner of the
   `all` keyword.
 - `src/ui/mod.rs` — `select_snippet` and the tty guard.
-- `src/main.rs` — dispatch (`src/main.rs:585-597`).
+- `src/main.rs` — dispatch (`src/main.rs:586-599`).
 
 ## File / line references
 
 - `SearchArgs`: `src/commands/search_cmd.rs:7`; `run`: `:24`
 - `all` guard: `:37-44`; `--config` derivation: `:50-57`
 - Shared loop: `src/commands/mod.rs:338`
-- Dispatch: `src/main.rs:585-597`
+- Dispatch: `src/main.rs:586-599`

@@ -377,12 +377,12 @@ An odd number of backslashes before `<` escapes it; an even number does not.
 | File | Role |
 |------|------|
 | `src/utils/variables.rs` | The whole grammar: parsing, expansion, escape stripping, diagnostics |
-| `src/commands/mod.rs:274-296` | `expand_snippet_command` — parse → prompt → expand (interactive path) |
-| `src/commands/get_cmd.rs:279-333` | `expand_without_prompt` — the non-interactive `--var` path (does **not** use `expand_command`) |
+| `src/commands/mod.rs:274-293` | `expand_snippet_command` — parse → prompt → expand (interactive path) |
+| `src/commands/get_cmd.rs:279-330` | `expand_without_prompt` — the non-interactive `--var` path (does **not** use `expand_command`) |
 | `src/ui/variables.rs:78` | `prompt_variables` — the TUI prompt dialog |
 | `src/ui/mod.rs:374-398`, `:1639` | Preview rendering and the visual-range multi-select copy |
-| `src/commands/import_cmd.rs:219-224` | Detects snippets that contain variables on import |
-| `src/commands/doctor_cmd.rs:312-318` | Reports snippets that contain variables |
+| `src/commands/import_cmd.rs:216-222` | Detects snippets that contain variables on import |
+| `src/commands/doctor_cmd.rs:309-315` | Reports snippets that contain variables |
 
 ## Invariants
 
@@ -409,7 +409,7 @@ An odd number of backslashes before `<` escapes it; an even number does not.
   angle brackets and on `\\`. If a command relies on an unknown escape
   surviving expansion, that behaviour is not shared.
 - **`expand_command` is not the non-interactive path.** `snp get` uses its own
-  `expand_without_prompt` (`src/commands/get_cmd.rs:279-333`), which does
+  `expand_without_prompt` (`src/commands/get_cmd.rs:279-330`), which does
   plain string replacement per kind and leaves an unassigned `Required`
   variable **untouched** rather than substituting the bare name.
 - **The default is applied at expansion time, not at parse time.** The parsed

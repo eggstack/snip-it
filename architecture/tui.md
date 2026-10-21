@@ -23,7 +23,7 @@ below; deterministic non-interactive resolution lives in
 | Item | Location | Purpose |
 |------|----------|---------|
 | `SnippetListParams` | `src/ui/mod.rs:499` | Borrowed view of the library (descriptions, commands, tags, folders, favorites, `snippets`, `original_indices`, `sort_opts`, `usage`, `is_search`, `initial_filter`, `allow_delete`) |
-| `SnippetSelection` | `src/ui/mod.rs:515` | `Selected(usize, Option<String>)` / `Copied` / `Delete(usize)` / `Cancelled` |
+| `SnippetSelection` | `src/ui/mod.rs:516` | `Selected(usize, Option<String>)` / `Copied` / `Delete(usize)` / `Cancelled` |
 | `select_snippet` | `src/ui/mod.rs:527` | Public wrapper; tty guard, then `select_snippet_inner` (`:545`) |
 | `run_snippet_selection` | `src/commands/mod.rs:338` | Sole caller of `select_snippet`; loads library + usage, loops the TUI, handles `Delete`/`Copied`/sync |
 | Re-exports | `src/ui/mod.rs:16-17` | `pub use theme::get_theme;` and `pub use variables::{VariablePromptResult, prompt_variables};` |
@@ -34,7 +34,7 @@ The real signatures:
 // src/ui/mod.rs:527
 pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<SnippetSelection>>;
 
-// src/ui/mod.rs:515
+// src/ui/mod.rs:516
 pub enum SnippetSelection {
     Selected(usize, Option<String>),
     Copied,
@@ -78,7 +78,7 @@ surface is a breaking change for every caller; extend inside
 3. **`ratatui::init()`** (`src/ui/mod.rs:568`) — in ratatui 0.30.2 this
    enables raw mode, enters the alternate screen buffer, and installs a panic
    hook that chains to the previously installed one
-   (`ratatui-0.30.2/src/init.rs:365`, `:566-572`).
+   (`ratatui-0.30.2/src/init.rs:398`, `:566-572`).
 4. **`TerminalGuard`** (`src/ui/mod.rs:42-53`) — its `Drop` disables mouse
    capture (warn-only) and calls `ratatui::restore()`, which disables raw mode
    and leaves the alternate screen. The guard is bound immediately after
@@ -91,7 +91,7 @@ surface is a breaking change for every caller; extend inside
 |------|-----------|
 | Normal exit | `TerminalGuard::drop` → `DisableMouseCapture` + `ratatui::restore()` |
 | Panic | The same `Drop` runs during unwind, *and* ratatui's own panic hook restores the terminal before delegating to snip-it's hook |
-| Process panic | `src/logging.rs:245` `setup_panic_handler` explicitly disables mouse capture and calls `ratatui::restore()` before logging and flushing |
+| Process panic | `src/logging.rs:264-272` `setup_panic_handler` explicitly disables mouse capture and calls `ratatui::restore()` before logging and flushing |
 | SIGINT / SIGTERM | `TERMINATE` is set by the `signal_hook` handler registered in `src/main.rs:35-44`; the loop breaks and returns `SnippetSelection::Cancelled` (`src/ui/mod.rs:660-662`, `:1912-1914`) |
 
 `TERMINATE` is a process-global `LazyLock<Arc<AtomicBool>>`
@@ -245,7 +245,7 @@ interactive toggles; it can only arrive via `--sort command`.
 | `SortMode` | `state.rs:4-16` | `None` (default), `Newest`, `Oldest`, `AlphaAsc`, `AlphaDesc`, `LastUsed`, `MostUsed`, `Command` |
 | `SelectState` | `state.rs:19-22` | `selected` + `scroll_state`; `update` clamps on filter shrink (`:32`); `move_up` saturates (`:44`), `move_down` bounds-checks (`:48`), `move_to_top`/`move_to_bottom` (`:54`, `:58`) |
 | `FilterState` | `state.rs:64-67` | `sort_mode` + `tag_filter_text`; `toggle_sort_new`/`_old`/`_alpha`/`_alpha_rev` (`:70`, `:77`, `:84`, `:91`) each cycle back to `None`; the last-used / most-used toggles exist but are `#[allow(dead_code)]` (`:98`, `:106`) |
-| `is_ctrl_key` | `state.rs:116-123` | Ctrl-combination predicate used by paging and quit keys |
+| `is_ctrl_key` | `state.rs:116-121` | Ctrl-combination predicate used by paging and quit keys |
 
 `SelectState`, `FilterState`, and `SortMode` are `pub(super)` — they are
 internal to the `ui` module and are **not** part of the public surface.
@@ -381,19 +381,22 @@ Clicks outside the list reset the double-click state (`:1350-1353`).
 
 ### Drift with `src/commands/keybindings_cmd.rs`
 
-`src/commands/keybindings_cmd.rs` (80 lines) prints a static reference for the
+`src/commands/keybindings_cmd.rs` (85 lines) prints a static reference for the
 same keymap. It is **documentation-as-code with no link to the loop** — the
 strings are hand-written `println!`s, so the two can and do drift. Known
 divergences at the time of writing:
 
 | `keybindings_cmd.rs` claim | Reality |
 |---|---|
-| "Insert Mode: `j/k` : alternative navigation" (`:35`) | `j` and `k` are ordinary printable characters in insert mode — the insert-mode match has no `Char('j')`/`Char('k')` arm (`:1695-1762`) |
-| "Theme Picker … `gg` : first theme" (`:48`) | Only `Ctrl+g` is bound (`:1502`); there is no `gg` sequence in the picker |
-| Normal-mode list starts with "Normal Mode:" (`:7`) | The loop starts in **insert** mode (`insert_mode = true`, `:598`) |
-| No mention of `Tab` | `Tab` toggles the list display mode (`:1758`, `:1796`) |
-| `y` : "copy and quit" (`:20`) | Correct for normal mode (`:1780-1788`); the separate **visual**-mode `y` (range copy) is undocumented |
-| No mention of `Ctrl+C` in normal mode | `Ctrl+C` cancels (`:1566-1569`) |
+| `y` : "copy and quit" (`:23`) | Correct for normal mode (`:1780-1788`); the separate **visual**-mode `y` (range copy) is undocumented |
+| No mention of `Ctrl+C` in the selector's Normal Mode block (`:10-36`) | `Ctrl+C` cancels (`:1566-1569`); the file mentions `Ctrl+c` only in the Variable Prompt section (`:83`) |
+| No mention of `Enter` in the selector's Normal Mode block (`:10-36`) | `Enter` leaves the loop with the current selection (`:1772-1775`) |
+| Theme Picker cancel is `e/q` only (`:56`) | The picker's **normal** mode also cancels on `Esc` (`:1438`); the file documents `Esc` only as "leave filter" (`:57`) |
+
+Earlier divergences have since been fixed upstream: the reference now states
+that the selector starts in insert mode (`:7`), that `j`/`k` are literal in
+insert mode (`:39`), that `Tab` toggles the list display mode (`:36`, `:44`),
+and that the picker jumps to the first theme with `Ctrl+g` (`:53`).
 
 Also note the theme picker's filter input cannot contain `j` or `k`: the
 `Char('j')` / `Char('k')` arms (`:1376`, `:1389`) precede the catch-all
@@ -503,8 +506,8 @@ The TUI itself is **synchronous**. Tokio enters only at the caller boundary:
   ("sync requested but no runtime", `src/commands/mod.rs:353-359`). When
   `do_sync` is false the runtime is discarded and the value is `None`
   (`:360-362`).
-- The CLI wires this as `args.sync.then_some(&RUNTIME)` (`src/main.rs:539`,
-  `:560`, `:581`, `:596`), so the global `RUNTIME`
+- The CLI wires this as `args.sync.then_some(&RUNTIME)` (`src/main.rs:540`,
+  `:561`, `:582`, `:597`), so the global `RUNTIME`
   (`src/main.rs:22-27`) is only borrowed when `--sync` was requested.
 - `select_cmd` passes `do_sync = false` and `runtime = None`
   (`src/commands/select_cmd.rs:88-91`).
@@ -608,11 +611,11 @@ flag as a reserved hook, not a live mode.
 | `src/commands/mod.rs:338-496` | `run_snippet_selection` — the bridge from commands to the TUI |
 | `src/commands/mod.rs:243-271` | `get_snippet_data` — deleted filtering + index mapping |
 | `src/commands/mod.rs:499-514` | `mark_snippet_deleted` — tombstone write |
-| `src/commands/keybindings_cmd.rs` (80 lines) | Static keybinding reference that mirrors the loop (can drift) |
+| `src/commands/keybindings_cmd.rs` (85 lines) | Static keybinding reference that mirrors the loop (can drift) |
 | `src/selector.rs:135-158` | `searchable_text` — the *canonical* search contract the TUI does **not** use |
 | `src/utils/variables.rs` (1947 lines) | Variable parsing / expansion / escape stripping |
 | `src/main.rs:29-50` | SIGINT/SIGTERM handler feeding `TERMINATE` |
-| `src/logging.rs:245` | Panic hook that restores the terminal |
+| `src/logging.rs:264-272` | Panic hook that restores the terminal |
 
 ## Invariants
 

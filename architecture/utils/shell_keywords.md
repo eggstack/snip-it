@@ -62,8 +62,8 @@ managers, editors, privilege/session tools, and misc:
 | 53–56 | Permission modes | `chmod`, `chown`, `chgrp`, `umask` |
 | 57–74 | Networking | `curl`, `wget`, `ssh`, `scp`, `rsync`, `ping`, `dig`, `nmap` |
 | 75–83 | Archives | `tar`, `zip`, `unzip`, `gzip`, `bzip2`, `xz`, `7z`, `rar` |
-| 84–96 | Process / system | `systemctl`, `journalctl`, `ps`, `kill`, `pkill`, `top`, `htop`, `df`, `du` |
-| 97–109 | Filesystem / disks | `ln`, `touch`, `file`, `fdisk`, `lsblk`, `mkfs`, `fsck` |
+| 84–96 | Process / system | `systemctl`, `journalctl`, `ps`, `kill`, `pkill`, `top`, `htop` |
+| 97–109 | Filesystem / disks | `df`, `du`, `ln`, `touch`, `file`, `fdisk`, `lsblk`, `mkfs`, `fsck` |
 | 110–137 | Shell builtins / control flow | `which`, `alias`, `export`, `source`, `set`, `read`, `exit`, `trap`, `exec`, `eval`, `test`, `case`, `function`, `time`, `timeout`, `watch` |
 | 138–142 | Debuggers / tracers | `strace`, `ltrace`, `gdb`, `lsof`, `stat` |
 | 143–148 | Checksums / encoding | `md5sum`, `sha256sum`, `base64`, `xxd`, `od`, `hexdump` |
@@ -119,7 +119,7 @@ use crate::utils::shell_keywords::SHELL_KEYWORDS_SET;
 | Apply the keyword colour | `src/ui/highlight.rs:162` — `color_keyword` (`theme.primary`) vs `color_default` (`theme.text`) |
 
 The highlighter's word scanner accepts `alphanumeric`, `_`, `-`, and `.`
-(`src/ui/highlight.rs:153-159`), so `git` matches, `git-lfs` matches only if
+(`src/ui/highlight.rs:151-159`), so `git` matches, `git-lfs` matches only if
 `git-lfs` is in the list, and `docker-compose` matches only if that exact
 string is listed.
 

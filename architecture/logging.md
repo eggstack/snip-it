@@ -4,7 +4,7 @@
 
 ## Overview
 
-Structured logging on the `tracing` crate (`src/logging.rs`, 683 lines): a
+Structured logging on the `tracing` crate (`src/logging.rs`, 702 lines): a
 daily-rolling diagnostic file under `<config>/logs/`, a synchronous
 append-only `audit.log` in the config directory, a terminal-restoring panic
 hook, and command-sensitive startup levels so read-only commands never touch
@@ -23,17 +23,17 @@ Two artifacts live under the config directory and are easy to confuse:
 | Diagnostic log | `<config>/logs/snp.log.YYYY-MM-DD` | `tracing` subscriber, non-blocking | Free-form operational events |
 | Audit trail | `<config>/audit.log` | `audit_log()`, synchronous append | Structured record of snippet mutations |
 
-## Startup service levels (`src/main.rs:886`)
+## Startup service levels (`src/main.rs:887`)
 
 `command_behavior()` assigns the startup recovery policy **and** the
 logging/audit service level in one match, so the two cannot drift
-(`src/main.rs:882-886`). `StartupServices` has exactly two variants
-(`src/main.rs:872-876`).
+(`src/main.rs:882-885`). `StartupServices` has exactly two variants
+(`src/main.rs:873-877`).
 
 | Level | Commands | Startup behaviour |
 |-------|----------|-------------------|
-| `Minimal` (`src/main.rs:874`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1005-1008`), no `log_startup_info()` (`:1009-1011`) |
-| `Logging` (`src/main.rs:875`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1007`) + `log_startup_info()` (`:1010`), and `log_shutdown_info()` on every exit path (`:1021`, `:1028`, `:1035`) |
+| `Minimal` (`src/main.rs:875`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1006-1007`), no `log_startup_info()` (`:1010-1012`) |
+| `Logging` (`src/main.rs:876`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1008`) + `log_startup_info()` (`:1011`), and `log_shutdown_info()` on every exit path (`:1022`, `:1029`, `:1036`) |
 
 Because `init_default_file_logging()` never runs, `Minimal` commands never
 create `<config>/logs/`, never create `snp.log.*`, and never create
@@ -42,7 +42,7 @@ the config directory for their own reasons — see
 [cli.md](cli.md) for the command-level contract.)
 Note that the `Minimal` group's suppression of **startup recovery** is a
 separate mechanism: it is the recovery *policy* (`StartupRecoveryPolicy::SuppressReadOnly`,
-`src/main.rs:902`) that is checked at `src/main.rs:1013`, not the service
+`src/main.rs:903`) that is checked at `src/main.rs:1014`, not the service
 level.
 
 `log_shutdown_info()` flushes the non-blocking writer by dropping the worker
@@ -51,30 +51,30 @@ process exits.
 
 ## Subscriber setup
 
-### `init_logging(config)` (`src/logging.rs:86`)
+### `init_logging(config)` (`src/logging.rs:105`)
 
-1. **Idempotence guard** (`:87-92`): if `LOG_GUARD` already holds a guard,
+1. **Idempotence guard** (`:106-111`): if `LOG_GUARD` already holds a guard,
    return `Ok(())` immediately. `LOG_GUARD` is a
    `LazyLock<Mutex<Option<WorkerGuard>>>` (`:45-46`); the guard must stay
    alive for the process lifetime, because dropping it stops the file
    writes.
-2. **Directory** (`:94-105`): `create_dir_all(log_dir)`, then on Unix
+2. **Directory** (`:115-124`): `create_dir_all(log_dir)`, then on Unix
    `set_permissions` to `0o700`. Failures return `SnipError::io_error`.
-3. **Appender** (`:107`): `tracing_appender::rolling::daily(log_dir,
+3. **Appender** (`:126`): `tracing_appender::rolling::daily(log_dir,
    &config.file_name)`.
-4. **Non-blocking writer** (`:109`): `tracing_appender::non_blocking(...)`
+4. **Non-blocking writer** (`:128`): `tracing_appender::non_blocking(...)`
    returns the writer plus a `WorkerGuard`, which is stored in `LOG_GUARD`
-   at `:137`.
+   at `:156`.
 5. **Filter** (`:130-138`): see [Filter selection](#filter-selection).
-6. **Layer** (`:121-127`): `fmt::layer()` with `.with_ansi(false)`,
+6. **Layer** (`:140-146`): `fmt::layer()` with `.with_ansi(false)`,
    `.with_target(config.include_target)`, `.with_thread_ids(true)`,
    `.with_file(true)`, `.with_line_number(true)`.
-7. **Install** (`:129-135`): `registry().with(env_filter).with(file_layer)`,
+7. **Install** (`:148-154`): `registry().with(env_filter).with(file_layer)`,
    then `try_init()`. A failure prints
    `"Warning: failed to initialize logging subscriber: {e}"` to stderr but
    **does not fail the command** — `init_logging` still returns `Ok(())` and
    still stores the guard.
-8. **Banner** (`:139-140`): two `tracing::info!` records ("Logging
+8. **Banner** (`:158-159`): two `tracing::info!` records ("Logging
    initialized…", "Log level: …").
 
 There is **no stderr subscriber**: the only output sink is the file. The
@@ -82,7 +82,7 @@ There is **no stderr subscriber**: the only output sink is the file. The
 
 ### Log directory and file names
 
-`get_default_log_dir()` (`src/logging.rs:71-73`) is
+`get_default_log_dir()` (`src/logging.rs:72-74`) is
 `<config>/logs`, where `<config>` is `crate::utils::config::get_config_dir()`
 (`src/utils/config.rs:63-82`) — `$XDG_CONFIG_HOME/snp` or
 `~/.config/snp`.
@@ -101,7 +101,7 @@ retention policy (see [Rotation and retention](#rotation-and-retention)).
 
 `LogConfig` is `#[allow(dead_code)]` (`:49`) and no in-tree caller varies
 its fields: `init_default_file_logging()` always uses `LogConfig::default()`
-(`:161`). The struct is the intended seam for a future per-command level.
+(`:180`). The struct is the intended seam for a future per-command level.
 
 ### Filter selection
 
@@ -110,11 +110,11 @@ its fields: `init_default_file_logging()` always uses `LogConfig::default()`
 let env_filter = if let Ok(filter_str) = std::env::var("SNP_LOG") {
     EnvFilter::try_new(&filter_str).unwrap_or_else(|e| {
         eprintln!("Warning: Invalid SNP_LOG filter '{filter_str}': {e}");
-        EnvFilter::new(format!("snp={}", level_str(config.level)))
+        EnvFilter::new(default_filter_directive(config.level))
     })
 } else {
     EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("snp={}", level_str(config.level))))
+        .unwrap_or_else(|_| EnvFilter::new(default_filter_directive(config.level)))
 };
 ```
 
@@ -124,8 +124,8 @@ Precedence:
 2. `SNP_LOG` set but invalid → stderr warning + the `snip_it=<level>` fallback
    (`:131-134`).
 3. `SNP_LOG` unset → `RUST_LOG` via `EnvFilter::try_from_default_env()`
-   (`:117`).
-4. Neither set → the `snip_it=info` fallback (`:118`; `Level::INFO` default at
+   (`:136`).
+4. Neither set → the `snip_it=info` fallback (`:137`; `Level::INFO` default at
    `:64`).
 
 `RUST_LOG` is read through `tracing-subscriber`'s own environment lookup,
@@ -154,8 +154,8 @@ The only explicit target in the workspace is the panic event's literal
 > **Fixed in this session.** The fallback used to be `snp=<level>`, which
 > matched **no** event: with neither `SNP_LOG` nor `RUST_LOG` set, the daily
 > log file was created but stayed **empty**. The fallback is now built by
-> `default_filter_directive()` from the `LOG_TARGET_PREFIX` constant
-> (`src/logging.rs`), which is `snip_it` — the library crate, not the binary
+> `default_filter_directive()` (`:101`) from the `LOG_TARGET_PREFIX` constant
+> (`src/logging.rs:95`), which is `snip_it` — the library crate, not the binary
 > crate. Verified by running `snp new` against a throwaway `XDG_CONFIG_HOME`:
 > the log file went from 0 bytes to 696 bytes of records, while the
 > `SNP_LOG=warn` and `RUST_LOG=info` overrides continue to behave as before.
@@ -176,37 +176,37 @@ fields — so one record looks like:
 
 - **Timestamp**: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC), then a space.
 - **Level**: `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`.
-- **Thread id**: enabled (`:125`), rendered as the `Debug` form of
+- **Thread id**: enabled (`:144`), rendered as the `Debug` form of
   `std::thread::ThreadId` — e.g. `ThreadId(2)`.
 - **Span scope**: the enclosing spans are printed as
   `name{field=value …}:` — so the `#[tracing::instrument]` span fields
-  (`action`, `snippet_id` for `audit_log` at `:368`; `command` for
-  `log_command_execution` at `:269`) **do** reach the file.
+  (`action`, `snippet_id` for `audit_log` at `:387`; `command` for
+  `log_command_execution` at `:288`) **do** reach the file.
 - **Target**: the module path, because `include_target` defaults to `true`
   (`src/logging.rs:65`, `:143`).
 - **File and line**: enabled (`:145-146`).
 - **No ANSI**: disabled explicitly (`:142`), so the file is plain text.
 - **Event fields**: the event's own fields, including the message.
 
-### `init_default_file_logging()` (`src/logging.rs:153`)
+### `init_default_file_logging()` (`src/logging.rs:172`)
 
-The entry point used by `main` (`src/main.rs:1007`):
+The entry point used by `main` (`src/main.rs:1008`):
 
-1. `crate::utils::config::ensure_config_dir()` (`:158`) — creates the config
+1. `crate::utils::config::ensure_config_dir()` (`:177`) — creates the config
    directory and tightens it to `0o700` on Unix. Failures are a stderr
    warning, not an error.
-2. `LogConfig::default()` (`:161`) and `init_logging(&config)` (`:162`) —
+2. `LogConfig::default()` (`:180`) and `init_logging(&config)` (`:181`) —
    failures are a stderr warning, not an error.
-3. `self_check()` (`:165`, defined `:168-208`) — re-creates the log directory
+3. `self_check()` (`:184`, defined `:187-227`) — re-creates the log directory
    if missing, then opens and deletes a `.self_check` sentinel file to prove
    the directory is writable, and finally ensures the config directory
    exists.
 
-`init_default_logging()` (`src/logging.rs:145-147`) is a public alias for
+`init_default_logging()` (`src/logging.rs:164-166`) is a public alias for
 `init_default_file_logging()`. It has no in-tree caller; it exists for the
-documented public API surface (`docs/PUBLIC_API.md:322`).
+documented public API surface (`docs/PUBLIC_API.md:326`).
 
-`shutdown_logging()` (`:210-215`) takes the guard out of `LOG_GUARD` and
+`shutdown_logging()` (`:229-234`) takes the guard out of `LOG_GUARD` and
 drops it, which flushes the non-blocking writer.
 
 ## Structured event functions
@@ -261,21 +261,21 @@ pub fn audit_log(
 ### What is deliberately NOT logged
 
 - **Descriptions are never persisted.** `description` is hard-coded to the
-  literal `"[omitted]"` (`:386`) — descriptions are user-authored free text
+  literal `"[omitted]"` (`:405`) — descriptions are user-authored free text
   that may embed secrets, and the snippet store may be encrypted. The
-  comment at `:383-385` states the rationale. Pinned by the sentinel-secret
-  test (`:598-639`).
+  comment at `:402-404` states the rationale. Pinned by the sentinel-secret
+  test (`:617-658`).
 - **Snippet commands are never logged.** No audit field carries the command
   or the output.
 - **No credentials.** API keys, bearer tokens, and URLs with embedded
   credentials are stripped by `redact_command` before any command reaches a
-  `tracing` event (`:295-315`).
+  `tracing` event (`:314-334`).
 - **Clipboard content is never logged** — only operation names and success
-  flags (`:337-343`).
+  flags (`:357-361`).
 
 ### Entry format
 
-Pipe-delimited, one line per entry (`:409-417`):
+Pipe-delimited, one line per entry (`:428-436`):
 
 ```
 {timestamp}|{action}|{snippet_id}|{description}|{library_id}|{device_id}
@@ -283,18 +283,18 @@ Pipe-delimited, one line per entry (`:409-417`):
 
 - `timestamp` is Unix **seconds** (not milliseconds).
 - `snippet_id`, `description`, and `device_id` are escaped by `escape_pipe`
-  (`:448-463`): `\` → `\\`, `|` → `\|`, newline → `\n`, CR → `\r`, and any
+  (`:467-482`): `\` → `\\`, `|` → `\|`, newline → `\n`, CR → `\r`, and any
   other control character → `\xNN`. `action` and `library_id` are **not**
   escaped.
 
 ### File handling
 
-- **Path**: `get_audit_log_path()` (`:362-366`) returns
+- **Path**: `get_audit_log_path()` (`:381-385`) returns
   `<config>/audit.log`, creating the config directory as a side effect.
-- **Open**: `create(true).append(true)` with Unix mode `0o600` (`:420-426`),
-  and permissions are re-tightened to `0o600` after the write (`:435-439`).
-- **Write**: `write_all` of the formatted line (`:441-444`).
-- **Synchronous by design** (`:149-152`, `:394`): the audit trail has no
+- **Open**: `create(true).append(true)` with Unix mode `0o600` (`:439-445`),
+  and permissions are re-tightened to `0o600` after the write (`:454-458`).
+- **Write**: `write_all` of the formatted line (`:460`).
+- **Synchronous by design** (`:170-171`, `:413`): the audit trail has no
   background writer or channel — human command rate does not need one, and
   a synchronous append cannot lose the last record.
 - **Error handling differs by caller.** `clip` propagates the error with
@@ -309,14 +309,14 @@ Pipe-delimited, one line per entry (`:409-417`):
 
 1. `fs::symlink_metadata(log_path)` (`:489`) reads the size without
    following symlinks. If the file does not exist yet, this returns an
-   error — and the caller **discards it** with `let _ =` (`:403`), so the
+   error — and the caller **discards it** with `let _ =` (`:422`), so the
    first append of a fresh install simply skips rotation.
 2. Size over `AUDIT_LOG_MAX_SIZE_BYTES` (10 MiB, `:30`) → rename to
-   `audit.<unix_secs>.rotated` (`:474-479`).
+   `audit.<unix_secs>.rotated` (`:493-498`).
 3. Scan the parent directory for `*.rotated` and delete entries older than
-   `AUDIT_LOG_RETENTION_DAYS` (30 days, `:31`) by mtime (`:482-499`).
+   `AUDIT_LOG_RETENTION_DAYS` (30 days, `:31`) by mtime (`:501-520`).
 4. The whole rotation step is best-effort — a full or read-only disk must
-   not break the user's command (`:403`).
+   not break the user's command (`:422`).
 
 ## Panic handler
 
@@ -324,24 +324,24 @@ Pipe-delimited, one line per entry (`:409-417`):
 and installs a replacement that, on panic:
 
 1. Best-effort terminal restoration inside `catch_unwind`:
-   `DisableMouseCapture` then `ratatui::restore()` (`:248-254`). The
+   `DisableMouseCapture` then `ratatui::restore()` (`:268-273`). The
    mouse-capture disable is explicit because some terminals leave the mouse
    in a bad state if `ratatui::restore()` runs alone.
-2. `log_panic_info(panic_info)` (`:256`, defined `:234-243`) — an
+2. `log_panic_info(panic_info)` (`:275`, defined `:253-262`) — an
    `tracing::error!` with `target: "panic"`, the location as
    `file:line:column`, and the panic message.
-3. `shutdown_logging()` (`:259`) — flushes the non-blocking writer before
+3. `shutdown_logging()` (`:278`) — flushes the non-blocking writer before
    the process dies.
-4. `eprintln!("PANIC at {location}: {message}")` (`:263`).
-5. `previous_hook(panic_info)` (`:265`).
+4. `eprintln!("PANIC at {location}: {message}")` (`:282`).
+5. `previous_hook(panic_info)` (`:284`).
 
-`extract_panic_info` (`:217-232`) renders the location as
-`file:line:column` (`:220`), and downcasts the payload to `&str` or
-`String`, falling back to `"Unknown panic"` (`:223-229`).
+`extract_panic_info` (`:236-251`) renders the location as
+`file:line:column` (`:239`), and downcasts the payload to `&str` or
+`String`, falling back to `"Unknown panic"` (`:242-248`).
 
-The hook is installed first in `main()` (`src/main.rs:1000`), **before**
+The hook is installed first in `main()` (`src/main.rs:1001`), **before**
 argument parsing and **before** `init_default_file_logging()`
-(`src/main.rs:1007`). A panic that happens before logging is initialised
+(`src/main.rs:1008`). A panic that happens before logging is initialised
 therefore still restores the terminal and prints to stderr, but has no log
 file to write to. The same applies to the `target: "panic"` record: it is
 only captured when the active filter covers the `panic` target — see
@@ -355,9 +355,9 @@ applied to a `tracing` payload in this module:
 | Input shape | Output |
 |-------------|--------|
 | `git status` (≤80 chars, clean) | unchanged |
-| 100-char plain string | first ~77 chars + `...` (char-boundary safe, `:306-311`) |
-| 300-char string | `<very-long-command>` (`:296-298`) |
-| `curl -H "Authorization: Bearer …"` / embedded `password=` / `token=` | `<redacted-command>` (`:300-303`) |
+| 100-char plain string | first ~77 chars + `...` (char-boundary safe, `:324-330`) |
+| 300-char string | `<very-long-command>` (`:315-317`) |
+| `curl -H "Authorization: Bearer …"` / embedded `password=` / `token=` | `<redacted-command>` (`:319-322`) |
 
 The secret detection is `crate::auto_sync::status::redact_secrets`
 (`src/auto_sync/status.rs:27`), which re-exports the canonical
@@ -372,9 +372,9 @@ directory, the redacted command name, and — on failure — the error text.
 
 ## Test-module config isolation
 
-`src/logging.rs` has its own `#[cfg(test)] mod tests` (`:506-683`). The
+`src/logging.rs` has its own `#[cfg(test)] mod tests` (`:525-702`). The
 sentinel-secret test (`test_sentinel_secret_not_in_audit_log_entry`,
-`:598-639`) must not write to the developer's real `~/.config/snp/`, because
+`:617-658`) must not write to the developer's real `~/.config/snp/`, because
 `audit_log()` resolves its path from the config directory. It therefore
 binds the test-only, **thread-local** `ScopedConfigDir` seam:
 
@@ -410,12 +410,12 @@ test module** — no production line of the logging module changed.
 | Under-limit file is not rotated | `:575` | file survives |
 | Log dir permissions are `0700` on Unix | `:584` | mode check |
 | Audit log permissions are `0600` on Unix | `:601` | mode check |
-| Sentinel secret never reaches the audit file | `:598` | `[omitted]` present, secret absent, no ANSI escapes per line |
-| `redact_command` truncates long commands | `:641` | length + `...` |
-| `redact_command` preserves short commands | `:649` | unchanged |
-| `redact_command` removes embedded credentials | `:656` | `<redacted-command>` |
-| Log dir stays under the config dir | `:663` | `starts_with(config_dir)` |
-| Log dir is consistent across calls | `:677` | two calls agree |
+| Sentinel secret never reaches the audit file | `:618` | `[omitted]` present, secret absent, no ANSI escapes per line |
+| `redact_command` truncates long commands | `:661` | length + `...` |
+| `redact_command` preserves short commands | `:669` | unchanged |
+| `redact_command` removes embedded credentials | `:676` | `<redacted-command>` |
+| Log dir stays under the config dir | `:683` | `starts_with(config_dir)` |
+| Log dir is consistent across calls | `:697` | two calls agree |
 
 The two permission tests only assert on Unix; on Windows the `#[cfg(unix)]`
 bodies are empty and the test passes vacuously.
@@ -424,9 +424,9 @@ bodies are empty and the test passes vacuously.
 
 | File | Subject |
 |------|---------|
-| `src/logging.rs` (683 lines) | Subscriber setup, filter selection, structured events, audit trail, panic hook |
-| `src/main.rs:872-997` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
-| `src/main.rs:999-1037` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
+| `src/logging.rs` (702 lines) | Subscriber setup, filter selection, structured events, audit trail, panic hook |
+| `src/main.rs:873-998` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
+| `src/main.rs:1000-1038` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
 | `src/utils/config.rs:63-82`, `:91-116` | `get_config_dir()` / `ensure_config_dir()` — the config-root resolution the audit path uses |
 | `src/utils/config.rs:35-57` | `ScopedConfigDir` — test-only thread-local config override |
 | `src/utils/redact.rs:32` | `redact_secrets()` — the canonical secret stripper |
@@ -434,7 +434,7 @@ bodies are empty and the test passes vacuously.
 | `src/commands/clip_cmd.rs:42` | Audit call site that propagates its error |
 | `src/ui/mod.rs:1660` | Audit call site that logs at debug instead |
 | `src/commands/mod.rs:432` | `delete` audit call site — also logs at debug |
-| `Cargo.toml:118-120` | `tracing`, `tracing-subscriber` (fmt/registry/env-filter), `tracing-appender` |
+| `Cargo.toml:117-119` | `tracing`, `tracing-subscriber` (fmt/registry/env-filter), `tracing-appender` |
 
 ## Invariants
 
@@ -452,7 +452,7 @@ bodies are empty and the test passes vacuously.
    `ratatui::restore()`), and the log writer is flushed before the process
    dies.
 6. **The recovery policy and the logging level are decided by one match**
-   (`src/main.rs:886`), so they cannot drift apart.
+   (`src/main.rs:887`), so they cannot drift apart.
 7. **Unit tests never write to the real `~/.config/snp/`** — the audit
    sentinel test binds a per-test, thread-local config directory.
 
@@ -473,7 +473,7 @@ bodies are empty and the test passes vacuously.
   built-in `snip_it=<level>` fallback.
 - **A rotation failure is silently swallowed.** `rotate_audit_log_if_needed`
   returns an error when `audit.log` does not exist yet, and the caller
-  discards it with `let _ =` (`src/logging.rs:403`). The first append of a
+  discards it with `let _ =` (`src/logging.rs:422`). The first append of a
   fresh install simply skips rotation — no warning is emitted.
 - **`try_init()` failure does not fail the command.** The subscriber may
   fail to install (e.g. another global subscriber is already set); the
@@ -486,7 +486,7 @@ bodies are empty and the test passes vacuously.
   span scope as `name{field=value …}:`, so `audit_log`'s `action` and
   `snippet_id` and `log_command_execution`'s redacted `command` appear in
   `snp.log.*` — even though `result` is `skip`ped from the span
-  (`src/logging.rs:269`, `:368`).
+  (`src/logging.rs:288`, `:387`).
 - **The audit trail and the diagnostic log live in different directories.**
   `audit.log` is directly in `<config>/`; the `tracing` files are in
   `<config>/logs/`.
@@ -494,11 +494,11 @@ bodies are empty and the test passes vacuously.
   a new `snp.log.YYYY-MM-DD` per UTC day and never deletes the old ones —
   only the audit log prunes (30 days for `*.rotated`).
 - **`get_audit_log_path()` creates the config directory** as a side effect
-  (`:362-366`), without tightening its permissions the way
+  (`:381-385`), without tightening its permissions the way
   `ensure_config_dir()` does.
 - **The panic hook is installed before logging is initialised**
-  (`src/main.rs:1000` vs `:1007`), so an early panic has no log file to
+  (`src/main.rs:1001` vs `:1008`), so an early panic has no log file to
   write to — only the stderr line.
 - **`init_default_logging()` has no in-tree caller.** It is a public alias
   for `init_default_file_logging()` kept for the documented API surface
-  (`src/logging.rs:145`).
+  (`src/logging.rs:164`).

@@ -2,9 +2,9 @@
 
 [← Back to Overview](../overview.md) · [Command index](mod.md) · [repair_cmd.md](repair_cmd.md) · [doctor_cmd.md](doctor_cmd.md)
 
-`snp validate` performs a **read-only health check** of the local snippet data: it parses every visible library, cross-checks the library index, checks for orphaned usage entries, and inspects file permissions. It reports what it finds as structured diagnostics and never changes anything.
+`snp validate` performs a **read-only health check** of the local snippet data: it parses every visible library, cross-checks the library index, checks for orphaned usage entries, and inspects file permissions. It reports what it finds as structured diagnostics and never changes snippet data.
 
-It does **not** repair anything, does **not** migrate legacy state, and does **not** create files.
+It does **not** repair anything. It is not *strictly* read-only, though: the read paths it drives can create backup files and can migrate the legacy macOS config directory — see [Mutation vs read-only](#mutation-vs-read-only--not-strictly-read-only).
 
 ## CLI arguments
 
@@ -71,14 +71,14 @@ There is **no generic finding DSL** shared with `doctor` or `import`. `validate`
 | `E-FILE-READ` | Error | Manual | The library file could not be read (`:144-159`). |
 | `I-FILE-EMPTY` | Info | Auto | The library file is empty — no snippets (`:161-173`). |
 | `E-TOML-PARSE` | Error | Manual | The raw file is not valid TOML (`:176-191`). |
-| `E-DUP-ID` | Error | Auto | The same snippet ID appears more than once (`:196-216`). |
-| `W-ID-EMPTY` | Warning | Auto | A snippet has an empty ID — `load_library` assigns IDs on read (`:218-235`). |
+| `E-DUP-ID` | Error | Manual | The same snippet ID appears more than once (`:196-216`). |
+| `W-ID-EMPTY` | Warning | Manual | A snippet has an empty ID — `load_library` assigns IDs on read (`:218-235`). |
 | `E-CMD-EMPTY` | Error | Manual | A snippet has an empty command (`:238-253`). |
 | `W-DESC-EMPTY` | Warning (Error in strict) | Manual | A snippet has an empty description (`:254-277`). |
-| `W-SAME-ID-DIVERGENT` | Warning | Auto | The same ID appears multiple times with **divergent** description/command (`:280-313`). |
+| `W-SAME-ID-DIVERGENT` | Warning | Manual | The same ID appears multiple times with **divergent** description/command (`:280-313`). |
 | `W-DUP-CHECK-SKIPPED` | Warning | Manual | The raw re-parse failed, so the divergence check was skipped (`:314-325`). |
 | `W-EXACT-DUP` | Warning | Manual | Two entries share both description and command (`:327-347`). |
-| `W-CORRUPT-BAK` | Warning | Auto | A `<library>.toml.corrupt.bak` file exists, indicating a previous parse failure (`:349-365`). |
+| `W-CORRUPT-BAK` | Warning | Manual | A `<library>.toml.corrupt.bak` file exists, indicating a previous parse failure (`:349-365`). |
 
 ### h–j. Index cross-references (`validate_index`, `validate_cmd.rs:374-454`)
 
@@ -87,7 +87,7 @@ There is **no generic finding DSL** shared with `doctor` or `import`. `validate`
 | `E-INDEX-MISSING-FILE` | Error | Manual | A library is registered in the index but its file does not exist (`:377-392`). |
 | `W-ORPHAN-FILE` | Warning | Auto | A file exists in `libraries/` but is not registered in the index (`:394-413`). |
 | `E-PRIMARY-MISSING` | Error | Manual | The primary library's file does not exist (`:416-431`). |
-| `W-NO-PRIMARY` | Warning | Auto | Libraries exist but no primary is set (`:432-451`). |
+| `W-NO-PRIMARY` | Warning | Manual | Libraries exist but no primary is set (`:432-451`). |
 
 ### k. Orphaned usage entries (`validate_usage`, `validate_cmd.rs:461-531`)
 
@@ -103,7 +103,7 @@ Unix only. Checks `snippets.toml`, `libraries.toml`, `sync.toml`, and `usage.tom
 
 | Code | Severity | Repairability | Condition |
 |---|---|---|---|
-| `W-INSECURE-PERMS` | Warning | Auto | The file's mode has any group- or world-accessible bit (`mode & 0o077 != 0`); recommended mode is `0600` (`:548-571`). |
+| `W-INSECURE-PERMS` | Warning | Manual | The file's mode has any group- or world-accessible bit (`mode & 0o077 != 0`); recommended mode is `0600` (`:548-571`). |
 
 ## Strict mode
 
@@ -134,19 +134,25 @@ Strict mode therefore changes the **exit code**: warnings in the elevated set tu
 
 | Shared input | Used by | Where |
 |---|---|---|
-| `LibraryManager::inspect_library_index()` → `LibraryIndexInspection` (missing files, orphan files, `PrimaryState`) | `validate`, `repair`, `doctor` | `validate_cmd.rs:375`, `repair_cmd.rs:381`, `doctor_cmd.rs:563` |
-| `crate::library::find_orphaned_ids(active_ids, usage_ids)` | `validate`, `repair` | `validate_cmd.rs:517`, `repair_cmd.rs:432` |
+| `LibraryManager::inspect_library_index()` → `LibraryIndexInspection` (missing files, orphan files, `PrimaryState`) | `validate`, `repair`, `doctor` | `validate_cmd.rs:375`, `repair_cmd.rs:392`, `doctor_cmd.rs:563` |
+| `crate::library::find_orphaned_ids(active_ids, usage_ids)` | `validate`, `repair` | `validate_cmd.rs:517`, `repair_cmd.rs:443` |
 | `crate::library::readonly_library_sources(...)` | `validate` | `validate_cmd.rs:677-688`, `:471` |
 
 Rendering into `ValidationDiagnostic` stays local to `validate`, which preserves its pass/fail-plus-warnings semantics without dragging in the doctor/import diagnostic families.
 
-## The read-only guarantee
+## Mutation vs read-only — not strictly read-only
 
-`run()` (`validate_cmd.rs:666-737`) is documented as:
+`run()` (`validate_cmd.rs:666-737`) carries this doc comment:
 
 > Read-only: uses `LibraryManager::new` plus the canonical read-only resolver. Never migrates legacy state and never creates files.
 
-Concretely:
+The second sentence is **aspirational, not actual** — `LibraryManager::new()`
+(`validate_cmd.rs:671`) runs the macOS config-directory migration
+(`src/library/manager.rs:43` → `src/utils/config.rs:166-206`) and creates
+`libraries.toml.corrupt` when the index fails to parse
+(`src/library/manager.rs:60-75`). See the side-effect table below.
+
+Concretely, for snippet data:
 
 - Library discovery goes through `crate::library::readonly_library_sources(...)` (`validate_cmd.rs:677-688`), **not** `resolve_selector`. The mutating resolver runs `ensure_library_mode()`, which can migrate and rewrite metadata — using it here would reintroduce recovery side effects into a read-only command.
 - The index cross-check uses `LibraryManager::inspect_library_index()`, a read-only inspection.
@@ -154,7 +160,18 @@ Concretely:
 - The report declares `dry_run: true` unconditionally (`validate_cmd.rs:76`).
 - The command **never** calls `gate_mutation_on_interrupted_transactions()` and never takes the local-data or transaction lock — it does not mutate, so it needs neither.
 
-The one nuance: `validate_library` calls `crate::library::load_library(lib_path)` in some paths, and `load_library` assigns deterministic IDs to snippets that lack them. `validate` therefore reads through the raw file (`std::fs::read_to_string`) for its own structural checks (`validate_cmd.rs:144`) precisely so it can observe pre-normalization state without writing anything back. The `W-ID-EMPTY` message states this explicitly ("load_library assigns IDs on read").
+The one nuance: `validate_usage` calls `crate::library::load_library(&source.path)` (`validate_cmd.rs:474`), and `load_library` assigns deterministic IDs to snippets that lack them. `validate_library` therefore reads through the raw file (`std::fs::read_to_string`) for its own structural checks (`validate_cmd.rs:144`) precisely so it can observe pre-normalization state without writing anything back. The `W-ID-EMPTY` message states this explicitly ("load_library assigns IDs on read").
+
+### Side effects of a read-only `validate`
+
+| Side effect | Trigger | Site |
+|-------------|---------|------|
+| `libraries.toml.corrupt` | `libraries.toml` exists but does not parse — the file is copied to a backup and the constructor returns an error | `src/library/manager.rs:60` (reached via `LibraryManager::new()`, `validate_cmd.rs:671`) |
+| `<library>.toml.corrupt.bak` | A library file fails to parse — `load_library` copies it to `<name>.toml.corrupt.bak` before returning the parse error | `src/library/persistence.rs:175` (reached via `load_library`, `validate_cmd.rs:474`) |
+| Config-directory migration | The legacy macOS config directory is moved into the XDG location | `src/library/manager.rs:43` → `src/utils/config.rs:166-206` |
+
+All three are **best-effort diagnostics / one-time migration**: no snippet data
+is modified, and the original files are left in place.
 
 ## Output and exit codes
 
@@ -180,7 +197,7 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 | Local-data lock | **Not taken.** |
 | Transaction lock | **Not taken.** |
 | Journal | Read-only: none. |
-| Side effects | None. `validate` creates no files, including no backups. |
+| Side effects | Bounded and non-mutating: `libraries.toml.corrupt`, `<library>.toml.corrupt.bak`, and the macOS config migration (see [Mutation vs read-only](#mutation-vs-read-only--not-strictly-read-only)). No snippet data is written. |
 
 ## Key Files
 
@@ -196,7 +213,7 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 
 ## Invariants
 
-- `snp validate` never writes, migrates, or creates files.
+- `snp validate` never writes, migrates, or creates files *for snippet data*. The only disk side effects are the best-effort corrupt-file backups and the macOS config migration listed above.
 - Every diagnostic carries a stable `code`, a severity, a repairability class, and — where applicable — a path, library, and snippet ID.
 - The index and usage classifications are shared with `repair` and `doctor`, so the commands never disagree about what "orphaned" or "no primary" means.
 - The exit code is `6` if and only if the report contains at least one `Error` diagnostic.
@@ -206,6 +223,7 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 
 - `snp validate` and `snp data validate` are the same command (`src/main.rs:258`, `:825-827`).
 - `--library` takes a library **name**, resolved by `readonly_library_sources`. An unknown name surfaces as "Library not found" (`validate_cmd.rs:679-685`).
+- **`snp validate` is not strictly read-only.** It can create `libraries.toml.corrupt` and `<library>.toml.corrupt.bak`, and it migrates the legacy macOS config directory (via `LibraryManager::new()`). See [Mutation vs read-only](#mutation-vs-read-only--not-strictly-read-only).
 - `W-CORRUPT-BAK` is reported for a **leftover** `.toml.corrupt.bak` file. It is a historical signal, not a live parse failure — the live failure would be `E-TOML-PARSE`.
 - `W-LIB-UNREADABLE` and `W-LIB-INDEX-UNREADABLE` mean the orphan-usage check was **partially or wholly skipped**. The report does not record "check skipped" as a separate flag; the diagnostic *is* the signal.
 - `W-SAME-ID-DIVERGENT` and `W-DUP-CHECK-SKIPPED` are mutually exclusive: if the raw re-parse fails you get the latter instead of the former.

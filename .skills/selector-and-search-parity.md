@@ -65,7 +65,12 @@ correctness bug**, not a style issue.
 | `resolve_selector_readonly(&selector)` (`src/selector.rs:623`) | Uses `readonly_library_sources()` — no migration, no directory creation, no metadata rewrite | Read-only commands, MCP, inspection |
 | `resolve_exact_target(...)` (`src/selector.rs:604`) | Builds an exact selector and delegates to the **mutating** resolver | Mutating callers needing ID/description/command matching |
 
-- MCP is read-only, so it must use `resolve_selector_readonly`.
+- MCP is read-only, so it must never reach the mutating `resolve_selector`.
+  Only `snippet_get` calls `resolve_selector_readonly` directly
+  (`src/mcp/tools.rs:160`); `snippets_list` and `snippets_search` go
+  `load_snippets()` (`src/mcp/tools.rs:234`) → `library_sources()`
+  (`src/mcp/tools.rs:253`) → `readonly_library_sources()`. Both routes are
+  read-only, but they are not the same route.
 - Guards: `tests/readonly_no_recovery.rs` and
   `tests/readonly_library_resolution.rs` assert the readonly path performs no
   recovery. Both are **serial-ish and feature-gated** — check
@@ -77,10 +82,26 @@ correctness bug**, not a style issue.
 
 ## Library scope: two paths, don't mix
 
-`"all"` is defined exactly once — `LibraryScope::from_filter_arg`
-(`src/selector.rs:61-68`) → `LibraryScope::AllLibraries`.
+`"all"` has **two** independent definitions — do not assume one covers both
+paths:
 
-- **Selector path** understands `"all"`. Used by `snp get`, `snp list`, and MCP.
+- **Selector path** — `LibraryScope::from_filter_arg`
+  (`src/selector.rs:65-71`) → `LibraryScope::AllLibraries`. Used by `snp get`,
+  exact-mode `run`/`clip`/`edit`, and MCP `snippet_get`.
+- **Read-only library path** — `LibraryManager::resolve_readonly_sources`
+  (`src/library/manager.rs:248-282`) matches the literal `"all"` itself, in
+  three separate arms (`:256`, `:266`, `:278`). Used by `snp list`,
+  `load_readonly_snippets`, and MCP `snippets_list` / `snippets_search`.
+
+They agree today, but they are separate code — changing one does not change
+the other. (The `from_filter_arg` doc comment calls itself "the single
+definition of `"all"` handling"; that is true only of the selector path.)
+
+- **Selector path** understands `"all"`. Used by `snp get`, exact-mode
+  `run`/`clip`/`edit`, and MCP `snippet_get`.
+- **Read-only library path** understands `"all"` independently. Used by
+  `snp list`, `load_readonly_snippets`, and MCP `snippets_list` /
+  `snippets_search`.
 - **`commands::get_library_path`** (`src/commands/mod.rs:91`) does **not**:
   it calls `get_library_by_filename("all")` and returns `library_not_found`.
   Used by the single-library mutating commands (`snp new`, `snp edit`).

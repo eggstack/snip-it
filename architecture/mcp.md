@@ -19,7 +19,7 @@ can run a snippet), library mutation, the user-facing protocol contract
 **Sources**: `src/mcp/mod.rs` (28 lines), `src/mcp/protocol.rs` (479),
 `src/mcp/tools.rs` (307), `src/mcp/client_install.rs` (269).
 CLI wiring: `McpCommands` (`src/main.rs:239`), classified `SuppressReadOnly` +
-`Minimal` (`src/main.rs:894`).
+`Minimal` (`src/main.rs:895`).
 
 ## Module Map
 
@@ -284,17 +284,22 @@ These are enforced by construction, not by convention:
   which parses and returns; it never writes.
 - **No recovery / no migration.** The read path uses the **side-effect-free**
   resolver: `resolve_selector_readonly()` (`src/selector.rs:623`) and
-  `library::readonly_library_sources()` (`src/library/manager.rs:773`), never
+  `library::readonly_library_sources()` (`src/library/manager.rs:784`), never
   `resolve_selector()` (`src/selector.rs:681`), which calls
   `LibraryManager::ensure_library_mode()` and can migrate a legacy
   single-file checkout, create `libraries/`, copy the legacy file, write
   `libraries.toml`, and bump the generation. MCP never calls the mutating
   resolver, so an agent's read cannot trigger that recovery path.
+  Concretely: `snippet_get` resolves through `resolve_selector_readonly()`
+  (`src/mcp/tools.rs:160`), while `snippets_list` and `snippets_search` load
+  through `load_snippets()` (`src/mcp/tools.rs:234`) → `library_sources()`
+  (`src/mcp/tools.rs:253`) → `library::readonly_library_sources()`. Neither
+  path reaches `resolve_selector()`.
 - **No prompting.** `ResolutionPolicy::All` + `resolve_selector_readonly`
   returns `NotFound` / `One` / `Many` / `Ambiguous` as data; there is no TUI,
   no stdin prompt, and no auto-expand of variables.
 - **No background work.** `snp mcp …` is classified `SuppressReadOnly` +
-  `Minimal` (`src/main.rs:894`), so no auto-sync worker is spawned, no network
+  `Minimal` (`src/main.rs:895`), so no auto-sync worker is spawned, no network
   connection is opened, and no recovery runs at startup.
 
 ## Search Parity
@@ -383,16 +388,16 @@ Mirrors `snp get` exactly (`src/mcp/tools.rs:129-206`; matching rules at
 ## CLI Surface
 
 `McpCommands` (`src/main.rs:239`) exposes three subcommands, all classified
-`SuppressReadOnly` + `Minimal` (`src/main.rs:894`) so agent reads never spawn
+`SuppressReadOnly` + `Minimal` (`src/main.rs:895`) so agent reads never spawn
 workers, open network connections, or create log/config state:
 
 - `snp mcp serve` — run the stdio server until EOF (`mcp::serve()`,
-  `src/mcp/mod.rs:14`, `src/main.rs:820`).
+  `src/mcp/mod.rs:14`, `src/main.rs:821`).
 - `snp mcp instructions <client>` — print the absolute-path setup block for one
-  of the six supported clients (`src/main.rs:821`).
+  of the six supported clients (`src/main.rs:822`).
 - `snp mcp install <client>` — invoke the official noninteractive registration
   when one exists, else print manual setup without changing anything
-  (`src/main.rs:822`).
+  (`src/main.rs:823`).
 
 ## Tests
 
@@ -406,8 +411,8 @@ process over pipes:
 | `malformed_and_oversized_messages_return_errors_without_crashing` (`:267`) | `-32700` / `-32602` / `-32600` error codes, oversized-line recovery |
 | `malformed_library_fails_closed_as_tool_error` (`:310`) | malformed library TOML surfaces as a tool error, not a crash |
 
-Unit tests live next to the code: `src/mcp/tools.rs:292` (limit bounds,
-object-only arguments), `src/mcp/client_install.rs:239` (official invocations
+Unit tests live next to the code: `src/mcp/tools.rs:296` (limit bounds,
+object-only arguments), `src/mcp/client_install.rs:243` (official invocations
 use exact server arguments), and `src/mcp/protocol.rs:472` (bounded reader
 discards oversized lines).
 
@@ -419,8 +424,8 @@ discards oversized lines).
 - `src/mcp/client_install.rs` — `McpClient`, official-CLI gate, manual setup blocks
 - `src/selector.rs:135` — `searchable_text`, the shared search contract
 - `src/selector.rs:623` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
-- `src/library/manager.rs:773` — `readonly_library_sources`, the read-only library resolver
-- `src/main.rs:239` — `McpCommands`; `src/main.rs:894` — read-only service classification
+- `src/library/manager.rs:784` — `readonly_library_sources`, the read-only library resolver
+- `src/main.rs:239` — `McpCommands`; `src/main.rs:895` — read-only service classification
 - `tests/mcp_integration.rs` — end-to-end protocol contract
 
 ## Invariants

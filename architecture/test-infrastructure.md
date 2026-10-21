@@ -93,7 +93,7 @@ binary respectively.
 **Feature** column: `test-support` is required by `Cargo.toml`
 `required-features`; `test-helpers` is the `snip-sync` crate feature that
 enables the in-process server helpers (it is enabled unconditionally for the
-`snip-it` dev-dependency, `Cargo.toml:143`).
+`snip-it` dev-dependency, `Cargo.toml:152`).
 
 ### CLI Surface and Output Contracts
 
@@ -157,7 +157,7 @@ enables the in-process server helpers (it is enabled unconditionally for the
 | `backup_snapshot_concurrency.rs` | Backup captures a consistent generation of library files under concurrent mutation, symlinks, non-regular files, and deterministic ordering | **serial** | — |
 | `destination_permissions.rs` | `snp restore` applies the destination permission policy uniformly: new files `0o600` on Unix, existing modes preserved, sensitive kinds overridden | parallel | — |
 | `edit_mutation_notify.rs` | `snp edit` byte-change-driven sync notification, per the outcome matrix (editor status × file changed) | parallel | — |
-| `manifest_contracts.rs` | Restore manifest validation — 25 numbered rejection/success cases including unknown entry kind, schema version, traversal paths, Windows reserved names, UNC paths, duplicate destinations, and fixture integrity | parallel | — |
+| `manifest_contracts.rs` | Restore manifest validation — 28 rejection/success cases including unknown entry kind, schema version, traversal paths, Windows reserved names, UNC paths, duplicate destinations, and fixture integrity | parallel | — |
 | `restore_security.rs` | Every rejection class of the backup-relative path validator rejects unsafe source artifacts | parallel | — |
 | `restore_transactions.rs` | Restore transactionality: dry run produces zero writes, a successful restore records exactly one pending generation, a failed restore rolls back | parallel | — |
 
@@ -214,8 +214,8 @@ and `tests/bin/` are not targets.
 ## Shared Support Modules
 
 `tests/support/` holds four modules. 39 of the 51 targets opt in with
-`mod support;` at the top of the file; the remaining 12 drive the binary
-directly (they need no shared helpers):
+`mod support;` at the top of the file; the remaining 12 need no shared
+helpers:
 
 | Target | Why it does not use `mod support;` |
 |--------|------------------------------------|
@@ -268,7 +268,7 @@ pub fn snp_in(config_dir: &Path) -> Command {
 `helpers` also provides `output_with_stdin`, `create_sort_test_library`,
 `write_sync_toml_auto_sync_enabled`, `write_sync_toml_auto_sync_ignore`,
 `create_test_library_for_auto_sync`, and `golden_corpus`
-(`tests/support/mod.rs:41-157`).
+(`tests/support/mod.rs:41-187`).
 
 The `env_remove` block is deliberate: a test that needs a seam re-adds only
 that one variable, so a stray value in the developer's shell cannot change a
@@ -368,8 +368,8 @@ let addr = listener.local_addr().unwrap();
 ```
 
 The service itself is pre-configured with `sqlite::memory:` and a 5-connection
-pool (`snip-sync/src/test_helpers.rs:36-38`), so no database file is ever
-created.
+pool (`snip-sync/src/test_helpers.rs:32`, `:38-39`), so no database file is
+ever created.
 
 | Method | Purpose |
 |--------|---------|
@@ -450,22 +450,25 @@ by both).
 
 ### Process-Level: `TempDir` + `XDG_CONFIG_HOME`
 
-Every integration test that shells out to `snp` redirects the config
-directory. `setup_test_env()` returns a `TempDir` and the
+Every integration test that shells out to `snp` and can write state redirects
+the config directory. (`tests/transaction_crash_recovery.rs:407` spawns
+`snp --version` alone; clap answers that before any config path is
+resolved.) `setup_test_env()` returns a `TempDir` and the
 `<tmp>/.config/snp` path; `snp_in(config_dir)` sets `XDG_CONFIG_HOME` to the
 config directory's parent, so the binary resolves
 `$XDG_CONFIG_HOME/snp` (`src/utils/config.rs:63-82`).
 
 `TestEnvironment` does the same with `home_dir` as the `TempDir` root
-(`environment.rs:44-48`).
+(`environment.rs:44-48`, `:251`).
 
 **Rule:** a subprocess test must not write the real `~/.config/snp/`. There is
 no per-platform `#[cfg]` branch in config resolution — macOS and Windows use
 the same `~/.config` layout (`src/utils/config.rs:1-7`).
 
 A target that calls the `snip_it` **library** (rather than the binary) is
-not covered by `XDG_CONFIG_HOME` unless it sets it itself — see the
-`identity_contract.rs` gap in [Gotchas](#gotchas).
+not covered by `XDG_CONFIG_HOME` unless it sets it itself — such a target
+must bind a `ScopedConfigDir` instead (`tests/identity_contract.rs:20-40`
+shows the pattern).
 
 ### Thread-Level: `ScopedConfigDir` (the one a contributor must know)
 
@@ -492,11 +495,14 @@ test contended on one process-wide local-data lock file. That contention is
 what made `test_serialization_matrix_makefile_leading_tabs_with_trailing_newline`
 fail on a 30 s local-data-lock timeout.
 
-The fix is a `#[cfg(test)]`-only, **thread-local** config-directory override:
+The fix is a **thread-local** config-directory override, compiled in under
+`#[cfg(any(test, feature = "test-support"))]` so that both the crate's own
+unit tests and `test-support` integration tests can bind it, and production
+builds cannot:
 
 ```rust
 // src/utils/config.rs:15-22
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Per-thread config-directory override. Tests run in parallel threads
     /// inside one process, so an `XDG_CONFIG_HOME` mutation would race with
@@ -506,13 +512,13 @@ thread_local! {
 }
 
 // src/utils/config.rs:35-57
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct ScopedConfigDir {
     previous: Option<PathBuf>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ScopedConfigDir {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
@@ -521,7 +527,7 @@ impl ScopedConfigDir {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ScopedConfigDir {
     fn drop(&mut self) {
         let previous = self.previous.take();
@@ -535,7 +541,12 @@ impl Drop for ScopedConfigDir {
 failing test cannot leak the redirect into the tests running beside it.
 Nested overrides unwind LIFO.
 
-**Usage pattern** (from `src/commands/run_cmd.rs:434-440`):
+The type is re-exported from the crate root as `snip_it::ScopedConfigDir`
+(`src/lib.rs:95-97`), also `#[cfg(any(test, feature = "test-support"))]` and
+`#[doc(hidden)]` — so an integration test can reach it, but only when the
+`test-support` feature is enabled.
+
+**Usage pattern** (from `src/commands/run_cmd.rs:431-441`):
 
 ```rust
 /// `run_exact` writes an audit-log entry and a usage counter, both of
@@ -551,7 +562,7 @@ fn isolated_config_dir() -> (tempfile::TempDir, crate::utils::config::ScopedConf
 }
 ```
 
-The same pattern appears in `src/logging.rs:601-607` for the audit-log test.
+The same pattern appears in `src/logging.rs:617-626` for the audit-log test.
 
 The canonical example is the `TestDir` helper in the library unit tests —
 this is the helper that fixed the failing serialization-matrix test:
@@ -583,8 +594,17 @@ redirected config directory must set `XDG_CONFIG_HOME` instead. See
 
 ### Credentials
 
-`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on **every** spawned test command
-(`tests/support/mod.rs:14`, `tests/support/environment.rs:49`). It is the
+`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on every spawned test command
+that can reach the credential store: on the two shared helpers
+(`tests/support/mod.rs:14`, `tests/support/environment.rs:49`) and on the
+per-target helpers of the targets that build their own `Command`
+(`tests/integration.rs:9`, `tests/output_contracts.rs:8`,
+`tests/recovery_integration.rs:9`, `tests/local_contracts.rs:15`,
+`tests/mcp_integration.rs:21`, `:216`,
+`tests/selector_search_parity.rs:31`,
+`tests/readonly_library_resolution.rs:355`,
+`tests/auto_sync_detached_worker.rs:31`, `:384`, `:834`,
+`tests/edit_mutation_notify.rs:51`). It is the
 seam that lets a test write a plaintext API key into `sync.toml` instead of
 going through the OS keychain. **Never remove it** — the keychain is a real
 system store and tests must not touch it.
@@ -668,7 +688,11 @@ constructs its own `TempDir` via `setup_test_env()` or `TestEnvironment`.
 These rules apply to every target in the suite, not just the auto-sync ones.
 
 - **Exact counts, not `>= 1`**: `assert_eq!(count, 1, ...)` on sync attempts,
-  worker spawns, and server operations.
+  worker spawns, and server operations. Two deliberate exceptions:
+  `tests/transaction_crash_recovery.rs:201-292` asserts `>= 1` detected
+  transaction (the `snp repair --dry-run` list may carry several items), and
+  `tests/recording_telemetry.rs:44`, `:63` use `>= 1` only as polling guards
+  inside a wait loop, never as the final assertion.
 - **Server-side effects proven**: remote state (the snippet appears on pull,
   the request was recorded) is asserted, not just the client's exit code.
 - **Pending-clear ordering**: the remote effect occurs *before* the pending
@@ -700,13 +724,13 @@ These rules apply to every target in the suite, not just the auto-sync ones.
 
 ### `test-support` (the `snip-it` crate)
 
-`Cargo.toml:161-162` defines `test-support = []` — a no-op feature whose only
+`Cargo.toml:170-171` defines `test-support = []` — a no-op feature whose only
 purpose is to switch `#[cfg(feature = "test-support")]` blocks on and off.
 
 Under `test-support`:
 
 - `src/test_failpoints.rs` compiles its real failpoint, error-injection, and
-  barrier logic (`src/test_failpoints.rs:20-26`, `:38-48`, `:63-80`).
+  barrier logic (`src/test_failpoints.rs:20-26`, `:38-48`, `:63-89`).
 - `src/auto_sync/test_events.rs` compiles real event emission
   (`src/auto_sync/test_events.rs:15-33`).
 - `src/lib.rs:65-69` re-exports the `transaction` module publicly so
@@ -725,10 +749,34 @@ Without `test-support`, every one of those sites is a compile-time no-op —
 the environment variable checks are **absent from the binary**, not merely
 inert. See [Production Seam Proof](#production-seam-proof).
 
+### The eight test-only seams
+
+All eight test seams are `#[cfg(feature = "test-support")]`-gated, so the
+variable name is absent from a production binary:
+
+| Seam | Gated check | Production behaviour |
+|------|-------------|----------------------|
+| `SNP_TEST_FAILPOINT` | `src/test_failpoints.rs:20-26` | `pub fn maybe_failpoint(_name) {}` (`:29-31`) |
+| `SNP_TEST_INJECT_ERROR` | `src/test_failpoints.rs:38-48` | `Ok(())` (`:51-56`) |
+| `SNP_TEST_MUTATION_BARRIER_DIR` | `src/test_failpoints.rs:63-89` | empty body (`:92-95`) |
+| `SNP_SKIP_WORKER_SPAWN` | `src/auto_sync/schedule.rs:195-198` | `false` (`:201-205`) |
+| `SNP_TEST_EVENTS_DIR` | `src/auto_sync/test_events.rs:30-33` | `false` / `None` (`:36-40`, `:50-54`) |
+| `SNP_ALLOW_DIR_FSYNC_FAILURE` | `src/utils/atomic.rs:217-220` | `false` (`:223-226`) |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | `src/config/sync_settings.rs:256-259`, `:302-317`, `:372-375` | keychain path only |
+| `SNP_TEST_CREDENTIAL_FILE` | `src/config/sync_settings.rs:250-253`, `:280-301`, `:366-369` | keychain path only |
+
+`scripts/ci/test-production-seams.sh` proves the compiled-out claim
+mechanically for five of them (see [Production Seam
+Proof](#production-seam-proof)). The remaining three — `SNP_TEST_INJECT_ERROR`
+and the two credential seams — are established by the `#[cfg(feature =
+"test-support")]` attribute on every read of those variables in `src/`:
+without the feature the `std::env::var` call is not compiled at all, so the
+string cannot reach the binary.
+
 ### `required-features` in `Cargo.toml`
 
 ```toml
-# Cargo.toml:51-75
+# Cargo.toml:50-84
 # Cross-process lock test helper binary. Only enabled under `test-support`
 # so production builds do not include this code path.
 [[bin]]
@@ -754,10 +802,20 @@ required-features = ["test-support"]
 name = "local_data_lock_barriers"
 path = "tests/local_data_lock_barriers.rs"
 required-features = ["test-support"]
+
+# The identity-contract test calls `save_library` in-process. `save_library`
+# derives the mutation gate and the local-data-lock path from the *config
+# directory*, so the test needs the `ScopedConfigDir` override to avoid
+# resolving them against the developer's real `~/.config/snp/`. That override
+# is exported from the crate root only under `test-support`.
+[[test]]
+name = "identity_contract"
+path = "tests/identity_contract.rs"
+required-features = ["test-support"]
 ```
 
-Exactly **four** entries carry `required-features`: the three targets above
-plus the `process_lock_helper` binary. The remaining 48 targets compile with
+Exactly **five** entries carry `required-features`: the four targets above
+plus the `process_lock_helper` binary. The remaining 47 targets compile with
 default features.
 
 > **Note.** `cargo clippy --workspace --all-targets -- -D warnings` (the
@@ -765,8 +823,9 @@ default features.
 > therefore *not* linted by that command; they are linted only when a target
 > is built with `--features test-support`. `check.sh` covers
 > `platform_smoke`, `destination_permissions`, and `auto_sync_closure` that
-> way — but `repair_transactions`, `process_lock_concurrency`, and
-> `local_data_lock_barriers` are **never** linted by `check.sh`. Run
+> way — but `repair_transactions`, `process_lock_concurrency`,
+> `local_data_lock_barriers`, and `identity_contract` are **never** linted by
+> `check.sh`. Run
 > `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 > locally before landing changes to them.
 
@@ -776,7 +835,7 @@ default features.
 kernel-lock race. `process_lock_concurrency.rs` spawns it via
 `env!("CARGO_BIN_EXE_process_lock_helper")` and coordinates through
 `SNP_TEST_LOCK_PATH` and `SNP_TEST_LOCK_BARRIER_DIR`
-(`tests/process_lock_concurrency.rs:28-40`).
+(`tests/process_lock_concurrency.rs:28-42`).
 
 **Container caveat** (from the target's own header): the tests use real
 `flock` (Unix), which requires `SYS_ADMIN` capability or `--privileged` in
@@ -799,14 +858,14 @@ pub mod test_observer;
 
 `test_helpers` provides `build_test_service()`,
 `build_test_service_with_observer(Option<Arc<dyn TestRequestObserver>>)`, and
-`start_test_server(service)` (`snip-sync/src/test_helpers.rs:24-110`).
+`start_test_server(service)` (`snip-sync/src/test_helpers.rs:23-110`).
 `test_observer` provides the `TestRequestObserver` trait and
 `InMemoryObserver`, which retain sanitized request telemetry only — no API
 key, authorization header, raw body, or plaintext payload
 (`snip-sync/src/test_observer.rs:1-22`).
 
 The `snip-it` crate pulls `snip-sync` in as a dev-dependency with the feature
-already on (`Cargo.toml:143`):
+already on (`Cargo.toml:152`):
 
 ```toml
 snip-sync = { version = "0.1.6", path = "snip-sync", features = ["test-helpers"] }
@@ -979,7 +1038,7 @@ Aborts the process immediately — a true crash, not a clean error. The
 production stub is `pub fn maybe_failpoint(_name: &str) {}`
 (`src/test_failpoints.rs:29-31`).
 
-**Named failpoints** (`src/test_failpoints.rs:101-122`):
+**Named failpoints** (`src/test_failpoints.rs:100-124`):
 
 | Constant | Value |
 |----------|-------|
@@ -990,7 +1049,7 @@ production stub is `pub fn maybe_failpoint(_name: &str) {}`
 | `RESTORE_AFTER_ALL_INSTALLS` | `restore-after-all-installs` |
 | `RESTORE_AFTER_COMMITTED_LOCAL_BEFORE_PENDING` | `restore-after-committed-local-before-pending` |
 | `RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE` | `restore-after-pending-before-journal-update` |
-| `RESTORE_AFTER_PENDING_BEFORE_CLEANUP` | `restore-after-pending-before-cleanup` |
+| `RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP` | `restore-after-journal-pending-before-cleanup` |
 | `RESTORE_DURING_FIRST_ROLLBACK` | `restore-during-first-rollback` |
 | `RESTORE_DURING_SECOND_ROLLBACK` | `restore-during-second-rollback` |
 | `CLEANUP_AFTER_STATE_BEFORE_VALIDATION` | `cleanup-after-state-before-validation` |
@@ -1023,7 +1082,7 @@ paths (`tests/repair_transactions.rs:812`,
 ### `mutation_barrier(point)`
 
 ```rust
-// src/test_failpoints.rs:63-80 (abridged)
+// src/test_failpoints.rs:63-89 (abridged)
 #[cfg(feature = "test-support")]
 pub fn mutation_barrier(point: &str) {
     let Ok(root) = std::env::var("SNP_TEST_MUTATION_BARRIER_DIR") else {
@@ -1043,11 +1102,11 @@ The barrier protocol, driven by the test:
 
 1. The test writes the expected point name to `<dir>/point` and clears stale
    `entered` / `release` files
-   (`tests/local_data_lock_barriers.rs:31-38`).
+   (`tests/local_data_lock_barriers.rs:30-34`).
 2. The real process reaches that point, writes `<dir>/entered`, and blocks.
 3. The test observes `entered` and runs the contending operation.
 4. The test writes `<dir>/release`; the blocked process resumes
-   (`tests/local_data_lock_barriers.rs:40-43`).
+   (`tests/local_data_lock_barriers.rs:36-39`).
 
 ### Who Uses Which Seam
 
@@ -1058,12 +1117,15 @@ The barrier protocol, driven by the test:
 | `SNP_TEST_MUTATION_BARRIER_DIR` | `tests/local_data_lock_barriers.rs:211`, `tests/repair_transactions.rs:1173` |
 | `SNP_SKIP_WORKER_SPAWN` | `tests/edit_mutation_notify.rs:50`, `:268`; production no-op at `src/auto_sync/schedule.rs:189-198` |
 | `SNP_TEST_EVENTS_DIR` | `src/auto_sync/test_events.rs:32`, `:45` |
+| `SNP_ALLOW_DIR_FSYNC_FAILURE` | `src/utils/atomic.rs:219`; exercised by `scripts/ci/test-production-seams.sh:150-170` |
+| `SNP_ALLOW_PLAINTEXT_API_KEY` | `tests/support/mod.rs:14`, `tests/support/environment.rs:49` (see [Credentials](#credentials)) |
+| `SNP_TEST_CREDENTIAL_FILE` | `tests/support/environment.rs:63`, `:259`; `tests/restore_crash_failpoints.rs:175`, `:525`, `:709`; `tests/cleanup_crash_failpoints.rs:95` |
 
 ---
 
 ## Architecture Boundary Tests
 
-`tests/architecture.rs` (256 lines) is a **source-scanning** test. It does not
+`tests/architecture.rs` (258 lines) is a **source-scanning** test. It does not
 run the code under test — it reads the source text and asserts on it. This is
 what makes it cheap enough to run in every CI pass.
 
@@ -1114,7 +1176,7 @@ The third test pins module visibility: `clipboard`, `diagnostics`,
 ### Updater transport pin
 
 ```rust
-// tests/architecture.rs:200-218
+// tests/architecture.rs:202-220
 #[test]
 fn snp_updater_pins_lean_eggfetch_profile() {
     ...
@@ -1127,7 +1189,7 @@ fn snp_updater_pins_lean_eggfetch_profile() {
 }
 ```
 
-The pin is `=0.2.2`, matching `Cargo.toml:132`:
+The pin is `=0.2.2`, matching `Cargo.toml:141`:
 
 ```toml
 eggfetch-core = { version = "=0.2.2", default-features = false, features = [
@@ -1145,7 +1207,7 @@ Three further tests pin the split:
   `snip-sync/src/update.rs` curl adapter is intentionally *not* scanned: it
   is a measured footprint tradeoff (see [update.md](update.md)).
 - `snp_updater_delegates_redirects_and_total_timeout`
-  (`tests/architecture.rs:220-256`) — `RedirectPolicy::strict` must be
+  (`tests/architecture.rs:222-258`) — `RedirectPolicy::strict` must be
   present, and `tokio::time::timeout` plus the superseded manual redirect
   helpers (`fn safe_get`, `fn is_redirect_status`, `fn redirect_location`,
   `fn redirect_target`, `follow_redirects(false)`) must be absent.
@@ -1170,12 +1232,17 @@ binary and asserts the HTTP wire bytes. It is the lock on the server's
 two-route EggServe leaf — do not change status codes, `Allow`/`Vary`, or the
 security headers without updating this target.
 
-| Test | Line | Proves |
+| Test | Line in `snip_sync_lifetime.rs` | Proves |
 |------|------|--------|
 | `server_remains_healthy_beyond_30_seconds` | `:215-217` | The server survives past the 30 s total-connection-lifetime boundary. **Marked `#[ignore = "runs for 35+ seconds; invoke explicitly with --ignored"]`** — invoked by `release-check.sh:163` |
 | `http_health_head_metrics_disabled_and_fallback_contract` | `:251-252` | `HEAD /health`, the metrics-disabled path, and the fallback registry |
 | `http_metrics_auth_and_cors_preflight_contract` | `:357-358` | Basic auth on `/metrics`, the CORS preflight, and the `WWW-Authenticate` challenge |
 | `http_allow_all_cors_is_available_for_loopback_server` | `:441-442` | `Access-Control-Allow-Origin: *` for the loopback server |
+| `server_exits_cleanly_on_signal` | `:797-799` | SIGTERM shutdown. **Marked `#[ignore = "runs for 10+ seconds; invoke explicitly with --ignored"]`** — also invoked by `release-check.sh:163` |
+
+The file holds eight `#[test]` functions in total; the table above lists the
+wire-contract ones. Both `#[ignore]`d tests are executed by the
+`--ignored` run in `release-check.sh:163`.
 
 ### The `WWW-Authenticate` assertion
 
@@ -1196,7 +1263,7 @@ assert!(
 );
 ```
 
-The second occurrence is at `tests/snip_sync_lifetime.rs:381-388`, for the
+The second occurrence is at `tests/snip_sync_lifetime.rs:383-388`, for the
 `Authorization: Basic !!!` (invalid) response.
 
 ### Shared assertion helpers
@@ -1205,7 +1272,7 @@ The target provides reusable helpers that other work should reuse rather than
 re-derive: `response_headers`, `header_value`, `header_tokens`,
 `response_body`, `assert_security_headers_present`,
 `assert_no_security_headers`, `assert_vary_origin`, `assert_no_vary`, and
-`assert_empty_fallback` (`tests/snip_sync_lifetime.rs:485-590`).
+`assert_empty_fallback` (`tests/snip_sync_lifetime.rs:485-589`).
 
 ---
 
@@ -1221,7 +1288,7 @@ Three targets dig deeper than anything CI runs.
 
 **`transaction_crash_recovery.rs`** is the only one wired into a script. It
 runs in the **release profile** — the release binary's optimizer and
-`panic = "abort"` profile (`Cargo.toml:150-155`) can expose timing and
+`panic = "abort"` profile (`Cargo.toml:159-164`) can expose timing and
 teardown behavior that a debug build does not.
 
 **`cleanup_crash_failpoints.rs` and `restore_crash_failpoints.rs` are
@@ -1262,7 +1329,7 @@ full-suite command, the release script, or by hand.
 
 ### `scripts/release-check.sh verify`
 
-Requires a clean tree (`release-check.sh:130-134`). Phases:
+Requires a clean tree (`release-check.sh:126-137`). Phases:
 
 1. Release workflow contract
 2. `scripts/check.sh` (same as Linux CI)
@@ -1286,7 +1353,7 @@ See [Production Seam Proof](#production-seam-proof).
 - **linux-correctness** — `bash scripts/check.sh` (35 min timeout).
 - **platform-smoke** — macOS and Windows: `cargo check --workspace --all-targets`
   plus `cargo test --test platform_smoke --features test-support`. Windows
-  additionally runs `pwsh -NoProfile -File scripts/tests/installers.ps1`.
+  additionally runs `scripts/tests/installers.ps1` under `pwsh`.
 
 ---
 
@@ -1301,13 +1368,13 @@ See [Production Seam Proof](#production-seam-proof).
 | `tests/bin/process_lock_helper.rs` | Helper binary that participates in the kernel-lock race (`required-features = ["test-support"]`) |
 | `src/test_failpoints.rs` | Feature-gated failpoint, error-injection, and barrier seams |
 | `src/auto_sync/test_events.rs` | Feature-gated JSON-lines event emission (`SNP_TEST_EVENTS_DIR`) |
-| `src/utils/config.rs` | `get_config_dir()` and the `#[cfg(test)]` thread-local `ScopedConfigDir` override |
+| `src/utils/config.rs` | `get_config_dir()` and the `#[cfg(any(test, feature = "test-support"))]` thread-local `ScopedConfigDir` override |
 | `tests/architecture.rs` | Source-scanning layer-boundary enforcement and the updater transport pin |
 | `tests/pty_integration.rs` | Real-pty TUI harness with the paint-and-quiet handshake |
 | `tests/snip_sync_lifetime.rs` | Locked HTTP wire-parity assertions for the `snip-sync` leaf |
 | `tests/readonly_library_resolution.rs` | Read-only resolution regression: legacy layout, `all` scope, no writes |
 | `tests/public_api_smoke.rs` | The supported `snip_it` public surface still resolves |
-| `Cargo.toml` | `required-features` gating for three targets and the helper bin; `test-support` feature |
+| `Cargo.toml` | `required-features` gating for four targets and the helper bin; `test-support` feature |
 | `snip-sync/Cargo.toml` | `test-helpers` feature for the in-process server helpers |
 | `scripts/check.sh` | The Linux-CI check list |
 | `scripts/release-check.sh` | The manual pre-release verification, including the deep suites |
@@ -1319,11 +1386,11 @@ See [Production Seam Proof](#production-seam-proof).
 
 1. **Tests must not touch the developer's real `~/.config/snp/`, real
    keychain, or real network ports.** Subprocess tests use `TempDir` +
-   `XDG_CONFIG_HOME`; unit tests use the `#[cfg(test)]` thread-local
-   `ScopedConfigDir`. One target does not yet comply — see
-   [Gotchas](#gotchas).
-2. **`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on every test command.** It is
-   the seam that keeps the OS keychain out of the test path. Never remove it.
+   `XDG_CONFIG_HOME`; unit tests and `test-support` integration tests use the
+   thread-local `ScopedConfigDir`.
+2. **`SNP_ALLOW_PLAINTEXT_API_KEY=true` is set on every test command that
+   can reach the credential store.** It is the seam that keeps the OS
+   keychain out of the test path. Never remove it.
 3. **Test-only code is compiled out of production builds.** `test-support`
    gates the failpoints, the event sink, and the public `transaction`
    re-export. `scripts/ci/test-production-seams.sh` proves the env-var
@@ -1333,12 +1400,13 @@ See [Production Seam Proof](#production-seam-proof).
    override.
 5. **Serial targets are serial for a reason** — real pty pairs, kernel lock
    contention, barrier coordination, or shared ports. Do not parallelize them.
-6. **Exactly four Cargo entries carry `required-features`**: the three
+6. **Exactly five Cargo entries carry `required-features`**: the four
    `test-support` targets and the `process_lock_helper` bin.
 7. **The exit timeout is a named constant.** `PTY_EXIT_TIMEOUT`, not a
    literal.
 8. **Assertions are exact counts, not `>= 1`**, and server-side effects are
-   proven, not inferred from the client's exit code.
+   proven, not inferred from the client's exit code. (Two deliberate
+   exceptions are listed under [Assertion Discipline](#assertion-discipline).)
 9. **A read-only path is proven by a filesystem snapshot**, not by the
    absence of an error. Compare a recursive byte snapshot of the config
    directory before and after the call
@@ -1351,37 +1419,43 @@ See [Production Seam Proof](#production-seam-proof).
 
 ## Gotchas
 
-- **`ScopedConfigDir` is unreachable from integration tests.** It is
-  `#[cfg(test)]` on the struct *and* both impls (`src/utils/config.rs:35`,
-  `:41`, `:51`) *and* lives in a `pub(crate)` module
-  (`src/lib.rs:70`). Only the crate's own unit tests can bind it; an
-  integration test must redirect the config directory with
-  `XDG_CONFIG_HOME` instead.
+- **`ScopedConfigDir` needs the `test-support` feature to reach an
+  integration test.** The struct and both impls are gated on
+  `#[cfg(any(test, feature = "test-support"))]`
+  (`src/utils/config.rs:35`, `:41`, `:51`) and the type is re-exported from
+  the crate root as `snip_it::ScopedConfigDir` under the same gate
+  (`src/lib.rs:95-97`). A crate's own unit test sees it via `cfg(test)`; an
+  integration test sees it only when `test-support` is enabled — which is
+  why `tests/identity_contract.rs` is gated on that feature
+  (`Cargo.toml:81-84`). Without the feature, redirect the config directory
+  with `XDG_CONFIG_HOME` instead.
 - **A thread-local override does not propagate to spawned threads.** Use
   `XDG_CONFIG_HOME` for a test that spawns a worker thread.
 - **`set_var` is `unsafe` in edition 2024.** Barrier tests wrap it
   (`tests/repair_transactions.rs:1170-1175`).
-- **`cargo clippy --workspace --all-targets` does not lint the three
+- **`cargo clippy --workspace --all-targets` does not lint the four
   `required-features` targets.** `check.sh` does not pass `--all-features`;
   lint them explicitly before landing changes to
-  `repair_transactions`, `process_lock_concurrency`, or
-  `local_data_lock_barriers`.
+  `repair_transactions`, `process_lock_concurrency`,
+  `local_data_lock_barriers`, or `identity_contract`.
 - **Do not delete the `env_remove` block** in `snp_cmd()` /
   `base_snp_cmd()`. Without it a stray variable in the developer's shell
   silently changes test behavior.
 - **`process_lock_concurrency.rs` needs `SYS_ADMIN` / `--privileged` in
   Docker.** Without it `flock` degrades to `fcntl` and mutual exclusion is
   not actually proven.
-- **`snip_sync_lifetime.rs` has one `#[ignore]`d test** that takes 35+ s. It
-  runs only via `release-check.sh` with `--ignored`.
+- **`snip_sync_lifetime.rs` has two `#[ignore]`d tests** — the 35+ s
+  lifetime test (`:215-217`) and the 10+ s SIGTERM-shutdown test
+  (`:797-799`). They run only via `release-check.sh` with `--ignored`
+  (`release-check.sh:163`).
 - **`snip-sync` has its own integration target**
   (`snip-sync/tests/legacy_pid_cli.rs`), Linux-only
   (`#![cfg(target_os = "linux")]`). It is not one of the 51.
 - **The `snip_it` library is `#[doc(hidden)]` in places.** Integration tests
   use it directly, but `public_api_smoke.rs` is the guard on the *supported*
   surface listed in `src/lib.rs`.
-- **`tests/identity_contract.rs` now isolates the config directory.** *(Fixed
-  in this session.)* It calls `save_library` in-process, which runs the
+- **`tests/identity_contract.rs` now isolates the config directory.** *(Fixed.)*
+  It calls `save_library` in-process, which runs the
   mutation gate and acquires the local-data lock — both derived from the
   **config directory** (`src/library/persistence.rs:223-224` →
   `src/utils/config.rs:227-232` → `src/local_data.rs:398-400`). It
@@ -1391,7 +1465,8 @@ See [Production Seam Proof](#production-seam-proof).
   the mutation (or roll back an interrupted transaction) depending on the
   developer's real state, and a `.transaction` directory was created in the
   real config. The target now uses a `TestDir` helper that binds
-  `ScopedConfigDir` for the calling thread, and the target is gated on
+  `ScopedConfigDir` for the calling thread (`tests/identity_contract.rs:20-40`),
+  and the target is gated on
   `test-support` because that override is exported from the crate root only
   under that feature.
 - **The PTY harness's `settle` window is a quiet period, not a delay.**

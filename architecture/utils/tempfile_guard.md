@@ -49,7 +49,7 @@ The guard is created **immediately after** the temp path is computed and
 armed first and the file is created second, so a failure to create the file
 still leaves the guard armed for a path that does not exist — the resulting
 `NotFound` on drop is swallowed
-(`src/utils/atomic.rs:285-286`, `:370-371`).
+(`src/utils/atomic.rs:285-286`, `:375-376`).
 
 ### Persist — the success path
 
@@ -173,13 +173,13 @@ The guard has no dedicated unit tests of its own — it is covered through the
 atomic-write tests:
 
 - `test_atomic_replace_no_temp_file_on_success`
-  (`src/utils/atomic.rs:650-664`) — no `*.tmp` files remain after a
+  (`src/utils/atomic.rs:649-663`) — no `*.tmp` files remain after a
   successful replace.
 - `test_atomic_replace_no_temp_file_on_failure`
-  (`src/utils/atomic.rs:666`) — no `*.tmp` files remain after a failed
+  (`src/utils/atomic.rs:665-682`) — no `*.tmp` files remain after a failed
   replace.
-- `tests/auto_sync_concurrency.rs:401-449` — no UUID-based `.tmp` files
-  accumulate across a burst of mutations.
+- `tests/auto_sync_concurrency.rs:417-457` (`test_no_temp_file_accumulation`) —
+  no UUID-based `.tmp` files accumulate across a burst of mutations.
 
 ---
 
@@ -188,7 +188,7 @@ atomic-write tests:
 | Path | Role |
 |------|------|
 | `src/utils/tempfile_guard.rs` | The guard itself: `new`, `persist`, `Drop` |
-| `src/utils/atomic.rs` | The only production consumer — `write_private_atomic` (`:281`, `:315`) and `atomic_replace` (`:371`, `:409`) |
+| `src/utils/atomic.rs` | The only production consumer — `write_private_atomic` (guard armed `:285-286`, `persist()` at `:320`) and `atomic_replace` (guard armed `:375-376`, `persist()` at `:414`) |
 | `src/utils/mod.rs` | Declares `pub mod tempfile_guard` (`src/utils/mod.rs:16`) |
 | `tests/auto_sync_concurrency.rs` | Integration check that no `.tmp` files accumulate |
 
@@ -199,7 +199,7 @@ atomic-write tests:
 1. **`persist()` consumes the guard** — it cannot be called twice, and the
    caller no longer holds it afterwards (`src/utils/tempfile_guard.rs:17`).
 2. **`persist()` is called only after a successful `fs::rename`**
-   (`src/utils/atomic.rs:320`, `:409`), so the target file is never removed by
+   (`src/utils/atomic.rs:320`, `:414`), so the target file is never removed by
    the guard.
 3. **A failed write never leaves a temp file behind** — every error path
    between guard construction and the rename drops the guard armed

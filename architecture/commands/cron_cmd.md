@@ -27,7 +27,7 @@ pub struct CronArgs {
 ```
 
 `snp cron` (alias `cr`) — `src/main.rs:114-116`, dispatched at
-`src/main.rs:723-725`.
+`src/main.rs:724-725`.
 
 | Flag | Type | Default | Behavior |
 |------|------|---------|----------|
@@ -169,7 +169,7 @@ runtime-owning commands as `run`, `clip`, `search`, `sync`, `register`,
 
 Startup policy: `Commands::Cron(_)` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:969-972`) — generating a cron
+`StartupServices::Logging` (`src/main.rs:970-972`) — generating a cron
 entry does not reschedule pending auto-sync work.
 
 ## Auto-sync trigger
@@ -181,7 +181,7 @@ pending marker itself; it does not create a new pending intent.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1025-1031`).
+exit **1** (`src/main.rs:1026-1032`).
 
 | Situation | Result |
 |-----------|--------|
@@ -216,7 +216,7 @@ With a spaced install path, the binary field renders quoted:
 | Path | Role |
 |------|------|
 | `src/commands/cron_cmd.rs` | `CronArgs`, `shell_escape_path`, `binary_path`, `make_cron_entry`, `run` |
-| `src/main.rs:114-116`, `:723-725` | Clap wiring and dispatch |
+| `src/main.rs:114-116`, `:724-725` | Clap wiring and dispatch |
 | `src/clipboard.rs:166-169` | `copy_to_clipboard_auto` (auto-clear aware) |
 | `src/commands/clip_cmd.rs:40-49` | The auditing copy path that `cron` bypasses |
 | `src/commands/sync_cmd.rs:188-210` | The execution lock the generated entry contends for |
@@ -244,3 +244,9 @@ With a spaced install path, the binary field renders quoted:
   entry and no usage-index update for it.
 - **Copying the entry can schedule a clipboard auto-clear** if
   `clipboard_auto_clear_seconds` is set in `sync.toml`.
+- **`shell_escape_path` is not a complete shell quoter.** It quotes on
+  space, `'`, `"`, `\`, `$`, and a backtick (`src/commands/cron_cmd.rs:15-17`);
+  characters such as `;`, `&`, `|`, `>`, `<`, `(`, `)`, `*`, `?`, `!`,
+  `#`, `~`, and newline are emitted verbatim. A binary path containing one
+  of those lands unquoted in the crontab line and is interpreted by `sh`
+  when the entry fires.

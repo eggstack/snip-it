@@ -34,8 +34,8 @@ must take; only two call sites bypass it (see
 
 | Target | Dependency | Location |
 |--------|------------|----------|
-| `cfg(windows)` | `clipboard-win = "5.4"` | `Cargo.toml:98-99` |
-| `cfg(not(windows))` (macOS + Linux) | `arboard = { version = "3", default-features = false }` | `Cargo.toml:102-103` |
+| `cfg(windows)` | `clipboard-win = "5.4"` | `Cargo.toml:98` |
+| `cfg(not(windows))` (macOS + Linux) | `arboard = { version = "3", default-features = false }` | `Cargo.toml:102` |
 
 `default-features = false` on `arboard` is load-bearing. arboard's default
 feature set is `["image-data"]`, and the optional `wayland-data-control`
@@ -206,7 +206,8 @@ subcommand). A short-lived `snp clip` exits before the timer fires.
 records **debug** on success and **warn** on failure. It logs the operation
 name and a boolean only — never the copied text.
 
-Every OS write inside `src/clipboard.rs` calls it:
+Every OS **copy** inside `src/clipboard.rs` calls it on success and failure;
+`clear_clipboard_impl` calls it only on success:
 
 | Site | Operation string | Level |
 |------|------------------|-------|
@@ -293,6 +294,7 @@ Every failure is `SnipError::clipboard_error(operation, detail)`
 | arboard `set_text` fails | `"set text"` | underlying arboard error | `src/clipboard.rs:206` |
 | Windows `set_clipboard` fails | `"set text"` | underlying `clipboard-win` error | `src/clipboard.rs:182` |
 | Clear fails (arboard) | `"clear clipboard"` | underlying arboard error | `src/clipboard.rs:105` |
+| Clear context creation fails (arboard) | `"create clipboard context for clear"` | underlying arboard error | `src/clipboard.rs:102` |
 | Clear fails (Windows) | `"clear clipboard"` | underlying `clipboard-win` error | `src/clipboard.rs:96` |
 | Exceeds `SNP_CLIPBOARD_TIMEOUT` | `"copy"` or `"clear"` | `"clipboard operation timed out after N seconds"` | `src/clipboard.rs:136-142` |
 | Worker channel drops | `"copy"` or `"clear"` | `"clipboard operation channel closed unexpectedly"` | `src/clipboard.rs:144-147` |
@@ -443,7 +445,7 @@ bumps the usage index — i.e. that the copy went through
 - **Auto-clear is off by default.** `clipboard_auto_clear_seconds` is
   `None` unless the user sets it (`src/config/sync_settings.rs:407`).
 - **This build has no Wayland support.** `arboard` is pulled with
-  `default-features = false` (`Cargo.toml:103`), which disables
+  `default-features = false` (`Cargo.toml:102`), which disables
   `wayland-data-control`; the Linux backend is X11-only.
 - **The settings cache is invalidated only by `save_sync_settings`.** An
   external edit to the config file is not picked up until the next in-process

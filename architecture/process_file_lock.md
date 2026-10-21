@@ -393,7 +393,7 @@ conflated.
 |----------|-------|
 | Authority | `create_new(true)` plus an ownership record written into the file |
 | Lock files | `<state_dir>/transaction.lock`, `<state_dir>/local-data.lock` |
-| Record | `pid`, `nonce`, `start_token`, `created_at_unix_ms`, `schema_version` |
+| Record | `pid`, `nonce`, `start_token`, `created_at_unix_ms`, `schema_version` (plus `operation` in the transaction record, `src/transaction.rs:988`) |
 | On `Drop` | unlink, but only after ownership verification via `remove_owned_lock_file` (`src/transaction.rs:1014`, `src/local_data.rs:93`) |
 | Stale reclaim | rename to a quarantine file |
 | Users | transaction lock, local-data lock |

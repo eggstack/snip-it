@@ -80,12 +80,12 @@ On Unix the temp file is always created `0o600`, so a replaced file keeps
 
 Exact fsync semantics (`src/utils/atomic.rs`):
 
-- **File fsync** — `file.sync_all()` runs only for `DurableUserData` and `SensitiveConfig` (`atomic.rs:397-403`). The other two classes get `file.flush()` only, which pushes to the kernel buffer but not to the device.
-- **Directory fsync** — `sync_parent_dir()` hard-fails the write for `DurableUserData`/`SensitiveConfig` when the parent-dir fsync errors (`atomic.rs:228-250`). `RecoverableMetadata` downgrades a directory-fsync failure to a warning (`atomic.rs:252-259`). `EphemeralCoordination` skips the directory fsync entirely (`atomic.rs:192`).
-- **Temp-file mode** — `0o600` for *every* class on Unix (`atomic.rs:378-382`); `write_private_atomic` likewise creates its temp at `0o600` (`atomic.rs:287`).
-- **Windows** — `std` offers no creation-time permission knob, so the temp file inherits the parent directory's ACL. Windows installs rely on the user-private `%APPDATA%` directory ACLs instead of a file-level DACL (`atomic.rs:265-272`).
+- **File fsync** — `file.sync_all()` runs only for `DurableUserData` and `SensitiveConfig` (`atomic.rs:402-408`). The other two classes get `file.flush()` only, which pushes to the kernel buffer but not to the device.
+- **Directory fsync** — `sync_parent_dir()` hard-fails the write for `DurableUserData`/`SensitiveConfig` when the parent-dir fsync errors (`atomic.rs:228-255`). `RecoverableMetadata` downgrades a directory-fsync failure to a warning (`atomic.rs:257-264`). `EphemeralCoordination` skips the directory fsync entirely (`atomic.rs:195-197`).
+- **Temp-file mode** — `0o600` for *every* class on Unix (`atomic.rs:383-387`); `write_private_atomic` likewise creates its temp at `0o600` (`atomic.rs:292`).
+- **Windows** — `std` offers no creation-time permission knob, so the temp file inherits the parent directory's ACL. Windows installs rely on the user-private `%APPDATA%` directory ACLs instead of a file-level DACL (`atomic.rs:273-277`).
 
-`SNP_ALLOW_DIR_FSYNC_FAILURE=1` downgrades a directory-fsync error to a warning, but only in `test-support` builds (`atomic.rs:212-221`). Production builds always fail closed on a durability error — the seam is inert outside tests.
+`SNP_ALLOW_DIR_FSYNC_FAILURE=1` downgrades a directory-fsync error to a warning, but only in `test-support` builds (`atomic.rs:217-226`). Production builds always fail closed on a durability error — the seam is inert outside tests.
 
 ### Options
 
@@ -97,7 +97,7 @@ pub struct AtomicWriteOptions {
 }
 ```
 
-`AtomicWriteOptions::for_durability(d)` creates defaults: `reject_symlink = true` only for `SensitiveConfig` (`atomic.rs:56-63`).
+`AtomicWriteOptions::for_durability(d)` creates defaults: `reject_symlink = true` only for `SensitiveConfig` (`atomic.rs:61-68`).
 
 ### Algorithm
 
@@ -114,9 +114,9 @@ pub struct AtomicWriteOptions {
 9. Sync parent directory — for `DurableUserData`/`SensitiveConfig` a failure fails the write; for `RecoverableMetadata` it is logged and ignored; `EphemeralCoordination` skips it
 10. On any failure, `TempFileGuard` cleans up the temp file
 
-Target validation (`validate_target`, `atomic.rs:107-162`) rejects directories, FIFOs, sockets, and device nodes. A symlink is **replaced, never followed** — the final `rename` swaps the directory entry itself, so an allowed symlink is a valid target (`atomic.rs:121-126`).
+Target validation (`validate_target`, `atomic.rs:112-167`) rejects directories, FIFOs, sockets, and device nodes. A symlink is **replaced, never followed** — the final `rename` swaps the directory entry itself, so an allowed symlink is a valid target (`atomic.rs:126-131`).
 
-`write_private_atomic` always syncs the parent directory with `SensitiveConfig` semantics (`atomic.rs:322`), so its directory-fsync failures are hard errors.
+`write_private_atomic` syncs the parent directory with `SensitiveConfig` semantics (`atomic.rs:326-327`), so its directory-fsync failures are hard errors. That sync is Unix-only — on non-Unix platforms the `sync_parent_dir` call is compiled out, so the rename entry is never flushed on Windows.
 
 ### Report
 
@@ -225,7 +225,7 @@ The mutation gate runs *before* either lock is taken. The gate itself may acquir
 |-----------|------|-----------------|-------------------|
 | `library::persistence::save_library` | Yes (`persistence.rs:225-228`) | Yes (`persistence.rs:233`) | — |
 | `commands::save_snippets` | Yes (`commands/mod.rs:212-215`) | Yes (`commands/mod.rs:218`) | — |
-| `LibraryManager` mutators | Yes (`manager.rs:625-631`) | Yes (`manager.rs:616-619`) | — |
+| `LibraryManager` mutators | Yes (`manager.rs:636-642`) | Yes (`manager.rs:627-630`) | — |
 | `commands::edit_cmd` | Yes (`edit_cmd.rs:73`) | Yes (`edit_cmd.rs:101`) | — |
 | `commands::restore_cmd` | Yes (`restore_cmd.rs:1142-1145`) | Yes (`restore_cmd.rs:1146`) | Yes (`restore_cmd.rs:1147`) |
 | `commands::backup_cmd` | — | Yes (`backup_cmd.rs:78`) | — |
@@ -233,11 +233,11 @@ The mutation gate runs *before* either lock is taken. The gate itself may acquir
 | `config::sync_settings` | — | Yes (`config/sync_settings.rs:473`) | — |
 | `transaction::recover_transaction_by_id` | — | — | Yes, first (`transaction.rs:782`) |
 
-Every `LibraryManager` mutator follows the same shape — `gate_mutation()` then `acquire_local_data_lock()` — at `manager.rs:182-183, 364-365, 419-420, 489-490, 513-514, 526-527, 545-546, 561-562, 574-575, 601-602, 642-643`. `gate_mutation()` runs *before* any in-memory mutation so a refused call leaves the manager clean for a retry after `snp repair` (`manager.rs:621-631`).
+Every `LibraryManager` mutator follows the same shape — `gate_mutation()` then `acquire_local_data_lock()` — at `manager.rs:182-183, 364/378, 430-431, 500-501, 524-525, 537-538, 556-557, 571-572, 585-586, 612-613, 653-654`. `gate_mutation()` runs *before* any in-memory mutation so a refused call leaves the manager clean for a retry after `snp repair` (`manager.rs:632-642`). Two mutators deviate: `create_library` takes the lock at `:378`, after `ensure_library_mode()` at `:376` (gate at `:364`), and `save_premade_library` takes the local-data lock only, with no gate (`manager.rs:717-718`).
 
 Two commands acquire no lock of their own and inherit the table's rows **transitively**, so look them up here before concluding they are unlocked:
 - `snp repair` takes the transaction lock only inside `recover_transaction_by_id` (`transaction.rs:782`) and the local-data lock only inside `UsageIndex::save()` (`usage.rs:74`).
-- `snp import` reaches both through `save_library` (`persistence.rs:217-238`) and, for a new library, `add_existing_library` (`manager.rs:573-574`).
+- `snp import` reaches both through `save_library` (`persistence.rs:217-238`) and, for a new library, `add_existing_library` (`manager.rs:585-586`).
 
 `snp edit` is the one deliberate exception to "gate, then lock": the gate runs at `edit_cmd.rs:73`, the editor session runs unlocked, and the local-data lock is taken only for the short post-editor observe-and-notify window (`edit_cmd.rs:97-101`). The interactive session cannot hold the lock; only the read-compare-notify critical section needs to be serialized against other writers.
 
@@ -320,7 +320,7 @@ pub struct StagedFile {
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce, PID, and start token match the guard's nonce, PID, and start token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
 
 **Bounded retry ladder.** A record that is *empty, unparseable, or only partially written* goes through a bounded retry ladder before quarantine, because "a live writer called `create_new` but has not finished writing" is an observable state, and a partially written record is indistinguishable from a malformed one; quarantining immediately would rename away a live owner's lock and admit a second writer into the critical section.
 
@@ -468,7 +468,7 @@ Quarantine files are named `local-data.lock.quarantine.<uuid>` and pruned by `pr
 
 ### Relationship to Backup Snapshot Capture
 
-`snp backup` acquires the local-data lock for the duration of snapshot capture (`backup_cmd.rs:74-78`), reading the library generation before and after the copy so a concurrent mutation is detected as a torn snapshot. The mirror-image rule holds on the write side: `save_library` (`persistence.rs:230-233`), `save_snippets` (`commands/mod.rs:217-218`), and every `LibraryManager` mutator (`manager.rs:616-619`) take the same lock, so backup sees either the complete before-state or the complete after-state of all local data, never a mixed state.
+`snp backup` acquires the local-data lock for the duration of snapshot capture (`backup_cmd.rs:74-78`), reading the library generation before and after the copy so a concurrent mutation is detected as a torn snapshot. The mirror-image rule holds on the write side: `save_library` (`persistence.rs:230-233`), `save_snippets` (`commands/mod.rs:217-218`), and every `LibraryManager` mutator (`manager.rs:627-630`) take the same lock, so backup sees either the complete before-state or the complete after-state of all local data, never a mixed state.
 
 ---
 
@@ -717,7 +717,7 @@ pub struct RepairItem {
 
 ### Backup Before Repair
 
-`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>-<uuid>/` before any mutations (`repair_cmd.rs:211-213, 861-893`). The backup copies the whole `libraries/` directory plus `libraries.toml` and `usage.toml`.
+`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>-<uuid>/` before any mutations (`repair_cmd.rs:214-216, 872-905`). The backup copies the whole `libraries/` directory plus `libraries.toml` and `usage.toml`.
 
 Transaction recovery inside repair goes through `recover_transaction_by_id`, so each journal is classified, re-validated, and recovered under the transaction lock.
 
@@ -878,7 +878,8 @@ This ensures repeated loads of identical file content produce identical IDs with
 
 - All sensitive files created with 0o600 permissions
 - Config directory created with 0o700 permissions
-- Lock files use the kernel-backed process file lock for atomic acquisition; ownership is never reused based on PID liveness inspection
+- Kernel-backed locks (the auto-sync execution lock, the sync-server singleton) use the process file lock (`flock`/`LockFileEx`) for atomic acquisition; the kernel state is the sole mutual-exclusion authority and ownership is never reused based on PID liveness inspection
+- Owned-record locks (`transaction.lock`, `local-data.lock`) do **not** use a kernel lock: they are created with `O_EXCL` (`create_new(true)`) plus a TOML owner record (`transaction.rs:1085-1088`, `local_data.rs:140-143`). A stale owner is reclaimed by observing the recorded PID and comparing start tokens (`transaction.rs:1205-1247`, `local_data.rs:261-299`)
 - Auto-sync lock ownership uses start-token + nonce diagnostics only; the kernel state is the sole mutual-exclusion authority
 - Atomic writes: temp-file-then-rename with `validate_target` (rejects FIFOs, sockets, devices)
 - Transaction artifact path validation rejects `Component::ParentDir` during lexical normalization and rejects missing children below symlinked intermediate components
@@ -887,7 +888,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 - Backup redaction: API keys stripped from sync.toml copies
 - Owned-record lock reclaim is **ownership-verified** for the local-data lock: the record on disk is re-read and compared before the rename (`local_data.rs:322-354`), so a live lock is never renamed away by a racing reclaimer
 - Lock records are `0o600`-scoped by construction: the config directory is `0o700` and the temp/record files inherit that
-- `SNP_ALLOW_DIR_FSYNC_FAILURE` is inert in production builds (`atomic.rs:217-221`)
+- `SNP_ALLOW_DIR_FSYNC_FAILURE` is inert in production builds (`atomic.rs:217-226`)
 
 ---
 
@@ -954,4 +955,4 @@ This ensures repeated loads of identical file content produce identical IDs with
 - **Adding a cleanup/normalization pass after `toml::to_string_pretty` silently corrupts user data.** The serializer already picks correct quoting and escaping for tabs, trailing whitespace, and CRLF.
 - **`quote_strings_containing_backslashes` must never touch serialized output.** It cannot distinguish a triple-quoted multi-line string from an ordinary double-quoted one, and its single-quoted output preserves `\t` as a literal two-character pair. It survives only for callers that hand-write TOML.
 - **Reading is not the same as resolving.** `resolve_selector_readonly` never migrates; `resolve_selector` calls `ensure_library_mode()` and can rewrite metadata. Picking the wrong one reintroduces recovery side effects — see [library.md](library.md).
-- **Unit tests must not write to the real `~/.config/snp/`.** `save_library` derives its gate and local-data-lock paths from the *config directory*, not from the target library path (`persistence.rs:223-224`), and `ScopedConfigDir` (`src/utils/config.rs:35-57`, `#[cfg(test)]` only) binds a per-test, thread-local config directory.
+- **Unit tests must not write to the real `~/.config/snp/`.** `save_library` derives its gate and local-data-lock paths from the *config directory*, not from the target library path (`persistence.rs:223-224`), and `ScopedConfigDir` (`src/utils/config.rs:35-57`, `#[cfg(any(test, feature = "test-support"))]`) binds a per-test, thread-local config directory.

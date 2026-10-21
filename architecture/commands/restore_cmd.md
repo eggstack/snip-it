@@ -79,7 +79,7 @@ Reads and validates the backup, then prints the planned actions and **returns be
 All of this happens **before** any lock, transaction, or live write.
 
 1. **Backup path must exist** (`:957-962`).
-2. **Load the manifest** (`:964-965` → `load_manifest`, `:542-588`). `manifest.toml` is tried first, then `manifest.json`.
+2. **Load the manifest** (`:964-965` → `load_manifest`, `:542-570`). `manifest.toml` is tried first, then `manifest.json`.
 3. **Contract validation** (`:971` → `validate_manifest_contract`, `:239-353`):
    - `schema` must be `1`; `layout` must be `"directory"` (`:241-254`);
    - at most one `index`, one `usage`, one `sync_config` entry (`:256-287`);
@@ -184,10 +184,10 @@ pub struct RestoreReport {
 
 | `kind` | Raised when | Source |
 |---|---|---|
-| `updated` | incoming snippet has a strictly greater `updated_at` | `restore_cmd.rs:824-833` |
-| `kept_existing` | existing snippet's `updated_at` is greater or equal | `restore_cmd.rs:836-845` |
-| `added` | snippet ID not present in the destination | `restore_cmd.rs:849-853` |
-| `replaced` | replace mode overwrote an existing library | `restore_cmd.rs:864-868` |
+| `updated` | incoming snippet has a strictly greater `updated_at` | `restore_cmd.rs:823-834` |
+| `kept_existing` | existing snippet's `updated_at` is greater or equal | `restore_cmd.rs:835-846` |
+| `added` | snippet ID not present in the destination | `restore_cmd.rs:847-854` |
+| `replaced` | replace mode overwrote an existing library | `restore_cmd.rs:863-869` |
 | `redacted_key` | `sync.toml` was restored from a redacted backup | `restore_cmd.rs:1545-1551` |
 
 `report.skipped` holds human-readable strings, not structured records: `"<name>.toml (identical)"`, `"sync.toml (local config preserved)"`.
@@ -226,7 +226,7 @@ The restore path is instrumented with failpoints from `src/test_failpoints.rs:10
 | `RESTORE_AFTER_PENDING_BEFORE_JOURNAL_UPDATE` | `restore-after-pending-before-journal-update` | `restore_cmd.rs:1693` | the pending marker is durable; the journal still says `NotRecorded` |
 | `RESTORE_AFTER_JOURNAL_PENDING_BEFORE_CLEANUP` | `restore-after-journal-pending-before-cleanup` | `restore_cmd.rs:1708` | the journal records the final pending state; artifacts still exist |
 
-Each of these is a distinct recovery state that `snp repair` must classify and resolve (`repair_cmd.rs:497-542`).
+Each of these is a distinct recovery state that `snp repair` must classify and resolve (`repair_cmd.rs:483-553`).
 
 ## Output and exit codes
 
@@ -235,7 +235,7 @@ Each of these is a distinct recovery state that `snp repair` must classify and r
 | `--json` | stdout | the serialized `RestoreReport` (`:1736-1740`) |
 | default | stderr | `Restore complete (mode: …)`, files restored, conflict list, skipped list, pre-restore backup path (`:1741-1759`) |
 
-`snp restore` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:422-425`). Failures are `SnipError`s mapped through `src/outcome.rs:46-70`.
+`snp restore` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:423-426`). Failures are `SnipError`s mapped through `src/outcome.rs:46-70`.
 
 ## Interaction with the transaction journal and locks
 
@@ -264,7 +264,7 @@ Each of these is a distinct recovery state that `snp repair` must classify and r
 ## Invariants
 
 - **Nothing is written until every validation passes.** Manifest contract, path safety, artifact type/size, checksum, and index semantics are all checked before the first lock is taken (`restore_cmd.rs:964-1080`).
-- The lock order is always `LocalDataLock → TransactionLock → destination writes` (`restore_cmd.rs:1133`).
+- The lock order is always `LocalDataLock → TransactionLock → destination writes` (`restore_cmd.rs:1142-1147`).
 - The gate runs before the locks, so an interrupted foreign transaction refuses the restore rather than racing it.
 - Every staged artifact is written, synced, and verified **before** the journal is persisted at `BackupsDurable`; commit progress is persisted **after** each verified write.
 - Each installed destination is re-hashed **from the live file** and compared to the intended hash; an I/O error during hashing is propagated, never treated as a hash match.

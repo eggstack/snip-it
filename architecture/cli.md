@@ -6,12 +6,12 @@
 
 `src/main.rs` is the `snp` binary entry point: the clap schema (`Cli` +
 `Commands`), Unix signal setup, the global Tokio runtime handle, the
-startup-behavior classification, and a 1:1 `dispatch_command()` fan-out to
-`src/commands/*`. It owns no business logic — each subcommand maps to exactly
-one command module, and each command module owns its canonical `*Args` struct
-beside its handler. The `snp data` subgroup is a compatibility alias layer over
-the same arg types and the same single-path `handle_*` helpers, never a second
-schema.
+startup-behavior classification, and a `dispatch_command()` fan-out to
+`src/commands/*`. It owns no business logic — each subcommand maps to a
+command module, and each command module owns its canonical `*Args` struct
+beside its handler. The `snp data` subgroup is a mirror group over the same
+arg types and the same single-path `handle_*` helpers, never a second
+schema (it is a separate Clap subcommand group, not a Clap `alias`).
 
 This doc covers the command surface, dispatch, and startup behavior only.
 Command implementations live in [commands/mod.md](commands/mod.md); the
@@ -25,25 +25,25 @@ startup behavior, and the stdout/stderr split — see
 
 ## Startup sequence
 
-`main()` (`src/main.rs:999-1037`) runs, in order:
+`main()` (`src/main.rs:1000-1038`) runs, in order:
 
 1. `setup_panic_handler()` — installed before parsing so TUI terminal cleanup
-   is protected even on argument errors (`src/main.rs:1000`).
-2. `setup_signal_handler()` (`src/main.rs:1001`; Unix impl `src/main.rs:29-45`) —
+   is protected even on argument errors (`src/main.rs:1001`).
+2. `setup_signal_handler()` (`src/main.rs:1002`; Unix impl `src/main.rs:29-45`) —
    registers SIGINT + SIGTERM via `signal_hook::flag` on Unix
    (`src/main.rs:37`, `src/main.rs:41`); on Windows the handler is an empty
    stub (`src/main.rs:47-50`) because Ctrl+C is handled by the crossterm event
    loop.
-3. `Cli::parse()` + `command_behavior()` (`src/main.rs:1003-1004`) — one match
+3. `Cli::parse()` + `command_behavior()` (`src/main.rs:1004-1005`) — one match
    assigns both the `StartupRecoveryPolicy` and the `StartupServices` level,
    preventing drift between the two.
-4. Conditional logging (`src/main.rs:1005-1011`) — `Minimal` commands skip
+4. Conditional logging (`src/main.rs:1006-1012`) — `Minimal` commands skip
    `init_default_file_logging()` and `log_startup_info()`; `Logging` commands
    call both.
-5. Startup recovery (`src/main.rs:1013-1015`) — only when the policy is
+5. Startup recovery (`src/main.rs:1014-1016`) — only when the policy is
    `Allow` (see [Startup recovery](#startup-recovery)).
-6. `dispatch_command()` (`src/main.rs:1017`); the outcome maps to a process
-   exit code via `CliOutcome::exit_code()` (`src/main.rs:1019-1031`).
+6. `dispatch_command()` (`src/main.rs:1018`); the outcome maps to a process
+   exit code via `CliOutcome::exit_code()` (`src/main.rs:1019-1032`).
 
 ### Signal handling (Unix)
 
@@ -82,13 +82,13 @@ it:
 
 | Call site | Runtime handle |
 |---|---|
-| `update` (`src/main.rs:451-457`) | `RUNTIME.block_on(…)` |
-| `sync` run (`src/main.rs:695`), `sync retry` (`src/main.rs:710`) | `&RUNTIME` |
-| `register` (`src/main.rs:727`) | `&RUNTIME` |
-| `premade list/get/sync/search/update` (`src/main.rs:739-750`) | `&RUNTIME` |
-| `run` — exact (`src/main.rs:514`), TUI (`src/main.rs:539`) | `args.sync.then_some(&RUNTIME)` |
-| `clip` — exact (`src/main.rs:560`), TUI (`src/main.rs:581`) | `args.sync.then_some(&RUNTIME)` |
-| `search` (`src/main.rs:596`) | `args.sync.then_some(&RUNTIME)` |
+| `update` (`src/main.rs:452-458`) | `RUNTIME.block_on(…)` |
+| `sync` run (`src/main.rs:696`), `sync retry` (`src/main.rs:711`) | `&RUNTIME` |
+| `register` (`src/main.rs:728`) | `&RUNTIME` |
+| `premade list/get/sync/search/update` (`src/main.rs:739-752`) | `&RUNTIME` |
+| `run` — exact (`src/main.rs:515`), TUI (`src/main.rs:540`) | `args.sync.then_some(&RUNTIME)` |
+| `clip` — exact (`src/main.rs:561`), TUI (`src/main.rs:582`) | `args.sync.then_some(&RUNTIME)` |
+| `search` (`src/main.rs:597`) | `args.sync.then_some(&RUNTIME)` |
 
 `run_snippet_selection()` takes `Option<&Runtime>`
 (`src/commands/mod.rs:338-352`) and errors when `do_sync` is true but the
@@ -113,7 +113,7 @@ ones.
 | `version` | `v` | — | No | Print version (`src/main.rs:68`) |
 | `update` | — | `src/update.rs` | Yes | Check for and install an update; `--dry-run`, `--locked` (`src/main.rs:70-75`) |
 | `new` | `n` | `new_cmd` | No | Create snippet from positional, prompt, multiline, exact stdin, file, or editor (`src/main.rs:86`) |
-| `list` | `l` | `list_cmd` | No | List snippets; `--json` / `--csv` are mutually exclusive (`src/main.rs:89`) |
+| `list` | `l` | `list_cmd` | No | List snippets (`src/main.rs:89`); `--json` / `--csv` are mutually exclusive (`src/commands/list_cmd.rs:18-21`) |
 | `run` | `r` | `run_cmd` | If `--sync` | TUI select → execute via shell; exact selectors bypass the TUI (`src/main.rs:92`) |
 | `clip` | `c` | `clip_cmd` | If `--sync` | TUI select → copy to clipboard; exact selectors bypass the TUI (`src/main.rs:95`) |
 | `search` | `s` | `search_cmd` | If `--sync` | TUI select → display snippet info (`src/main.rs:98`) |
@@ -129,7 +129,7 @@ ones.
 | `import` | `i` | `import_cmd` | No | Import Pet snippet files (`src/main.rs:136-139`) |
 | `repair` | `rp` | `repair_cmd` | No | Conservative, backed-up, idempotent repair (`src/main.rs:142`) |
 | `validate` | `val` | `validate_cmd` | No | Validate snippet libraries and configuration (read-only) (`src/main.rs:145`) |
-| `data` | `d` | `DataCommands` | No | Alias layer over the canonical data arg types (`src/main.rs:148-151`) |
+| `data` | `d` | `DataCommands` | No | Mirror group over the canonical data arg types (`src/main.rs:148-151`) |
 | `completions` | `g` | inline (`clap_complete`) | No | Generate shell completions (`src/main.rs:154-158`) |
 | `shell` | — | `shell_cmd` | No | Generate interactive shell integration (`src/main.rs:160-163`) |
 | `backup` | — | `backup_cmd` | No | Secret-free backup snapshot (`src/main.rs:165`) |
@@ -142,8 +142,8 @@ ones.
 
 | Command | Declaration | Purpose |
 |---|---|---|
-| `auto-sync-worker` | `#[command(name = "auto-sync-worker", hide = true)]` (`src/main.rs:177-183`) | Detached debounce worker; invoked by the parent process after a mutation. Takes `--state-dir`. Exits 1 on `WorkerOutcome::Failed` (`src/main.rs:857-867`) |
-| `__self-replace` | `#[command(name = "__self-replace", hide = true)]` (`src/main.rs:76-83`) | Windows self-replacement helper; takes `--candidate` / `--destination` (`src/main.rs:462-464`) |
+| `auto-sync-worker` | `#[command(name = "auto-sync-worker", hide = true)]` (`src/main.rs:177-183`) | Detached debounce worker; invoked by the parent process after a mutation. Takes `--state-dir`. Exits 1 on `WorkerOutcome::Failed` (`src/main.rs:858-868`) |
+| `__self-replace` | `#[command(name = "__self-replace", hide = true)]` (`src/main.rs:76-83`) | Windows self-replacement helper; takes `--candidate` / `--destination` (`src/main.rs:459-465`) |
 
 ### Nested subcommand groups
 
@@ -201,8 +201,9 @@ ones.
 | `instructions` | — | `client` (`src/main.rs:243-246`) |
 | `install` | — | `client` (`src/main.rs:248-251`) |
 
-**`data`** — `DataCommands` (`src/main.rs:254-269`) — a compatibility alias
-layer. It reuses the *same* arg types as the top-level commands:
+**`data`** — `DataCommands` (`src/main.rs:254-269`) — a mirror group over the
+top-level commands. It reuses the *same* arg types as the top-level commands
+(it is a separate Clap subcommand group, **not** a Clap `alias` attribute):
 
 | Subcommand | Alias | Arg type |
 |---|---|---|
@@ -213,33 +214,35 @@ layer. It reuses the *same* arg types as the top-level commands:
 | `status` | `s` | `commands::status_cmd::StatusArgs` (`src/main.rs:268`) |
 
 Bare `snp` (no subcommand) defaults to the `run` TUI
-(`src/main.rs:445-447`).
+(`src/main.rs:446-448`).
 
 ## Dispatch
 
-`dispatch_command()` (`src/main.rs:443-870`) maps every `Commands` variant to
-its module 1:1. Each module exposes `run()` (except `premade_cmd` /
-`library_cmd`, which use subcommand-dispatched `run_list` / `run_get` / …).
+`dispatch_command()` (`src/main.rs:444-871`) maps every `Commands` variant to
+its module 1:1 — except `data`, whose five subcommand arms each route to the
+`handle_*` helper of the matching top-level command. Each module exposes
+`run()` (except `premade_cmd` / `library_cmd`, which use subcommand-dispatched
+`run_list` / `run_get` / …).
 
 Routing facts worth auditing:
 
 - **Top-level and `data` spellings share one code path.** `handle_validate`
-  (`src/main.rs:405`), `handle_backup` (`src/main.rs:410`), `handle_restore`
-  (`src/main.rs:422`), `handle_repair` (`src/main.rs:431`), and `handle_status`
-  (`src/main.rs:438`) are the only implementations; `Commands::Validate`
-  (`src/main.rs:807-809`), `Commands::Backup` (`src/main.rs:810-812`),
-  `Commands::Restore` (`src/main.rs:813-815`), `Commands::Repair`
-  (`src/main.rs:804-806`), `Commands::Status` (`src/main.rs:816-818`) and all
-  five `DataCommands` arms (`src/main.rs:824-840`) call them.
+  (`src/main.rs:406`), `handle_backup` (`src/main.rs:411`), `handle_restore`
+  (`src/main.rs:423`), `handle_repair` (`src/main.rs:432`), and `handle_status`
+  (`src/main.rs:439`) are the only implementations; `Commands::Validate`
+  (`src/main.rs:808-810`), `Commands::Backup` (`src/main.rs:811-813`),
+  `Commands::Restore` (`src/main.rs:814-816`), `Commands::Repair`
+  (`src/main.rs:805-807`), `Commands::Status` (`src/main.rs:817-819`) and all
+  five `DataCommands` arms (`src/main.rs:825-841`) call them.
 - **Commands that own their outcome return it directly** instead of falling
-  through to the `Ok(CliOutcome::Success)` tail at `src/main.rs:869`:
-  `select` (`src/main.rs:605-612`), `doctor` (`src/main.rs:756-768`),
-  `sync discard-pending` (`src/main.rs:715-718`), `get`
-  (`src/main.rs:841-856`).
+  through to the `Ok(CliOutcome::Success)` tail at `src/main.rs:870`:
+  `select` (`src/main.rs:606-613`), `doctor` (`src/main.rs:757-769`),
+  `sync discard-pending` (`src/main.rs:716-719`), `get`
+  (`src/main.rs:842-857`).
 - **Ambiguous exact matches** are reported to stderr by `report_ambiguous()`
-  (`src/main.rs:389-399`) and return `CliOutcome::Ambiguous` (exit 5).
+  (`src/main.rs:390-400`) and return `CliOutcome::Ambiguous` (exit 5).
 - **`auto-sync-worker`** is dispatched to `snip_it::auto_sync::worker::run`
-  (`src/main.rs:857-867`) and exits 1 on failure.
+  (`src/main.rs:858-868`) and exits 1 on failure.
 
 ### Canonical `*Args` structs
 
@@ -255,7 +258,7 @@ mapping. Shared shell spellings live in `shell_cmd::ShellIntegration`.
 `run`, `clip`, and `edit` accept `--id` / `--description-exact` /
 `--command-exact`, which bypass the TUI via
 `selector::resolve_exact_target()` (`src/selector.rs:604-612`;
-call sites `src/main.rs:503`, `src/main.rs:549`, `src/main.rs:639`):
+call sites `src/main.rs:504`, `src/main.rs:550`, `src/main.rs:640`):
 
 - `--id <ID>` — exact snippet ID (case-sensitive)
 - `--description-exact <text>` — exact description (case-insensitive)
@@ -264,13 +267,13 @@ call sites `src/main.rs:503`, `src/main.rs:549`, `src/main.rs:639`):
 They conflict with `--filter` (fuzzy TUI pre-filter) and with each other.
 Ambiguous description/command matches report identities (exit 5); no match
 is exit 3. `snp edit --output/--output-stdin/--clear-output` requires an
-exact selector or `--filter` (`src/main.rs:661-667`). See
+exact selector or `--filter` (`src/main.rs:662-667`). See
 [selector.md](selector.md).
 
 ## Startup-behavior classification
 
-`command_behavior()` (`src/main.rs:886-997`) maps every `Commands` variant to
-a `CommandBehavior { recovery, services }` (`src/main.rs:881-884`). The struct
+`command_behavior()` (`src/main.rs:887-998`) maps every `Commands` variant to
+a `CommandBehavior { recovery, services }` (`src/main.rs:882-885`). The struct
 and the match are one unit: **one** match assigns both the startup-recovery
 policy and the logging/audit service level, so the two can never drift.
 
@@ -287,7 +290,7 @@ pub enum StartupRecoveryPolicy {
 }
 ```
 
-`StartupServices` (`src/main.rs:872-876`) has two levels: `Minimal` skips file
+`StartupServices` (`src/main.rs:873-877`) has two levels: `Minimal` skips file
 logging, startup/shutdown log lines, and audit entirely; `Logging`
 initializes file logging plus `log_startup_info()` / `log_shutdown_info()`.
 
@@ -295,15 +298,15 @@ initializes file logging plus `log_startup_info()` / `log_shutdown_info()`.
 
 | Policy | Services | Commands | Source |
 |---|---|---|---|
-| `SuppressReadOnly` | `Minimal` | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` | `src/main.rs:889-904` |
-| `SuppressReadOnly` | `Minimal` | `restore --dry-run`, `repair --dry-run`, `import pet --dry-run` | `src/main.rs:906-924` |
-| `SuppressReadOnly` | `Minimal` | `data validate`, `data status`, `data backup`, `data restore --dry-run`, `data repair --dry-run` | `src/main.rs:927-943` |
-| `Allow` | `Logging` | `data repair`, `data restore` (non-dry-run) | `src/main.rs:944-946` |
-| `Allow` | `Logging` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary` | `src/main.rs:950-966` |
-| `SuppressExplicitSync` | `Logging` | `sync`, `cron`, `register` | `src/main.rs:969-972` |
-| `SuppressInternal` | `Logging` | `auto-sync-worker` | `src/main.rs:975-978` |
-| `SuppressConfiguration` | `Logging` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` | `src/main.rs:981-991` |
-| `Allow` | `Logging` | bare `snp` (default TUI) | `src/main.rs:994` |
+| `SuppressReadOnly` | `Minimal` | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` | `src/main.rs:890-905` |
+| `SuppressReadOnly` | `Minimal` | `restore --dry-run`, `repair --dry-run`, `import pet --dry-run` | `src/main.rs:907-925` |
+| `SuppressReadOnly` | `Minimal` | `data validate`, `data status`, `data backup`, `data restore --dry-run`, `data repair --dry-run` | `src/main.rs:929-944` |
+| `Allow` | `Logging` | `data repair`, `data restore` (non-dry-run) | `src/main.rs:945-947` |
+| `Allow` | `Logging` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary` | `src/main.rs:951-967` |
+| `SuppressExplicitSync` | `Logging` | `sync`, `cron`, `register` | `src/main.rs:970-973` |
+| `SuppressInternal` | `Logging` | `auto-sync-worker` | `src/main.rs:976-979` |
+| `SuppressConfiguration` | `Logging` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` | `src/main.rs:982-992` |
+| `Allow` | `Logging` | bare `snp` (default TUI) | `src/main.rs:995` |
 
 The match is exhaustive — adding a command requires choosing a policy and a
 `StartupServices` level, enforced by the compiler with no catch-all arm.
@@ -311,20 +314,20 @@ The match is exhaustive — adding a command requires choosing a policy and a
 Notes for auditors:
 
 - **`search` is classified as a mutation command**, not read-only: it is in the
-  `Allow` / `Logging` arm (`src/main.rs:952`). A regression test pins this
-  (`search_retains_mutation_capabilities`, `src/main.rs:1077-1088`).
+  `Allow` / `Logging` arm (`src/main.rs:955`). A regression test pins this
+  (`search_retains_mutation_capabilities`, `src/main.rs:1078-1089`).
 - **Dry-run modes of mutating commands are classified read-only** so previews
   never trigger network work or create log/config state
-  (`src/main.rs:906-924`).
+  (`src/main.rs:907-925`).
 - **`library` is split by subcommand**: `list`/`show` are read-only
-  (`src/main.rs:898-900`); `create`/`delete`/`set-primary` are mutations
-  (`src/main.rs:960-965`).
-- **`data` is split by subcommand** the same way (`src/main.rs:927-947`).
+  (`src/main.rs:899-901`); `create`/`delete`/`set-primary` are mutations
+  (`src/main.rs:961-966`).
+- **`data` is split by subcommand** the same way (`src/main.rs:928-948`).
 
 ### Startup recovery
 
 `main()` gates recovery on the policy
-(`src/main.rs:1013-1015`):
+(`src/main.rs:1014-1016`):
 
 ```rust
 if snip_it::auto_sync::should_attempt_auto_sync_recovery_for_policy(Some(behavior.recovery)) {
@@ -349,7 +352,7 @@ pending marker and schedules the detached worker; a scheduling failure is a
 |---|---|---|
 | `snp get`, exact-mode `run`/`clip`/`edit`, MCP | Supported | Selector path (`src/selector.rs:65-71`, `src/selector.rs:623-646`) |
 | `snp list` | Supported | Read-only path via `commands::load_readonly_snippets` (`src/commands/mod.rs:127-147`; `src/commands/list_cmd.rs:65-77`) |
-| `snp search` | **Rejected** with an explicit error | The interactive selector edits and deletes inside a single library file (`src/commands/search_cmd.rs:32-45`) |
+| `snp search` | **Rejected** with an explicit error | The interactive selector edits and deletes inside a single library file (`src/commands/search_cmd.rs:32-44`) |
 | `snp new`, `snp edit`, `snp sync`, `snp select` | Not supported | Single-library path (`commands::get_library_path`, `src/commands/mod.rs:91`) |
 
 The read-only resolver that backs the supported surfaces is
@@ -360,10 +363,15 @@ the one implicit `snippets` library (`src/library/manager.rs:256`). It never
 calls `ensure_library_mode()`, never creates files or directories, and never
 rewrites metadata (`src/library/manager.rs:237-247`).
 
+> "Read-only" scopes the *library* state. Constructing the manager first can
+> still migrate the legacy macOS config directory
+> (`src/library/manager.rs:41-92` → `src/utils/config.rs:166-179`). See
+> [public_api.md](public_api.md) for the caveat.
+
 `snp search --library all` used to fail with the misleading
 `Library 'all' does not exist`. It now rejects the scope with an accurate
 error naming the supported alternatives (`snp list --library all`,
-`snp get --library all`) — `src/commands/search_cmd.rs:32-45`.
+`snp get --library all`) — `src/commands/search_cmd.rs:32-44`.
 
 **`all` is a reserved library name.** `validate_library_name()` rejects it
 (`src/library/model.rs:213-223`), so `snp library create all` fails and
@@ -389,16 +397,16 @@ error naming the supported alternatives (`snp list --library all`,
 | 9 | Conflict/refused |
 | 10 | Unsafe repairs pending operator decision |
 
-`main()` maps the result (`src/main.rs:1017-1032`):
+`main()` maps the result (`src/main.rs:1018-1033`):
 
-- `Ok(CliOutcome::Success)` → fall through, exit 0 (`src/main.rs:1018`).
-- `Ok(other)` → `std::process::exit(outcome.exit_code())` (`src/main.rs:1023`).
+- `Ok(CliOutcome::Success)` → fall through, exit 0 (`src/main.rs:1019`).
+- `Ok(other)` → `std::process::exit(outcome.exit_code())` (`src/main.rs:1024`).
 - `Err(SnipError)` → `eprintln!("error: {e}")` then exit 1
-  (`src/main.rs:1025-1031`).
+  (`src/main.rs:1026-1032`).
 
 ### The exit-10 path is *not* a `CliOutcome`
 
-`exit_on_repair_status()` (`src/main.rs:375-387`) maps
+`exit_on_repair_status()` (`src/main.rs:375-388`) maps
 `commands::repair_cmd::RepairExitStatus` to a process exit code directly:
 
 ```rust
@@ -406,6 +414,7 @@ fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
     match status {
         commands::repair_cmd::RepairExitStatus::Clean
         | commands::repair_cmd::RepairExitStatus::Repaired
+        | commands::repair_cmd::RepairExitStatus::FindingsSafe
         | commands::repair_cmd::RepairExitStatus::DryRun => {}
         commands::repair_cmd::RepairExitStatus::PartialFailure => {
             std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);
@@ -419,13 +428,17 @@ fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
 
 | `RepairExitStatus` | Exit code |
 |---|---|
-| `Clean` / `Repaired` / `DryRun` | 0 (implicit return) |
+| `Clean` / `Repaired` / `FindingsSafe` / `DryRun` | 0 (implicit return) |
 | `PartialFailure` | 1 (`GENERAL_ERROR`) |
 | `UnsafeOnly` | 10 (`UNSAFE_REPAIRS`) |
 
-`UnsafeOnly` deliberately does **not** reuse 2 (`USAGE_ERROR`): a valid
-invocation that found unsafe repairs awaiting an operator decision is not a
-usage error, and scripts must be able to tell the two apart
+`FindingsSafe` is the report-only case: issues were found, all of them are
+safe to repair, but none were applied because neither `--apply` nor
+`--dry-run` was passed (`src/commands/repair_cmd.rs:156-158`,
+`:243-252`). It therefore does not claim code 10. `UnsafeOnly` deliberately
+does **not** reuse 2 (`USAGE_ERROR`): a valid invocation that found unsafe
+repairs awaiting an operator decision is not a usage error, and scripts must
+be able to tell the two apart
 (`src/main.rs:369-374`). Because this path calls `std::process::exit` inside
 the handler, there is deliberately **no** `CliOutcome` variant for it — see
 [outcome.md](outcome.md).
@@ -433,7 +446,8 @@ the handler, there is deliberately **no** `CliOutcome` variant for it — see
 `ExecutionFailed { child_code }` propagates the child process exit code when
 available, falling back to 8 (`src/outcome.rs:83-87`); the `run` paths call
 `std::process::exit(child_code.unwrap_or(8))` directly
-(`src/main.rs:518`, `src/main.rs:542`).
+(`src/main.rs:519`, `src/main.rs:543`). `snp clip` does not — it exits 1 on
+error.
 
 ## Key Files
 
@@ -451,17 +465,17 @@ available, falling back to 8 (`src/outcome.rs:83-87`); the `run` paths call
 
 - **`command_behavior()` is exhaustive.** Adding a `Commands` variant without
   choosing a policy and a service level is a compile error, not a silent
-  default (`src/main.rs:886-997`).
+  default (`src/main.rs:887-998`).
 - **Read-only commands never create state.** `Minimal` services skip the log
   directory, `snp.log`, `audit.log`, and the config directory entirely
-  (`src/main.rs:1005-1011`).
+  (`src/main.rs:1006-1012`).
 - **Only `Allow` triggers startup recovery** — read-only, explicit-sync,
   internal, and configuration policies all suppress it
   (`src/auto_sync/notification.rs:213-223`).
 - **`sync` with no subcommand ≡ `sync run`** with no flags
   (`src/main.rs:677-687`).
 - **`snp data X` and `snp X` are the same code path** — one arg type, one
-  handler, one exit-code mapping (`src/main.rs:405-441`, `src/main.rs:824-840`).
+  handler, one exit-code mapping (`src/main.rs:406-442`, `src/main.rs:825-841`).
 - **`all` has one definition** (`LibraryScope::from_filter_arg`) and one
   reserved-name guard (`validate_library_name`); no surface may fork the rule.
 
@@ -471,15 +485,15 @@ available, falling back to 8 (`src/outcome.rs:83-87`); the `run` paths call
   MSVC.** `.cargo/config.toml` sets `/STACK:8388608` for that reason — do not
   remove it.
 - **`search` is not read-only.** It is classified `Allow` / `Logging`
-  (`src/main.rs:952`), which is intentional and pinned by
-  `search_retains_mutation_capabilities` (`src/main.rs:1077-1088`).
+  (`src/main.rs:955`), which is intentional and pinned by
+  `search_retains_mutation_capabilities` (`src/main.rs:1078-1089`).
 - **`doctor` is a flat command, not a nested group** (`src/main.rs:133`), even
   though it takes a `DoctorArgs` struct with several modes.
 - **`data repair` and `data restore` are mutations**, unlike their
-  read-only siblings (`src/main.rs:944-946`).
+  read-only siblings (`src/main.rs:945-947`).
 - **Exit code 10 never comes back through `CliOutcome`.** `exit_on_repair_status`
   calls `std::process::exit` directly, so `handle_repair` never returns
-  (`src/main.rs:431-435`).
+  (`src/main.rs:432-436`).
 - **A failed `run` records no usage metadata** — usage is written only on
   `ProcessResult::is_done()` (`src/commands/run_cmd.rs:175-184`).
 - **`--library all` is rejected by `snp search`**, not silently ignored; the

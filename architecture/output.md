@@ -45,7 +45,9 @@ The hardening on the redirect branch (all in `src/commands/run_cmd.rs`):
   argument is absolute, so an absolute `output` value escapes the join — which
   is exactly why the containment check below is mandatory.
 - Pre-open containment check: the canonicalized output path must start with
-  the canonicalized CWD, else `"Invalid output path"` (`:226-239`).
+  the canonicalized CWD, else `"Invalid output path"` (`:225-259` — the
+  existing-path branch at `:225-239`, the not-yet-created branch at
+  `:240-259`).
 - `OpenOptions::create_new(true)` — fails closed rather than following an
   existing symlink (`:261-262`).
 - Post-open re-canonicalization + `dev`/`ino` identity check against the
@@ -54,7 +56,7 @@ The hardening on the redirect branch (all in `src/commands/run_cmd.rs`):
 - The child is spawned with `cmd.stdout(file)`, so **stdout only** is
   redirected; stderr still reaches the terminal (`:323`, `:131-133`).
 - The output-file branch uses the default timeout policy; the ordinary
-  branch uses `TimeoutPolicy::NoDefault` (`:318-320` vs `:329-330`).
+  branch uses `TimeoutPolicy::NoDefault` (`:319-321` vs `:330`).
 
 ---
 
@@ -137,7 +139,7 @@ user's terminal when the field is rendered.
 
 | Surface | Why |
 |---|---|
-| `snp get` | `GetField` (`src/commands/get_cmd.rs:55-65`) offers only `command`, `description`, `id`, `tags`; `GetJsonOutput` (`src/commands/get_cmd.rs:68-77`) has **no** `output` key. `snp get` cannot display the field in any format. |
+| `snp get` | `GetField` (`src/commands/get_cmd.rs:55-64`) offers only `command`, `description`, `id`, `tags`; `GetJsonOutput` (`src/commands/get_cmd.rs:68-77`) has **no** `output` key. `snp get` cannot display the field in any format. |
 | MCP `snippet_json` | The serialized object (`src/mcp/tools.rs:263-273`) contains `id`, `library`, `description`, `command`, `tags`, `folders`, `favorite` — **no** `output`. |
 | MCP `snippet_identity_json` | Only `id`, `library`, `description` (`src/mcp/tools.rs:275-281`). |
 
@@ -153,22 +155,22 @@ would reach the terminal unmodified.
 | Path | Behavior |
 |---|---|
 | `snp edit --output <text>` | Sets the field (`src/commands/edit_cmd.rs:209`) |
-| `snp edit --output-stdin` | Sets the field from stdin (`src/commands/edit_cmd.rs:12-17`, `:209`) |
-| `snp edit --clear-output` | Sets the field to the empty string (`src/commands/edit_cmd.rs:19-20`, `:209`) |
+| `snp edit --output-stdin` | Sets the field from stdin (`src/commands/edit_cmd.rs:15-17`, `:209`) |
+| `snp edit --clear-output` | Sets the field to the empty string (`src/commands/edit_cmd.rs:18-20`, `:209`) |
 | `snp new` | **No `--output` flag exists** — `NewArgs` (`src/commands/new_cmd.rs:18-69`) has no output field |
 | Import / hand-edited TOML | The field is serialized as `output` with the alias `Output` (`src/library/model.rs:35-36`) |
 
 **Targeting rule.** `snp edit --output` / `--output-stdin` / `--clear-output`
 require `--filter` **unless** an exact selector is given
 (`--id`, `--description-exact`, `--command-exact`)
-(`src/main.rs:614-667`):
+(`src/main.rs:615-673`):
 
 - With an exact selector, the snippet is resolved through
   `selector::resolve_exact_target()` and edited by ID
-  (`src/main.rs:637-660`, `src/commands/edit_cmd.rs:233-286`).
+  (`src/main.rs:638-660`, `src/commands/edit_cmd.rs:233-290`).
 - Without one, `--filter` is mandatory; otherwise the command fails with
   `--filter is required when using --output, --output-stdin, or --clear-output`
-  (`src/main.rs:661-667`).
+  (`src/main.rs:661-669`).
 
 The reason is the ambiguity risk recorded in the changelog: a substring
 filter can match more than one snippet, and the fuzzy match's first hit was
@@ -182,8 +184,8 @@ previously influenced by the local-only `output` field.
 
 - `ProtoSnippet` (`snip_proto::Snippet`, imported as `ProtoSnippet` in
   `src/sync_commands.rs`) carries `id`, `description`, `command`, `tags`,
-  `created_at`, `updated_at`, `device_id`, `deleted` — **no `output`**
-  (`src/sync_commands.rs:426-437`).
+  `created_at`, `updated_at`, `device_id`, `deleted`, and `encrypted` —
+  **no `output`** (`src/sync_commands.rs:425-435`).
 - The conflict fingerprint (`fingerprint()`,
   `src/sync_commands.rs:1140-1163`) hashes id, description, command, tags,
   created_at, updated_at, device_id, and deleted — **no `output`**, and no
@@ -244,11 +246,11 @@ Consequences:
 | `src/commands/list_cmd.rs:199-207` | `snp list` default — sanitized `summary(80)` |
 | `src/commands/list_cmd.rs:158`, `:184` | `snp list --json` / `--csv` — raw export |
 | `src/commands/search_cmd.rs:68` | `snp search` — raw print (not sanitized) |
-| `src/commands/edit_cmd.rs:143-286` | Set / replace / clear the field, by filter or by ID |
-| `src/main.rs:614-667` | The `--filter`-or-exact-selector gate for output edits |
+| `src/commands/edit_cmd.rs:143-290` | Set / replace / clear the field, by filter or by ID |
+| `src/main.rs:615-673` | The `--filter`-or-exact-selector gate for output edits |
 | `src/commands/run_cmd.rs:208-216`, `:261-323` | The stdout-redirect branch that also reads this field |
 | `src/selector.rs:151-155` | The opt-in scoring input |
-| `src/sync_commands.rs:426-437` | `ProtoSnippet` — proof `output` is not on the wire |
+| `src/sync_commands.rs:425-435` | `ProtoSnippet` — proof `output` is not on the wire |
 | `src/sync_commands.rs:1140-1163` | `fingerprint()` — proof `output` is not in the conflict key |
 | `src/sync_commands.rs:1268`, `:1289`, `:1302` | Merge — local `output` preserved |
 

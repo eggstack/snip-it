@@ -62,14 +62,15 @@ code.
 | `RecoverableMetadata` | No | Best-effort, warn (`:257-264`) | `0o600` (`:383-387`) | No | Warning only |
 | `EphemeralCoordination` | No | **Skipped** — `None` (`:195-197`) | `0o600` (`:383-387`) | No | n/a |
 
-> **Correction — permissions are `0o600` for every class.** The `Durability`
-> doc comments say "default permissions" for `RecoverableMetadata` and
-> `EphemeralCoordination` (`src/utils/atomic.rs:33-39`), but the
-> implementation sets `mode(0o600)` on the temp file **unconditionally** on
-> Unix (`src/utils/atomic.rs:383-387`), and the renamed target inherits that
-> inode's mode. The comments are stale relative to the code. The two classes
-> genuinely differ only in fsync behavior (and `SensitiveConfig` in symlink
-> rejection) — **not** in file mode.
+> **Correction — permissions are `0o600` for every class.** The enum-level
+> doc comment (`src/utils/atomic.rs:17-20`) states that every variant applies
+> `mode(0o600)` to the temp file unconditionally, and the implementation sets
+> it that way (`src/utils/atomic.rs:383-387`); the renamed target inherits
+> that inode's mode. The per-variant doc comments on `RecoverableMetadata` and
+> `EphemeralCoordination` (`src/utils/atomic.rs:33-39`) mention only fsync and
+> cleanup expectations, not permissions. The four classes genuinely differ only
+> in fsync behavior (and `SensitiveConfig` in symlink rejection) — **not** in
+> file mode.
 >
 > The one way to get a non-`0o600` target is `preserve_permissions(true)`,
 > which snapshots the pre-existing mode and restores it after the rename
@@ -103,6 +104,15 @@ rolled back".
 `parent_dir_sync_durable` is Unix-only (`src/utils/atomic.rs:172-187`); on
 other platforms it returns
 `Err(std::io::Error::other("dir fsync unsupported on this platform"))`.
+
+> **Consequence on non-Unix platforms.** Because the durable branch maps that
+> `Err` straight to `SnipError::io_error` — and `allow_dir_fsync_failure()` is
+> `false` in production builds (`src/utils/atomic.rs:217-226`) — **every**
+> `atomic_replace` with `DurableUserData` or `SensitiveConfig` returns an error
+> on Windows, after the rename at `src/utils/atomic.rs:412` has already
+> replaced the target. `write_private_atomic` is unaffected because its
+> `sync_parent_dir` call is compiled out entirely (`src/utils/atomic.rs:326-327`).
+> Treat the durable classes as Unix-only in practice until this is reconciled.
 
 ### The test-only fsync seam
 
@@ -337,7 +347,8 @@ computed **from the live file on disk**, not from a source buffer.
 |--------|---------|-------------|--------|
 | `write_library_file` | library file content | caller's | `src/library/persistence.rs:16-20` |
 | `save_library_internal` | `toml::to_string_pretty` of the snippet library | library file stem, else `"snippets"` | `src/library/persistence.rs:286-290` |
-| `save_snippets` | `toml::to_string_pretty` of the config | `"config"` | `src/commands/mod.rs:228-231` |
+| `save_snippets` | `toml::to_string_pretty` of the config | config file stem, else `"config"` | `src/commands/mod.rs:227-231` |
+| `LibraryManager::save_config` | `toml::to_string_pretty` of `libraries.toml` | `"libraries"` | `src/library/manager.rs:772` |
 | Transaction journals | journal TOML | `"txn"` | `src/transaction.rs:1405`, `:1415` |
 | Sync settings | sync settings TOML | `"sync"` | `src/config/sync_settings.rs:488` |
 | Import report | JSON report | `"import-report"` | `src/commands/import_cmd.rs:549` |
@@ -351,6 +362,10 @@ computed **from the live file on disk**, not from a source buffer.
 |--------|-------|--------|
 | Transaction rollback — restore the original file bytes | `DurableUserData` | `src/transaction.rs:2250-2253` |
 | `snp select --output` — write the selected command | `DurableUserData` | `src/commands/select_cmd.rs:111-115` |
+| Sync recovery marker — record the pending sync intent | `DurableUserData` | `src/sync_commands.rs:58-62` |
+| Restore — install a staged library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:918` |
+| Restore — install a restored non-library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:1408`, `:1471` |
+| Restore — install the restored `sync.toml` | `SensitiveConfig` | `src/commands/restore_cmd.rs:1520` |
 
 ### `atomic_write_bytes`
 
@@ -361,9 +376,9 @@ computed **from the live file on disk**, not from a source buffer.
 | Auto-sync pending marker | `DurableUserData` | `src/auto_sync/pending.rs:390-394` |
 
 > **Gap worth noting.** `RecoverableMetadata` and `EphemeralCoordination` have
-> **no production call sites** today — every caller uses one of the two
-> durable classes. The classes exist for the durability taxonomy, not because
-> the current writers need them.
+> **no production call sites** today — every production caller uses one of the
+> two durable classes (`DurableUserData` or `SensitiveConfig`). The classes
+> exist for the durability taxonomy, not because the current writers need them.
 
 ---
 

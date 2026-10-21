@@ -13,7 +13,7 @@ server.
 
 | File | Lines | Role |
 |------|-------|------|
-| `snip-proto/proto/sync.proto` | 216 | The schema — the source of truth |
+| `snip-proto/proto/sync.proto` | 222 | The schema — the source of truth |
 | `snip-proto/src/snip_proto.rs` | 1334 | The **generated** stubs (checked in, never hand-edited) |
 | `snip-proto/src/lib.rs` | 5 | The crate root |
 
@@ -82,7 +82,7 @@ qualified service name is `snip_proto.SnippetSync`
 
 The server implements all 11. The client calls **9** — it never calls
 `GetSnippets` (it always uses the bidirectional `Sync`) and never calls
-`DeleteLibrary` (the client's `delete_library` at `src/library/manager.rs:418`
+`DeleteLibrary` (the client's `delete_library` at `src/library/manager.rs:429`
 is a *local* library delete, unrelated to the RPC).
 
 ### Generated Rust surface
@@ -100,7 +100,7 @@ the RPC name converted to `snake_case` (`GetSnippets` → `get_snippets`).
 ## The `Snippet` Message
 
 ```protobuf
-// snip-proto/proto/sync.proto:93-112
+// snip-proto/proto/sync.proto:99-118
 message Snippet {
     string id = 1;
     string description = 2;
@@ -175,7 +175,7 @@ Tombstone visibility differs by RPC:
 
 The schema comment states this directly: *"Deletion tombstone. Tombstones are
 returned by Sync, not GetSnippets."*
-(`snip-proto/proto/sync.proto:108-109`.)
+(`snip-proto/proto/sync.proto:114-115`.)
 
 Deletion beats live content even when the tombstone carries an older
 timestamp — there is no resurrection. See [sync.md](sync.md).
@@ -183,13 +183,15 @@ timestamp — there is no resurrection. See [sync.md](sync.md).
 ### The `encrypted` Flag
 
 `encrypted = true` means the `command` field carries a **client-encrypted
-payload** rather than a plaintext command. The server never sees the
-plaintext.
+payload** rather than a plaintext command. The server stores and relays the
+payload opaquely; it has no built-in way to decrypt it (the key is derived
+from the API key, which the server also receives as a bearer token — see
+[encryption.md](encryption.md) for the trust boundary).
 
 When the client encrypts a snippet it blanks the other plaintext fields:
 
 ```rust
-// src/sync.rs:1284-1294
+// src/sync.rs:1283-1293
 Ok(crate::proto::Snippet {
     id: snippet.id.clone(),
     description: String::new(),
@@ -222,7 +224,7 @@ description and no tags** — the server can merge it (by `id`,
 ### Library
 
 ```protobuf
-// snip-proto/proto/sync.proto:171-176
+// snip-proto/proto/sync.proto:177-182
 message Library {
     string id = 1;
     string name = 2;
@@ -232,14 +234,14 @@ message Library {
 ```
 
 Library IDs are **scoped to the authenticated account**
-(`snip-proto/proto/sync.proto:26`); an unowned library ID yields
+(`snip-proto/proto/sync.proto:31`); an unowned library ID yields
 `Status::not_found("Library not found")`, not a permission error
 (`snip-sync/src/lib.rs:1094`).
 
 ### PremadeLibrary
 
 ```protobuf
-// snip-proto/proto/sync.proto:188-194
+// snip-proto/proto/sync.proto:194-200
 message PremadeLibrary {
     string name = 1;
     string filename = 2;
@@ -251,7 +253,7 @@ message PremadeLibrary {
 
 Premade libraries are **server-to-client only** — there is no way to push a
 premade library back. `GetPremadeLibraryResponse` returns the library as a
-**TOML string** in `content` (`snip-proto/proto/sync.proto:201-206`), not as
+**TOML string** in `content` (`snip-proto/proto/sync.proto:207-212`), not as
 a `Snippet` list; the client parses it with the same TOML helpers it uses
 for local libraries.
 
@@ -264,7 +266,7 @@ for local libraries.
 | `limit` | `GetSnippetsRequest`, `SyncRequest` | Maximum records to return; `0` selects the server default |
 | `offset` | `GetSnippetsRequest`, `SyncRequest` | Records to skip |
 | `has_more` | `SnippetList`, `SyncResponse`, `ListLibrariesResponse`, `ListPremadeLibrariesResponse` | More pages remain |
-| `total_count` | `SnippetList`, `SyncResponse`, `ListLibrariesResponse`, `ListPremadeLibrariesResponse` | Total matching records |
+| `total_count` | `SnippetList`, `SyncResponse`, `ListLibrariesResponse`, `ListPremadeLibrariesResponse`, `SearchPremadeLibrariesResponse` | Total matching records |
 
 Server defaults and clamps:
 
@@ -276,7 +278,7 @@ Server defaults and clamps:
 `MAX_REQUEST_LIMIT = 1000` (`snip-sync/src/lib.rs:108`).
 
 `has_more` is computed as `offset + page_len < total` **OR** the page was
-byte-truncated (`snip-sync/src/lib.rs:1126`, `:1536`) — a page that had
+byte-truncated (`snip-sync/src/lib.rs:1147`, `:1536`) — a page that had
 rows dropped for size still reports `has_more`, so the client does not stop
 early and lose data.
 
@@ -288,7 +290,7 @@ Two different fields carry the incremental-sync watermark, and they are
 | Field | Message | Used for |
 |-------|---------|----------|
 | `since` | `GetSnippetsRequest` (`:42`) | The download filter of the read-only `GetSnippets` RPC |
-| `last_sync_timestamp` | `SyncRequest` (`:73`) | The download filter **and** the watermark the client stores after a completed `Sync` |
+| `last_sync_timestamp` | `SyncRequest` (`:71`) | The download filter **and** the watermark the client stores after a completed `Sync` |
 
 **The download filter is inclusive (`>=`), not exclusive (`>`).** The server
 SQL is:
@@ -326,10 +328,14 @@ regardless of the watermark, using that record's own `updated_at` for
 conflict resolution (`snip-sync/src/lib.rs:1423-1470`,
 `snip-sync/src/db.rs:596`, `:647`).
 
-> The schema comment at `snip-proto/proto/sync.proto:69-70` — *"Only records
+> The `.proto` schema comment is **correct**: *"Every local record is considered
+> for insertion or conflict resolution; `last_sync_timestamp` only selects the
+> page of server rows returned in the response."*
+> (`snip-proto/proto/sync.proto:74-76`). The older wording — *"Only records
 > newer than last_sync_timestamp are considered for insertion or conflict
-> resolution"* — is **stale**. The generated stub at
-> `snip-proto/src/snip_proto.rs:48-49` matches the implementation.
+> resolution"* — survives only in the generated stub at
+> `snip-proto/src/snip_proto.rs:48-49`. See
+> [Known Drift](#known-drift-between-the-proto-and-the-generated-stubs).
 
 ### The watermark does not advance while paginating
 
@@ -352,17 +358,25 @@ remain would silently skip them on the next incremental sync.
 
 ## Authentication
 
-Every request message carries an `api_key` field, but all of them are
-**deprecated compatibility fields**:
+Every request message except `RegisterRequest` carries an `api_key` field. On
+the three sync-path messages it is explicitly deprecated in the schema:
 
 > *"Deprecated compatibility field. New clients should send the API key in
 > the authorization metadata as `Bearer <api-key>`."*
-> (`snip-proto/proto/sync.proto:38-39`)
+> (`snip-proto/proto/sync.proto:43-44` — `GetSnippetsRequest`;
+> `snip-proto/proto/sync.proto:57` and `:72` carry the shorter *"Deprecated
+> compatibility field. Prefer authorization metadata."* wording)
+
+The remaining request messages (`CreateLibraryRequest`, `ListLibrariesRequest`,
+`DeleteLibraryRequest`, and the three premade-library requests) keep a bare
+`api_key` field with no schema comment.
 
 The server accepts the key from the authorization metadata first and falls
-back to the message field (`snip-sync/src/lib.rs:1058`).
+back to the message field on every authenticated RPC — e.g.
+`snip-sync/src/lib.rs:1058` for `GetSnippets`, `:1169` for `PushSnippets`,
+`:1353` for `Sync`.
 
-`RegisterResponse.api_key` (`snip-proto/proto/sync.proto:133`) is the **one
+`RegisterResponse.api_key` (`snip-proto/proto/sync.proto:139`) is the **one
 exception** — that is where the key is *issued*.
 
 ## Message and Size Limits
@@ -384,7 +398,7 @@ exception** — that is where the key is *issued*.
 The client ceiling is deliberately **below** the server's 4 MiB limit. The
 client measures its request with Prost's `encoded_len()` — not a character
 count — so the encoded size is what it bounds
-(`src/sync.rs:1360-1394`).
+(`src/sync.rs:1360-1395`).
 
 ## Code Generation
 
@@ -445,10 +459,10 @@ snip-proto  →  snip-sync  →  snip-it
 |-------|---------|-----------------|
 | `snip-proto` | 0.1.3 | — |
 | `snip-sync` | 0.1.6 | `snip-proto = { version = "0.1.3", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
-| `snip-it` | 1.3.9 | `snip-proto = { version = "0.1.3", path = "snip-proto" }` (`Cargo.toml:117`) |
+| `snip-it` | 1.3.9 | `snip-proto = { version = "0.1.3", path = "snip-proto" }` (`Cargo.toml:126`) |
 
 **A proto change requires bumping `snip-proto`'s version in both
-dependents.** `snip-sync/Cargo.toml:58` and `Cargo.toml:117` both pin
+dependents.** `snip-sync/Cargo.toml:58` and `Cargo.toml:126` both pin
 `version = "0.1.3"`; after a proto change both must be updated to the new
 version, or `crates.io` will resolve the old published `snip-proto`.
 
@@ -503,8 +517,11 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 - **The schema's comments are not authoritative** for the two items listed
   under [Known drift](#known-drift-between-the-proto-and-the-generated-stubs).
   The implementation is.
-- **`api_key` in a request message is deprecated.** New clients must use
-  the `Bearer <api-key>` authorization metadata.
+- **`api_key` in a request message is deprecated on the three sync-path
+  messages** (`GetSnippetsRequest`, `PushSnippetsRequest`, `SyncRequest`). New
+  clients must use the `Bearer <api-key>` authorization metadata; the server
+  accepts the message field only as a fallback. See
+  [Authentication](#authentication).
 - **`has_more` can be true even when the row count fits the page**, because
   the page was byte-truncated. Never stop paginating on the row count alone.
 - **Encrypted snippets carry no `description` and no `tags`.** A consumer
@@ -514,4 +531,4 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 - **The `encrypted` flag is not set by the generic conversion.**
   `From<&Snippet> for ProtoSnippet` always sets `encrypted: false`
   (`src/sync_commands.rs:434`); the encrypted form is built explicitly in
-  `src/sync.rs:1284-1294`.
+  `src/sync.rs:1283-1293`.

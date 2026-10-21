@@ -82,7 +82,7 @@ Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code m
 
 ## Startup Recovery Classification
 
-Commands are classified by `command_behavior()` (`src/main.rs:886`) into a
+Commands are classified by `command_behavior()` (`src/main.rs:887`) into a
 `StartupRecoveryPolicy` **and** a `StartupServices` level, both in one `match`
 so the two cannot drift. `snp data <subcommand>` is a mirror of the top-level
 spellings and is classified in the same table.

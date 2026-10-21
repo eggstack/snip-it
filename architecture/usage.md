@@ -109,11 +109,10 @@ last_used_at = 1700000000
 | `use_count` | integer | `u64`, incremented with `saturating_add` (`src/usage.rs:86`) |
 | `last_used_at` | integer or absent | Unix epoch **seconds** (`i64`), from `chrono::Utc::now().timestamp()` (`src/usage.rs:84`) |
 
-> The module doc comment in `src/usage.rs:10-17` still shows `[[usage]]` with
-> `id = "snippet-uuid"`. That comment is stale: the serializer emits
-> `[[entries]]` (no serde rename on the field), and snippet IDs are
-> deterministic `legacy-<sha256 hex>` values. The code is authoritative; this
-> doc records the actual format.
+> The module doc comment at `src/usage.rs:10-17` matches this format: it shows
+> `[[entries]]` with `id = "legacy-<sha256-hex>"`. There is no serde rename on
+> the `entries` field (`src/usage.rs:41-45`), so `[[entries]]` is the only
+> table name that loads — `[[usage]]` does not.
 
 ## Update policy
 
@@ -140,11 +139,11 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 - Orphaned entries (IDs with no live snippet) are classified by the shared
   pure helper `library::find_orphaned_ids()` (`src/library/model.rs:169-177`),
   so `validate` (warning diagnostic, `src/commands/validate_cmd.rs:461-466`)
-  and `repair` (prune candidate, `src/commands/repair_cmd.rs:423-428`) agree
+  and `repair` (prune candidate, `src/commands/repair_cmd.rs:434-453`) agree
   on what "orphaned" means.
 - `UsageIndex::prune(&active_ids)` retains only live IDs
   (`src/usage.rs:114-118`); `repair` applies it via
-  `RepairAction::PruneOrphanedUsage` (`src/commands/repair_cmd.rs:656-662`).
+  `RepairAction::PruneOrphanedUsage` (`src/commands/repair_cmd.rs:667-670`).
 
 ## Readers
 
@@ -153,10 +152,10 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 |--------|--------|---------|
 | TUI selection loop | `src/commands/mod.rs:373-402` | Loads the index once per session and builds a one-shot `HashMap` for O(1) per-snippet lookup (not O(k·m)) |
 | `ui::SnippetListParams.usage` | `src/ui/mod.rs:499-513` | Optional `&[UsageData]` slice handed to the TUI; the TUI also reads usage for its own ordering hints (`src/ui/mod.rs:181`) |
-| `sort::rank_snippets` | `src/sort.rs:113-119` | The `usage` slice used by the `LastUsed` / `MostUsed` sort modes |
+| `sort::rank_snippets` | `src/sort.rs:116-122` | The `usage` slice used by the `LastUsed` / `MostUsed` sort modes |
 | `list` command | `src/commands/list_cmd.rs:124` | `--sort last-used` / `--sort most-used` |
 | `validate` command | `src/commands/validate_cmd.rs:461-466` | Orphaned-usage-entry diagnostic |
-| `repair` command | `src/commands/repair_cmd.rs:423-428`, `:656-662` | Prune orphaned usage entries |
+| `repair` command | `src/commands/repair_cmd.rs:434-453`, `:667-670` | Prune orphaned usage entries |
 
 ## Writers
 
@@ -171,11 +170,11 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 
 - `src/usage.rs` — the whole module: types (`:26-54`), `usage_path` (`:57-59`), `UsageIndex` impl (`:61-163`), unit tests (`:165-283`)
 - `src/library/model.rs:169-177` — `find_orphaned_ids`, the shared orphan classifier
-- `src/commands/run_cmd.rs:175-188` — usage write on successful run
-- `src/commands/clip_cmd.rs:40-47` — usage write on successful clip
-- `src/commands/mod.rs:370-416` — session-scoped usage load and the one-shot lookup map
-- `src/sort.rs:113-119` — the `usage` slice consumed by `LastUsed` / `MostUsed`
-- `src/utils/config.rs:63-66` — `get_config_dir()`, the base for `usage.toml`
+- `src/commands/run_cmd.rs:175-184` — usage write on successful run
+- `src/commands/clip_cmd.rs:40-49` — usage write on successful clip
+- `src/commands/mod.rs:373-402` — session-scoped usage load and the one-shot lookup map
+- `src/sort.rs:116-122` — the `usage` slice consumed by `LastUsed` / `MostUsed`
+- `src/utils/config.rs:63` — `get_config_dir()`, the base for `usage.toml`
 ## Invariants
 
 
@@ -196,8 +195,8 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 
 
 - **The on-disk table is `[[entries]]`, not `[[usage]]`.** A hand-edited
-  `usage.toml` must use `[[entries]]`; the stale `[[usage]]` example in
-  `src/usage.rs:10-17` will not load.
+  `usage.toml` must use `[[entries]]`; there is no serde rename on the field
+  (`src/usage.rs:41-45`), so a `[[usage]]` table will not load.
 - **Snippet IDs are deterministic `legacy-<sha256 hex>` values, not UUIDs.**
   Do not treat the `id` field as a random v4 UUID.
 - **`UsageIndex::entries` is private.** Use `entries()`; the field is not
@@ -208,7 +207,7 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
   reachable from the binary and integration tests, but it is **not** part of
   the supported external API — see [public_api.md](public_api.md).
 - **`snp backup --include-usage` opts usage into a local backup archive**
-  (`src/commands/backup_cmd.rs:26-28`, `:112-116`). That is a *local* copy,
+  (`src/commands/backup_cmd.rs:26-28`, `:112-119`). That is a *local* copy,
   not a sync — but it is the one path where `usage.toml` leaves the config
   directory.
 - **`last_used_at` is epoch seconds, not milliseconds.** The JSON schema

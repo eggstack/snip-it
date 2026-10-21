@@ -137,7 +137,7 @@ coherent palette:
 `Color::Reset` is treated as "missing" and walks the chain; the final
 fallback is always `Color::White`, never `Reset`.
 
-Hex parsing is `hex_to_color` (`src/ui/theme.rs:303-323`): a leading `#` is
+Hex parsing is `hex_to_color` (`src/ui/theme.rs:303-321`): a leading `#` is
 stripped and the remainder must be **6** hex digits (`#RRGGBB`) or **8**
 hex digits (`#RRGGBBAA`, whose alpha channel is discarded), producing
 `Color::Rgb(r, g, b)`. Anything else yields `None`, and the empty string is
@@ -346,7 +346,8 @@ pub(crate) fn highlight_command(command: &str) -> Line<'static>;
 ```
 
 It is a **single-pass character scanner**, not a shell parser. It recognises
-exactly six token classes:
+six highlighted token classes — plus two neutral fallbacks (plain word,
+whitespace):
 
 | Class | Trigger | Colour | Location |
 |-------|---------|--------|----------|
@@ -438,7 +439,7 @@ The highlighter is **lazy and budgeted**, not precomputed at startup:
 | File | Subject |
 |------|---------|
 | `src/ui/theme.rs` (1063 lines) | `Theme` palette, Halloy TOML schema + projection, `ThemeManager`, `themes.toml`, initial resolution order, name validation |
-| `src/ui/highlight.rs` (248 lines) | `highlight_command` — the shell tokenizer and its six token classes |
+| `src/ui/highlight.rs` (248 lines) | `highlight_command` — the shell tokenizer and its six highlighted token classes |
 | `src/ui/_generated_bundled_themes.rs` (301 lines) | **Generated** — `DEFAULT_BUNDLED`, `BUNDLED`, `bundled_themes_decoded` |
 | `src/utils/shell_keywords.rs` (198 lines) | `SHELL_KEYWORDS` (190 names) + `SHELL_KEYWORDS_SET` |
 | `src/utils/variables.rs` (1947 lines) | Variable grammar — `parse_variables`, `expand_command`, `strip_escape_sequences` |
@@ -512,6 +513,6 @@ The highlighter is **lazy and budgeted**, not precomputed at startup:
   highlighter never inspects the `=default` part.
 - **`src/ui/variables.rs` and `src/utils/variables.rs` have overlapping
   names.** The former is the modal prompt UI; the latter is the grammar and
-  expander. `src/utils/mod.rs:20-22` re-exports only the latter's helpers.
+  expander. `src/utils/mod.rs:20-23` re-exports only the latter's helpers.
 - **`get_theme()` takes a read lock on every call.** The draw loop snapshots
   it once per frame (`src/ui/mod.rs:886`); do not call it per span.

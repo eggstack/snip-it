@@ -30,7 +30,7 @@ pub struct DoctorArgs {
 }
 ```
 
-(`src/commands/doctor_cmd.rs:16-48`.)
+(`src/commands/doctor_cmd.rs:18-48`.)
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
@@ -42,7 +42,7 @@ pub struct DoctorArgs {
 | `--strict` | flag | off | Elevate a designated set of warnings to errors. |
 | `--report <FORMAT>` | `DiagnosticReportFormat` | `human` | `human` (stderr) or `json` (stdout). |
 
-**A mode is required.** With no mode selected the command errors with "No mode selected" and lists the options (`doctor_cmd.rs:1237-1247`).
+**A mode is required.** With no mode selected the command errors with "No mode selected" and lists the options (`doctor_cmd.rs:1240-1247`). `--check-shell` on its own counts as a mode — the mode check is `has_file_mode || compatibility || sync || check_shell.is_some()` (`:1237-1238`).
 
 ### Mode selection order
 
@@ -87,6 +87,7 @@ Doctor's report is `DoctorReport` (`src/diagnostics.rs:106-145`), documented in 
 | `compat.acquire.command_stdin` / `.from_file` / `.editor` | `snp new --help` advertises the acquisition flags | Info / Warning |
 | `compat.choice_parser.ok` / `.missing` | The choice-variable parser is functional | Info / Warning |
 | `compat.shell_syntax.<name>.ok` / `.invalid` / `.init_failed` / `.unavailable` | `snp shell init <shell>` piped through the shell's syntax checker | Info / Warning / Warning / Info |
+| `compat.shell_init.<name>.ok` / `.invalid` / `.error` / `.unavailable` / `.unknown` | The `--check-shell` path: generate the init output and syntax-check it | Info / Warning\* / Warning / Warning\* / Warning |
 | `compat.editor.ok` / `.unset` | `$EDITOR` / `$VISUAL` | Info |
 | `compat.pet_toml.ok` / `.error` | The Pet TOML parser works on a canonical sample | Info / **Error** |
 | `compat.legacy.single_file` / `.config_dir` | Legacy `~/.config/snippets.toml` and `~/.snip-it` are present | Info |
@@ -97,6 +98,7 @@ Notes on the trickier ones:
 - **Shell syntax** (`:838-928`): for each of `bash`, `zsh`, `fish` the command shells out to `snp shell init <shell>` and pipes the output into `<shell> -n` (bash/zsh) or `fish --no-execute`. A missing shell produces `.unavailable` (Info); a non-zero syntax check produces `.invalid` (Warning); a failed `snp shell init` produces `.init_failed` (Warning).
 - **Choice parser** (`:806-836`): parses the literal string `echo <color=|_red_||_green_||_blue_||>` and checks that a `VariableKind::Choices` variable comes out.
 - **Primary library** (`:562-611`): uses `LibraryManager::new()` then `&mgr.inspect_library_index().primary`. `PrimaryState::Present` and `PrimaryState::FileMissing` are both reported as `compat.primary_library.ok` with the snippet count (0 for a missing file); `NoPrimary` and `NoLibraries` produce `compat.primary_library.missing`.
+- **`--check-shell` shell-init family** (`check_shell_init`, `:1084-1225`): a different code family from the audit's `compat.shell_syntax.*` one. `.unavailable` (`:1126`) and `.invalid` (`:1204`) become **Error** under `--strict` and Warning otherwise; `.error` (`:1144`, `:1157`, `:1215`) means the init generation or the syntax check itself failed; `.unknown` (`:1091`) means the shell name is not one of the three.
 
 ## Sync diagnostics (`--sync` and the tail of `--compatibility`)
 
@@ -109,7 +111,7 @@ A summary diagnostic `compat.sync.checked` is always pushed first so the report 
 
 ## File analysis (`--pet-file`, `--library`)
 
-`build_pet_report(source_path, content, strict, existing_library_names)` (`doctor_cmd.rs:200-370`):
+`build_pet_report(source_path, content, strict, existing_library_names)` (`doctor_cmd.rs:201-370`):
 
 1. `detect_unknown_fields(content)` on the raw TOML (`doctor_cmd.rs:211`).
 2. `parse_pet_toml(content)`; a parse failure sets `has_toml_error` / `toml_error_detail` and **returns early** (`:215-222`).
@@ -126,7 +128,7 @@ A summary diagnostic `compat.sync.checked` is always pushed first so the report 
 
 ## Strict mode
 
-`--strict` elevates the following warning codes to errors (`doctor_cmd.rs:52-63`, applied by `apply_strict_elevation` at `:186-198`):
+`--strict` elevates the following warning codes to errors (`doctor_cmd.rs:53-63`, applied by `apply_strict_elevation` at `:187-198`):
 
 ```rust
 const STRICT_WARNING_CODES: &[&str] = &[
@@ -199,4 +201,4 @@ The only temp file doctor creates is the shell-init syntax-check fixture, which 
 - `compat.pet_toml.error` is the only `Error` severity produced by the environment audit itself; every other environment problem is a Warning.
 - `--library` accepts a **path or a name**. A relative path that happens to exist on disk wins over the name lookup (`doctor_cmd.rs:1050-1053`).
 - The doctor strict-code list and the validate strict-code list are **different**. A code elevated by one is not necessarily elevated by the other.
-- `W-DEST-CONFLICT` compares against existing library **names** using doctor's `sanitize_library_name`, which is a separate implementation from the import layer's `derive_library_name` (`import_cmd.rs:48-80`). The two sanitizers agree today but are not shared code.
+- `W-DEST-CONFLICT` compares against existing library **names** using doctor's `sanitize_library_name`, which is a separate implementation from the import layer's `derive_library_name` (`import_cmd.rs:48-89`). The two sanitizers agree today but are not shared code.

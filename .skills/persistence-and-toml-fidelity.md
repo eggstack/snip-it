@@ -88,12 +88,40 @@ alongside this file, not instead of it.
 (`src/utils/atomic.rs`) is the only sanctioned write for user data. Match the
 class to how much the data matters:
 
-| Class | Use for | Behavior |
-|-------|---------|----------|
-| `DurableUserData` | libraries, snippets | fsync file + fsync parent |
-| `SensitiveConfig` | credentials, sync settings | fsync parent, `0o600`, symlink rejection |
-| `RecoverableMetadata` | caches, status files | fsync parent |
-| `EphemeralCoordination` | locks, temp state | no fsync |
+| Class | Use for | File fsync | Parent-dir fsync |
+|-------|---------|-------------|-----------------|
+| `DurableUserData` | pending markers, auto-sync status, restore installs, transaction rollback, sync recovery markers | yes | **required** — hard error on failure |
+| `SensitiveConfig` | credentials, sync settings | yes | **required** — hard error on failure |
+| `RecoverableMetadata` | caches, usage counters | no | best-effort — logs a warning and continues |
+| `EphemeralCoordination` | locks, temp state | no | none |
+
+Notes that the shorthand table tends to get wrong:
+
+- **All four variants apply `mode(0o600)` to the temp file unconditionally**
+  (`src/utils/atomic.rs:17-20`); the target inherits it. The variants differ in
+  **fsync** behavior, not in permissions. `AtomicWriteOptions::preserve_permissions`
+  keeps the target's existing mode instead.
+- `SensitiveConfig` additionally **rejects symlinks** by default
+  (`src/utils/atomic.rs:62`). That is its only behavioral difference from
+  `DurableUserData`.
+- `RecoverableMetadata`'s parent-dir sync is **not** a guarantee: it degrades to
+  a warning and returns `Ok(Some(false))` (`src/utils/atomic.rs:247-264`).
+- `EphemeralCoordination` currently has **no production caller** — it appears
+  only inside `src/utils/atomic.rs`'s own tests.
+
+**Snippets and libraries are not written through `atomic_replace`.** They go
+through `write_private_atomic` (`src/utils/atomic.rs:278`), which takes no
+`Durability` argument: it always fsyncs the file, and fsyncs the parent
+directory under `SensitiveConfig` semantics — but only on Unix
+(`src/utils/atomic.rs:326-327` is `#[cfg(unix)]`).
+
+> **Windows hazard.** `atomic_replace` calls `sync_parent_dir` unconditionally
+> (`src/utils/atomic.rs:434`), and `parent_dir_sync_durable` returns `Err` on
+> non-Unix (`src/utils/atomic.rs:180-186`). So on Windows an `atomic_replace`
+> with `DurableUserData`/`SensitiveConfig` **replaces the target and then
+> returns an error** — and never returns the `AtomicWriteReport`. Callers that
+> treat `Err` as "not written" are wrong on Windows. `write_private_atomic` is
+> unaffected.
 
 Picking a weaker class than the data deserves is how "the file was there but
 empty after a crash" happens. A stronger class is a performance cost, not a

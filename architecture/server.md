@@ -142,7 +142,7 @@ gRPC handler code lives in `lib.rs`. `main.rs` is CLI dispatch plus
   (`snip-sync/src/main.rs:97`). The Unix path uses `flock(LOCK_EX |
   LOCK_NB)` (`snip-sync/src/server_lock.rs:181`); Windows uses
   `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK |
-  LOCKFILE_FAIL_IMMEDIATELY` (`snip-sync/src/server_lock.rs:192-210`).
+  LOCKFILE_FAIL_IMMEDIATELY` (`snip-sync/src/server_lock.rs:203-212`).
 - The kernel owns exclusion; the lock file (`snip-sync.server.lock`:
   pid, start token, nonce, timestamp) is **diagnostic metadata only**.
   `Drop` releases without unlinking, so crash leftovers are harmless —
@@ -156,7 +156,7 @@ gRPC handler code lives in `lib.rs`. `main.rs` is CLI dispatch plus
 
 ### Legacy PID fallback
 
-- `process::parse_pid_file()` (`snip-sync/src/process.rs:35-58`)
+- `process::parse_pid_file()` (`snip-sync/src/process.rs:35-59`)
   understands `Structured` records, bare `LegacyPid`, `Empty`, and
   `Malformed`.
 - `stop`/`restart` read it only when the kernel lock is free, verify
@@ -175,10 +175,14 @@ half-started server running with a misleading successful exit.
 
 The startup signal is the bind-time log pair at
 `snip-sync/src/main.rs:152-153` (`gRPC server listening on …` /
-`HTTP server listening on …`). There is deliberately **no** second
-"listening" log after `serve_with_incoming_shutdown()` — that expression
-only returns once the server has already terminated, so a log there would
-print a startup line at shutdown time on every run
+`HTTP server listening on …`). The EggServe side logs its own
+`HTTP server listening on http://…` after `into_parts()` has handed the
+control/completion pair to the orchestrator
+(`snip-sync/src/main.rs:276`) — still before the serve expression. There
+is deliberately **no** second "listening" log after
+`serve_with_incoming_shutdown()` — that expression only returns once the
+server has already terminated, so a log there would print a startup line
+at shutdown time on every run
 (`snip-sync/src/main.rs:283-287`).
 
 ### Signals and coordinated drain
@@ -196,12 +200,12 @@ print a startup line at shutdown time on every run
   signal, the gRPC `JoinHandle`, and the borrowed cancellation-safe
   EggServe completion future, then broadcasts, requests EggServe
   shutdown, and drains both under `request_timeout_secs`
-  (`snip-sync/src/orchestration.rs:9-80`).
+  (`snip-sync/src/orchestration.rs:9-78`).
 - **Outcome**: `ServiceShutdownOutcome { requested, forced, grpc_result,
   http_result }` with `ServiceResult::{Clean, ServiceError, Panic,
   Cancelled}`. `serve_inner` calls `ensure_clean_requested_shutdown()`
   (`snip-sync/src/main.rs:354`,
-  `snip-sync/src/orchestration.rs:124-135`): `Ok(())` only for
+  `snip-sync/src/orchestration.rs:124-134`): `Ok(())` only for
   requested + unforced + dual-clean; anything else (forced drain,
   unexpected exit, error/panic) returns a diagnostic naming both
   classifications. `server_exits_cleanly_on_signal` proves a SIGTERM
@@ -296,7 +300,7 @@ deleted)`, `idx_libraries_user`.
 - **Hash**: Argon2id (`Algorithm::Argon2id`, `V0x13`), 16 MiB memory
   (`1 << 14` KiB), 3 iterations, parallelism 4, fresh 16-byte salt per
   key; PHC string stored in `users.api_key`
-  (`snip-sync/src/db.rs:81-95`).
+  (`snip-sync/src/db.rs:81-98`).
 - **Indexed lookup**: `api_key_prefix` = first 8 chars of
   `base64(SHA-256(api_key))` (`STANDARD_NO_PAD`). Auth queries
   `WHERE api_key_prefix = ?` then Argon2-verifies only that bucket
@@ -323,6 +327,15 @@ whose `WHERE` clause requires the incoming row to match the stored row's
 `DO UPDATE` as a silent no-op — **0 rows affected, no error**. A push
 whose id already belongs to another user or library therefore wrote
 zero rows while looking successful.
+
+The server's merge rule is **not** the client's. Inside the same `WHERE`
+clause the server applies a lexicographic last-write-wins over
+`(updated_at, device_id, command, description)` — plain string comparison,
+**no SHA-256 fingerprint** (`snip-sync/src/db.rs:646-650`). `deleted` is an
+ordinary column (`deleted = excluded.deleted`), so a newer *live* row
+overwrites a tombstone: the server does **not** guarantee no resurrection.
+The no-resurrection guarantee belongs to the client's `choose_version`
+(`src/sync_commands.rs:1199`, see [sync.md](sync.md)).
 
 `upsert_snippet_in_tx()` now classifies the outcome explicitly
 (`snip-sync/src/db.rs:35-53`):
@@ -415,7 +428,7 @@ so a legitimate second library can collide with the first.
   trailing rows so the encoded page stays under
   `grpc_max_message_size - 64 KiB` envelope reserve (minus `skipped_ids`
   bytes), sets `has_more`, and always keeps at least one row
-  (`snip-sync/src/lib.rs:112-157`, applied at
+  (`snip-sync/src/lib.rs:131-156`, applied at
   `snip-sync/src/lib.rs:1528-1536`). Without this, row-count paging alone
   could produce a page tonic cannot encode, which returns `OUT_OF_RANGE`
   and makes the library permanently undownloadable.
@@ -539,7 +552,7 @@ leaf service built with `eggserve_server::service_fn_head`; only
   `CORS_ALLOW_ALL` / `CORS_ALLOWED_ORIGINS` (or `[server.cors]`).
   Preflight answers `Access-Control-Allow-Methods/Headers` and echoes a
   matching `Origin`; allow-all answers `*`/`*`/`*`
-  (`snip-sync/src/http.rs:54-78`, `snip-sync/src/http.rs:127-138`).
+  (`snip-sync/src/http.rs:54-84`, `snip-sync/src/http.rs:127-138`).
 - **Three security headers** on every ordinary response:
   `x-content-type-options: nosniff`, `x-frame-options: DENY`,
   `cache-control: no-store` (`snip-sync/src/http.rs:106-110`).
@@ -624,7 +637,7 @@ instruments:
 
 | Metric | Type | Labels | Incremented at |
 |--------|------|--------|----------------|
-| `snip_sync_requests_total` | CounterVec | `method` | `SnipSyncService::record_request` (`snip-sync/src/lib.rs:638`) |
+| `snip_sync_requests_total` | CounterVec | `method` | `SnipSyncService::record_request` (`snip-sync/src/lib.rs:636-640`) |
 | `snip_sync_request_duration_seconds` | HistogramVec | `method` | `record_request_duration` (`snip-sync/src/lib.rs:697-704`) |
 | `snip_sync_sync_operations_total` | CounterVec | `direction` | `record_sync` (`snip-sync/src/lib.rs:714-719`) |
 | `snip_sync_library_operations_total` | CounterVec | `operation` | `record_library_op` (`snip-sync/src/lib.rs:721-726`) |
@@ -633,7 +646,7 @@ instruments:
 
 `Metrics::new()` failure falls back to `Metrics::fallback()`, an
 isolated registry with placeholder instruments so the server keeps serving
-(`snip-sync/src/metrics.rs:88-118`, wired at `snip-sync/src/main.rs:170-179`).
+(`snip-sync/src/metrics.rs:88-117`, wired at `snip-sync/src/main.rs:170-179`).
 
 The `/metrics` endpoint is only enabled when **both** `METRICS_USERNAME`
 and `METRICS_PASSWORD` are configured; a half-configured pair stays
@@ -661,7 +674,7 @@ material the flow is meant to protect, and contradicting the comment
 promising to keep it.
 
 The current flow stages the old pair as sibling backups and restores it
-on any failure (`snip-sync/src/cert.rs:88-142`):
+on any failure (`snip-sync/src/cert.rs:93-143`):
 
 1. Rename `key.pem` → `key.pem.backup.<uuid>`; on failure, restore and
    abort.
@@ -781,7 +794,7 @@ Line counts at time of writing (`wc -l`):
 | `snip-sync/src/bootstrap.rs` | Layout + default config | 119 |
 | `snip-sync/src/test_helpers.rs` | In-process test server | 110 |
 | `snip-sync/Cargo.toml` | Pinned EggServe/tonic/sqlx deps | 75 |
-| `snip-proto/proto/sync.proto` | Wire contract (see [proto.md](proto.md)) | 216 |
+| `snip-proto/proto/sync.proto` | Wire contract (see [proto.md](proto.md)) | 222 |
 | `tests/snip_sync_lifetime.rs` | Socket wire-parity + lifetime gates | 840 |
 
 ## Security properties
@@ -829,6 +842,12 @@ Line counts at time of writing (`wc -l`):
   no-op** in SQLite: 0 rows affected, no error. Any code path that
   infers success from "no error" is wrong here; infer it from
   `rows_affected()` plus a scope probe.
+- **The server's merge rule is not the client's.** The upsert tie-break is
+  a lexicographic last-write-wins on `(updated_at, device_id, command,
+  description)` with no SHA-256, and `deleted` is an ordinary column, so a
+  newer live row overwrites a tombstone. Do not assume the server
+  guarantees no resurrection — that guarantee is the client's
+  (`choose_version`, `src/sync_commands.rs:1199`).
 - **`PRAGMA foreign_keys` is per-connection.** Setting it once against a
   pool sets it on one connection. Use `after_connect`.
 - **Do not add a second "listening" log after

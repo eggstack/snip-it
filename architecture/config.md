@@ -75,7 +75,7 @@ or world bits, `src/utils/config.rs:94-105`).
 
 `libraries/`, `premade/`, `libraries.toml` come from
 `src/library/manager.rs:49-51`; `.transaction/` from
-`src/library/manager.rs:617` and `src/local_data.rs:398-400`; `backups/` from
+`src/library/manager.rs:628` and `src/local_data.rs:398-400`; `backups/` from
 `src/library/persistence.rs:316` and `src/commands/backup_cmd.rs:63`;
 `logs/` from `src/logging.rs:72`; `audit.log` from `src/logging.rs:380-384`.
 
@@ -135,28 +135,29 @@ because the legacy path is returned even when the new path exists
 ### Test-Only Config Directory Override
 
 ```rust
-// src/utils/config.rs:35-57
-#[cfg(test)]
+// src/utils/config.rs:35-49
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct ScopedConfigDir {
     previous: Option<PathBuf>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ScopedConfigDir {
     pub fn new(dir: impl Into<PathBuf>) -> Self
 }
 ```
 
 `ScopedConfigDir` is an RAII override of `get_config_dir()` for the **current
-thread**. It is compiled only into unit-test builds (`#[cfg(test)]` on the
-struct and both impls), so production binaries cannot be steered by it.
+thread**. It is compiled only into unit-test builds and `test-support` feature
+builds (`#[cfg(any(test, feature = "test-support"))]` on the struct and both
+impls), so production binaries cannot be steered by it.
 
 The backing state is a thread-local:
 
 ```rust
 // src/utils/config.rs:15-22
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CONFIG_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
@@ -187,8 +188,8 @@ config directory and the config directory redirected per test, each test gets
 its own gate, its own journal directory, and its own lock.
 
 **This is a test-only seam.** It is not part of production behavior and is not
-something a production reviewer audits; `#[cfg(test)]` means it does not exist
-in a release build.
+something a production reviewer audits; `#[cfg(any(test, feature =
+"test-support"))]` means it does not exist in a release build.
 
 ## Sync Settings
 
@@ -220,7 +221,7 @@ pub struct SyncSettings {
     pub credential_revision: u64,           // monotonic key-change counter
 }
 pub fn SyncSettings::sync_limit_value(&self) -> i32          // :196-198
-pub fn SyncSettings::auto_sync_debounce(&self) -> Duration    // :202-208
+pub fn SyncSettings::auto_sync_debounce(&self) -> Duration    // :202-207
 pub fn SyncSettings::auto_sync_max_delay(&self) -> Duration   // :211-217
 pub fn SyncSettings::auto_sync_timeout(&self) -> Duration     // :222-228
 pub fn SyncSettings::sync_config_file_exists() -> bool        // :231-233
@@ -326,7 +327,7 @@ pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // 
    `sync.toml.corrupt.bak`, a warning is printed on stderr, and the defaults
    are returned (`:507-533`).
 4. The header is stripped and invalid TOML escapes are repaired
-   (`:535-536`, `src/utils/toml_helpers.rs:205-208`).
+   (`:535-536`, `src/utils/toml_helpers.rs:205-209`).
 5. The TOML is parsed and the `settings.sync` table is extracted (`:538-541`).
 6. An existing plaintext API key is migrated into the keychain, keeping the
    plaintext value in memory so the current operation still authenticates
@@ -362,7 +363,7 @@ environment variable, so they are physically absent from production builds.
 | Variable | Effect | Source |
 |----------|--------|--------|
 | `SNP_ALLOW_PLAINTEXT_API_KEY=true` | The API key is written and read as plaintext in `sync.toml` instead of going through the keychain. The value must be exactly `true`. | `:250-259`, `:302-317`, `:366-375` |
-| `SNP_TEST_CREDENTIAL_FILE=<path>` | The real key lives in a file; `sync.toml` and the file stay in sync and the keychain is bypassed entirely. | `:248-253`, `:280-301`, `:364-368` |
+| `SNP_TEST_CREDENTIAL_FILE=<path>` | The real key lives in a file; `sync.toml` and the file stay in sync and the keychain is bypassed entirely. | `:248-253`, `:280-301`, `:366-369` |
 
 Details a reviewer should know:
 
@@ -420,7 +421,8 @@ pub(crate) fn strip_integrity_line(content: &str) -> String       // :244-248
   with `runtime_error("read toml file", "file changed while being read")`
   (`:291-304`, `:346-349`). This keeps content and cache metadata tied to one
   snapshot even when the path is atomically replaced underneath.
-- Poison recovery keeps the surviving entries rather than clearing the cache
+- A poisoned mutex is recovered by **clearing the whole cache** rather than
+  trusting entries a panicking holder may have left half-written
   (`:69-81`).
 
 ### Invalidation
@@ -501,5 +503,6 @@ Test-only vars are inert in production builds (proven by `scripts/ci/test-produc
   marker as a credential** — the load fails fast instead.
 - **Keep `keyring = "4"` with default features** or persistence silently
   falls back to the mock store.
-- **`ScopedConfigDir` is `#[cfg(test)]` and thread-local.** It does not exist
-  in production, and it does not propagate to threads the test spawns.
+- **`ScopedConfigDir` is `#[cfg(any(test, feature = "test-support"))]` and
+  thread-local.** It does not exist in production, and it does not propagate to
+  threads the test spawns.

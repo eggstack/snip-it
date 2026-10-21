@@ -120,13 +120,13 @@ Mutating. Writes one library file through `save_library`
 (`new_cmd.rs:650-653`), reported via `report_notification_result`. No
 explicit sync here; the detached worker picks it up.
 
-`src/main.rs:951` classifies `Commands::New(_)` as a mutation command
+`src/main.rs:952` classifies `Commands::New(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`).
 
 ## Tokio runtime
 
 `new` is a local-only command: it never initializes the global Tokio
-runtime and `src/main.rs:466-478` passes no runtime.
+runtime and `src/main.rs:467-479` passes no runtime.
 
 ## Error / exit mapping
 
@@ -162,6 +162,12 @@ runtime and `src/main.rs:466-478` passes no runtime.
 
 - `--multiline` is not byte-exact. Use `--command-stdin`, `--from-file`,
   or `--editor` when full fidelity is required (`new_cmd.rs:509-513`).
+- The six sources are not all clap-exclusive with each other: `--multiline`
+  and `--from-file` do not conflict (`new_cmd.rs:35-55`), so
+  `snp new --multiline --from-file PATH` is accepted and `--from-file`
+  silently wins, because the source resolution order is
+  stdin → file → editor → multiline → positional → prompt
+  (`new_cmd.rs:565-577`). Every other pairing is rejected by clap.
 - A bare `-t` (no value) triggers the tags prompt, which is incompatible
   with `--command-stdin` because stdin is already reserved for the body.
 - The positional `COMMAND` and the interactive prompt are not equivalent:
@@ -185,7 +191,7 @@ runtime and `src/main.rs:466-478` passes no runtime.
   `resolve_editor_spec`.
 - `src/auto_sync/notification.rs` — `notify_mutation` and
   `report_notification_result`.
-- `src/main.rs` — dispatch (`src/main.rs:466-478`).
+- `src/main.rs` — dispatch (`src/main.rs:467-479`).
 
 ## File / line references
 

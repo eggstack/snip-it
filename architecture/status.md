@@ -218,17 +218,17 @@ Field semantics (`AutoSyncStatus`, `src/auto_sync/status.rs:34-67`):
 | `attention_required` | Operator attention needed |
 | `message` | Bounded, sanitised, secret-free human message (≤ 512 chars, control characters stripped, secrets redacted — `src/auto_sync/status.rs:291-298`) |
 | `config_fingerprint` | Secret-free hash of the sync-relevant config (`server_url`, `enabled`, `auto_sync`, `sync_direction`, `credential_revision`); used to release a deferred failure when the config changes (`src/auto_sync/status.rs:319-329`). Computed with `DefaultHasher`, so the value is **not stable across Rust toolchain releases** — only the equality comparison matters. |
-| `integrity` | `u32` CRC32 over every behaviour-driving field **except** `message` (informational only) (`src/auto_sync/status.rs:186-215`) |
+| `integrity` | `u32` CRC32 over every behaviour-driving field **except** `message` (informational only) (`src/auto_sync/status.rs:186-216`) |
 
 Write properties: atomic (temp file + rename + directory fsync,
 `DurableUserData`), bounded to 8192 bytes, 0o600 on Unix, and **write failure
 is logged but never propagated** — status is best-effort and a failed status
 write never clears pending (`src/auto_sync/status.rs:8-10`, `:149-152`).
 
-`record_success` (`src/auto_sync/status.rs:219-248`) resets
+`record_success` (`src/auto_sync/status.rs:219-247`) resets
 `consecutive_failures` to 0, clears `next_attempt_at_unix_ms`, clears
 `attention_required`, and clears `last_failure_class`. `record_failure`
-(`:250-289`) writes the class, the count, the next-attempt timestamp, and sets
+(`:250-285`) writes the class, the count, the next-attempt timestamp, and sets
 `attention_required` when the class is deferred (`Configuration`), is
 `LocalFailure`, or is `Internal` with `consecutive_failures >= 3`.
 
@@ -378,7 +378,7 @@ Notes for auditors:
   `partial` → `sync.attention.partial`, `local` →
   `sync.attention.local_persistence`, and the fallback is
   `sync.attention.configuration` (`src/commands/doctor_cmd.rs:113-132`).
-  **In practice the snapshot only reaches three of those seven codes.** The
+  **In practice the snapshot only reaches two of those six distinct codes.** The
   message is built as `"Sync requires attention: {last_failure_class}"`
   (`src/status_snapshot.rs:485-488`) and `last_failure_class` is always one of
   the four `FailureClass::as_code()` values (`transient`, `configuration`,
@@ -387,9 +387,9 @@ Notes for auditors:
   `local_failure` → `sync.attention.local_persistence` (matches the `local`
   keyword);
   `transient` and `internal` → `sync.attention.configuration` (fallback).
-  The `authentication`, `credential_store`, and `conflict` doctor codes are
-  **unreachable via the snapshot path** — they can only be produced by another
-  caller of the doctor report.
+  The `authentication`, `credential_store`, `conflict`, and `partial` doctor
+  codes are **unreachable via the snapshot path** — they can only be produced by
+  another caller of the doctor report.
 - The doctor report always carries a summary entry `compat.sync.checked`
   (Info) whose message is the debug-formatted `TopLevelSyncState`
   (`src/commands/doctor_cmd.rs:168-177`).
@@ -520,8 +520,8 @@ or `snp validate` for that.
 - **The `ATTENTION_REQUIRED` → doctor code mapping is substring-based**, and the
   snapshot's message only ever contains a `FailureClass` code. In practice only
   `sync.attention.configuration` and `sync.attention.local_persistence` are
-  reachable; `authentication`, `credential_store`, and `conflict` are not.
-  `src/commands/doctor_cmd.rs:113-132`, `src/status_snapshot.rs:482-490`.
+  reachable; `authentication`, `credential_store`, `conflict`, and `partial` are
+  not. `src/commands/doctor_cmd.rs:113-132`, `src/status_snapshot.rs:482-490`.
 - **`LoadFailed` and `NotConfigured` configuration states both map to the
   top level `NotConfigured`** — the distinction only survives in the
   `sync.configuration` field and the `CONFIG_LOAD_FAILED` diagnostic.
@@ -553,4 +553,4 @@ or `snp validate` for that.
   scheduled attempt will pick it up. `src/commands/sync_cmd.rs:611-634`.
 - **The status file's CRC32 deliberately excludes `message`.** Editing a
   message does not invalidate the record.
-  `src/auto_sync/status.rs:186-215`.
+  `src/auto_sync/status.rs:186-216`.

@@ -86,7 +86,11 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 
 - **Confidentiality**: AES-256-GCM
 - **Integrity**: GCM auth tag (tested with tampered ciphertext/nonce/salt tests)
-- **Key isolation**: API key never sent to server (used locally for encryption only)
+- **Key isolation**: The server stores only an Argon2id hash of the API key, never
+  the key itself, and snippet bodies are stored as ciphertext. Note the API key
+  **is** transmitted as a `Bearer` token on every request (`src/sync.rs:291-299`),
+  so anything observing that token can re-derive the Argon2id key. The guarantee
+  is transport + at-rest protection — not server-blindness.
 - **Nonce uniqueness**: Random per-encryption via OsRng
 - **Salt uniqueness**: Random per-encryption via OsRng
 

@@ -35,7 +35,7 @@ is `LibraryCommands` (`src/main.rs:187-207`).
 
 Unlike `sync`, `register`, and `cron`, the `library` group has **no**
 `*Args` struct — the clap variants are declared inline in
-`src/main.rs` and destructured at dispatch (`src/main.rs:729-737`).
+`src/main.rs` and destructured at dispatch (`src/main.rs:730-738`).
 
 ## Flow / steps
 
@@ -53,23 +53,27 @@ the rest (`:10-19`).
 
 `mgr.create_library(name)` → notify → `Created library '<name>' at <path>`.
 
-`LibraryManager::create_library` (`src/library/manager.rs:363-412`):
+`LibraryManager::create_library` (`src/library/manager.rs:363-423`):
 
 1. `gate_mutation()` → `transaction::gate_mutation_on_interrupted_transactions`
-   (`:364`, `:625-631`).
-2. `acquire_local_data_lock()` (`:365`).
-3. `validate_library_name(filename)` (`:366-367`) — see
+   (`:364`, `:636-642`).
+2. `validate_library_name(filename)` (`:366-367`) — see
    [Reserved names](#reserved-names).
-4. `init_libraries_dir()` (`:369`).
-5. Reject if the file already exists (`:374-379`).
-6. Reject a case-insensitive duplicate in the index (`:381-390`).
-7. Write a default empty library file (`:392-399`).
-8. `mutation_barrier("library-create-after-file-before-index")` (`:401`) —
+3. `ensure_library_mode()` (`:376`) — migrates a legacy single-file
+   `snippets.toml` store **before** the libraries directory exists; doing
+   it later would orphan the legacy file (the comment at `:369-375`
+   explains the ordering).
+4. `acquire_local_data_lock()` (`:378`).
+5. `init_libraries_dir()` (`:380`).
+6. Reject if the file already exists (`:385-390`).
+7. Reject a case-insensitive duplicate in the index (`:392-401`).
+8. Write a default empty library file (`:403-410`).
+9. `mutation_barrier("library-create-after-file-before-index")` (`:412`) —
    a test-only crash-injection point between the file write and the index
    update.
-9. Push the `LibraryMeta`; the **first** library created is automatically
-   marked primary (`:403-406`).
-10. `bump_generation()` + `save_config()` (`:408-409`).
+10. Push the `LibraryMeta`; the **first** library created is automatically
+    marked primary (`:414-417`).
+11. `bump_generation()` + `save_config()` (`:419-420`).
 
 ### `run_delete` (`library_cmd.rs:39`)
 
@@ -83,29 +87,29 @@ the rest (`:10-19`).
 2. `mgr.delete_library(name)` (`:61`).
 3. Notify → `Deleted library '<name>'` (`:64-69`).
 
-`LibraryManager::delete_library` (`src/library/manager.rs:418-485`):
+`LibraryManager::delete_library` (`src/library/manager.rs:429-496`):
 
-- gate → lock (`:419-420`);
-- snapshot the config for rollback (`:421`);
+- gate → lock (`:430-431`);
+- snapshot the config for rollback (`:432`);
 - look up the library; unknown name → `runtime_error("Library not
-  found")` (`:422-425`);
+  found")` (`:433-436`);
 - **remove the entry from the index and save the config FIRST**, then
-  delete the file (`:429-458`). The comment at `:429-433` states the
+  delete the file (`:445-469`). The comment at `:440-444` states the
   rationale: if the process crashes after the config save but before the
   file delete, the orphan file is recoverable; the reverse order would
   leave a stale config reference;
 - if the deleted library was primary, promote another one — preferring a
-  server-linked library when the deleted one was server-linked (`:436-455`);
-- `mutation_barrier("library-delete-after-index-before-file")` (`:460`);
+  server-linked library when the deleted one was server-linked (`:447-466`);
+- `mutation_barrier("library-delete-after-index-before-file")` (`:471`);
 - if the file delete fails, restore the saved config and re-save it
-  (`:462-482`).
+  (`:473-493`).
 
 ### `run_set_primary` (`library_cmd.rs:74`)
 
 `mgr.set_primary(name)` → `Set '<name>' as primary library`. **No
 notification** — the primary pointer is not snippet content.
 
-`LibraryManager::set_primary` (`src/library/manager.rs:488-511`): gate →
+`LibraryManager::set_primary` (`src/library/manager.rs:499-520`): gate →
 lock → the library must exist (else `runtime_error("Library not found")`)
 → set `is_primary` on exactly one entry → `bump_generation()` +
 `save_config()`.
@@ -167,7 +171,7 @@ reader would not expect from a "read" path:
 1. **macOS config-dir migration** (`:43-45`):
    `utils::config::migrate_macos_config_dir()` moves a legacy
    `~/Library/Application Support/...` config directory into the XDG
-   location (`src/utils/config.rs:166-206`). A failure is a warning only.
+   location (`src/utils/config.rs:166-210`). A failure is a warning only.
 2. **Fail-closed `libraries.toml` parse** (`:53-84`): if
    `<config>/libraries.toml` exists but does not parse, the file is
    **copied to `libraries.toml.corrupt`** (`:60-75`) and the constructor
@@ -195,21 +199,21 @@ that `snp status` has (see [status_cmd.md](status_cmd.md)).
 `create` and `delete` call `gate_mutation()` through
 `LibraryManager`, so both run
 `gate_mutation_on_interrupted_transactions(config_dir, transaction_dir)`
-(`src/library/manager.rs:625-631`). `set-primary` also calls
-`gate_mutation()` (`:489`) even though it only rewrites the index.
+(`src/library/manager.rs:636-642`). `set-primary` also calls
+`gate_mutation()` (`:500`) even though it only rewrites the index.
 
 ## Tokio runtime
 
 None. `snp library` never touches the global `RUNTIME`
 (`src/main.rs:22-27`) — every handler is synchronous.
 
-Startup policy (`src/main.rs:950-966`):
+Startup policy (`src/main.rs:950-967`):
 
 - `library list` / `library show` → `StartupRecoveryPolicy::SuppressReadOnly`
-  with `StartupServices::Minimal` (no file logging) — `src/main.rs:898-904`;
+  with `StartupServices::Minimal` (no file logging) — `src/main.rs:899-905`;
 - `library create` / `library delete` / `library set-primary` →
   `StartupRecoveryPolicy::Allow` with `StartupServices::Logging` —
-  `src/main.rs:960-966`.
+  `src/main.rs:961-967`.
 
 ## Auto-sync trigger
 
@@ -226,7 +230,7 @@ result is reported via `auto_sync::report_notification_result`.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1025-1031`).
+exit **1** (`src/main.rs:1026-1032`).
 
 | Situation | Result |
 |-----------|--------|
@@ -248,12 +252,12 @@ returns `CliOutcome::NotFound`.
 | Path | Role |
 |------|------|
 | `src/commands/library_cmd.rs` | The five handlers + the `if_empty` helper |
-| `src/main.rs:187-207`, `:729-737` | Clap wiring and dispatch |
+| `src/main.rs:187-207`, `:730-738` | Clap wiring and dispatch |
 | `src/library/manager.rs` | `LibraryManager` — index, files, linkage, gate, lock |
 | `src/library/model.rs:179-225` | `validate_library_name` (incl. the reserved `all`) |
 | `src/library/persistence.rs` | `load_library` / `save_library` (TOML fidelity) |
 | `src/selector.rs` | `LibraryScope::from_filter_arg` — owns the `all` scope keyword |
-| `src/utils/config.rs:166-206` | `migrate_macos_config_dir` |
+| `src/utils/config.rs:166-210` | `migrate_macos_config_dir` |
 | `src/auto_sync/notification.rs` | `notify_mutation` / `report_notification_result` |
 
 ## Invariants

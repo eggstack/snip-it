@@ -32,7 +32,7 @@ pub struct StatusArgs {
 `StatusArgs` is the single source of truth for **both** spellings:
 `snp status` (`src/main.rs:169`) and `snp data status` (alias `s`,
 `src/main.rs:266-268`). Both dispatch through the single-path handler
-`handle_status` (`src/main.rs:437-441`), which calls
+`handle_status` (`src/main.rs:439-442`), which calls
 `status_cmd::run(args.json, args.sync_only)` and always returns
 `CliOutcome::Success`.
 
@@ -111,7 +111,7 @@ Every other variant renders no action line.
 | `sync.configuration` | `sync_configuration_state()` (`:201-215`) — `NotConfigured` / `Configured` / `ConfiguredAutoSyncDisabled` / `LoadFailed` |
 | `sync.top_level` | `derive_top_level(...)` from the pending view, execution view, attempt view, and configuration state |
 | `pending.state` | `pending_state_view(&state_dir)` (`:217-249`) — `None` / `Pending` / `Corrupt` / `Inaccessible` |
-| `attempt` | `attempt_from_status(...)` (`:158-169`) |
+| `attempt` | `attempt_from_status(...)` (`:160`, defined at `:512`) |
 | `execution.execution_lock` / `execution.worker_lock` | `execution_state_view(&state_dir)` — `ProcessStateView` (`Idle` / `Live` / `DeadStale` / `Malformed` / `Inaccessible`) |
 | `diagnostics` | `collect_diagnostics(&snapshot)` (`:197`) |
 
@@ -145,7 +145,7 @@ local census while the real index is on disk next to a
 **No transaction gate** (`gate_mutation_on_interrupted_transactions`) is
 called, and no execution lock is acquired. `snp status` is classified as
 `StartupRecoveryPolicy::SuppressReadOnly` with
-`StartupServices::Minimal` (`src/main.rs:893-903`) — no file logging, and
+`StartupServices::Minimal` (`src/main.rs:890-905`) — no file logging, and
 pending auto-sync is not rescheduled before the command runs.
 
 ## Tokio runtime
@@ -162,7 +162,7 @@ on.
 ## Error / exit mapping
 
 `SnipResult<()>` → `handle_status` returns `CliOutcome::Success`
-(`src/main.rs:438-441`).
+(`src/main.rs:439-442`).
 
 | Situation | Result |
 |-----------|--------|
@@ -185,7 +185,7 @@ Corrupt state is a *displayed condition*, not a failure of this command.
 | `src/library/manager.rs:41-92` | `LibraryManager::new` — migration + fail-closed index load |
 | `src/library/persistence.rs:175` | `load_library` corrupt backup |
 | `src/config/sync_settings.rs:498-553` | `load_sync_settings` — integrity check, corrupt backup, keychain migration |
-| `src/main.rs:437-441` | `handle_status` — the shared single-path handler |
+| `src/main.rs:439-442` | `handle_status` — the shared single-path handler |
 
 ## Invariants
 

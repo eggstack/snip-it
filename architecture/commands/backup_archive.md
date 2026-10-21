@@ -83,9 +83,9 @@ impl BackupRelativePath {
 - absolute paths;
 - `..` parent traversal;
 - NUL bytes;
-- reserved Windows device names — `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` (`backup_archive.rs:49-53`).
+- reserved Windows device names — `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` (`backup_archive.rs:50-53`).
 
-`restore` re-runs this validation on every manifest entry (`restore_cmd.rs:973-976`, `restore_cmd.rs:289-292`), so a hand-edited manifest cannot escape the backup root.
+`BackupRelativePath::parse` is **not called by either command** — it is currently dead code (only `pub use`-re-exported by `backup_cmd.rs:5-7`). `restore` performs the equivalent validation with its own `validate_backup_path` (`restore_cmd.rs:604-725`) on every manifest entry (`restore_cmd.rs:973-976`, `restore_cmd.rs:289-292`), so a hand-edited manifest still cannot escape the backup root.
 
 ### `validate_canonical_containment`
 
@@ -128,7 +128,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String;
 pub(crate) fn validate_toml_content(bytes: &[u8], label: &str) -> SnipResult<()>;
 ```
 
-(`backup_archive.rs:282-291`.) Rejects non-UTF-8 and non-TOML content. `backup_cmd` applies it to every library file and to `libraries.toml` (`src/commands/backup_cmd.rs:144-150`).
+(`backup_archive.rs:282-291`.) Rejects non-UTF-8 and non-TOML content. `backup_cmd` applies it to every library file (`src/commands/backup_cmd.rs:144-150`) and to `libraries.toml` (`:151-155`).
 
 ### `read_library_generation`
 
@@ -182,9 +182,9 @@ The staging path is derived by the caller with `Path::with_extension("<ext>.stag
 
 | Restore step | Source | Purpose |
 |---|---|---|
-| Load manifest | `restore_cmd.rs:542-588` (`load_manifest`) | Reads `manifest.toml`, falling back to `manifest.json`. |
+| Load manifest | `restore_cmd.rs:542-570` (`load_manifest`) | Reads `manifest.toml`, falling back to `manifest.json`. |
 | Contract validation | `restore_cmd.rs:239-353` | Schema, layout, entry cardinality, destination uniqueness, SHA-256 shape, size ceiling. |
-| Path validation | `restore_cmd.rs:973-976` | Re-runs `BackupRelativePath::parse` per entry. |
+| Path validation | `restore_cmd.rs:973-976` | Re-runs restore's own `validate_backup_path` per entry (`restore_cmd.rs:604-725`). |
 | Artifact checks | `restore_cmd.rs:978-1057` | Existence, symlink rejection, regular-file check, size ceiling (10 MiB), manifest-size match, duplicate snippet-ID check for libraries. |
 | Checksum verification | `restore_cmd.rs:1059-1074` | Recomputes SHA-256 and compares against the manifest. |
 | Semantic validation | `restore_cmd.rs:381-514` | Parses the index and enforces index↔library consistency, at most one primary, and (in replace mode) full index coverage. |

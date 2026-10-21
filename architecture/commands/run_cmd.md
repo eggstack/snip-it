@@ -25,11 +25,11 @@ oversight (see *Key invariants*).
 | `-l/--library` | `Option<String>` | – | Library scope |
 | `--sort` | `SnippetSort` | `Relevance` | Ordering |
 | `--favorites-first` | bool | `false` | Favorites rank first |
-| `--id` | `Option<String>` | – | Exact UUID bypass (conflicts with the other selectors + filter) |
+| `--id` | `Option<String>` | – | Exact snippet ID bypass (conflicts with the other selectors + filter) |
 | `--description-exact` | `Option<String>` | – | Exact description bypass |
 | `--command-exact` | `Option<String>` | – | Exact command bypass |
 
-`src/main.rs:500-545` routes exact selectors through
+`src/main.rs:501-546` routes exact selectors through
 `resolve_exact_target` → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -41,7 +41,7 @@ allow_delete=true, sort_opts, runtime, process_snippet)` and maps
 `ExecutionFailed{exit_code} → CliOutcome::ExecutionFailed`,
 `Cancelled → Success` (run treats cancellation as exit 0,
 `run_cmd.rs:365`), `Selected → Success` (`run_cmd.rs:358-367`).
-`src/main.rs:541-543` turns `ExecutionFailed` into
+`src/main.rs:542-543` turns `ExecutionFailed` into
 `process::exit(child_code.unwrap_or(8))`.
 
 ### `run_exact()` (`run_cmd.rs:371`)
@@ -122,7 +122,7 @@ bookkeeping path shared by both execution branches:
   (`run_cmd.rs:191`) — a tracing event, not the audit file.
 
 The audit file is `<config>/audit.log`
-(`src/logging.rs:380-384`); entries carry a timestamp, action, snippet id,
+(`src/logging.rs:381-385`); entries carry a timestamp, action, snippet id,
 description, library id, and device id (`src/logging.rs:34-41`).
 
 ## Mutation vs read-only
@@ -142,13 +142,13 @@ post-`run_exact` `run_explicit_sync` (`src/commands/mod.rs:301`)
 performs a foreground sync under the `SyncExecutionLock` and clears
 pending. Without `--sync`, usage or execution leaves no sync intent.
 
-`src/main.rs:952-953` classifies `Commands::Run(_)` as a mutation command
+`src/main.rs:953` classifies `Commands::Run(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`).
 
 ## Tokio runtime
 
 `run` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:539` passes
+but only for `--sync`. `src/main.rs:540` passes
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
 `--sync` is set. `run_snippet_selection` (`src/commands/mod.rs:353-362`)
 and `run_exact` (`run_cmd.rs:376-385`) both error with
@@ -207,7 +207,7 @@ the runtime is `None`.
 - `src/logging.rs` — `audit_log` and `log_command_execution`.
 - `src/usage.rs` — `UsageIndex` (use counts, last-used timestamps).
 - `src/outcome.rs` — `CliOutcome::ExecutionFailed` and the exit codes.
-- `src/main.rs` — dispatch (`src/main.rs:500-545`).
+- `src/main.rs` — dispatch (`src/main.rs:501-546`).
 
 ## File / line references
 
@@ -215,4 +215,4 @@ the runtime is `None`.
 - `shell_arg_flag`: `:103`; `get_shell`: `:107`
 - `spawn_and_wait_execution`: `:123`; `record_execution_result`: `:169`
 - `process_snippet`: `:194`; `run`: `:342`; `run_exact`: `:371`
-- Dispatch: `src/main.rs:500-545`
+- Dispatch: `src/main.rs:501-546`

@@ -419,8 +419,8 @@ version in place and is not a conflict. A remote tombstone over a live local
 record *does* resolve to `Remote`, so it is counted.
 
 The previous helper, `sync::detect_device_conflict`, has been **removed**; no
-public or test-only entry point remains. `docs/PUBLIC_API.md` still lists it
-and is out of date.
+public or test-only entry point remains. `architecture/public_api.md:276-277`
+records the removal.
 
 ## Orchestration — `src/sync_commands.rs`
 
@@ -501,7 +501,7 @@ answers `LibraryNotFound`:
 
 1. Locate or create the `<library>.sync_recovery` marker
    (`SyncRecoveryMarker`, `src/sync_commands.rs:24-33`; phases
-   `Creating | RemoteCreated | Linked`, `src/sync_commands.rs:36-48`).
+   `Creating | RemoteCreated | Linked`, `src/sync_commands.rs:35-40`).
 2. **Verify identity.** The marker's schema, normalized local library name,
    file stem, and local library id must all match the current local library
    (`src/sync_commands.rs:146-164`). A mismatch fails closed rather than
@@ -654,7 +654,7 @@ Only `Transient` and `Internal` allow automatic retry
 (`src/sync_failure.rs:147-149`); `Configuration` is *deferred* — it waits for
 the user to fix something (`src/sync_failure.rs:151-153`).
 
-`add_batch_context` (`src/sync.rs:1492-1510`) adds a `batch N/M` prefix while
+`add_batch_context` (`src/sync.rs:1492-1511`) adds a `batch N/M` prefix while
 **preserving the original classification**. Re-wrapping every kind as
 `SyncRequestFailed` would classify persistent server-side faults (e.g. gRPC
 `internal`, which maps to `Runtime` → `Internal`) as `Transient` and retry them
