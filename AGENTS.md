@@ -18,7 +18,7 @@ cargo test --workspace --all-features -- --test-threads=1   # full suite, serial
 cargo test -p snip-sync --features test-helpers
 ```
 
-- `check.sh` passes `--features test-support` to all focused targets (`platform_smoke`, `destination_permissions`, `auto_sync_closure`, plus `-- --test-threads=1` for `auto_sync_concurrency`, `sync_multibatch`). Only `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers` (plus the `process_lock_helper` bin) gate compilation on it (see `required-features` in `Cargo.toml`).
+- `check.sh` passes `--features test-support` to all focused targets (`platform_smoke`, `destination_permissions`, `auto_sync_closure`, plus `-- --test-threads=1` for `auto_sync_concurrency`, `sync_multibatch`). Only `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers`, `identity_contract` (plus the `process_lock_helper` bin) gate compilation on it (see `required-features` in `Cargo.toml`). `identity_contract` is gated because it needs the `test-support`-only `ScopedConfigDir` export to redirect the config directory; without it, `save_library` resolves the mutation gate and the local-data lock against the developer's real `~/.config/snp/`.
 - Integration/PTY/lock/barrier tests are serial: always `--test-threads=1` for `pty_integration` (real pty pairs), `*_concurrency`, `sync_multibatch`, `*_barriers`, `repair_transactions`. Deep crash/restore/manifest suites run only in `release-check.sh verify`, not CI.
 - macOS/Windows CI only runs `cargo check --workspace --all-targets` + `platform_smoke`; Windows additionally runs `pwsh -NoProfile -File scripts/tests/installers.ps1` (needs `pwsh`). Linux `check.sh` runs the bash equivalent.
 
@@ -55,7 +55,7 @@ cargo test -p snip-sync --features test-helpers
 
 ## Sync & persistence invariants
 
-- Conflict: `(updated_at, device_id, SHA-256(synced fields))`; never role-dependent server-wins. Deletion beats live content even with an older timestamp (no resurrection). `output`/`folders`/`favorite` are local-only, excluded from the fingerprint; `output` is not in `ProtoSnippet`, `snp edit --output` requires `--filter`.
+- Conflict: `(updated_at, device_id, SHA-256(synced fields))`; never role-dependent server-wins. Deletion beats live content even with an older timestamp (no resurrection). `output`/`folders`/`favorite` are local-only, excluded from the fingerprint; `output` is not in `ProtoSnippet` (`snip_proto::Snippet`), and `snp edit --output` requires `--filter` unless an exact selector (`--id`/`--description-exact`/`--command-exact`) is given.
 - Uploads byte-bounded via Prost `encoded_len()` (client 3.5 MiB < server 4 MiB gRPC limit); `PushSnippets` idempotent by snippet identity; multi-batch errors preserve the original `SyncFailureKind` via `add_batch_context()`.
 - Scheduling errors are typed — never collapse pending-read/spawn failures into `NoPending`/`SpawnNow`/success. Pending generations are monotonic (lower generation = corrupt, preserve marker, no spawn), except lower-generation + strictly newer timestamp = marker cleared and re-recorded, adopt as new work.
 - Malformed library/`libraries.toml` fails closed (best-effort backup + error, never synthesize writable empty); missing/empty files give defaults. Missing-library recovery uses atomic `<library>.sync_recovery` state: preserve corrupt markers, one normalized remote-name match only, fail on ambiguity, remove marker only after relink + retry sync are durable, linkage + `last_sync` reset in one save.
@@ -70,7 +70,7 @@ cargo test -p snip-sync --features test-helpers
 
 - `AGENTS.override.md` — session pitfall notes; consult it.
 - `architecture/overview.md` — **start here.** Layer map, workspace crates, and the
-  **Deep-Dive Index** covering all 61 architecture documents. Every topic below has
+  **Deep-Dive Index** covering all 62 architecture documents. Every topic below has
   an entry there; prefer extending that index over adding prose here.
 - `docs/README.md` — index of every reference doc, split into **current contracts**
   vs **archived snapshots** in `docs/archive/`. Check the status column before

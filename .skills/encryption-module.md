@@ -42,7 +42,7 @@ Base64(Salt[16] + Nonce[12] + Ciphertext[...])
 
 ### What sync actually encrypts (do not assume the whole record is covered)
 
-`encrypt_snippet` (`src/sync.rs:1183`) encrypts **only** a 3-field
+`encrypt_snippet` (`src/sync.rs:1264`) encrypts **only** a 3-field
 `EncryptedSnippetData { description, command, tags }`, serialized to JSON. The
 ciphertext is placed in the proto `command` field; `description` is emptied and
 `tags` cleared. The remaining fields travel as **plaintext** proto fields:
@@ -53,7 +53,7 @@ ciphertext is placed in the proto `command` field; `description` is emptied and
 | `id`, `created_at`, `updated_at`, `device_id`, `deleted` | **Plaintext** |
 | `output` | Not in `ProtoSnippet` at all (local-only) |
 
-`decrypt_snippet` (`src/sync.rs:1246`) is the symmetric inverse and returns
+`decrypt_snippet` (`src/sync.rs:1327`) is the symmetric inverse and returns
 unmodified records unchanged when `encrypted == false`. An agent must not
 assume the full record is confidential — `device_id` and `updated_at` are
 visible to the server and to anyone reading the wire format, which matters
@@ -97,7 +97,7 @@ Derived keys are cached per-session to avoid re-running Argon2id for the same (a
 - **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>>` — keyed by `(SHA-256(api_key), base64(salt))`
 - **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
 - **Clear**: sync takes an RAII guard `let _key_cache_guard = encryption::key_cache_guard();`
-  (`src/sync.rs:403`); `KeyCacheGuard::drop` calls `clear_key_cache()`. There is no
+  (`src/encryption.rs:90`, acquired at `src/sync.rs:420`); `KeyCacheGuard::drop` calls `clear_key_cache()`. There is no
   direct `clear_key_cache()` call in `sync.rs` — keep the guard, or an early return
   leaks derived keys for the rest of the process.
 - **Zeroize**: Cache entries are zeroized on drain

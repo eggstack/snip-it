@@ -8,7 +8,7 @@ Guide agents through working with the sync module (`src/sync.rs`, `src/sync_comm
 ### PERF-3: Argon2 Key Derivation Per-Snippet (PARTIALLY ADDRESSED)
 **Location**: `src/sync.rs`, `src/encryption.rs`
 
-Each snippet gets a new random salt, running Argon2 key derivation for every single snippet. A session-local key cache (`KEY_CACHE` in `encryption.rs`) now avoids re-deriving keys for the same (api_key, salt) pair, but each unique salt still triggers a fresh Argon2 run. The cache is cleared at the end of sync by an RAII guard — `let _key_cache_guard = encryption::key_cache_guard();` (`src/sync.rs:403`), whose `Drop` calls `clear_key_cache()`.
+Each snippet gets a new random salt, running Argon2 key derivation for every single snippet. A session-local key cache (`KEY_CACHE` in `encryption.rs`) now avoids re-deriving keys for the same (api_key, salt) pair, but each unique salt still triggers a fresh Argon2 run. The cache is cleared at the end of sync by an RAII guard — `let _key_cache_guard = encryption::key_cache_guard();` (`src/sync.rs:420`), whose `Drop` calls `clear_key_cache()`.
 
 ## Sync Flow
 
@@ -43,7 +43,7 @@ run_sync() flow (sync_commands.rs):
 
 - `sync_encrypted` and `sync_encrypted_with_ceiling` both delegate to `sync_encrypted_inner`, which runs real encryption and then calls the private `sync_prepared_encrypted_inner` that owns the entire zero/one/many batch transport logic. Zero batches is a valid pull-only path — it sends an empty-upload `Sync(offset=0)` to retrieve remote snippets, not an `unreachable!` panic.
 - Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via the private `add_batch_context()` helper instead of flattening to `SyncRequestFailed`.
-- The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1466`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
+- The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1514`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
 
 ## Merge Strategy
 

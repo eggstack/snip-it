@@ -40,7 +40,7 @@ Moved out of `docs/` so they cannot be mistaken for contracts. Each carries an
 
 ## Related, outside `docs/`
 
-- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 61 architecture documents.
+- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 62 architecture documents.
 - [`../AGENTS.md`](../AGENTS.md) — verify commands, gotchas, invariants.
 - [`../AGENTS.override.md`](../AGENTS.override.md) — session pitfall notes.
 - [`../.skills/`](../.skills) — task-shaped skills (sync, transactions, server, selector parity, …).

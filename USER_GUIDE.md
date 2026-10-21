@@ -752,7 +752,7 @@ Useful environment variables:
 | `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
 | `SNP_THEME` | Legacy theme or theme filename | bundled default |
-| `SNP_LOG` / `RUST_LOG` | Tracing filters | `snp=info` |
+| `SNP_LOG` / `RUST_LOG` | Tracing filters | `snip_it=info` (a bare level such as `info` also works) |
 | `EDITOR` | Editor for `snp edit` and fallback for `snp new --editor` | `vim` |
 | `VISUAL` | Editor for `snp new --editor` (overrides `EDITOR` if non-empty) | unset |
 

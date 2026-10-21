@@ -13,33 +13,39 @@ modals in raw mode. It is the machine-facing endpoint behind the
 
 `SelectArgs` (`select_cmd.rs:11`), `snp select` (alias `sel`):
 
-| Flag | Meaning |
-|------|---------|
-| `-f/--filter` | Initial TUI filter |
-| `--query` | Alias pre-fill for `--filter` (`filter.or(query)` in `main.rs`) |
-| `-l/--library` | Library scope |
-| `--raw` | Emit stored bytes verbatim (conflicts with `--expanded`) |
-| `--expanded` | Prompt for variables, emit expanded text |
-| `--output-file PATH` | Atomic write to file instead of stdout (shell integration) |
-| `--sort`, `--favorites-first` | Ordering (default `Relevance`) |
+| Flag | Type | Default | Meaning |
+|------|------|---------|---------|
+| `-f/--filter` | `Option<String>` | – | Initial TUI filter |
+| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:600`) |
+| `-l/--library` | `Option<String>` | – | Library scope |
+| `--raw` | bool | `false` | Emit stored bytes verbatim (conflicts with `--expanded`) |
+| `--expanded` | bool | `false` | Prompt for variables, emit expanded text (conflicts with `--raw`) |
+| `--output-file PATH` | `Option<PathBuf>` | – | Atomic write to file instead of stdout (shell integration) |
+| `--sort` | `SnippetSort` | `Relevance` | Ordering |
+| `--favorites-first` | bool | `false` | Favorites rank first |
 
-Default mode is raw (both flags absent → `Raw`).
+Default mode is raw (both flags absent → `OutputMode::Raw`,
+`select_cmd.rs:77-81`). The `_raw` parameter of `run()` is accepted but
+unused (`select_cmd.rs:72`); the mode is derived from `expanded` alone.
 
 ## Flow / steps
 
 `run()` (`select_cmd.rs:69`):
 
-1. Map `expanded → Expanded`, else `Raw`. Fresh `cancelled: Cell<bool>`
-   and `selected_command: Cell<Option<String>>` capture the result
-   across the `FnMut` boundary.
+1. Map `expanded → Expanded`, else `Raw` (`select_cmd.rs:77-81`). Fresh
+   `cancelled: Cell<bool>` and `selected_command: Cell<Option<String>>`
+   capture the result across the `FnMut` boundary
+   (`select_cmd.rs:82-83`).
 2. `run_snippet_selection(filter, library, do_sync=false,
-   allow_delete=false, sort_opts, runtime=None, closure)`. No deleting,
-   no sync, no runtime — this call can never init Tokio.
+   allow_delete=false, sort_opts, runtime=None, closure)`
+   (`select_cmd.rs:85-99`). No deleting, no sync, no runtime — this call
+   can never init Tokio.
 3. Closure: `Raw → Done(command.clone())`; `Expanded →`
    `expand_snippet_command` (`Cancel` sets the cancelled cell and
-   returns `Cancel`; `Skip → Continue`; `Expanded(cmd) → Done(cmd)`).
-   `Done` payloads are stashed in `selected_command`.
-4. Match `(outcome, cancelled, command)`:
+   returns `Cancel`; `Skip → Continue`; `Expanded(cmd) → Done(cmd)`,
+   `select_cmd.rs:40-59`). `Done` payloads are stashed in
+   `selected_command`.
+4. Match `(outcome, cancelled, command)` (`select_cmd.rs:101-127`):
    - `Cancelled` or cancelled flag → `CliOutcome::Cancelled` (exit 4).
    - `ExecutionFailed` → internal contract error (unreachable: no
      execution branch exists here).
@@ -47,40 +53,86 @@ Default mode is raw (both flags absent → `Raw`).
    - `Selected + None` → internal contract error (bug).
 
 File output uses `atomic_replace` with
-`Durability::DurableUserData` (temp-file + rename): a cancelled
-selection preserves a pre-existing caller file, and a racing symlink
-cannot redirect the write.
+`Durability::DurableUserData` (temp-file + rename,
+`select_cmd.rs:110-117`): a cancelled selection preserves a pre-existing
+caller file, and a racing symlink cannot redirect the write.
 
 ## Mutation vs read-only
 
-Read-only. No gate, no lock, no save, no clipboard, no execution.
-Variable *expansion* prompts may interact, but nothing persists.
+Read-only. No gate, no lock, no save, no clipboard, no execution, and
+`allow_delete=false` — selection contexts must not offer destructive
+shortcuts. Variable *expansion* prompts may interact, but nothing
+persists.
+
+`select` never calls `gate_mutation_on_interrupted_transactions()`.
+
+Note that the shared loop still resolves its library through the
+**mutating** `get_library_path` (`src/commands/mod.rs:364`), so a legacy
+single-file checkout is migrated by opening the selector. That is a
+resolution side effect, not a snippet mutation.
 
 ## Auto-sync trigger
 
-None. `do_sync=false` is hardcoded; no `notify_mutation`, no explicit
-sync, no pending marker. Selection is invisible to the sync subsystem.
+None. `do_sync=false` is hardcoded (`select_cmd.rs:88`); no
+`notify_mutation`, no explicit sync, no pending marker. Selection is
+invisible to the sync subsystem.
+
+## Tokio runtime
+
+`select` is a local-only command: it never initializes the global Tokio
+runtime. `src/main.rs:605-612` does not pass `&RUNTIME`, and
+`run_snippet_selection` is called with `runtime=None`
+(`select_cmd.rs:91`).
 
 ## Error / exit mapping
 
-- `Cancelled` → exit 4 (shell helpers restore `READLINE_LINE` on 4).
+- `Cancelled` → exit 4 (shell helpers restore `READLINE_LINE` on 4 —
+  `src/commands/shell_cmd.rs:96-99`).
 - `Success` → exit 0 with the command on stdout (plus trailing
-  newline via `println!`) or atomically in the file.
+  newline via `println!`, `select_cmd.rs:119`) or atomically in the file.
 - Contract violations → `runtime_error` (exit 1), signaling a bug, not
   user error. Atomic-write I/O errors propagate as `io_error`.
+- `src/main.rs:605-613` returns the `CliOutcome` directly.
 
 ## Key invariants
 
 - Raw mode never prompts: `<name>` tokens pass through byte-identical.
 - Stdout transport adds a newline; file transport is byte-exact —
-  shell helpers read the file with `read -r -d ''`.
+  shell helpers read the file with `IFS= read -r -d '' selected`
+  (`src/commands/shell_cmd.rs:118`).
 - Never init the Tokio runtime on this path.
 - `allow_delete=false`: selection contexts must not offer destructive
   shortcuts.
+- The stdout command is the raw stored bytes in `Raw` mode, so it can
+  contain `<name>` tokens verbatim.
+
+## Gotchas
+
+- The `--raw` flag is a no-op in the dispatch: `run()` ignores its
+  `_raw` argument and always treats "not expanded" as raw
+  (`select_cmd.rs:72`, `select_cmd.rs:77-81`).
+- `select` requires a tty. `ui::select_snippet` returns
+  `io::ErrorKind::Unsupported` when stdin or stdout is not a terminal
+  (`src/ui/mod.rs:533-540`).
+- The `ExecutionFailed` and `Selected + None` arms are unreachable
+  contract violations, not user-facing errors — treat a hit there as a
+  bug, not a bad invocation.
+
+## Key Files
+
+- `src/commands/select_cmd.rs` — the command: args, output-mode
+  mapping, and the stdout/file transport.
+- `src/commands/mod.rs` — `run_snippet_selection`, the shared TUI loop;
+  `expand_snippet_command`.
+- `src/utils/atomic.rs` — `atomic_replace` and `Durability`.
+- `src/commands/shell_cmd.rs` — the `__snp_select` bash/zsh/fish
+  consumers of `--output-file`.
+- `src/outcome.rs` — `CliOutcome` and the exit-code table.
+- `src/main.rs` — dispatch (`src/main.rs:599-613`).
 
 ## File / line references
 
 - `SelectArgs`: `src/commands/select_cmd.rs:11`; `OutputMode`: `:35`
 - `process_snippet`: `:40`; `run`: `:69`
-- Shared loop: `src/commands/mod.rs:306`; atomic write: `utils/atomic.rs`
-- Dispatch: `src/main.rs:599-612`; consumers: `shell_cmd.rs:66-333`
+- Shared loop: `src/commands/mod.rs:338`; atomic write: `src/utils/atomic.rs:345`
+- Dispatch: `src/main.rs:599-613`; consumers: `src/commands/shell_cmd.rs:74-123`

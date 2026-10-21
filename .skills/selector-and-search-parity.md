@@ -80,15 +80,27 @@ correctness bug**, not a style issue.
 `"all"` is defined exactly once — `LibraryScope::from_filter_arg`
 (`src/selector.rs:61-68`) → `LibraryScope::AllLibraries`.
 
-- **Selector path** understands `"all"`. Used by `snp get`.
+- **Selector path** understands `"all"`. Used by `snp get`, `snp list`, and MCP.
 - **`commands::get_library_path`** (`src/commands/mod.rs:91`) does **not**:
   it calls `get_library_by_filename("all")` and returns `library_not_found`.
-  Used by `snp list`, `snp new`, `snp edit`.
+  Used by the single-library mutating commands (`snp new`, `snp edit`).
+- **`snp search` rejects `"all"` on purpose.** Its interactive selector edits
+  and deletes within a single library file, so it cannot take a cross-library
+  scope (`src/commands/search_cmd.rs:37-44`). It returns an error naming the
+  supported alternatives (`snp list --library all`, `snp get --library all`).
 
-So `snp get --library all` works and `snp list --library all` errors. That is
-current intended behavior, documented in
-[`../docs/LIBRARY_SCOPE.md`](../docs/LIBRARY_SCOPE.md). Do not "fix" the error
-by adding `"all"` to the single-library path — that forks the rule.
+So `snp get --library all` and `snp list --library all` work, and
+`snp search --library all` is a deliberate, accurate error. `all` is also a
+**reserved library name** — `validate_library_name` rejects it
+(`src/library/model.rs:213-223`), so `snp library create all` fails.
+
+Read-only commands must resolve through `commands::load_readonly_snippets`
+(`src/commands/mod.rs:127-147`) → `library::readonly_library_sources`, never
+through the mutating `get_library_path`; `ensure_library_mode()` must not run
+on a read path.
+
+See [`../docs/LIBRARY_SCOPE.md`](../docs/LIBRARY_SCOPE.md) for the
+authoritative scope table.
 
 ---
 
@@ -170,4 +182,5 @@ needs `unsafe` (edition 2024).
 - Making MCP search folders or `favorite` — those are private/local metadata
   and are never searchable by contract.
 - Writing a diagnostic to stdout in the MCP server — corrupts the protocol.
-- Assuming `list --library all` should work because `get --library all` does.
+- Assuming `search --library all` should work because `get --library all` does.
+  `snp search` deliberately rejects it (the selector operates on one library file).

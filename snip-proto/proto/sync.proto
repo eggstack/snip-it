@@ -6,7 +6,12 @@ option go_package = "github.com/eggstack/snip-it/snip-proto;snip_proto";
 
 service SnippetSync {
     // Get non-deleted snippets from the selected library. Results are filtered
-    // to records with updated_at strictly greater than since.
+    // to records with updated_at greater than or equal to since (>=). The
+    // server uses >= deliberately: timestamps have second granularity and the
+    // watermark returned to the client is MAX(updated_at), so a strict >
+    // would skip rows written in the same second as the previous watermark.
+    // Re-delivering boundary rows is safe — merges are idempotent by snippet
+    // identity.
     rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);
     
     // Push local snippets to the selected library. Invalid snippets are
@@ -66,8 +71,9 @@ message PushSnippetsResponse {
 message SyncRequest {
     // Deprecated compatibility field. Prefer authorization metadata.
     string api_key = 1;
-    // Local records to merge. Only records newer than last_sync_timestamp are
-    // considered for insertion or conflict resolution.
+    // Local records to merge. Every local record is considered for insertion
+    // or conflict resolution; last_sync_timestamp only selects the page of
+    // server rows returned in the response.
     repeated Snippet local_snippets = 2;
     // Unix timestamp returned by the previous completed sync.
     int64 last_sync_timestamp = 3;

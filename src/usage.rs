@@ -10,8 +10,8 @@
 //! # File format
 //!
 //! ```toml
-//! [[usage]]
-//! id = "snippet-uuid"
+//! [[entries]]
+//! id = "legacy-<sha256-hex>"
 //! use_count = 5
 //! last_used_at = 1700000000
 //! ```

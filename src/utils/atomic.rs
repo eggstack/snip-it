@@ -13,6 +13,11 @@ use std::path::{Path, PathBuf};
 ///
 /// Controls fsync behavior and permission restrictions applied to the
 /// temp file before the atomic rename.
+///
+/// Every variant applies `mode(0o600)` to the temp file unconditionally; the
+/// target inherits it. Use [`AtomicWriteOptions::preserve_permissions`] to
+/// keep the target's existing mode instead. The variants differ in fsync
+/// behavior, not in permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 #[allow(dead_code)]
@@ -26,11 +31,11 @@ pub enum Durability {
     SensitiveConfig,
 
     /// Metadata that can be reconstructed (usage counters, cache).
-    /// No fsync, default permissions.
+    /// No fsync.
     RecoverableMetadata,
 
     /// Lock files, coordination artifacts that are not persisted.
-    /// No fsync, default permissions, cleanup expected.
+    /// No fsync, cleanup expected.
     EphemeralCoordination,
 }
 

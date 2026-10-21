@@ -4,12 +4,15 @@
 //!
 //! Provides deterministic, stable sorting of snippets with support for
 //! multiple sort modes, favorites-first grouping, and optional fuzzy-relevance
-//! scores. The tie-break chain is:
+//! scores. The comparison chain is:
 //!
-//! 1. Requested primary key ([`SnippetSort`] variant)
-//! 2. Favorites-first grouping (orthogonal modifier)
-//! 3. Fuzzy relevance where meaningful (for [`SnippetSort::Relevance`])
-//! 4. Normalized description (case-insensitive)
+//! 1. Favorites-first grouping (orthogonal modifier — compared *before* the
+//!    primary key so favorites land in a contiguous block)
+//! 2. Requested primary key ([`SnippetSort`] variant)
+//! 3. Fuzzy relevance, where meaningful (skipped when the primary sort is
+//!    already [`SnippetSort::Relevance`])
+//! 4. Normalized description (case-insensitive; skipped for
+//!    [`SnippetSort::Relevance`], which is defined as fuzzy score → index)
 //! 5. Original source order (index ascending)
 
 use crate::usage::UsageData;

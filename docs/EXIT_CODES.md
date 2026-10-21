@@ -49,7 +49,7 @@ pub enum CliOutcome {
 | `Cancelled` | 4 | `select` maps `CliOutcome::Cancelled` to exit 4 in `main.rs` |
 | `ValidationFailed` | 6 | |
 | `PersistenceFailed` | 1 | Shares code with `GENERAL_ERROR` |
-| `SyncFailed` | 7 | |
+| `SyncFailed` | 7 | **Reserved.** No command constructs this variant today — `main.rs` maps every command `Err` to `GENERAL_ERROR` (1). The code remains part of the stable contract. |
 | `ExecutionFailed { child_code: None }` | 8 | Wrapper code when child exit is unknown |
 | `ExecutionFailed { child_code: Some(n) }` | n | Propagates child process exit code |
 | `ConflictOrRefused` | 9 | |

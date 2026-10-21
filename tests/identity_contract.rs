@@ -2,10 +2,44 @@
 //!
 //! Verifies identity behavior across the full lifecycle.
 
-use snip_it::{LibraryConfig, LibraryMeta, Snippet, Snippets, load_library, save_library};
+use snip_it::{
+    LibraryConfig, LibraryMeta, ScopedConfigDir, Snippet, Snippets, load_library, save_library,
+};
 use tempfile::TempDir;
 
-fn temp_library_path(dir: &TempDir) -> std::path::PathBuf {
+/// Private temp directory that also points this thread's resolved config
+/// directory at `<tmp>/.config/snp`.
+///
+/// `save_library` derives the mutation gate and the local-data-lock path
+/// from the *config directory*, not from the target library path. Without
+/// this override, every `save_library` call in this file resolved against
+/// the developer's real `~/.config/snp/` — creating a `.transaction`
+/// directory there, contending on the real local-data lock, and failing
+/// outright whenever the developer happened to have an interrupted
+/// transaction journal on disk.
+struct TestDir {
+    tmp: TempDir,
+    _config_dir: ScopedConfigDir,
+}
+
+impl TestDir {
+    fn new() -> Self {
+        let tmp = TempDir::new().expect("test helper: temp dir");
+        let config_home = tmp.path().join(".config");
+        std::fs::create_dir_all(&config_home).expect("test helper: create config home");
+        let config_dir = ScopedConfigDir::new(config_home.join("snp"));
+        Self {
+            tmp,
+            _config_dir: config_dir,
+        }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.tmp.path()
+    }
+}
+
+fn temp_library_path(dir: &TestDir) -> std::path::PathBuf {
     dir.path().join("test_library.toml")
 }
 
@@ -27,7 +61,7 @@ fn make_snippet(id: &str, desc: &str, cmd: &str) -> Snippet {
 
 #[test]
 fn test_edit_retains_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![make_snippet("stable-id", "original", "echo old")],
@@ -51,7 +85,7 @@ fn test_edit_retains_id() {
 
 #[test]
 fn test_move_retains_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let lib_a = dir.path().join("lib_a.toml");
     let lib_b = dir.path().join("lib_b.toml");
 
@@ -81,7 +115,7 @@ fn test_move_retains_id() {
 
 #[test]
 fn test_native_export_includes_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![make_snippet("export-id", "exportable", "echo export")],
@@ -102,7 +136,7 @@ fn test_native_export_includes_id() {
 
 #[test]
 fn test_import_without_id_gets_new() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let toml_content = r#"
@@ -123,7 +157,7 @@ command = "echo imported"
 
 #[test]
 fn test_dedup_same_id_same_content() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let toml_content = r#"
@@ -149,7 +183,7 @@ command = "echo two"
 
 #[test]
 fn test_same_id_diff_content_new_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let toml_content = r#"
@@ -172,7 +206,7 @@ command = "echo beta"
 
 #[test]
 fn test_diff_id_same_content_both_kept() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let toml_content = r#"
@@ -196,7 +230,7 @@ command = "echo same"
 
 #[test]
 fn test_delete_preserves_tombstone() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![
@@ -234,7 +268,7 @@ fn test_delete_preserves_tombstone() {
 
 #[test]
 fn test_recreate_gets_new_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![make_snippet("original-id", "original", "echo original")],
@@ -266,7 +300,7 @@ fn test_recreate_gets_new_id() {
 
 #[test]
 fn test_sync_preserves_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![make_snippet("sync-stable-id", "synced", "echo sync")],
@@ -290,7 +324,7 @@ fn test_sync_preserves_id() {
 
 #[test]
 fn test_id_roundtrip_preserves_all_fields() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let original = Snippet {
@@ -331,7 +365,7 @@ fn test_id_roundtrip_preserves_all_fields() {
 
 #[test]
 fn test_empty_id_gets_assigned_on_load() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
 
     let toml_content = r#"
@@ -351,7 +385,7 @@ command = "echo no-id"
 
 #[test]
 fn test_multiple_edits_retain_id() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let path = temp_library_path(&dir);
     let snippets = Snippets {
         snippets: vec![make_snippet("multi-edit-id", "v1", "echo v1")],
@@ -374,7 +408,7 @@ fn test_multiple_edits_retain_id() {
 
 #[test]
 fn test_library_meta_roundtrip() {
-    let dir = TempDir::new().unwrap();
+    let dir = TestDir::new();
     let config_path = dir.path().join("libraries.toml");
 
     let config = LibraryConfig {

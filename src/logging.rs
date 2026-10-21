@@ -83,6 +83,25 @@ fn level_str(level: Level) -> &'static str {
     }
 }
 
+/// The `tracing` target prefix that scopes the default log filter to this
+/// application's own events.
+///
+/// Every `tracing` call in the workspace lives in the **library** crate, whose
+/// Rust module path is `snip_it` (the `snip-it` package name with `-`
+/// normalized to `_`). The `snp` binary crate contains no `tracing` calls, so
+/// a filter scoped to `snp` matches nothing and the log file stays empty.
+/// `EnvFilter` matches a target directive by prefix, so `snip_it=info` covers
+/// every `snip_it::…` target.
+const LOG_TARGET_PREFIX: &str = "snip_it";
+
+/// Builds the default `EnvFilter` directive for `level`.
+///
+/// Scoped to [`LOG_TARGET_PREFIX`] so the filter covers this application's
+/// own events without enabling dependency-crate logging.
+fn default_filter_directive(level: Level) -> String {
+    format!("{LOG_TARGET_PREFIX}={}", level_str(level))
+}
+
 pub fn init_logging(config: &LogConfig) -> Result<(), SnipError> {
     {
         let guard = LOG_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -111,11 +130,11 @@ pub fn init_logging(config: &LogConfig) -> Result<(), SnipError> {
     let env_filter = if let Ok(filter_str) = std::env::var("SNP_LOG") {
         EnvFilter::try_new(&filter_str).unwrap_or_else(|e| {
             eprintln!("Warning: Invalid SNP_LOG filter '{filter_str}': {e}");
-            EnvFilter::new(format!("snp={}", level_str(config.level)))
+            EnvFilter::new(default_filter_directive(config.level))
         })
     } else {
         EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(format!("snp={}", level_str(config.level))))
+            .unwrap_or_else(|_| EnvFilter::new(default_filter_directive(config.level)))
     };
 
     let file_layer = fmt::layer()

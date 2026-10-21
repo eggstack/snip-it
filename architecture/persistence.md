@@ -7,14 +7,19 @@
 - [Overview](#overview)
 - [Atomic Write Primitive](#atomic-write-primitive)
 - [Process File Lock](#process-file-lock)
+- [Lock Hierarchy](#lock-hierarchy)
 - [Transaction Boundary](#transaction-boundary)
+- [Local-Data Lock](#local-data-lock)
 - [Validation Framework](#validation-framework)
 - [Backup Format](#backup-format)
 - [Restore Semantics](#restore-semantics)
 - [Repair Command](#repair-command)
 - [Migration Framework](#migration-framework)
 - [Identity Contract](#identity-contract)
+- [Security Properties](#security-properties)
 - [Key Files](#key-files)
+- [Invariants](#invariants)
+- [Gotchas](#gotchas)
 
 ---
 
@@ -29,7 +34,9 @@ The persistence stack has four layers:
 3. **Validation, backup, restore, repair** — data integrity workflows
 4. **Migration framework** — schema versioning and evolution
 
-All user-facing data lives under `~/.config/snp/` (XDG-compliant). See [utils.md](utils.md) for path resolution and [library.md](library.md) for the snippet data model.
+All user-facing data lives under `~/.config/snp/` (XDG-compliant, no per-platform branch — see [utils/config.md](utils/config.md)). See [library.md](library.md) for the snippet data model and [utils/atomic.md](utils/atomic.md) for the write primitive's finer points.
+
+**What this document does not cover.** The *sync protocol*, conflict resolution, and merge semantics live in [sync.md](sync.md). The *auto-sync worker*, pending-generation marker, and execution lock live in [auto_sync.md](auto_sync.md). The *kernel* cross-process lock primitive is documented here ([Process File Lock](#process-file-lock)) and detailed in [process_file_lock.md](process_file_lock.md). The *library data model* is in [library.md](library.md). The *CLI surface* for backup/restore/repair/validate is in [commands/backup_cmd.md](commands/backup_cmd.md), [commands/restore_cmd.md](commands/restore_cmd.md), [commands/repair_cmd.md](commands/repair_cmd.md), and [commands/validate_cmd.md](commands/validate_cmd.md).
 
 ---
 
@@ -71,6 +78,15 @@ pub enum Durability {
 On Unix the temp file is always created `0o600`, so a replaced file keeps
 `0o600` unless `preserve_permissions` restores the previous mode.
 
+Exact fsync semantics (`src/utils/atomic.rs`):
+
+- **File fsync** — `file.sync_all()` runs only for `DurableUserData` and `SensitiveConfig` (`atomic.rs:397-403`). The other two classes get `file.flush()` only, which pushes to the kernel buffer but not to the device.
+- **Directory fsync** — `sync_parent_dir()` hard-fails the write for `DurableUserData`/`SensitiveConfig` when the parent-dir fsync errors (`atomic.rs:228-250`). `RecoverableMetadata` downgrades a directory-fsync failure to a warning (`atomic.rs:252-259`). `EphemeralCoordination` skips the directory fsync entirely (`atomic.rs:192`).
+- **Temp-file mode** — `0o600` for *every* class on Unix (`atomic.rs:378-382`); `write_private_atomic` likewise creates its temp at `0o600` (`atomic.rs:287`).
+- **Windows** — `std` offers no creation-time permission knob, so the temp file inherits the parent directory's ACL. Windows installs rely on the user-private `%APPDATA%` directory ACLs instead of a file-level DACL (`atomic.rs:265-272`).
+
+`SNP_ALLOW_DIR_FSYNC_FAILURE=1` downgrades a directory-fsync error to a warning, but only in `test-support` builds (`atomic.rs:212-221`). Production builds always fail closed on a durability error — the seam is inert outside tests.
+
 ### Options
 
 ```rust
@@ -81,7 +97,7 @@ pub struct AtomicWriteOptions {
 }
 ```
 
-`AtomicWriteOptions::for_durability(d)` creates defaults: `reject_symlink = true` only for `SensitiveConfig`.
+`AtomicWriteOptions::for_durability(d)` creates defaults: `reject_symlink = true` only for `SensitiveConfig` (`atomic.rs:56-63`).
 
 ### Algorithm
 
@@ -97,6 +113,10 @@ pub struct AtomicWriteOptions {
 8. Restore original permissions if `preserve_permissions` was set
 9. Sync parent directory — for `DurableUserData`/`SensitiveConfig` a failure fails the write; for `RecoverableMetadata` it is logged and ignored; `EphemeralCoordination` skips it
 10. On any failure, `TempFileGuard` cleans up the temp file
+
+Target validation (`validate_target`, `atomic.rs:107-162`) rejects directories, FIFOs, sockets, and device nodes. A symlink is **replaced, never followed** — the final `rename` swaps the directory entry itself, so an allowed symlink is a valid target (`atomic.rs:121-126`).
+
+`write_private_atomic` always syncs the parent directory with `SensitiveConfig` semantics (`atomic.rs:322`), so its directory-fsync failures are hard errors.
 
 ### Report
 
@@ -137,7 +157,7 @@ A single authoritative cross-process mutual-exclusion primitive built on the ope
 
 ### Authority
 
-The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFileEx` over a fixed byte range on Windows guarantee that at most one process holds the lock at a time. Unsupported platforms return [`ProcessFileLockError::UnsupportedPlatform`](../src/process_file_lock.rs) rather than silently weakening exclusion.
+The kernel alone arbitrates. `flock(fd, LOCK_EX | LOCK_NB)` on Unix and `LockFileEx` over a fixed byte range on Windows guarantee that at most one process holds the lock at a time. Unsupported platforms return `ProcessFileLockError::UnsupportedPlatform` rather than silently weakening exclusion.
 
 ### Acquisition Order
 
@@ -153,7 +173,7 @@ If metadata publication fails after kernel acquisition, the kernel lock is relea
 
 ### Identity Metadata
 
-[`LockIdentity`](../src/process_file_lock.rs) is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
+`LockIdentity` is for diagnostics only. It must never authorize lock stealing or canonical-file deletion. A contender that observes a busy kernel lock with empty, malformed, or legacy metadata must treat it as a live owner.
 
 On Linux, process start identity is parsed from `/proc/<pid>/stat` using field
 22 (`starttime`) after locating the final closing parenthesis of `comm`, which
@@ -176,6 +196,55 @@ Three thin wrappers in `src/auto_sync/` consume the primitive and preserve the e
 - The persistent file is never unlinked or renamed by `Drop`.
 - A repeated cycle of acquire/drop on the same path leaves only the canonical file.
 
+> **Distinct from the owned-record locks.** The kernel lock above is *not* the lock that serializes local data mutations. `LocalDataLock` and `TransactionLock` are owned-record locks (PID + nonce + start token + PID-reclaim) implemented in `src/local_data.rs` and `src/transaction.rs`. They are described in [Lock Hierarchy](#lock-hierarchy), [Local-Data Lock](#local-data-lock), and [TransactionLock](#transactionlock).
+
+---
+
+## Lock Hierarchy
+
+snip-it uses **three** distinct lock mechanisms. Confusing them is the source of most lock-ordering bugs.
+
+| Lock | Kind | Location | Authority |
+|------|------|----------|-----------|
+| `LocalDataLock` | Owned record (`create_new` + PID reclaim) | `<config>/.transaction/local-data.lock` | Reclaimable owned record |
+| `TransactionLock` | Owned record (`create_new` + PID reclaim) | `<config>/.transaction/transaction.lock` | Reclaimable owned record |
+| `ProcessFileLock` | Kernel (`flock` / `LockFileEx`) | auto-sync execution/worker/pending locks, `snip-sync` server singleton | Kernel only |
+
+### Acquisition Order
+
+**`LocalDataLock` → `TransactionLock` → destination writes.** Never invert.
+
+This ordering is stated in the source itself: `src/commands/restore_cmd.rs:1133` reads
+`// Lock hierarchy: LocalDataLock -> TransactionLock -> destination writes.`
+
+The mutation gate runs *before* either lock is taken. The gate itself may acquire the transaction lock internally (via `recover_transaction_by_id` → `acquire_transaction_lock`, `src/transaction.rs:782`), but it releases it before returning — so the gate never holds the transaction lock while another lock is being acquired, and there is no inversion.
+
+### Call-Site Map
+
+| Call site | Gate | `LocalDataLock` | `TransactionLock` |
+|-----------|------|-----------------|-------------------|
+| `library::persistence::save_library` | Yes (`persistence.rs:225-228`) | Yes (`persistence.rs:233`) | — |
+| `commands::save_snippets` | Yes (`commands/mod.rs:212-215`) | Yes (`commands/mod.rs:218`) | — |
+| `LibraryManager` mutators | Yes (`manager.rs:625-631`) | Yes (`manager.rs:616-619`) | — |
+| `commands::edit_cmd` | Yes (`edit_cmd.rs:73`) | Yes (`edit_cmd.rs:101`) | — |
+| `commands::restore_cmd` | Yes (`restore_cmd.rs:1142-1145`) | Yes (`restore_cmd.rs:1146`) | Yes (`restore_cmd.rs:1147`) |
+| `commands::backup_cmd` | — | Yes (`backup_cmd.rs:78`) | — |
+| `usage` | — | Yes (`usage.rs:74`) | — |
+| `config::sync_settings` | — | Yes (`config/sync_settings.rs:473`) | — |
+| `transaction::recover_transaction_by_id` | — | — | Yes, first (`transaction.rs:782`) |
+
+Every `LibraryManager` mutator follows the same shape — `gate_mutation()` then `acquire_local_data_lock()` — at `manager.rs:182-183, 364-365, 419-420, 489-490, 513-514, 526-527, 545-546, 561-562, 574-575, 601-602, 642-643`. `gate_mutation()` runs *before* any in-memory mutation so a refused call leaves the manager clean for a retry after `snp repair` (`manager.rs:621-631`).
+
+Two commands acquire no lock of their own and inherit the table's rows **transitively**, so look them up here before concluding they are unlocked:
+- `snp repair` takes the transaction lock only inside `recover_transaction_by_id` (`transaction.rs:782`) and the local-data lock only inside `UsageIndex::save()` (`usage.rs:74`).
+- `snp import` reaches both through `save_library` (`persistence.rs:217-238`) and, for a new library, `add_existing_library` (`manager.rs:573-574`).
+
+`snp edit` is the one deliberate exception to "gate, then lock": the gate runs at `edit_cmd.rs:73`, the editor session runs unlocked, and the local-data lock is taken only for the short post-editor observe-and-notify window (`edit_cmd.rs:97-101`). The interactive session cannot hold the lock; only the read-compare-notify critical section needs to be serialized against other writers.
+
+### Why the Local-Data Lock Exists
+
+`LocalDataLock` is the *snapshot-consistency* lock, not the *mutation* lock. Backup captures a set of files while they may be being rewritten; holding the local-data lock for the duration of the snapshot guarantees backup sees either the complete before-state or the complete after-state, never a mixed one (`backup_cmd.rs:74-78`, `persistence.rs:230-233`).
+
 ---
 
 ## Transaction Boundary
@@ -197,6 +266,8 @@ The transaction subsystem uses two distinct directories:
 
 This separation ensures the pending marker is never written to the `.transaction` subdirectory, which would cause it to be missed by the canonical pending path. The `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` function requires both directories: it inspects the canonical pending marker (in `sync_state_dir`) while cleaning up transaction artifacts (in `transaction_dir`).
 
+The canonical helper for the second directory is `local_data::transaction_dir()` (`src/local_data.rs:398-400`), which returns `<config_dir>/.transaction`. Prefer it over re-deriving the `.transaction` suffix by hand.
+
 ### State Machine
 
 ```
@@ -207,6 +278,8 @@ Prepared → Failed(error_message) (persisted terminal; recovery refuses without
 ```
 
 New transactions never persist terminal `Committed` or `RolledBack` states. The journal is removed during cleanup, making the absence of a journal the true terminal indicator. Legacy `Committed`, `RolledBack`, and `BackupsDurable` journals (from older versions) are handled during recovery. `CommittedLocal` is live on the restore path (see below) and also handled for legacy journals via `FinalizeCommittedLocal`.
+
+The persisted enum is `TransactionState` (`transaction.rs:306-354`); `is_interruptible()` (`transaction.rs:363-373`) lists the interruptible states: `Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`.
 
 ### Components
 
@@ -243,30 +316,71 @@ pub struct StagedFile {
 
 `staged_path` is the live destination. `backup_path` holds the original bytes used for rollback, `durable_staged_path` a private durable copy of the intended bytes, and `original_metadata` the pre-transaction permission/metadata snapshot.
 
+`StagedAction` (`transaction.rs:165-175`) is `Replace | Create | Delete | NoOp`.
+
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start_token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted. A record that is *empty or unparseable* first goes through a bounded retry ladder (50–200 attempts, age-aware) before quarantine, because "a live writer called `create_new` but has not finished writing" is an observable state and a partially written record is indistinguishable from a malformed one; quarantining immediately would rename away a live owner's lock.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce AND start_token match the guard's nonce and start token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
+
+**Bounded retry ladder.** A record that is *empty, unparseable, or only partially written* goes through a bounded retry ladder before quarantine, because "a live writer called `create_new` but has not finished writing" is an observable state, and a partially written record is indistinguishable from a malformed one; quarantining immediately would rename away a live owner's lock and admit a second writer into the critical section.
+
+The ladder has three arms (`transaction.rs:1151-1201`):
+
+| Arm | Condition | Bound | Action |
+|-----|-----------|-------|--------|
+| Readable | `toml::from_str` succeeds | — | Resets **both** counters (`transaction.rs:1152-1160`) |
+| Empty | parse fails **and** `content.trim().is_empty()` | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_stale_lock` (`transaction.rs:1161-1180`) |
+| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_stale_lock` (`transaction.rs:1181-1200`) |
+
+Both retry arms sleep 1 ms between attempts. A *readable* record resets both counters, so a waiter that sees scattered empty reads over a long legitimate acquisition never eventually quarantines a perfectly good lock.
+
+**Transient contention is platform-gated.** `is_transient_lock_contention` (`transaction.rs:1029-1047`) returns `true` only on Windows for `PermissionDenied`: a just-deleted file can briefly surface `PermissionDenied` in a pending-delete state. On Unix the same condition is *stable* (lock file owned by another UID, or a non-traversable `.transaction` directory), so retrying it spins forever with no error and no timeout. The `#[cfg(windows)]` / `#[cfg(not(windows))]` split is the fix for a hang that applied the Windows workaround unconditionally.
+
+**Deadline.** `LOCK_ACQUIRE_TIMEOUT` is 30 s (`transaction.rs:1023-1027`). The deadline is checked in the "lock removed or transient read" arm (`transaction.rs:1131-1140`) and returns `Transaction lock acquisition timed out`. The empty and malformed arms are bounded by their retry counters instead, not by the deadline.
+
+**A failed `write_all` no longer leaves a 0-byte lock file behind.** If the record write fails after `create_new` succeeded, the file this call created is removed before the error is returned (`transaction.rs:1097-1104`); otherwise every later acquirer would spin through the empty-content ladder on a file that can never become valid.
+
+**Quarantine is rename-based and GC'd.** `quarantine_stale_lock` (`transaction.rs:1268`) renames the lock to `transaction.lock.quarantine.<uuid>`; a `NotFound` from a concurrent writer's quarantine is treated as success. Old quarantine files are pruned by `prune_quarantine_files` with `QUARANTINE_RETENTION` = 7 days (`transaction.rs:1300-1301`).
 
 ### API
 
 | Function | Description |
 |----------|-------------|
-| `acquire_transaction_lock(state_dir, operation)` | Acquire exclusive lock, error if held |
+| `acquire_transaction_lock(state_dir, operation)` | Acquire exclusive lock, error if held or after the 30 s deadline |
 | `begin_transaction(state_dir, operation, affected_files)` | Create journal in `Prepared` state |
 | `commit_transaction(state_dir, journal)` | Begin cleanup phase; removes backups and journal |
 | `rollback_transaction(state_dir, journal)` | Restore files from backups in reverse order |
 | `check_interrupted_transactions(state_dir)` | Find journals in interruptible states on startup |
+| `scan_transaction_journals(transaction_dir)` | Authoritative discovery of *every* journal, including corrupt ones |
+| `classify_journal_recovery(transaction_dir, journal)` | Map a journal to a `RecoveryClass` |
+| `recover_transaction_by_id(sync_state_dir, transaction_dir, id, expected)` | Exact, lock-held, re-validated recovery of one journal |
+
+### The Mutation Gate
+
+`gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`transaction.rs:2510-2614`) is the mandatory pre-mutation check. Its policy:
+
+1. **Corrupt journals** → fail closed. Mutations are refused with a pointer to `snp repair` (`transaction.rs:2516-2535`).
+2. **`UnsafeFailed` journals** → fail closed; the journal is preserved for manual investigation (`transaction.rs:2547-2562`).
+3. **Zero actionable journals** → terminal journals with no artifacts are removed one at a time through exact recovery, each under its own transaction lock with re-validation (`transaction.rs:2570-2591`).
+4. **Exactly one actionable journal** → auto-recover it (auto-rollback for `Prepared`/`RollingBack`, finalize for `CommittedLocal`, resume cleanup for `CleaningUp`) (`transaction.rs:2593-2601`).
+5. **Two or more actionable journals** → refuse and direct the user to `snp repair` (`transaction.rs:2603-2613`).
+
+`check_interrupted_transactions` is a **scan helper, not the gate**. Calling the scan and proceeding anyway reproduces the corruption it exists to prevent.
+
+`RecoveryClass` (`transaction.rs:402-418`): `Rollback`, `FinalizeCommittedLocal`, `ResumeCleanup`, `CleanupLegacyCommitted`, `CleanupLegacyRolledBack`, `RemoveTerminalJournal`, `UnsafeFailed`.
 
 ### Crash Recovery
 
-`check_interrupted_transactions()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`). These represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
+`scan_transaction_journals()` scans the `.transaction` subdirectory of the state directory for `txn-*.toml` files and reports both parsed journals and corrupt ones. Journals in interruptible states (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`) represent interrupted operations. The `snp repair` command detects these and offers automatic rollback.
+
+`recover_transaction_by_id` (`transaction.rs:771-846`) is the canonical transaction-specific recovery API. It validates the transaction ID, **acquires the transaction lock first**, loads and classifies the journal *under* the lock, compares the actual classification against the expected one *under* the lock (a mismatch returns `stale repair action` and asks the user to re-run `snp repair`), and only then executes the recovery path — all while holding the lock.
 
 ### Journal Lifecycle
 
 1. `begin_transaction` writes journal via `write_private_atomic` in `Prepared` state
 2. Caller performs live replacements, advancing through `Committing { next_commit_position }` per file — progress persisted only after each verified atomic write
 3. After all writes complete, advance to `CleaningUp { outcome: Commit, next_step }` — records pending sync intent, then removes backups and journal
-4. If interrupted between begin and cleanup completion, `check_interrupted_transactions` finds the orphan in any interruptible state (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`). Legacy `CommittedLocal` and `BackupsDurable` journals from older versions are handled during recovery.
+4. If interrupted between begin and cleanup completion, the scanner finds the orphan in any interruptible state (`Prepared`, `BackupsDurable`, `Committing`, `CommittedLocal`, `RollingBack`, `CleaningUp`). Legacy `CommittedLocal` and `BackupsDurable` journals from older versions are handled during recovery.
 
 ### Commit Progress Semantics
 
@@ -278,17 +392,83 @@ File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir
 
 ### Artifact Path Validation
 
-All transaction artifact paths (backup, staged, destination) are validated by `validate_contained_path` before use. The validation has three layers:
+All transaction artifact paths (backup, staged, destination) are validated by `validate_contained_path` (`transaction.rs:1520`) before use. The validation has three layers:
 
-1. **Lexical containment** (`lexically_within`): Both paths must be absolute. `Component::ParentDir` is explicitly rejected during normalization via `normalize_absolute_without_parent` — any `..` component causes immediate rejection. This catches traversal even when the path doesn't exist yet (e.g. `<artifact-root>/../../outside.bin`).
-2. **Symlinked prefix rejection** (`reject_symlinked_existing_prefixes`): Walks from root toward child using `symlink_metadata` (not `fs::metadata`, so symlinks are not followed). If any existing intermediate component is a symlink, the path is rejected. This catches `<root>/link/missing.bin` where `link` is a symlink to outside and the final file is absent.
+1. **Lexical containment** (`lexically_within`, `transaction.rs:1594`): Both paths must be absolute. `Component::ParentDir` is explicitly rejected during normalization via `normalize_absolute_without_parent` (`transaction.rs:1625`) — any `..` component causes immediate rejection. This catches traversal even when the path doesn't exist yet (e.g. `<artifact-root>/../../outside.bin`).
+2. **Symlinked prefix rejection** (`reject_symlinked_existing_prefixes`, `transaction.rs:1649`): Walks from root toward child using `symlink_metadata` (not `fs::metadata`, so symlinks are not followed). If any existing intermediate component is a symlink, the path is rejected. This catches `<root>/link/missing.bin` where `link` is a symlink to outside and the final file is absent.
 3. **Canonical containment**: For existing paths, canonicalize both root and path and verify containment as defense in depth.
 
 The helper runs for every transaction state (not just on disk existence), and backup references are revalidated immediately before reading in rollback.
 
+Per-transaction artifacts live under `.transaction/artifacts/<txn-id>/` with `backups/` and `staged/` subdirectories (`transaction_artifact_dir`, `transaction.rs:1737`; used by `restore_cmd.rs:1179-1193`).
+
 ### CommittedLocal State (restore path + legacy)
 
 `CommittedLocal { pending }` is the restore pending-finalization state (`src/commands/restore_cmd.rs` advances through `advance_to_committed_local` before `commit_transaction`). New non-restore transactions transition directly from `Committing` to `CleaningUp`. Older-version `CommittedLocal` journals are handled during recovery via `FinalizeCommittedLocal`, which completes the pending intent recording.
+
+---
+
+## Local-Data Lock
+
+### Location
+
+`src/local_data.rs`
+
+### Purpose
+
+`LocalDataLock` is the *snapshot-consistency* lock: it serializes config mutations against backup snapshot capture, so a backup never observes a half-applied multi-file change. It lives in the same `.transaction` directory as the journal and the transaction lock, but is a separate file with a separate record.
+
+### Record
+
+```rust
+pub struct LocalDataLockInfo {
+    pub schema_version: u32,
+    pub pid: u32,
+    pub nonce: String,
+    pub created_at_unix_ms: i64,
+    pub start_token: Option<String>,
+}
+```
+
+`LocalDataLockInfo` derives `PartialEq, Eq` precisely so the reclaim path can compare the record it observed against the record currently on disk (`local_data.rs:35`).
+
+### Acquisition
+
+`acquire_local_data_lock(state_dir)` (`local_data.rs:111`) uses the same owned-lock protocol as the transaction lock: `create_new(true)` on `local-data.lock`, immediately write the TOML record, `sync_all` (warn-only on failure), and return the guard.
+
+- **Deadline** — 30 s from entry (`local_data.rs:128`). Exceeding it while the owner is alive returns `Local data lock held` / `Timed out waiting for local data lock after 30 seconds.` (`local_data.rs:282-287`).
+- **Backoff** — 10 ms doubling to a 1 s cap while a live owner holds the lock (`local_data.rs:288-289`).
+- **Transient contention** — the same platform-gated `is_transient_lock_contention` as the transaction lock (`local_data.rs:174, 184`).
+
+### Bounded Retry Ladder
+
+The local-data lock uses the same three-arm ladder as the transaction lock (`local_data.rs:199-258`):
+
+| Arm | Condition | Bound | Action |
+|-----|-----------|-------|--------|
+| Readable | parse succeeds | — | Resets both counters (`local_data.rs:200-208`) |
+| Empty | parse fails and content is empty | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_local_data_lock(&lock_path, None)` (`local_data.rs:209-241`) |
+| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_local_data_lock(&lock_path, None)` (`local_data.rs:242-257`) |
+
+The empty arm additionally checks the 30 s deadline and returns a typed error naming the likely cause — a writer interrupted between creating and writing the lock file (`local_data.rs:229-238`).
+
+**Before this ladder existed, a 0-byte `local-data.lock` hung every mutation forever.** A 0-byte file can arise from a failed `write_all` or from SIGKILL between `create_new` and `write_all`. Because the record can never become valid, no reclaim path was reachable and every later acquirer spun indefinitely with no error and no timeout.
+
+**A failed `write_all` deletes the file it created.** The record write removes the just-created 0-byte lock before returning the error (`local_data.rs:152-163`), so the poison file never reaches the ladder.
+
+### Ownership-Verified Reclaim
+
+Stale-lock reclaim renames the lock file. Reading the record and checking the owner's liveness are **not atomic**, so a writer that decided to reclaim could rename away a *live* lock that another writer had already reclaimed and re-acquired in the meantime — silently putting two processes inside the critical section.
+
+`quarantine_local_data_lock(lock_path, observed)` (`local_data.rs:322-354`) therefore re-reads the record and compares it to the one the caller observed before renaming. If the record changed, or is no longer parseable, the rename is **skipped** and the current owner is left alone. `observed = None` is used only for the empty/malformed arms, where there is no owner identity to compare — the same trade-off `Drop` makes for unparseable content.
+
+Both reclaim call sites pass the observed record: dead owner (`local_data.rs:268`) and PID reuse via start-token mismatch (`local_data.rs:297`).
+
+Quarantine files are named `local-data.lock.quarantine.<uuid>` and pruned by `prune_quarantine_files` with the same 7-day retention (`local_data.rs:356-370`).
+
+### Relationship to Backup Snapshot Capture
+
+`snp backup` acquires the local-data lock for the duration of snapshot capture (`backup_cmd.rs:74-78`), reading the library generation before and after the copy so a concurrent mutation is detected as a torn snapshot. The mirror-image rule holds on the write side: `save_library` (`persistence.rs:230-233`), `save_snippets` (`commands/mod.rs:217-218`), and every `LibraryManager` mutator (`manager.rs:616-619`) take the same lock, so backup sees either the complete before-state or the complete after-state of all local data, never a mixed state.
 
 ---
 
@@ -415,6 +595,10 @@ pub struct BackupManifestEntry {
 | Default | `~/.config/snp/backups/<timestamp>/` |
 | `--output <path>` | User-specified directory |
 
+### Snapshot Consistency
+
+The backup acquires the local-data lock before reading any file (`backup_cmd.rs:74-78`) and records the library generation before and after the capture so a concurrent mutation is detectable. Files are staged into a `<final>.staging.<uuid>` directory and renamed into place, so a partial backup is never visible at the final path (`backup_cmd.rs:65-72`).
+
 ### Integrity
 
 Each file in the backup has a SHA-256 digest recorded in the manifest. Restore verifies checksums before applying.
@@ -437,28 +621,30 @@ Each file in the backup has a SHA-256 digest recorded in the manifest. Restore v
 
 ### Restore Flow
 
-1. Acquire `LocalDataLock` (backup coordination)
-2. Acquire transaction lock (`acquire_transaction_lock`)
-3. Begin transaction journal (`begin_transaction`)
-4. Load and validate manifest (`manifest.toml` or `manifest.json`)
-5. Validate every source artifact (checksum, size, symlink rejection)
-6. Validate every destination path (traversal, reserved names, kind constraints)
-7. Parse incoming TOML files before any live write
-8. Validate duplicate snippet IDs (`validate_library_no_duplicate_ids`)
-9. Load every affected current file
-10. Compute full restore plan in memory (detect conflicts, produce deterministic report)
-11. Create durable backups for every existing destination
-12. Create durable staged files containing exact intended bytes
-13. fsync files and required parent directories according to durability class
-14. Populate all journal fields, including hashes and action
-15. Atomically persist `BackupsDurable`
-16. Perform live replacements via `atomic_replace` — `Durability::DurableUserData` with `preserve_permissions` for existing destinations, `Durability::SensitiveConfig` for newly created ones — persisting `Committing { next_commit_position }` only after each verified write
-17. Advance to `CommittedLocal { pending: PendingFinalization }` — records pending sync intent atomically
-18. Mark journal committed only after all live writes succeed and pending intent is recorded (`commit_transaction`)
+1. Gate against foreign interrupted transactions (`restore_cmd.rs:1142-1145`)
+2. Acquire `LocalDataLock` (`restore_cmd.rs:1146`)
+3. Acquire the transaction lock (`restore_cmd.rs:1147`)
+4. Begin transaction journal (`begin_transaction`, `restore_cmd.rs:1168`)
+5. Load and validate manifest (`manifest.toml` or `manifest.json`)
+6. Validate every source artifact (checksum, size, symlink rejection)
+7. Validate every destination path (traversal, reserved names, kind constraints)
+8. Parse incoming TOML files before any live write
+9. Validate duplicate snippet IDs (`validate_library_no_duplicate_ids`)
+10. Load every affected current file
+11. Compute full restore plan in memory (detect conflicts, produce deterministic report)
+12. Create durable backups for every existing destination under `.transaction/artifacts/<txn-id>/backups/` (`restore_cmd.rs:1179-1186`)
+13. Create durable staged files under `.transaction/artifacts/<txn-id>/staged/` (`restore_cmd.rs:1191-1193`)
+14. fsync files and required parent directories according to durability class
+15. Populate all journal fields, including hashes and action; advance to `BackupsDurable` (`restore_cmd.rs:1295`)
+16. Advance to `Committing { next_commit_position: 0 }` (`restore_cmd.rs:1304`) and perform live replacements via `atomic_replace` — `Durability::DurableUserData` with `preserve_permissions` for existing destinations, `Durability::SensitiveConfig` for newly created ones — persisting `Committing { next_commit_position }` only after each verified write (`restore_cmd.rs:1561`)
+17. Advance to `CommittedLocal { pending: PendingFinalization }` — records pending sync intent atomically (`restore_cmd.rs:1636, 1699`)
+18. Mark journal committed only after all live writes succeed and pending intent is recorded (`commit_transaction`, `restore_cmd.rs:1713, 1732`)
 19. Release transaction lock
 20. Release `LocalDataLock`
 21. Schedule auto-sync once, after commit, if policy permits
 22. Clean backups and journal according to retention policy
+
+Restore uses `save_library_internal` (not `save_library`) for the libraries it rewrites: it already holds both locks, and the global mutation gate would otherwise see restore's *own* journal as interrupted and roll it back mid-flight.
 
 ### Merge Strategy
 
@@ -531,7 +717,9 @@ pub struct RepairItem {
 
 ### Backup Before Repair
 
-`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>-<uuid>/` before any mutations.
+`snp repair --apply` always creates a timestamped backup at `~/.config/snp/backups/repair-<timestamp>-<uuid>/` before any mutations (`repair_cmd.rs:211-213, 861-893`). The backup copies the whole `libraries/` directory plus `libraries.toml` and `usage.toml`.
+
+Transaction recovery inside repair goes through `recover_transaction_by_id`, so each journal is classified, re-validated, and recovered under the transaction lock.
 
 ---
 
@@ -552,7 +740,9 @@ impl SchemaVersion {
 }
 ```
 
-Version 0 represents unversioned/legacy files. Version 1 is the current schema. The version is stored as `schema_version = <N>` in the TOML top-level table.
+Version 0 represents unversioned/legacy files. Version 1 is the current schema. The version is stored as `schema_version = <N>` in the TOML top-level table (key constant `SCHEMA_KEY`, `migration.rs:99`).
+
+`get_schema_version` parses the file as a `toml::Table` so a document with multiple root keys is handled; a missing key, a missing file, an empty file, or an unparseable file all read back as `LEGACY` (`migration.rs:113-147`).
 
 ### Migration Trait
 
@@ -587,11 +777,19 @@ pub enum MigrationOperation {
 
 ### Roundtripping
 
-`write_schema_version` parses the file as `toml::Table`, inserts the version key, and serializes back. This preserves array-of-tables structure and other TOML constructs that naive string insertion would corrupt.
+`write_schema_version` parses the file as `toml::Table`, inserts the version key, and serializes back (`migration.rs:153-180`). This preserves array-of-tables structure and other TOML constructs that naive string insertion would corrupt.
+
+**`toml::Table`, not `toml::Value`.** `toml::Value` collapses array-of-tables — it is the exact failure the `toml::Table` choice exists to prevent.
 
 ### Migration Chain
 
 `run_migrations` iterates through registered migrations in order. Each migration's `source` must match the current version. The chain advances from `LEGACY` → `CURRENT`.
+
+Each migration is **analyzed first**; the plan is only applied when it has operations. A best-effort pre-migration backup (`<path>.toml.pre-migration.bak`) is written once, before the first mutating step. If any step fails mid-chain, the file is restored from that backup, so the schema is never left at an intermediate version with half-applied data (`migration.rs:188-191, 205-217, 225-245`).
+
+### Current Usage
+
+`write_schema_version`, `needs_migration`, and `run_migrations` currently have **no production call sites** — they are exercised only by `src/migration.rs`'s own tests. They remain the canonical schema-versioning API and the template any future schema change must follow.
 
 ---
 
@@ -620,10 +818,36 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The deterministic I
 
 ### Deterministic Legacy IDs
 
-For legacy snippets with missing IDs, `load_library()` generates deterministic provisional IDs using SHA-256:
+For legacy snippets with missing IDs, `load_library()` generates deterministic provisional IDs using SHA-256 (`src/library/persistence.rs:87-116`). The hashed preimage is:
 
-- **Missing ID**: `legacy-<sha256("snip-it-legacy-id-v1\0" + description + "\0" + command + "\0" + tags + "\0" + output + "\0" + occurrence)>`
-- **Duplicate ID**: `legacy-<sha256("snip-it-duplicate-id-v1\0" + original_id + "\0" + description + "\0" + command + "\0" + tags + "\0" + output + "\0" + occurrence)>`
+```
+"snip-it-legacy-id-v1\0"
++ description + "\0"
++ command + "\0"
++ (tag + "\0")*
++ output + "\0"
++ (folder + "\0")*
++ favorite-as-one-byte + "\0"
++ device_id + "\0"
++ occurrence.to_le_bytes()
+```
+
+For a **duplicate explicit ID** the preimage is (`persistence.rs:119-149`):
+
+```
+"snip-it-duplicate-id-v1\0"
++ original_id + "\0"
++ description + "\0"
++ command + "\0"
++ (tag + "\0")*
++ output + "\0"
++ (folder + "\0")*
++ favorite-as-one-byte + "\0"
++ device_id + "\0"
++ occurrence.to_le_bytes()
+```
+
+Both are rendered as `legacy-<64 lowercase hex chars>`. Note that `folders`, `favorite`, and `device_id` participate in the digest even though they are local-only / sync-metadata fields — see [library.md](library.md) for the local-only vs synced split.
 
 This ensures repeated loads of identical file content produce identical IDs without rewriting the user's TOML file.
 
@@ -656,32 +880,78 @@ This ensures repeated loads of identical file content produce identical IDs with
 - Config directory created with 0o700 permissions
 - Lock files use the kernel-backed process file lock for atomic acquisition; ownership is never reused based on PID liveness inspection
 - Auto-sync lock ownership uses start-token + nonce diagnostics only; the kernel state is the sole mutual-exclusion authority
-- Atomic writes: temp-file-then-rename with validate_target (rejects FIFOs, sockets, devices)
+- Atomic writes: temp-file-then-rename with `validate_target` (rejects FIFOs, sockets, devices)
 - Transaction artifact path validation rejects `Component::ParentDir` during lexical normalization and rejects missing children below symlinked intermediate components
 - Transaction journals use UUID-based filenames and O_EXCL locks
 - Backup checksums: SHA-256 per file, verified before restore
 - Backup redaction: API keys stripped from sync.toml copies
+- Owned-record lock reclaim is **ownership-verified** for the local-data lock: the record on disk is re-read and compared before the rename (`local_data.rs:322-354`), so a live lock is never renamed away by a racing reclaimer
+- Lock records are `0o600`-scoped by construction: the config directory is `0o700` and the temp/record files inherit that
+- `SNP_ALLOW_DIR_FSYNC_FAILURE` is inert in production builds (`atomic.rs:217-221`)
+
+---
 
 ## Key Files
 
 | File | Subject |
 |------|---------|
 | `src/utils/atomic.rs` | Atomic write primitive, durability classes |
+| `src/utils/toml_helpers.rs` | Escape helpers for hand-written TOML only |
 | `src/utils/tempfile_guard.rs` | RAII temp-file cleanup used by the atomic write path |
+| `src/utils/config.rs` | Config-dir resolution, `ScopedConfigDir` test override, `derive_sync_state_dir` |
 | `src/process_file_lock.rs` | Kernel-backed cross-process file lock primitive |
 | `src/auto_sync/execution_lock.rs` | Auto-sync execution lock and worker lock wrappers |
 | `src/auto_sync/pending_lock.rs` | Auto-sync pending-marker mutex wrapper |
 | `snip-sync/src/server_lock.rs` | snip-sync server singleton kernel lock |
 | `snip-sync/src/process.rs` | Legacy PID parser and identity checks for compatibility stop/restart |
-| `src/transaction.rs` | Transaction boundary, journaling, lock, rollback |
+| `src/transaction.rs` | Transaction boundary, journaling, transaction lock, rollback, mutation gate |
+| `src/local_data.rs` | `LocalDataLock`, snapshot-consistency lock, directory derivation |
 | `src/commands/validate_cmd.rs` | Validation framework, diagnostic model, 12+ check categories |
 | `src/commands/backup_archive.rs` | Backup manifest, path validation, secret redaction, SHA-256 integrity, atomic staging |
 | `src/commands/backup_cmd.rs` | Backup CLI orchestration, lock acquisition, output reporting |
 | `src/commands/restore_cmd.rs` | Restore modes (DryRun/Merge/Replace), conflict resolution |
-| `src/commands/repair_cmd.rs` | Conservative repair, safe/unsafe classification |
+| `src/commands/repair_cmd.rs` | Conservative repair, safe/unsafe classification, pre-repair backup |
+| `src/library/persistence.rs` | Library load/save, deterministic ID normalization, backup |
+| `src/library/manager.rs` | `libraries.toml` registry, primary selection, canonical read-only resolver |
 | `src/migration.rs` | Schema versioning, migration trait, TOML roundtripping |
 | `docs/IDENTITY_CONTRACT.md` | Snippet and library identity lifecycle rules |
+| `docs/PERSISTENCE_INVENTORY.md` | Every persisted artifact with its durability class |
 | `tests/persistence_unit.rs` | Atomic write and durability class tests |
+| `tests/local_contracts.rs` | Golden-corpus byte-fidelity contract |
 | `tests/process_lock_concurrency.rs` | Cross-process kernel-lock concurrency tests |
 | `tests/edit_mutation_notify.rs` | `snp edit` byte-change-driven mutation notification tests |
 | `tests/identity_contract.rs` | Identity lifecycle contract tests |
+
+---
+
+## Invariants
+
+1. **The save path never post-processes `toml::to_string_pretty` output.** There is exactly one serialization-then-write site and nothing runs between them (`persistence.rs:208-216`).
+2. **`write_schema_version` uses `toml::Table`, never `toml::Value`** (`migration.rs:165`) — `toml::Value` collapses array-of-tables.
+3. **Every local mutation is gated** by `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`, and the gate receives *both* directories.
+4. **One interrupted journal → auto-rollback; multiple or incomplete journals → refuse** and direct the user to `snp repair` (`transaction.rs:2593-2613`).
+5. **Lock acquisition order is `LocalDataLock` → `TransactionLock` → writes** (`restore_cmd.rs:1133`). Never invert.
+6. **The gate runs before either lock is taken**, and it releases the transaction lock before returning — so the gate can never invert the order.
+7. **Journals live in `<config>/.transaction/`.** Transaction APIs take `.transaction`; pending-marker APIs take the state dir.
+8. **Absence of a journal is the true terminal indicator.** Terminal states are never persisted by new code paths.
+9. **Commit progress is persisted only after each verified atomic write**, never before.
+10. **Rollback restores files in reverse order** with hash verification after each action.
+11. **A malformed library or `libraries.toml` fails closed** (best-effort backup + error). A missing or empty file yields defaults. These are different cases and must stay different.
+12. **Backup captures a coherent snapshot** — it holds the local-data lock, and every mutation path takes the same lock.
+13. **Pre-repair and pre-restore backups are created automatically.** Do not remove them.
+14. **Quarantined lock files are retained for 7 days** and pruned opportunistically.
+
+---
+
+## Gotchas
+
+- **A lock that cannot be parsed is not automatically stale.** An empty or partially written record may belong to a live owner. Both locks use a bounded retry ladder before quarantining; quarantining on the first malformed read renames away a live lock and admits a second writer.
+- **`PermissionDenied` is transient only on Windows.** On Unix it is stable, so the transaction lock's `is_transient_lock_contention` returns `false` there. Applying the Windows workaround unconditionally caused the CLI to hang with no error and no timeout — including `snp repair`, `snp restore`, and the mutation gate.
+- **A failed `write_all` must delete the 0-byte lock file it created.** Otherwise every later acquirer spins on a record that can never become valid.
+- **The local-data lock's reclaim is ownership-verified; the transaction lock's is not.** `quarantine_local_data_lock` re-reads and compares the record before renaming (`local_data.rs:322-354`); `quarantine_stale_lock` (`transaction.rs:1268`) renames without re-checking. Do not assume the two are symmetric.
+- **`check_interrupted_transactions` is a scan helper, not the gate.** Calling the scan and proceeding anyway reproduces the corruption it exists to prevent.
+- **`save_library_internal` skips the gate and the lock.** It is valid only for callers that already hold both (restore). Do not call it from a new external path without that guarantee.
+- **Adding a cleanup/normalization pass after `toml::to_string_pretty` silently corrupts user data.** The serializer already picks correct quoting and escaping for tabs, trailing whitespace, and CRLF.
+- **`quote_strings_containing_backslashes` must never touch serialized output.** It cannot distinguish a triple-quoted multi-line string from an ordinary double-quoted one, and its single-quoted output preserves `\t` as a literal two-character pair. It survives only for callers that hand-write TOML.
+- **Reading is not the same as resolving.** `resolve_selector_readonly` never migrates; `resolve_selector` calls `ensure_library_mode()` and can rewrite metadata. Picking the wrong one reintroduces recovery side effects — see [library.md](library.md).
+- **Unit tests must not write to the real `~/.config/snp/`.** `save_library` derives its gate and local-data-lock paths from the *config directory*, not from the target library path (`persistence.rs:223-224`), and `ScopedConfigDir` (`src/utils/config.rs:35-57`, `#[cfg(test)]` only) binds a per-test, thread-local config directory.

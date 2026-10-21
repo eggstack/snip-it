@@ -151,24 +151,24 @@ Optional post-mutation background synchronization. Disabled by default; opt-in v
 - **`AutoSyncPolicy`** (`policy.rs`) — effective policy resolved once per invocation from `SyncSettings`. Fields: `sync_configured`, `enabled`, `debounce`, `failure_mode`, `sync_timeout`, `max_lifetime`.
 - **`PendingState`** (`pending.rs`) — durable pending marker (schema v2) with monotonic `generation`, `created_at_unix_ms`, CRC32 `integrity` over all behavior-driving fields. v1 markers migrate transparently. `ConditionalClearResult` enum (Cleared/Missing/GenerationChanged) returned by conditional clear.
 - **`PendingTxnGuard`** (`pending_lock.rs`) — short-lived transaction lock serializing concurrent CLI processes on the pending marker. Atomic acquire via `create_new(true)`; ownership-checked drop; bounded retry with jitter; dead-owner reclaim via `kill -0`; unique temp files per transaction; atomic rename + directory fsync.
-- **`WorkerLock`** (`execution_lock.rs`) — RAII cross-process lock with PID+nonce. Stale detection via `kill -0` only (live PID means owned, regardless of age). Ownership-checked drop — only removes if PID and nonce match. Atomic acquire via `OpenOptions::create_new`. 0o600 permissions.
-- **`SyncExecutionLock`** (`execution_lock.rs`) — shared execution lock for all sync operations. `try_acquire` (non-blocking, for workers) and `wait_acquire` (bounded timeout, for foreground callers). Ownership-checked drop, stale detection via `kill -0`.
+- **`WorkerLock`** (`execution_lock.rs`) — RAII wrapper over the kernel-backed `ProcessFileLock` (`flock`/`LockFileEx`) on a persistent lock file. `try_acquire` (non-blocking) and `wait_acquire` (bounded timeout). `Drop` releases the kernel lock but does **not** unlink the lock file, so the file may hold stale metadata; staleness is detected by inspecting the recorded PID (`kill -0`, where only `ESRCH` proves absence). **No production path acquires it** — `status_snapshot.rs` and `snp sync repair` only *inspect* the lock path.
+- **`SyncExecutionLock`** (`execution_lock.rs`) — shared execution lock for all sync operations, also a `ProcessFileLock` wrapper. `try_acquire` (non-blocking, for workers) and `wait_acquire` (bounded timeout, for foreground callers). Kernel-authoritative; `Drop` releases without unlinking.
 - **`spawn_worker`** (`execution_lock.rs`) — re-execs `std::env::current_exe()` as `snp auto-sync-worker` with platform-detached flags (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NO_WINDOW` on Windows) and `stdin`/`stdout`/`stderr` routed to `null`.
-- **`WorkerOutcome`** (`worker.rs`) — `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0; outcome is logged, not propagated.
-- **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite`, `AccountConfig` (never triggers).
+- **`WorkerOutcome`** (`worker.rs`) — `Success` / `Failed` / `NothingToDo`. Mapped to internal exit code 0; outcome is logged, not propagated. The worker's preflight path reports a typed **`PreflightError`** (`NothingToDo` / `Failed { class, message }`) so corrupt or unreadable pending state reaches `record_sync_failure` instead of being silently reported as "nothing to do".
+- **`MutationKind`** — enum classifying mutations: `SnippetCreate`, `SnippetUpdate`, `SnippetDelete`, `Import`, `LibraryChange`, `PremadeInstall`, `SyncConflictWrite` (no production producer — the variant exists but nothing constructs it), `AccountConfig` (never triggers).
 - **`MutationOrigin`** — `User`, `Import`, `SyncMerge` (suppresses trigger), `Recovery`.
 - **`MutationContext`** — carries `kind`, `origin`, `library_id` without snippet content.
 - **`AutoSyncNotificationResult`** — `Disabled`, `Suppressed`, `Scheduled { generation }`, `SchedulingFailed { generation }`.
 - **`StartupRecoveryPolicy`** / **`should_attempt_auto_sync_recovery_for_policy()`** — classifies commands at startup; recovery suppressed for sync/cron/register/internal subprocesses.
 - **Central API**: `notify_mutation(kind, origin)` — convenience function for commands. `notify_local_mutation(policy, context)` — full control.
 - **`clear_pending_after_explicit_sync()`** — clears pending state after successful manual sync to prevent duplicate delayed sync.
-- **`startup_recover_pending()`** — runs at startup for non-worker subcommands; preserves pending markers and re-schedules a worker if recent pending state is found.
+- **`startup_recover_pending()`** (`notification.rs`) / **`startup_recover()`** (`worker.rs`) — runs at startup for non-worker subcommands; preserves pending markers and re-schedules a worker for **any** marker found (there is no age threshold — the former `STALE_PENDING_THRESHOLD_MS` was removed).
 - **`auto-sync-worker`** — hidden subcommand (clap `hide = true`) that debounces, invokes `crate::sync_commands::run_sync` directly, conditionally clears the observed generation, records status, and exits.
 - **Trigger matrix**: all syncable mutation commands call `notify_mutation()` after their local atomic commit. Output-only edits (`snp edit --output`) are excluded (output is local-only).
 - **Debounce**: configurable 0–300 seconds (default 2). Rapid mutations coalesce. Maximum deadline bound prevents indefinite postponement.
 - **Failure modes**: `Ignore` (silent), `Warn` (stderr message), `Error` (nonzero exit code). Local mutation always committed regardless.
 - **Sync target**: Global — `library_id` field is vestigial; `run_default_sync` syncs all configured libraries.
-- **Three lock concepts**: `PendingTxnGuard` (short-lived, for marker transactions), `WorkerLock` (long-lived, for worker lifecycle), and `SyncExecutionLock` (shared, for actual sync operations). Never mixed.
+- **Three lock concepts**: `PendingTxnGuard` (short-lived, for marker transactions), `WorkerLock` (kernel-backed, but **not acquired by any production path** — only inspected), and `SyncExecutionLock` (shared, for actual sync operations). Never mixed.
 
 ### Encryption (`src/encryption.rs`)
 - AES-256-GCM + Argon2id key derivation (OWASP: 16 MiB, 3 iterations, 4 threads)
@@ -185,10 +185,12 @@ Optional post-mutation background synchronization. Disabled by default; opt-in v
 
 ### Utils (`src/utils/`)
 - `mod.rs` — re-exports: `parse_variables`, `expand_command`, `strip_escape_sequences`, `extract_variables_for_display`, `has_unmatched_angle_bracket`
-- `config.rs` — `get_config_dir()`, `get_snippets_path()`, `get_sync_config_path()`, macOS migration
+- `config.rs` — `get_config_dir()`, `get_snippets_path()`, `get_sync_config_path()`, macOS migration, plus the test-only thread-local `ScopedConfigDir` override
 - `variables.rs` — variable parsing/expansion
-- `toml_helpers.rs` — `fix_invalid_toml_escapes()` (hand-written TOML token scanner for legacy files), `quote_strings_containing_backslashes()` (public utility, no longer called by snip-it's own save pipeline)
-- `shell_keywords.rs` — ~190 shell command names for syntax highlighting
+- `toml_helpers.rs` — `fix_invalid_toml_escapes()` (hand-written TOML token scanner for legacy files), `quote_strings_containing_backslashes()` (`pub(crate)`, `#[allow(dead_code)]`, and no longer called by snip-it's own save pipeline)
+- `shell_keywords.rs` — 190 shell command names for syntax highlighting
+- `process.rs` — `is_process_alive()` and owned-lock-file removal
+- `redact.rs` — secret redaction for logs, backups, and diagnostics
 - `tempfile_guard.rs` — RAII temp file cleanup
 - `atomic.rs` — `write_private_atomic()` (temp file + rename, 0600 permissions on Unix)
 

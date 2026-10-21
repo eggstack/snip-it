@@ -79,6 +79,23 @@ pub use utils::atomic::{
     AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic,
 };
 
+/// Per-thread override of the config directory, for tests only.
+///
+/// Compiled into unit-test builds and into `test-support` builds so that
+/// integration tests can redirect `get_config_dir()` without mutating
+/// process-global environment state. It is a **thread-local** override
+/// because `std::env::set_var` is process-wide and would race with every
+/// other test running in the same process (and is `unsafe` in edition 2024).
+///
+/// Without it, a test that calls [`save_library`] resolves the mutation gate
+/// and the local-data lock against the developer's real `~/.config/snp/`.
+///
+/// This is not part of the supported public API — it is `#[doc(hidden)]` and
+/// unavailable unless the `test-support` feature is enabled.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use utils::config::ScopedConfigDir;
+
 /// Aggregated data for all snippets passed to the TUI selector.
 ///
 /// Contains parallel vectors of snippet metadata where index `i` corresponds

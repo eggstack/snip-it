@@ -27,10 +27,14 @@ src/ui/
 6. `TerminalGuard` RAII ensures terminal restore on drop/panic
 
 ## Syntax Highlighting
-- Pre-computed once at startup (not in draw loop)
+- **Lazy and budgeted**, not pre-computed at startup: `warm_visible_highlights` fills the
+  highlighted lines for the currently visible rows during the draw loop, under a
+  2 ms/frame budget (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:634`, called at `:1274-1281`)
 - Uses `SHELL_KEYWORDS_SET` for keyword detection (O(1) via `HashSet::contains()`)
 - Colors: keyword, string, comment, operator, escape, default
 - Theme-aware: string and escape colors adapt to active theme
+- Highlighting is **lossy**: `\<` renders as `<` and the backslash is dropped
+  (`src/ui/highlight.rs:65-72`)
 
 ## Theme System
 

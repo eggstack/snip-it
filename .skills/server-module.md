@@ -8,7 +8,8 @@ Guide agents through working with the snip-sync server (`snip-sync/src/`).
 - **TLS**: snip-sync serves plaintext gRPC and HTTP. Production deployments must use a reverse proxy with TLS; `TLS_ENABLED` acknowledges proxy termination and does not enable native TLS.
 - **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS. When not set and no origins configured, cross-origin requests are blocked.
 - **HTTP runtime**: `snip-sync/src/http.rs` is the concrete `/health` and `/metrics` EggServe leaf service. It rejects request bodies, keeps metrics Basic-auth comparison constant-time, applies configured CORS and security headers, and relies on EggServe for HEAD framing. Proven wire parity: router 404/405 are empty with no content-type (metrics-disabled 404 keeps `"Not found"`), known routes answer preflight/unsupported methods with `Allow: GET, HEAD`, every non-allow-all response carries `Vary: origin` (allow-all omits it), and preflight never carries the security headers. Keep Tonic on its separate listener and do not add EggServe TLS/H2/H3 or a general routing framework.
-- **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. Registration rate limits use IP address (not client-controlled device_id). `RATE_LIMIT_PER_MINUTE` controls limit.
+- **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. The bucket is keyed on the **peer address** (with trusted-proxy / `x-forwarded-for` handling), not on the client-supplied API key — keying on the raw key let every attacker-chosen key get a fresh budget, so the limiter imposed no aggregate ceiling. The rate limit runs **before** API-key lookup. `RATE_LIMIT_PER_MINUTE` controls limit.
+- **HTTP auth**: `/metrics` returns `401` with the RFC 9110 `WWW-Authenticate: Basic realm="metrics", charset="UTF-8"` challenge; the scheme match is case-insensitive (RFC 9110 §11.1); auth failures increment `snip_sync_auth_failures_total`.
 - **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs`.
 
 ## Server Architecture
@@ -19,7 +20,7 @@ snip-sync/
 ├── src/lib.rs          # Config loading and SnipSyncService
 ├── src/http.rs         # EggServe health/metrics service and HTTP policy
 ├── src/db.rs           # SQLite via sqlx (19 tests)
-├── src/rate_limiter.rs # Per-key sliding window (120 req/min default)
+├── src/rate_limiter.rs # Per-peer-address sliding window (120 req/min default)
 ├── src/metrics.rs      # Prometheus counters
 ├── src/premade.rs      # Premade library file scanning with path traversal prevention
 ├── src/bootstrap.rs    # Server initialization and service wiring
@@ -74,7 +75,7 @@ back.
 | `CORS_ALLOW_ALL` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow all origins |
 | `METRICS_USERNAME` | empty | Basic auth for /metrics |
 | `METRICS_PASSWORD` | empty | Basic auth for /metrics |
-| `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per API key |
+| `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per peer address |
 | `TRUSTED_PROXIES` | empty | Comma-separated trusted proxy IPs |
 | `TLS_ENABLED` | `false` | Boolean: `true`/`1`/`yes`/`on` to acknowledge TLS termination |
 | `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP — loopback binds only (`startup.rs:282`) |

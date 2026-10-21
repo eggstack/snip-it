@@ -84,6 +84,9 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 | `src/utils/atomic.rs` | Atomic file writes with durability classes |
 | `src/utils/config.rs` | Config directory paths, XDG resolution |
 | `src/utils/toml_helpers.rs` | TOML escape fixing, backslash quoting |
+| `src/utils/process.rs` | Process liveness checks, owned-lock-file removal |
+| `src/utils/redact.rs` | Secret redaction for logs, backups, diagnostics |
+| `src/utils/tempfile_guard.rs` | RAII cleanup of temporary files |
 
 **Core layer dependencies (allowed):**
 - `crate::error` (core)

@@ -74,6 +74,16 @@ name = "local_data_lock_barriers"
 path = "tests/local_data_lock_barriers.rs"
 required-features = ["test-support"]
 
+# The identity-contract test calls `save_library` in-process. `save_library`
+# derives the mutation gate and the local-data-lock path from the *config
+# directory*, so the test needs the `ScopedConfigDir` override to avoid
+# resolving them against the developer's real `~/.config/snp/`. That override
+# is exported from the crate root only under `test-support`.
+[[test]]
+name = "identity_contract"
+path = "tests/identity_contract.rs"
+required-features = ["test-support"]
+
 [package.metadata.docs.rs]
 all-features = false
 default-target = "x86_64-unknown-linux-gnu"

@@ -4,6 +4,9 @@ use crate::error::SnipResult;
 pub fn run() -> SnipResult<()> {
     println!("Current keybindings:");
     println!();
+    println!("The selector starts in INSERT mode — type to filter, Enter to select.");
+    println!("Press Esc to reach Normal mode (below).");
+    println!();
     println!("Normal Mode:");
     println!("  h/←   : move left");
     println!("  j/↓   : move down");
@@ -17,7 +20,7 @@ pub fn run() -> SnipResult<()> {
     println!("  Ctrl+u: page up (helix)");
     println!("  v     : visual mode (character)");
     println!("  V     : visual mode (line)");
-    println!("  y     : copy and quit");
+    println!("  y     : copy and quit (copies without quitting in search mode)");
     println!("  d     : delete selected snippet (confirm with y)");
     println!("  i     : insert mode");
     println!("  e     : open theme picker");
@@ -30,13 +33,15 @@ pub fn run() -> SnipResult<()> {
     println!("  a     : sort a-z");
     println!("  z     : sort z-a");
     println!("  x/c   : clear filter");
+    println!("  Tab   : toggle list display mode (command only / description + command)");
     println!();
     println!("Insert Mode:");
-    println!("  j/k   : alternative navigation");
+    println!("  (any printable character is typed into the filter — j/k are literal here)");
     println!("  ↑/↓   : move up/down");
     println!("  Enter : select/execute");
     println!("  Esc   : return to normal mode");
     println!("  /     : start search");
+    println!("  Tab   : toggle list display mode (command only / description + command)");
     println!("  Backspace: delete character");
     println!();
     println!("Theme Picker (opened with e in normal mode):");
@@ -45,7 +50,7 @@ pub fn run() -> SnipResult<()> {
     println!("  k/↑   : previous theme (live preview)");
     println!("  Ctrl+d/PageDown : page down (10 themes)");
     println!("  Ctrl+u/PageUp   : page up (10 themes)");
-    println!("  gg    : first theme");
+    println!("  Ctrl+g : first theme");
     println!("  G     : last theme");
     println!("  Enter : save & apply theme");
     println!("  e/q   : cancel & revert to previous theme");

@@ -38,7 +38,7 @@ Report findings directly (session summary or PR description) with:
 ## Key Files to Check
 
 `architecture/overview.md` § Deep-Dive Index is the authoritative module → doc
-map (61 files). The table below is the review *shortcut* — the highest-risk
+map (62 files). The table below is the review *shortcut* — the highest-risk
 source files, grouped by the skill that covers them.
 
 | Area | Primary Source Files | Skill / Doc |

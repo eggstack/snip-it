@@ -9,10 +9,10 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::cell::RefCell;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Per-thread config-directory override. Tests run in parallel threads
     /// inside one process, so an `XDG_CONFIG_HOME` mutation would race with
@@ -32,13 +32,13 @@ thread_local! {
 /// let tmp = tempfile::TempDir::new().unwrap();
 /// let _guard = ScopedConfigDir::new(tmp.path().join("snp"));
 /// ```
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct ScopedConfigDir {
     previous: Option<PathBuf>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ScopedConfigDir {
     /// Points [`get_config_dir`] at `dir` for the current thread.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
@@ -48,7 +48,7 @@ impl ScopedConfigDir {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ScopedConfigDir {
     fn drop(&mut self) {
         let previous = self.previous.take();
@@ -61,7 +61,7 @@ impl Drop for ScopedConfigDir {
 /// restrictive permissions on Unix) should call [`ensure_config_dir`]
 /// once at startup.
 pub fn get_config_dir() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(dir) = CONFIG_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
         return dir;
     }

@@ -48,8 +48,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   items into plain code-span text. `docs/PUBLIC_API.md` records the rule: only
   items re-exported from `src/lib.rs` may be intra-doc-linked from a public doc
   comment.
+- **Architecture docs rebuilt as an auditable deep-dive set**: `architecture/overview.md`
+  is now a birds-eye module map — every source module with the subsystem it owns,
+  a capability map grouped by what a user is trying to do, the layer boundaries
+  with how much of them is actually enforced, the cross-cutting invariants, the
+  primary data flows, the on-disk state table, and the testing surface — followed
+  by a Deep-Dive Index linking all 62 component documents. Each deep dive was
+  re-verified against the current source and corrected where the code had moved
+  on since the last review; the ones that changed the most grew substantially
+  (`persistence.md` 687→951 lines, `sync.md` +979, `server.md` 410→855,
+  `status.md` +762, `auto_sync.md` +723, `library.md` 208→557). A new
+  `architecture/public_api.md` documents which parts of `src/lib.rs` are the
+  supported external surface and which are `#[doc(hidden)]` crate-boundary
+  details.
 
 ### Fixed
+- **The default log filter matched nothing, so the log file was always empty.**
+  With neither `SNP_LOG` nor `RUST_LOG` set, the fallback directive was
+  `snp=<level>`. `EnvFilter` matches a target directive by prefix, but every
+  `tracing` call in the workspace lives in the *library* crate (`snip_it::…`) —
+  the `snp` binary crate contains no `tracing` calls at all — so `snp=info`
+  enabled no events and the daily log file was created and left empty. The
+  fallback is now built from a `LOG_TARGET_PREFIX` constant naming the library
+  crate (`snip_it=<level>`). Verified against a throwaway `XDG_CONFIG_HOME`:
+  the log file went from 0 bytes to 696 bytes of records; `SNP_LOG=warn` and
+  `RUST_LOG=info` overrides are unchanged.
+- **The architecture test suite was red on `main`.** `tests/architecture.rs`
+  asserted the literal string `eggfetch-core = { version = "=0.2.0"` while
+  `Cargo.toml` had been bumped to `=0.2.2` by dependabot, so
+  `snp_updater_pins_lean_eggfetch_profile` failed. The assertion now pins
+  `=0.2.2`, matching the manifest.
+- **`tests/identity_contract.rs` wrote to the developer's real config.**
+  `save_library` derives the mutation gate and the local-data-lock path from
+  the *config directory*, not from the target library path, and the target set
+  neither `XDG_CONFIG_HOME` nor a `ScopedConfigDir` — so the gate and the lock
+  resolved against the real `~/.config/snp/`, creating a `.transaction`
+  directory there and failing outright whenever the developer happened to have
+  an interrupted transaction journal on disk. `ScopedConfigDir` is now exported
+  from the crate root under `test-support`, the target binds it per thread, and
+  the target is gated on `test-support`.
+- **`snp keybindings` printed three bindings that do not exist.** Insert mode
+  advertised `j/k` as alternative navigation (both are literal characters
+  there — there is no `Char('j')`/`Char('k')` arm), the theme picker advertised
+  `gg` for the first theme (only `Ctrl+g` is bound), and the reference did not
+  say that the selector *starts* in insert mode. It now also lists the `Tab`
+  list-display-mode toggle.
 - **Silent permanent data loss on the sync server.** `snippets.id` is a
   *global* primary key, so pushing a snippet whose id already exists under a
   different user or library wrote zero rows. SQLite reports the discarded

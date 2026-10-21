@@ -169,7 +169,6 @@ library — it is a standalone binary.  The public surface exists because:
 | `SyncClient::search_premade_libraries()` | **integration-test-only** | Search premade libraries |
 | `pub fn encrypt_snippet()` | **integration-test-only** | Encrypt snippet for sync |
 | `pub fn decrypt_snippet()` | **integration-test-only** | Decrypt snippet from sync |
-| `pub fn detect_device_conflict()` | **integration-test-only** | Multi-device conflict detection |
 | `pub(crate) fn add_api_key_metadata()` | **application-internal** | `pub(crate)` — correct |
 
 ---
@@ -200,6 +199,7 @@ to external consumers.*
 | `pub fn get_library_path()` | **application-internal** | Library path resolution |
 | `pub fn init_library_manager()` | **application-internal** | Library manager init |
 | `pub fn load_snippets()` | **application-internal** | Load snippets from file |
+| `pub fn load_readonly_snippets()` | **application-internal** | Load snippets via the canonical read-only resolver (no migration, no generation bump) |
 | `pub fn save_snippets()` | **application-internal** | Save snippets to file |
 | `pub fn get_snippet_data()` | **application-internal** | Extract TUI display data |
 | `pub fn expand_snippet_command()` | **application-internal** | Variable expansion |
@@ -347,8 +347,10 @@ the root `snip-it` library no longer exposes a generated-proto module.
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub mod atomic` | **application-internal** | Atomic file writes |
-| `pub mod config` | **application-internal** | Config path helpers |
-| `pub mod shell_keywords` | **application-internal** | Shell keyword expansion |
+| `pub mod config` | **application-internal** | Config path helpers (also exports the test-only `ScopedConfigDir` override) |
+| `pub mod process` | **application-internal** | Process liveness checks and owned-lock-file removal |
+| `pub mod redact` | **application-internal** | Secret redaction for logs, backups, and diagnostics |
+| `pub mod shell_keywords` | **application-internal** | Shell command-name lookup set for syntax highlighting |
 | `pub mod tempfile_guard` | **application-internal** | Temp file cleanup |
 | `pub mod toml_helpers` | **application-internal** | TOML escape handling |
 | `pub mod variables` | **application-internal** | Variable parsing/expansion |
