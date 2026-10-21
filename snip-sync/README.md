@@ -62,7 +62,7 @@ share the libraries. Registering each environment independently creates
 isolated accounts. After the first client seeds the server, use
 `snp sync run --pull-only` on new environments and then set
 `sync_direction = "Bidirectional"` in the client `sync.toml` for normal use.
-See [USER_GUIDE.md](../USER_GUIDE.md#syncing-one-account-across-environments)
+See [USER_GUIDE.md](../docs/USER_GUIDE.md#syncing-one-account-across-environments)
 for the client-side settings example.
 
 The server config location is platform-specific. Run this to see the exact

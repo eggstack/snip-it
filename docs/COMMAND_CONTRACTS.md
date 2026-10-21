@@ -76,7 +76,7 @@ non-executing. See [`MCP.md`](MCP.md).
 | 7 | Sync failure | Synchronization with remote server failed |
 | 8 | Execution failure | Snippet execution (child process) failed |
 | 9 | Conflict/refused | Destructive action refused or generation changed |
-| 10 | Unsafe repairs | Repair refused; unsafe repairs require manual review |
+| 10 | Unsafe repairs | Every finding awaits an operator decision and was not applied |
 
 Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code mapping.
 

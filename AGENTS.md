@@ -76,6 +76,8 @@ cargo test -p snip-sync --features test-helpers
 - `docs/README.md` — index of every reference doc, split into **current contracts**
   vs **archived snapshots** in `docs/archive/`. Check the status column before
   trusting a doc; archived ones describe code that no longer exists.
+  `docs/USER_GUIDE.md` is the end-user walkthrough; `docs/COMMANDS.md` is the
+  full subcommand reference.
 - `plans/registry.md` is the authoritative planning status — check it before
   assuming any roadmap state. Canonical direction: `plans/000-long-term-specification.md`,
   `001-terminology-and-domain-model.md`, `002-long-term-roadmap.md`; governance:

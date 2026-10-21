@@ -61,8 +61,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `architecture/public_api.md` documents which parts of `src/lib.rs` are the
   supported external surface and which are `#[doc(hidden)]` crate-boundary
   details.
+- **Every example in the user guide was executed against the real binary**,
+  and ten concrete defects were corrected: a snippet ID literal from a retired
+  fingerprint scheme (it resolved to nothing — exit 3); the claim that `n`
+  cycles sort modes and `o` toggles favorites-first (neither is true, and
+  `[used]`/`[freq]` are reachable only via `--sort`); the `themes.toml` shape
+  (`active = "Dracula"`, not an `[active]` table, so the documented form failed
+  to parse and was silently ignored); the `$VISUAL` row (it also wins for
+  `snp edit`); a `snp new` example that prompts for a description and so
+  fails non-interactively; "a fresh install creates …" (those files appear on
+  the first write, not the first read); a reset snippet that hardcoded
+  `~/.config/snp`; and a test-only build seam listed among user-facing
+  environment variables.
+
+### Added
+- **`docs/COMMANDS.md`**: a complete reference for every `snp` subcommand —
+  what it does, which flags it takes, the exact selectors `snp get` accepts,
+  the library and sync subcommands, and the exit codes each can return.
+
+### Changed
+- **The README is now quickstart-first.** It leads with install and a working
+  first snippet, shows the real output of every example, and links out to the
+  detailed docs instead of duplicating them. The full command table, the
+  configuration-path table, and the TUI key bindings now live in `docs/`
+  (`docs/COMMANDS.md`, `docs/USER_GUIDE.md`).
+- **`USER_GUIDE.md` moved to `docs/USER_GUIDE.md`**, so every reference doc sits
+  in one indexed directory.
 
 ### Fixed
+- **`snp library create` orphaned the default snippet library.** Creating a
+  library created the `libraries/` directory before the legacy single-file
+  store was migrated. Because `is_single_file_mode()` is "`libraries/` does not
+  exist", that permanently flipped single-file mode off and left the legacy
+  `snippets.toml` out of the library index — so its snippets were invisible to
+  `snp get`, `snp list`, and `--library all` (`snp get` returned exit 3 for a
+  snippet that was still on disk). `create_library` now migrates before the
+  libraries directory exists, which also keeps the migrated default library
+  primary instead of handing primary to the newly created one.
+- **`snp repair` claimed "unsafe repairs pending" when nothing was unsafe.**
+  Report-only mode (no `--apply`, no `--dry-run`) exited 10 whenever it found
+  any issue, so a script could not tell "an operator must decide" from "a safe
+  repair is available". Exit 10 now means exactly what `docs/EXIT_CODES.md`
+  says it means: every finding needs an operator decision. Safe-only findings
+  exit 0 with `exit_status: findings_safe`.
+- **`snp repair` labelled findings `[auto]` that it then refused to apply.**
+  The library-index, snippet-ID, and timestamp repairs are detected but have no
+  auto-apply implementation, so `--apply` attempted them and failed the whole
+  run with exit 1. They are now classified `[manual]`, are skipped by
+  `--apply`, and the matching `snp validate` diagnostics no longer claim to be
+  "(auto-repairable)".
+- **`snp get --id` help text said "Match by exact snippet UUID".** Snippet IDs
+  are deterministic `legacy-<sha256 hex>` values, not UUIDs.
+- **Every `--help` printed an empty `Usage:` line.** `clap` was configured with
+  `default-features = false` and a feature list that omitted `usage`, so the
+  generated usage string was empty. The feature is now enabled in both
+  crates.
 - **The default log filter matched nothing, so the log file was always empty.**
   With neither `SNP_LOG` nor `RUST_LOG` set, the fallback directive was
   `snp=<level>`. `EnvFilter` matches a target directive by prefix, but every

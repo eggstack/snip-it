@@ -376,6 +376,7 @@ fn exit_on_repair_status(status: commands::repair_cmd::RepairExitStatus) {
     match status {
         commands::repair_cmd::RepairExitStatus::Clean
         | commands::repair_cmd::RepairExitStatus::Repaired
+        | commands::repair_cmd::RepairExitStatus::FindingsSafe
         | commands::repair_cmd::RepairExitStatus::DryRun => {}
         commands::repair_cmd::RepairExitStatus::PartialFailure => {
             std::process::exit(snip_it::outcome::exit_code::GENERAL_ERROR);

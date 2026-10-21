@@ -10,6 +10,8 @@ A document in `archive/` describes a codebase state that no longer exists.
 
 | Document | Subject | Enforced by |
 |----------|---------|-------------|
+| [USER_GUIDE.md](USER_GUIDE.md) | Task-oriented guide: libraries, variables, pet import, shell integration, themes, sync, auto-sync, recovery | Narrative guide; individual claims cross-reference the contract docs below |
+| [COMMANDS.md](COMMANDS.md) | Every `snp` subcommand, its flags, and the exit codes it can return | Generated from the clap schema; `snp --help` is authoritative |
 | [EXIT_CODES.md](EXIT_CODES.md) | Stable exit codes 0–10 and `CliOutcome` mapping | `src/outcome.rs`, `tests/execution_outcomes.rs` |
 | [COMMAND_CONTRACTS.md](COMMAND_CONTRACTS.md) | Per-command behavioral contract, startup-recovery policy, stream discipline | `src/main.rs::command_behavior` |
 | [CLI_EXITCODE_STREAM_POLICY.md](CLI_EXITCODE_STREAM_POLICY.md) | stdout/stderr discipline and easy-to-miss exit cases | Points to [`EXIT_CODES.md`](EXIT_CODES.md) for the live exit-code contract; not independently test-enforced |
@@ -46,5 +48,6 @@ Moved out of `docs/` so they cannot be mistaken for contracts. Each carries an
 - [`../AGENTS.override.md`](../AGENTS.override.md) — session pitfall notes.
 - [`../.skills/`](../.skills) — task-shaped skills (sync, transactions, server, selector parity, …).
 - [`../plans/registry.md`](../plans/registry.md) — authoritative planning status.
-- [`../USER_GUIDE.md`](../USER_GUIDE.md) — end-user guide.
+- [`../snip-sync/README.md`](../snip-sync/README.md) — running the sync server (systemd, Docker, reverse proxy).
 - [`../SECURITY.md`](../SECURITY.md) — vulnerability reporting and current security posture.
+- [`../packaging/README.md`](../packaging/README.md) — installer verification, pinned installs, fallbacks.

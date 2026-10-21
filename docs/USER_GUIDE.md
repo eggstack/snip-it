@@ -1,7 +1,7 @@
 # snp user guide
 
 This guide covers the parts of `snp` that are easy to outgrow from the
-[README](README.md): libraries, TOML compatibility, themes, synchronization,
+[README](../README.md): libraries, TOML compatibility, themes, synchronization,
 and automation.
 
 ## Contents
@@ -10,6 +10,7 @@ and automation.
 - [Agent / MCP integration](#agent--mcp-integration)
 - [Pet compatibility and import](#pet-compatibility-and-import)
 - [Shell integration](#shell-integration)
+- [TUI key bindings](#tui-key-bindings)
 - [Themes](#themes)
 - [Sync](#sync)
 - [Syncing one account across environments](#syncing-one-account-across-environments)
@@ -32,7 +33,7 @@ snp library set-primary work
 snp library list
 snp library show work
 
-snp new --library work 'kubectl get pods -n <namespace=default>'
+snp new --library work 'kubectl get pods -n <namespace=default>' --description 'Kubectl pods'
 snp list --library work
 snp run --library work
 snp clip --library work
@@ -189,7 +190,7 @@ fields as `snp get`. Each result includes the command as text for the agent to u
 under its own execution and approval policy. `snp mcp install <client>` only
 uses official noninteractive client commands where their registration
 contract is stable; otherwise it prints a schema-specific configuration
-block without changing user files. See [docs/MCP.md](docs/MCP.md).
+block without changing user files. See [MCP.md](MCP.md).
 
 ## Shell integration
 
@@ -369,6 +370,41 @@ Remove the `eval`/`source` line and any `bind`/`bindkey` lines you added.
 No files are written by `snp shell init`; the generated code is printed to
 stdout only.
 
+## TUI key bindings
+
+The selector starts in **insert mode** — typing filters the list. Press `Esc`
+to reach **normal mode**, where the navigation keys live.
+
+| Key | Normal mode | Insert mode |
+|-----|-------------|-------------|
+| `j` / `k` or `↓` / `↑` | Move down / up | `j` and `k` are literal characters |
+| `h` / `l` or `←` / `→` | Move left / right | — |
+| `gg` / `G` | Jump to top / bottom | — |
+| `Ctrl+f` / `Ctrl+b` | Page down / up | — |
+| `Enter` | Select and execute | Select and execute |
+| `Esc` | No-op (use `q` to quit) | Return to normal mode |
+| `/` | Search | Start a search |
+| `i` | Insert mode | — |
+| `y` | Copy the snippet and quit | — |
+| `d` | Delete the snippet (confirm with `y`) | — |
+| `e` | Open the theme picker | — |
+| `q` | Quit | — |
+| `t` | Toggle the tag filter | — |
+| `n` / `o` / `a` / `z` | Sort by newest / oldest / a-z / z-a | — |
+| `x` / `c` | Clear the filter | — |
+| `Tab` | Toggle list display mode (command only / description + command) | Same |
+| `Ctrl+g` | First theme (in the picker) | — |
+
+The theme picker (`e`) filters with `i`, moves with `j`/`k`, pages with
+`Ctrl+d`/`Ctrl+u`, and saves with `Enter`. `e` or `q` cancels and reverts to the
+previous theme.
+
+Variable prompts are modal: `Enter` saves the values, `q` returns to the
+snippet selector (it does not quit), and `Ctrl+c` exits. `d` toggles the
+default-value hint.
+
+Run `snp keybindings` to print the complete, always-current reference.
+
 ## Themes
 
 Snip-it accepts Halloy color-theme files. Copy a Halloy theme file—not the
@@ -387,8 +423,7 @@ to preview, `i` to filter, and `Enter` to save. The selection is stored in
 `themes.toml`:
 
 ```toml
-[active]
-name = "Dracula"
+active = "Dracula"
 ```
 
 The parser follows Halloy's theme schema. Snip-it projects the available
@@ -399,11 +434,11 @@ guide](https://halloy.chat/guides/custom-themes) for the upstream format.
 ## Sync
 
 Sync is provided by the optional self-hosted
-[`snip-sync`](snip-sync/README.md) server. The server uses SQLite and exposes a
+[`snip-sync`](../snip-sync/README.md) server. The server uses SQLite and exposes a
 gRPC API plus an HTTP health/metrics port. It does not terminate TLS itself.
 
 For a complete local, Docker, reverse-proxy, and systemd deployment guide, see
-[snip-sync/README.md](snip-sync/README.md).
+[snip-sync/README.md](../snip-sync/README.md).
 
 ### Local development
 
@@ -629,12 +664,15 @@ The TUI shows the active sort mode in the status bar:
 | `[old]` | Oldest first |
 | `[a-z]` | Description A→Z |
 | `[z-a]` | Description Z→A |
-| `[used]` | Last used |
-| `[freq]` | Most used |
+| `[used]` | Last used (via `--sort last-used`; not reachable by interactive cycling) |
+| `[freq]` | Most used (via `--sort most-used`; not reachable by interactive cycling) |
 | `[cmd]` | Command text A→Z (initial-only, via `snp run --sort command`; not reachable by interactive cycling) |
 
-Press `n` to cycle through sort modes interactively. Press `o` to toggle
-favorites-first.
+Press `n` to toggle sort-by-newest, `o` for sort-by-oldest, `a` for
+description A→Z, and `z` for description Z→A. Each key toggles its own mode
+rather than cycling through a list. There is no interactive favorites-first
+toggle — pass `--favorites-first` instead. `[used]` and `[freq]` are reachable
+only via `--sort last-used` and `--sort most-used`; no key selects them.
 
 ### Machine output ordering
 
@@ -660,7 +698,7 @@ relative to the current working directory. The file is created fresh on every
 run — an existing file makes the run fail — and a path that resolves outside
 the working directory is refused. Only stdout is redirected; stderr still
 goes to the terminal. The pet difference is tabulated in
-[docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
+[PET_COMPATIBILITY.md](PET_COMPATIBILITY.md).
 
 In the TUI preview, output appears below the command separated by
 `--- Output / Notes ---` when present. Empty output is hidden.
@@ -681,7 +719,14 @@ replace the filter; those three are mutually exclusive with each other.
 
 ```bash
 snp edit --output "Example output for this command" --description-exact "SSH connection"
-snp edit --output "Example output for this command" --id legacy-1d15ea6c6428e9ebbbf2d3a0b05017d4981e02a004d638930c07980750f2a062
+```
+
+IDs are derived from snippet content, so look one up rather than pasting a
+literal:
+
+```bash
+snp get --query "SSH connection" --field id
+snp edit --output "Example output for this command" --id "<that id>"
 ```
 
 #### Output-aware search
@@ -748,9 +793,9 @@ shell; snp does not expand them itself.
 ## Configuration
 
 The client root is `$XDG_CONFIG_HOME/snp`, or `~/.config/snp` when that
-variable is unset. A fresh install creates `snippets.toml` (the default
-single-file library), `logs/`, and `.transaction/`; the rest appear as you
-use the features.
+variable is unset. The first write creates `snippets.toml` (the default
+single-file library), `logs/`, and `.transaction/`; reading a library creates
+nothing at all. The rest appear as you use the features.
 
 | Path | Purpose |
 | --- | --- |
@@ -761,6 +806,7 @@ use the features.
 | `sync.toml` | Sync settings (the key itself lives in the OS keychain; this file holds only the `@keychain` marker) |
 | `themes/*.toml` | Halloy-compatible themes |
 | `themes.toml` | Active theme |
+| `usage.toml` | Local usage counts and last-used timestamps |
 | `logs/` | Rolling application logs |
 | `backups/` | Timestamped library backups |
 | `.transaction/` | Transaction journals and the local-data lock for crash-safe writes |
@@ -775,14 +821,13 @@ Useful environment variables:
 | --- | --- | --- |
 | `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | `0` for direct terminal runs |
 | `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds | `5` |
-| `SNP_ALLOW_PLAINTEXT_API_KEY` | Test-only seam. Forces plaintext API-key storage **and** forbids keychain access. Compiled in only under `test-support`; ignored by a release build | unset |
 | `SNP_ALLOW_DIR_FSYNC_FAILURE` | Allow atomic writes to continue when the filesystem rejects parent-directory fsync; weakens power-loss durability | unset |
 | `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
 | `SNP_THEME` | Legacy theme or theme filename | bundled default |
 | `SNP_LOG` / `RUST_LOG` | Tracing filters | `snip_it=info` (a bare level such as `info` also works) |
 | `EDITOR` | Editor for `snp edit` and fallback for `snp new --editor` | `vim` |
-| `VISUAL` | Editor for `snp new --editor` (overrides `EDITOR` if non-empty) | unset |
+| `VISUAL` | Editor for `snp edit` and `snp new --editor` (overrides `EDITOR` if non-empty) | unset |
 
 ## Automation
 
@@ -807,7 +852,7 @@ snp get --query 'push a branch' --json            # full record as JSON
 
 It exits 3 when nothing matches and 5 when a query matches more than one
 snippet, so a script can branch on the result instead of parsing stderr. The
-full table is [docs/EXIT_CODES.md](docs/EXIT_CODES.md).
+full table is [EXIT_CODES.md](EXIT_CODES.md).
 
 `snp cron` prints a cron entry and offers to copy it to the clipboard:
 
@@ -914,9 +959,23 @@ and takes a pre-restore backup of the config directory first. Every restore
 runs inside a transaction, so a failure rolls back.
 
 `snp repair` reports problems without changing anything until `--apply` is
-passed, and it creates a backup before applying safe repairs. Repairs that
-need an operator decision are reported but never applied automatically —
-`snp repair` exits 10 when only such unsafe items were found.
+passed, and it creates a backup before applying safe repairs. Each finding is
+labelled `[auto]` when it can be applied mechanically, or `[manual]` when it
+needs an operator decision. `[manual]` findings are never applied
+automatically — they are reported with a `Fix:` line instead.
+
+Exit codes follow the findings:
+
+| Exit | Meaning |
+|------|---------|
+| 0 | No findings, or every finding is `[auto]` and none were applied (report-only mode) |
+| 10 | Every finding is `[manual]` and awaits an operator decision |
+| 1 | `--apply` was passed and at least one repair failed |
+
+Only `[auto]` findings are attempted by `--apply`; `[manual]` ones are skipped
+and still counted as requiring review. With `--json`, the report's
+`exit_status` is one of `clean`, `findings_safe`, `repaired`, `partial_failure`,
+`unsafe_only`, or `dry_run`.
 
 If a sync configuration is damaged, snp keeps a `.corrupt.bak` copy and falls
 back to defaults. Library writes create timestamped backups in `backups/`.
@@ -928,8 +987,9 @@ register again later. To reset all local data, back up the config directory
 first, then remove it:
 
 ```bash
-mv ~/.config/snp ~/.config/snp.backup-$(date +%Y%m%d)
+mv "${XDG_CONFIG_HOME:-$HOME/.config}/snp" \
+   "${XDG_CONFIG_HOME:-$HOME/.config}/snp.backup-$(date +%Y%m%d)"
 ```
 
-For security issues, follow [SECURITY.md](SECURITY.md) rather than opening a
+For security issues, follow [../SECURITY.md](../SECURITY.md) rather than opening a
 public issue.

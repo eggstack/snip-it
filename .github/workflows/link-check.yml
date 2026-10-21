@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Check links in README and USER_GUIDE
+      - name: Check links in README and the user guide
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: >-
@@ -26,7 +26,7 @@ jobs:
             --exclude 'https://github.com/eggstack/snip-it/(issues|actions|releases).*'
             --exclude 'https://crates.io/.*'
             README.md
-            USER_GUIDE.md
+            docs/USER_GUIDE.md
             SECURITY.md
             CONTRIBUTING.md
             CODE_OF_CONDUCT.md

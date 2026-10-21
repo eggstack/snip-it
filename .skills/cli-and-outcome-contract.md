@@ -144,7 +144,7 @@ will tell you if you did not.
    default preserves the old behavior for existing scripts.
 4. **Changing the stdout format of a default (non-machine) mode** is a
    soft break — acceptable, but update `docs/COMMAND_CONTRACTS.md` and
-   `USER_GUIDE.md`.
+   `docs/USER_GUIDE.md`.
 5. **Machine modes (`--json`, `--csv`) are versioned contracts.** Field
    additions are fine; renames and removals are not. `docs/JSON_SCHEMAS.md`
    records the envelopes and `tests/schema.rs` enforces them.

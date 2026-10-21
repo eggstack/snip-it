@@ -22,7 +22,6 @@ exclude = [
     "docs/",
     "AGENTS.md",
     "AGENTS.override.md",
-    "USER_GUIDE.md",
     "RELEASING.md",
     "snippets.example.toml",
     "deny.toml",

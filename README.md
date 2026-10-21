@@ -34,11 +34,10 @@ Get-Content .\install-snip-it.ps1
 . .\install-snip-it.ps1 -Component Snp
 ```
 
-Or from source / crates.io:
+Or from crates.io (needs Rust 1.94+):
 
 ```bash
-cargo install snip-it      # needs Rust 1.94+
-git clone https://github.com/eggstack/snip-it.git && cd snip-it && cargo build --release
+cargo install snp-it
 ```
 
 The binary lands at `target/release/snp` (`snp.exe` on Windows). The installer
@@ -49,15 +48,36 @@ Homebrew — use `brew upgrade snip-it`.
 
 ## Quick start
 
-```bash
-# Store a snippet. Variables are prompted for at use time.
-snp new 'git push origin <branch=main>' --description 'Push a branch' --tags git,release
+Store a snippet, then use it. Variables are prompted for at use time.
 
-# Pick one interactively.
-snp run        # fuzzy-select and execute
-snp clip       # fuzzy-select and copy to the clipboard
-snp search     # fuzzy-select and inspect
-snp list       # browse without opening the selector
+```bash
+snp new 'git push origin <branch=main>' --description 'Push a branch' --tags git,release
+```
+
+```
+Command> git push origin <branch=main>
+Snippet added
+```
+
+Browse what you have stored:
+
+```bash
+snp list
+```
+
+```
+-----
+Push a branch: git push origin <branch=main>
+Tags: git, release
+```
+
+Then pick one interactively — `run` executes it through your shell, `clip`
+copies it, and `search` inspects it:
+
+```bash
+snp run
+snp clip
+snp search
 ```
 
 Variables come in three forms:
@@ -68,138 +88,98 @@ git checkout <branch=main>                     # prompt, pre-filled default
 kubectl config use-context <ctx=|_dev_||_prod_|>   # pet-compatible choice
 ```
 
-The `run`/`clip`/`search`/`select` commands need a terminal. For scripts and
-pipelines use the deterministic, non-TUI `snp get`:
+## Scripting
+
+`snp get` retrieves a snippet deterministically — no TUI, no execution. Use it
+when a script needs a command:
 
 ```bash
-snp get --query 'push a branch' --field command   # print the command
-snp get --query 'push a branch' --json            # full record as JSON
-snp list --json                                  # every snippet as JSON
-snp list --csv                                   # every snippet as CSV
+snp get --query 'push a branch' --field command
 ```
 
-`snp get` exits 3 when nothing matches and 5 when a query matches more than
-one snippet; [docs/EXIT_CODES.md](docs/EXIT_CODES.md) is the full table.
+```
+git push origin <branch=main>
+```
 
-`snp --help` or `snp <command> --help` covers everything else.
+`--json` returns the full record, including the expanded command and the
+snippet's stable ID:
 
-## Commands
+```bash
+snp get --query 'push a branch' --json
+```
 
-| Command | Purpose |
-| --- | --- |
-| `snp new` | Create a snippet (also `--command-stdin`, `--from-file`, `--editor`) |
-| `snp list` | List/filter snippets without executing (`--json`, `--csv`) |
-| `snp run` | Select and execute a snippet |
-| `snp clip` | Select and copy a snippet |
-| `snp search` | Select and inspect a snippet |
-| `snp select` | Select and print a command without executing it |
-| `snp get` | Retrieve a snippet deterministically for scripts |
-| `snp edit` | Edit a library, or one snippet's output/notes metadata |
-| `snp library` | `create` / `list` / `show` / `set-primary` / `delete` libraries |
-| `snp premade` | Install premade libraries from a sync server |
-| `snp import pet` | Import a pet snippet file (`--merge`, `--dry-run`) |
-| `snp doctor` | Diagnose a file, the install, shell integration, or sync |
-| `snp status` | Show auto-sync and sync state |
-| `snp backup` | Checksummed snapshot of local state |
-| `snp restore` | Restore from a backup snapshot |
-| `snp repair` | Validate and repair config and library files |
-| `snp validate` | Read-only validation of snippet data |
-| `snp register` | Register with a `snip-sync` server |
-| `snp sync` | Run or configure sync (`sync run --push-only`/`--pull-only`/`--dry-run`, `sync config`, `sync retry`) |
-| `snp cron` | Print a periodic sync schedule |
-| `snp shell init` | Generate shell integration (`bash`/`zsh`/`fish`) |
-| `snp completions` | Generate shell completions |
-| `snp keybindings` | Print the full TUI keybinding reference |
-| `snp mcp` | Read-only stdio MCP server (`serve`/`install`/`instructions`) |
-| `snp update` | Check for and install an update |
-| `snp data` | Aliases for `validate`, `backup`, `restore`, `repair`, `status` |
+```json
+{
+  "schema": 1,
+  "id": "legacy-6e766362842b1bf257b5f65bc7e87fb4afcc6f11f8847f2a4ad1415a76d40155",
+  "description": "Push a branch",
+  "command": "git push origin <branch=main>",
+  "expanded": "git push origin main",
+  "tags": ["git", "release"],
+  "library": "snippets",
+  "library_id": ""
+}
+```
+
+`snp get` exits **3** when nothing matches and **5** when a query matches more
+than one snippet. The full exit-code table is in
+[docs/EXIT_CODES.md](docs/EXIT_CODES.md).
 
 ## Libraries
 
+Snippets live in libraries. A fresh install uses a single `snippets` library;
+create more when you want to separate contexts.
+
 ```bash
-snp library create work && snp library set-primary work
-snp new 'kubectl get pods' -d 'Pods' --library work
+snp library create work
+snp library set-primary work
+snp new 'kubectl get pods' --description 'Pods' --library work
 snp list --library work
 ```
 
-One library is used at a time by default. `--library all` crosses every
-library: `snp get --library all` searches across all of them, and
-`snp list --library all` concatenates them into a single listing. `all` is a
-reserved library name — `snp library create all` is rejected — so the keyword
-can never be ambiguous. Details:
-[docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md).
+`--library all` targets every library at once. `all` is a reserved name and
+cannot be used as a library name.
 
 ## Shell integration
 
-```bash
-eval "$(snp shell init bash)"     # or zsh; fish: snp shell init fish | source
-```
-
-Adds `snp_select_raw`, `snp_select_expanded`, `snp_new_current`, and
-`snp_new_previous` so you can insert a snippet into the current buffer without
-executing it. No keybindings are installed automatically. Validate the output
-with `snp doctor --check-shell bash`, and see
-[USER_GUIDE.md](USER_GUIDE.md#shell-integration) for suggested bindings.
-
-## TUI
-
-Press `e` in normal mode for the theme picker (50 bundled Halloy-compatible
-themes; custom ones go in `$XDG_CONFIG_HOME/snp/themes/`). Common normal-mode
-keys:
-
-| Key | Action |
-| --- | --- |
-| `j` / `k` or arrows | Move through snippets |
-| `i` or `/` | Enter search/input mode |
-| `Enter` | Select the highlighted snippet |
-| `y` | Copy the selected snippet and quit |
-| `d` | Delete the selected snippet; confirm with `y` |
-| `e` | Open the theme picker |
-| `q` | Quit |
-
-`snp keybindings` prints the complete reference.
-
-## Import from pet
+`snp shell init` prints functions and widgets for bash, zsh, and fish. Inspect
+the output before sourcing it — it installs no key bindings by default.
 
 ```bash
-snp doctor --pet-file ~/.config/pet/snippets.toml   # inspect first
-snp import pet ~/.config/pet/snippets.toml --merge  # merge into the current library
-snp import pet snippets.toml --dry-run              # preview, writes nothing
+snp shell init bash >> ~/.bashrc
+snp doctor --check-shell bash
 ```
 
-`--dry-run` is the safe way to see what a file would produce. The matrix of
-behavioural differences is in
-[docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
+## Optional extras
 
-## Sync (optional, self-hosted)
+**Import from [pet](https://github.com/knqyf263/pet).** Inspect first, then
+merge:
 
-The client encrypts snippet content with AES-256-GCM before sending it;
-`snip-sync` stores only ciphertext. The server does not terminate TLS, so put a
-reverse proxy in front of remote deployments.
+```bash
+snp doctor --pet-file ~/.config/pet/snippets.toml   # inspect
+snp import pet ~/.config/pet/snippets.toml --dry-run # preview, writes nothing
+snp import pet ~/.config/pet/snippets.toml --merge   # merge into the library
+```
+
+The behavioral matrix is in [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
+
+**Self-hosted sync.** The client encrypts snippet content with AES-256-GCM
+before sending it; the server stores only ciphertext.
 
 ```bash
 cargo install snip-sync
 snip-sync init --skip-cert
-SNIP_SYNC_ALLOW_HTTP=true snip-sync serve &     # local loopback test only
-
 snp register --server http://127.0.0.1:50051
 snp sync run --push-only
 ```
 
-`snip-sync` listens on two ports: gRPC on `50051` (what `snp register` and
-`snp sync` talk to) and an HTTP control surface on `50050` serving `/health`
-and `/metrics`. See
-[USER_GUIDE.md](USER_GUIDE.md#troubleshooting-and-recovery) for the health
-check.
-
-Auto-sync after local mutations is off by default: enable it with
-`snp sync config --auto-sync on`. Deployment, systemd, and reverse-proxy setup:
+Auto-sync after local mutations is off by default — enable it with
+`snp sync config --auto-sync on`. Deployment and reverse-proxy setup:
 [snip-sync/README.md](snip-sync/README.md).
 
-## Coding agents (MCP)
-
-`snp mcp serve` exposes your snippets to a local agent over stdio. It binds no
-port, is read-only, and never executes stored commands.
+**Coding agents (MCP).** `snp mcp serve` exposes your snippets to a local
+agent over stdio. It binds no port, is read-only, and never executes stored
+commands.
 
 ```bash
 snp mcp instructions claude    # or codex, vscode, cursor, opencode, zed
@@ -208,42 +188,38 @@ snp mcp install claude         # noninteractive registration where supported
 
 ## Configuration
 
-Everything lives under `$XDG_CONFIG_HOME/snp`, or `~/.config/snp` when that is
-unset. A fresh install creates `snippets.toml` (the default library), `logs/`,
-and `.transaction/`; the rest appear as you use the features.
+Everything lives under `~/.config/snp/` (or `$XDG_CONFIG_HOME/snp/`). The
+first write creates `snippets.toml`, `logs/`, and `.transaction/`; the rest
+appear as you use the features.
 
 | Path | Purpose |
-| --- | --- |
-| `snippets.toml` | Default single-file library |
-| `libraries.toml` | Library metadata and sync links |
-| `libraries/*.toml` | Additional libraries |
-| `premade/*.toml` | Downloaded premade libraries |
-| `sync.toml` | Sync settings (the key itself lives in the OS keychain; this file holds only the `@keychain` marker) |
-| `usage.toml` | Local usage counts and last-used timestamps |
-| `themes/*.toml`, `themes.toml` | Custom themes and the active selection |
-| `logs/` | Rotating application and audit logs |
-| `.transaction/` | Transaction journals and the local-data lock for crash-safe writes |
-| `auto-sync-pending.toml` | Pending auto-sync marker (latest mutation generation) |
-| `auto-sync-status.toml` | Result of the last auto-sync attempt and its retry schedule |
-| `auto-sync-execution.lock` | Kernel lock serializing every sync execution |
-| `auto-sync-worker.lock` | PID+nonce lock preventing concurrent auto-sync workers |
+|------|---------|
+| `snippets.toml` | Your snippets, as plain TOML. |
+| `libraries/` | Additional libraries, one TOML file each. |
+| `libraries.toml` | Library index and which one is primary. |
+| `sync.toml` | Sync server and account settings. |
+| `logs/` | Rotating debug logs. |
+| `.transaction/` | Crash-recovery journals. Do not edit. |
+
+The API key for sync is kept in your OS keychain, not in `sync.toml`. See
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md#configuration) for the full set of
+paths, environment variables, and auto-sync settings.
 
 ## Documentation
 
-| Document | Contents |
-| --- | --- |
-| [USER_GUIDE.md](USER_GUIDE.md) | Task-oriented guide: libraries, variables, pet import, shell integration, themes, sync, auto-sync, recovery |
-| [docs/README.md](docs/README.md) | **Index of every reference doc**, split into current contracts vs archived snapshots |
-| [snip-sync/README.md](snip-sync/README.md) | Running the sync server (systemd, Docker, reverse proxy) |
-| [SECURITY.md](SECURITY.md) | Security model, encryption, credential storage, disclosure |
-| [packaging/README.md](packaging/README.md) | Installer verification, pinned installs, fallbacks |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, testing, releases |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
+Start with the [docs index](docs/README.md).
 
-Contracts worth knowing before you script against `snp`:
-[docs/EXIT_CODES.md](docs/EXIT_CODES.md),
-[docs/JSON_SCHEMAS.md](docs/JSON_SCHEMAS.md),
-[docs/COMMAND_CONTRACTS.md](docs/COMMAND_CONTRACTS.md).
+| Document | Subject |
+|----------|---------|
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Task-oriented guide: libraries, variables, pet import, shell integration, themes, sync, auto-sync, recovery |
+| [docs/COMMANDS.md](docs/COMMANDS.md) | Every subcommand and its flags |
+| [docs/EXIT_CODES.md](docs/EXIT_CODES.md) | Stable exit codes 0–10 and their meaning |
+| [docs/COMMAND_CONTRACTS.md](docs/COMMAND_CONTRACTS.md) | Per-command behavior, startup recovery, stdout/stderr split |
+| [docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md) | How `--library` resolves |
+| [docs/MCP.md](docs/MCP.md) | The read-only MCP server and its tools |
+| [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Behavioral matrix vs. `pet` import |
+| [docs/IDENTITY_CONTRACT.md](docs/IDENTITY_CONTRACT.md) | How snippet IDs are derived |
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability and current posture |
 
 ## License
 

@@ -443,6 +443,65 @@ fn test_create_library_uses_private_atomic_write() {
     assert_eq!(file_mode(&path), 0o600);
 }
 
+/// Regression: `create_library` used to create the `libraries/` directory
+/// before the legacy single-file store was migrated. Because
+/// `is_single_file_mode()` is "`libraries/` does not exist", that flipped
+/// single-file mode off permanently and left the legacy `snippets.toml`
+/// orphaned — unreachable from `snp get`, `snp list`, and `--library all`.
+#[test]
+fn test_create_library_migrates_legacy_single_file_store_first() {
+    let temp_dir = TestDir::new();
+    // Use the resolved config dir so `get_default_snippets_path()` (which the
+    // migration reads) points at the same place as `self.config_dir`.
+    let config_dir = crate::utils::config::get_config_dir();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let libraries_dir = config_dir.join("libraries");
+    let legacy_path = config_dir.join("snippets.toml");
+
+    // A legacy single-file store with one snippet in it.
+    std::fs::write(
+        &legacy_path,
+        "snippets = [{ description = \"Legacy one\", command = \"echo legacy\", tag = [] }]\n",
+    )
+    .unwrap();
+
+    let mut mgr = LibraryManager {
+        config_dir,
+        libraries_dir,
+        premade_dir: temp_dir.path().join("premade"),
+        config: Default::default(),
+    };
+
+    assert!(mgr.is_single_file_mode(), "precondition: single-file mode");
+
+    mgr.create_library("work").unwrap();
+
+    // The legacy store must now live inside the libraries directory and be
+    // registered in the index — otherwise it is invisible to every read path.
+    let migrated = mgr.libraries_dir.join("snippets.toml");
+    assert!(
+        migrated.exists(),
+        "legacy snippets.toml must be migrated into the libraries directory"
+    );
+    assert!(
+        mgr.config
+            .libraries
+            .iter()
+            .any(|l| l.filename == "snippets" && l.is_primary),
+        "the migrated default library must be registered and primary"
+    );
+
+    // Every read scope must now see the migrated snippet.
+    let all = mgr.resolve_readonly_sources(Some("all")).unwrap();
+    assert!(
+        all.iter().any(|s| s.name == "snippets"),
+        "`--library all` must include the migrated default library"
+    );
+    let primary = mgr.resolve_readonly_sources(None).unwrap();
+    assert_eq!(primary.len(), 1, "primary scope must resolve one library");
+    assert_eq!(primary[0].name, "snippets");
+}
+
 #[test]
 fn test_delete_library_restores_config_when_file_deletion_fails() {
     let temp_dir = TestDir::new();

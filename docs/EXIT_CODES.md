@@ -19,7 +19,7 @@
 | 7 | `SYNC_FAILED` | Sync failure | Synchronization with remote server failed |
 | 8 | `EXECUTION_FAILED` | Execution failure | Snippet execution (child process) failed wrapper |
 | 9 | `CONFLICT_OR_REFUSED` | Conflict/refused | Destructive action refused or generation changed |
-| 10 | `UNSAFE_REPAIRS` | Unsafe repairs pending | Valid invocation found repairs, but all are unsafe and await an operator decision (not a usage error) |
+| 10 | `UNSAFE_REPAIRS` | Unsafe repairs pending | Valid invocation found repairs, but every one of them needs an operator decision and was not applied (not a usage error) |
 
 ## `CliOutcome` Enum
 
@@ -95,7 +95,12 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 The central exit-code mapper in `src/main.rs` handles two paths:
 
 1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1.
-2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (no `CliOutcome` variant).
+2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (no `CliOutcome` variant). `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
+
+   `FindingsSafe` means the report-only invocation (no `--apply`, no
+   `--dry-run`) found only `[auto]`-repairable issues. Those are *not* unsafe
+   repairs pending an operator decision, so they do not claim exit 10 — a
+   script can tell "nothing is blocked" from "a human must act".
 
 ```rust
 match dispatch_command(cli.command) {

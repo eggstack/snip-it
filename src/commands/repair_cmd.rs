@@ -153,6 +153,9 @@ pub enum RepairExitStatus {
     PartialFailure,
     /// Issues found but no safe repairs to apply (all unsafe).
     UnsafeOnly,
+    /// Issues found, all of them safe to repair, but none were applied
+    /// because neither `--apply` nor `--dry-run` was passed.
+    FindingsSafe,
     /// Dry run completed — no changes made.
     DryRun,
 }
@@ -238,7 +241,15 @@ pub fn run(
     } else if dry_run {
         report.exit_status = RepairExitStatus::DryRun;
     } else {
-        report.exit_status = RepairExitStatus::UnsafeOnly;
+        // Report-only mode changes nothing. Exit 10 (unsafe repairs pending)
+        // is reserved for findings that actually await an operator decision;
+        // safe-only findings are not "unsafe" and must not claim that code.
+        let has_unsafe = report.items.iter().any(|i| !i.safe);
+        report.exit_status = if has_unsafe {
+            RepairExitStatus::UnsafeOnly
+        } else {
+            RepairExitStatus::FindingsSafe
+        };
     }
 
     if dry_run {
@@ -321,7 +332,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
                             fix: "Generate UUID for snippet".to_string(),
-                            safe: true,
+                            safe: false,
                             target_path: None,
                         });
                     } else if !all_ids.insert(snippet.id.clone()) {
@@ -334,7 +345,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
                             fix: "Regenerate duplicate ID".to_string(),
-                            safe: true,
+                            safe: false,
                             target_path: None,
                         });
                     }
@@ -353,7 +364,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
                             fix: "Set timestamps to current time".to_string(),
-                            safe: true,
+                            safe: false,
                             target_path: None,
                         });
                     }
@@ -385,7 +396,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                 category: "primary".to_string(),
                 problem: format!("Primary library '{name}' references missing file"),
                 fix: "Promote first available library to primary".to_string(),
-                safe: true,
+                safe: false,
                 target_path: None,
             });
         }
@@ -402,7 +413,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                     category: "primary".to_string(),
                     problem: "No primary library is set (only one library exists)".to_string(),
                     fix: format!("Set '{name}' as primary"),
-                    safe: true,
+                    safe: false,
                     target_path: None,
                 });
             } else if *count > 0 {
@@ -998,6 +1009,7 @@ fn emit_json_report(report: &RepairReport) -> SnipResult<()> {
         RepairExitStatus::Repaired => "repaired",
         RepairExitStatus::PartialFailure => "partial_failure",
         RepairExitStatus::UnsafeOnly => "unsafe_only",
+        RepairExitStatus::FindingsSafe => "findings_safe",
         RepairExitStatus::DryRun => "dry_run",
     };
 

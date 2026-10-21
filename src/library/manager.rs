@@ -362,9 +362,20 @@ impl LibraryManager {
     /// Returns the path to the newly created library file.
     pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> {
         self.gate_mutation()?;
-        let _lock = self.acquire_local_data_lock()?;
+
         validate_library_name(filename)
             .map_err(|(msg, detail)| SnipError::runtime_error(msg, Some(detail)))?;
+
+        // Migrate the legacy single-file store BEFORE the libraries directory
+        // exists. `init_libraries_dir()` creates that directory, which flips
+        // `is_single_file_mode()` to false; from that point on
+        // `migrate_from_single_file()` never runs and the legacy
+        // `snippets.toml` is orphaned — invisible to every read path,
+        // including `--library all`. Migrating first also keeps the migrated
+        // default library primary instead of handing primary to the new one.
+        self.ensure_library_mode()?;
+
+        let _lock = self.acquire_local_data_lock()?;
 
         self.init_libraries_dir()?;
 

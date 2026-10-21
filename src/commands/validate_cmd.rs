@@ -209,7 +209,7 @@ fn validate_library(
                 Some(id),
                 "E-DUP-ID",
                 Severity::Error,
-                Repairability::Auto,
+                Repairability::Manual,
                 format!("Duplicate snippet ID '{id}' found {count} times"),
             );
         }
@@ -225,7 +225,7 @@ fn validate_library(
                 None,
                 "W-ID-EMPTY",
                 Severity::Warning,
-                Repairability::Auto,
+                Repairability::Manual,
                 format!(
                     "Snippet '{}' has empty ID (load_library assigns IDs on read)",
                     truncate_desc(&s.description)
@@ -302,7 +302,7 @@ fn validate_library(
                         Some(id),
                         "W-SAME-ID-DIVERGENT",
                         Severity::Warning,
-                        Repairability::Auto,
+                        Repairability::Manual,
                         format!(
                             "Snippet ID '{id}' appears {} times with divergent content",
                             entries.len()
@@ -356,7 +356,7 @@ fn validate_library(
             None,
             "W-CORRUPT-BAK",
             Severity::Warning,
-            Repairability::Auto,
+            Repairability::Manual,
             format!(
                 "Corrupt backup exists at {} (indicates previous parse failure)",
                 corrupt_bak.display()
@@ -444,7 +444,7 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
                     None,
                     "W-NO-PRIMARY",
                     Severity::Warning,
-                    Repairability::Auto,
+                    Repairability::Manual,
                     "No primary library is set but libraries exist".to_string(),
                 );
             }
@@ -559,7 +559,7 @@ fn validate_permissions(report: &mut ValidationReport, _strict: bool) {
                         None,
                         "W-INSECURE-PERMS",
                         Severity::Warning,
-                        Repairability::Auto,
+                        Repairability::Manual,
                         format!(
                             "File {} has permissions {:o} (recommended: 0600)",
                             path.display(),
@@ -991,7 +991,7 @@ mod tests {
             .filter(|d| d.code == "W-SAME-ID-DIVERGENT")
             .collect();
         assert_eq!(div_diags.len(), 1);
-        assert_eq!(div_diags[0].repairability, Repairability::Auto);
+        assert_eq!(div_diags[0].repairability, Repairability::Manual);
     }
 
     #[test]
