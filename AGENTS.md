@@ -31,7 +31,7 @@ cargo test -p snip-sync --features test-helpers
 
 ## Layout
 
-- `snip-it/` binary `snp` (`src/main.rs`); `snip-proto/` protobuf + checked-in tonic stubs; `snip-sync/` server (Tonic gRPC + EggServe HTTP/1 leaf runtime); `tests/` (~50 targets); `scripts/check.sh`, `release-check.sh`; `themes/` Halloy TOML.
+- `snip-it/` binary `snp` (`src/main.rs`); `snip-proto/` protobuf + checked-in tonic stubs; `snip-sync/` server (Tonic gRPC + EggServe HTTP/1 leaf runtime); `tests/` (51 targets); `scripts/check.sh`, `release-check.sh`; `themes/` Halloy TOML (50).
 - `src/`: `commands/` (one module per command, canonical `*Args` beside handler; `snp data` is an alias, single-path `handle_*` in `main.rs`), `library/` (`model`/`persistence`/`manager`, canonical read-only resolver + `inspect_library_index`), `selector.rs` (fuzzy `SearchFields`/`searchable_text` + `resolve_exact_target`; mutating `resolve_selector` vs side-effect-free `resolve_selector_readonly`), `sync.rs` (gRPC client, single `retry_grpc_unified!` macro), `sync_commands.rs` (merge), `transaction.rs` + `local_data.rs` + `process_file_lock.rs` (journal + lock hierarchy), `auto_sync/` (detached `auto-sync-worker`, same `SyncExecutionLock` as manual sync), `mcp/` (read-only, stdio-only, non-executing), `ui/` (ratatui), `config/` (`sync_settings`/`toml_cache`), `update.rs`, `error.rs` (`SnipError`/`SnipResult`, no credentials), `outcome.rs` (`CliOutcome` → exit codes, see `docs/EXIT_CODES.md`).
 - Tests use `TempDir` + `XDG_CONFIG_HOME` override, `sqlite::memory:` for servers, `tests/support/` (`TestEnvironment`, `RecordingServer`, `EventSink`); never touch real config/keychain/ports. `SNP_ALLOW_PLAINTEXT_API_KEY=true` on all test commands — never remove that seam. `set_var` in tests needs `unsafe` (edition 2024).
 
@@ -52,6 +52,7 @@ cargo test -p snip-sync --features test-helpers
 - `snip-sync` HTTP is one concrete two-route EggServe leaf in `snip-sync/src/http.rs` — no Axum/Tower-HTTP, no generic router/middleware; Tonic stays on its separate listener. Keep pre-bound listener, explicit body rejection, disabled total connection lifetime, typed shutdown completion, external TLS, constant-time Basic-auth, configured CORS, three security headers. Read `tests/snip_sync_lifetime.rs` before touching status codes, `Allow`/`Vary`, or security headers (wire parity is locked there).
 - Tokio: global `RUNTIME` only for async commands (`run`, `clip`, `search`, `sync`, `register`, `premade`, `update`); local-only commands never init it. `run_snippet_selection` takes `Option<&Runtime>` (`None` when `do_sync` false). Detached worker uses `new_current_thread()`; keep client's `rt-multi-thread` feature. Keep `keyring = "4"` default features (platform stores) or persistence silently falls back to mock store.
 - Do not sanitize snippet commands (by design); removing CLI flags is breaking (deprecate first); Argon2 parameter changes break all existing encrypted payloads (version first); `commands/mod.rs` (`load/save_snippets`, `run_snippet_selection`) and `ui/mod.rs` re-exports affect all TUI commands; clipboard side effects go through `copy_to_clipboard()` in `clip_cmd.rs`.
+- The CLI surface is a published contract: exit codes, stdout/stderr split, and the `snp data` mirror are locked by tests. Every new subcommand needs a `command_behavior()` entry (startup-recovery policy) and a `docs/COMMAND_CONTRACTS.md` row. See `.skills/cli-and-outcome-contract.md`.
 
 ## Sync & persistence invariants
 
@@ -80,7 +81,9 @@ cargo test -p snip-sync --features test-helpers
   `001-terminology-and-domain-model.md`, `002-long-term-roadmap.md`; governance:
   `plans/003-planning-process.md`. Subsystem roadmaps live in `plans/subsystems/`,
   handoff plans in `plans/implementation/<subsystem>/`, completion gates in
-  `plans/closure/<subsystem>/`, predecessors in `plans/archive/`.
+  `plans/closure/<subsystem>/`, predecessors in `plans/archive/`. Closed
+  milestone bodies stay in their active directories; `plans/archive/` holds
+  retired direction documents and predecessor pointers.
 
 ### Skills (`.skills/`)
 
@@ -88,6 +91,7 @@ cargo test -p snip-sync --features test-helpers
 |-------|--------|
 | `architecture-review.md` | How to review architecture docs against code; key-file map; evergreen-reference checklist |
 | `planning.md` | The `plans/` convention: roadmaps, handoff plans, closure records, registry, status vocabulary |
+| `cli-and-outcome-contract.md` | CLI surface: dispatch chain, exit codes, startup-recovery policy, stdout/stderr split, `snp data` mirror, deprecation policy |
 | `selector-and-search-parity.md` | `snp get --query` / `snp list --filter` / MCP `snippets_search` share one function; readonly-vs-mutating resolvers; read-only stdio MCP boundary |
 | `persistence-and-toml-fidelity.md` | Save path never post-processes TOML; golden corpus; durability classes; gate-before-mutation |
 | `sync-module.md` | gRPC client, merge/conflict order, retry policy, failure classification, status snapshot |
@@ -100,17 +104,28 @@ cargo test -p snip-sync --features test-helpers
 
 ## Architecture index (start here per topic)
 
-- **Overview + layer map**: `architecture/overview.md`; CLI/dispatch/exit codes:
-  `architecture/cli.md`, `architecture/outcome.md`, `architecture/commands/mod.md`
+`architecture/overview.md` holds the **Deep-Dive Index** over all 62
+architecture documents — use it to reach any component. This map groups them
+by the task you are doing.
+
+- **CLI, dispatch, exit codes**: `architecture/cli.md`,
+  `architecture/outcome.md`, `architecture/commands/mod.md` +
+  `.skills/cli-and-outcome-contract.md`; contracts in `docs/EXIT_CODES.md`,
+  `docs/COMMAND_CONTRACTS.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`
+- **Core types & public API**: `architecture/core.md`,
+  `architecture/public_api.md` (contract: `docs/PUBLIC_API.md`); layer rules
+  in `docs/LOGICAL_LAYERS.md`, enforced by `tests/architecture.rs` — update the
+  doc and the test's constant lists together
 - **Sync protocol/merge/retry**: `architecture/sync.md` + `.skills/sync-module.md`;
   conflict `(updated_at, device_id, SHA-256)` + deletion-wins + local-only
-  `output`/`folders`/`favorite`
+  `output`/`folders`/`favorite`; wire format `architecture/proto.md`
 - **Transactions/locks/auto-sync**: `architecture/persistence.md`,
   `architecture/auto_sync.md`, `architecture/process_file_lock.md` +
   `.skills/transactions-and-auto-sync.md`; gate =
   `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`
-- **Local data / TOML fidelity**: `.skills/persistence-and-toml-fidelity.md`,
-  `architecture/library.md`, `architecture/config.md`, `architecture/utils/`
+- **Local data / TOML fidelity**: `architecture/library.md`,
+  `architecture/config.md`, `architecture/utils/` +
+  `.skills/persistence-and-toml-fidelity.md`
 - **Server (EggServe leaf, no Axum)**: `architecture/server.md` +
   `.skills/server-module.md`; wire parity locked in `tests/snip_sync_lifetime.rs`
 - **Updater split (lean `eggfetch-core` client vs `curl` server)**:
@@ -119,11 +134,18 @@ cargo test -p snip-sync --features test-helpers
   `architecture/mcp.md` + `.skills/selector-and-search-parity.md`
 - **TUI vs UI components**: `architecture/tui.md` (event loop),
   `architecture/ui.md` (theme, highlight, variables) + `.skills/ui-module.md`
+- **Sorting, output rendering, usage index**: `architecture/sort.md`,
+  `architecture/output.md`, `architecture/usage.md`
+- **Encryption & credentials**: `architecture/encryption.md` +
+  `.skills/encryption-module.md`; `architecture/utils/redact.md` +
+  `.skills/keychain-integration.md`
+- **Diagnostics / doctor / status**: `architecture/diagnostics.md`,
+  `architecture/status.md`, `architecture/clipboard.md`,
+  `architecture/logging.md`, `architecture/commands/{doctor_cmd,doctor_report,pet_analysis}.md`
 - **Backup/restore/repair/validate**: `architecture/persistence.md`,
   `architecture/commands/{backup_cmd,backup_archive,restore_cmd,repair_cmd,validate_cmd}.md`
-- **Diagnostics / doctor**: `architecture/diagnostics.md`,
-  `architecture/status.md`, `architecture/commands/{doctor_cmd,doctor_report,pet_analysis}.md`
-- **Layer boundaries**: `docs/LOGICAL_LAYERS.md`, enforced by `tests/architecture.rs`
-  — update the doc and the test's constant lists together
+- **Per-command references**: `architecture/commands/*.md` (26 files, one per
+  `src/commands/` module)
 - **Tests**: `architecture/test-infrastructure.md`; serial set +
   `test-support`/`test-helpers` gating per Verify section above
+

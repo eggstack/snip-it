@@ -135,6 +135,12 @@ Completed, superseded, or abandoned interim plans SHOULD move under
 preserve traceability and SHOULD retain original filenames and subsystem
 grouping.
 
+Closed milestone bodies are exempt from this move: the implementation plan
+at `plans/implementation/<subsystem>/NNN-*.md` and its closure evidence at
+`plans/closure/<subsystem>/NNN-status.md` remain the record of record, and
+the archive holds predecessor pointers to them. Only superseded or retired
+direction documents move into `plans/archive/`.
+
 Canonical long-term documents and accepted ADRs MUST NOT be archived merely
 because their initial implementation completed.
 

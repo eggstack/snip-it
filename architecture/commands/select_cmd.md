@@ -134,5 +134,5 @@ runtime. `src/main.rs:605-612` does not pass `&RUNTIME`, and
 
 - `SelectArgs`: `src/commands/select_cmd.rs:11`; `OutputMode`: `:35`
 - `process_snippet`: `:40`; `run`: `:69`
-- Shared loop: `src/commands/mod.rs:338`; atomic write: `src/utils/atomic.rs:345`
+- Shared loop: `src/commands/mod.rs:338`; atomic write: `src/utils/atomic.rs:350`
 - Dispatch: `src/main.rs:599-613`; consumers: `src/commands/shell_cmd.rs:74-123`

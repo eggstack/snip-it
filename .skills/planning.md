@@ -86,6 +86,8 @@ Authority order on conflict:
   finding prevents strict closure
 - `superseded` — replaced by another document
 - `archived` — no longer active; retained for traceability
+- `corrective pass required` — closure evidence insufficient; a named
+  corrective pass must land before the milestone can close
 
 Pre-convention `Status: complete` in promoted flat plans maps to `closed`.
 
@@ -100,7 +102,8 @@ Pre-convention `Status: complete` in promoted flat plans maps to `closed`.
   preserve subsystem grouping for later moves
 
 Stable subsystem names: `distribution-release`, `server-lifecycle-http`,
-`updater-transport`, `cli-library-sync-consolidation`, `mcp-integration`.
+`updater-transport`, `cli-library-sync-consolidation`, `mcp-integration`,
+`eggstack-dependency-refresh`.
 
 ## Work classification
 

@@ -40,7 +40,7 @@ long-running service.
 
 ### Capabilities
 
-- `snippets_search` and `snippet_get` for agent clients.
+- `snippets_list`, `snippets_search`, and `snippet_get` for agent clients.
 - Explicit client registration flow.
 
 ### Infrastructure
@@ -94,8 +94,8 @@ creating another service.
 Dependencies: interface on the canonical selector/search contract (closed
 via `cli-library-sync-consolidation` M004); soft on flat-000 direction.
 
-Deliverable boundary: `snippets_search`/`snippet_get` plus registration;
-no execution tool, no mutations, no networking.
+Deliverable boundary: `snippets_list`/`snippets_search`/`snippet_get` plus
+registration; no execution tool, no mutations, no networking.
 
 User or operator value: agent clients search and fetch snippets with the
 same semantics as the CLI.

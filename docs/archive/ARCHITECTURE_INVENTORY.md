@@ -1,5 +1,26 @@
 # Internal Architecture Inventory
 
+> **ARCHIVED — historical snapshot. Do not treat as a current contract.**
+> Archived 2026-10-21. Fully superseded by the `architecture/` tree — start with
+> `architecture/overview.md`. Its Module Map / Data Flow / Exit Codes /
+> Configuration Files sections map onto `architecture/overview.md` §5 / §8 / §9 /
+> §10, and its per-command sections onto `architecture/commands/*.md`.
+>
+> **Do not trust the counts or the function names below.** Known-stale items:
+> - `deduplicate_ids()` does not exist anywhere in the source. The real
+>   function is `normalize_snippet_ids()` in `src/library/persistence.rs`.
+> - "24 command modules" and "23 command modules" are both wrong. The actual
+>   count of `pub mod` declarations in `src/commands/mod.rs` is 25
+>   (`src/commands/` holds 26 files, including `mod.rs`).
+> - "29 unit tests" is wrong. `src/library/tests.rs` currently holds 96
+>   `#[test]` functions.
+> - Exit code 8 is described here as "Output-file execution failure
+>   (timeout/spawn)". The shipped `CliOutcome` mapping is in
+>   `docs/EXIT_CODES.md`.
+> - The `uuid` row under Key Dependencies is stale: snippet IDs are
+>   deterministic `legacy-<sha256 hex>`, not UUIDs. See
+>   `docs/IDENTITY_CONTRACT.md`.
+
 A concise map of the snp internal architecture for contributors working on pet-compatibility features. For deeper module documentation, see the `architecture/` directory (start with `architecture/overview.md`).
 
 ## Module Map

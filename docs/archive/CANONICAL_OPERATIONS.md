@@ -136,7 +136,7 @@ These are **not duplicates** — `rank_snippets` is for non-interactive list out
 | Attribute | Value |
 |-----------|-------|
 | **Canonical** | `src/utils/variables.rs:629` — `expand_command(command: &str, values: &[(String, String)]) -> String` |
-| **Semantics** | Tokenizes `<var>` placeholders, handles `\` escapes, supports `<var=default>`, `<var=_opt1_||_opt2_>`, `<var=_red_||_green_||_blue_||>` list prompts. Pure string transformation (no I/O). |
+| **Semantics** | Tokenizes `<var>` placeholders, handles `\` escapes, supports `<var=default>`, `<var=_opt1_\|\|_opt2_>`, `<var=_red_\|\|_green_\|\|_blue_\|\|>` list prompts. Pure string transformation (no I/O). |
 
 ### Callers
 

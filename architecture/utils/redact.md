@@ -210,7 +210,7 @@ it exceeds 40.
 | Consumer | Site | Policy |
 |----------|------|--------|
 | `auto_sync::status` | `src/auto_sync/status.rs:27` (re-export), `:292` | Redact, strip control chars, truncate to 512 |
-| `logging::redact_command` | `src/logging.rs:300` | Redact; on any change replace the **whole** command with `<redacted-command>` |
+| `logging::redact_command` | `src/logging.rs:314` | Redact; on any change replace the **whole** command with `<redacted-command>` |
 | `error::SnipError::Command` | `src/error.rs:190`, `:194` | Redact the command and each arg; truncate args to 40 chars |
 
 ## Backup Redaction Is a Different Mechanism

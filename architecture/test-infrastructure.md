@@ -622,7 +622,7 @@ unsafe {
 | Concern | Guarantee |
 |---------|-----------|
 | Config directory (subprocess) | `TempDir` + `XDG_CONFIG_HOME` override |
-| Config directory (in-process unit) | `ScopedConfigDir` thread-local override, `#[cfg(test)]` only |
+| Config directory (in-process unit) | `ScopedConfigDir` thread-local override, `#[cfg(any(test, feature = "test-support"))]` |
 | Keychain | `SNP_ALLOW_PLAINTEXT_API_KEY=true` + `SNP_TEST_CREDENTIAL_FILE`; no keyring access |
 | Ports | Server binds `127.0.0.1:0` — OS-assigned, loopback only |
 | Process cleanup | `Drop` for `TestEnvironment` SIGTERMs tracked child PIDs |

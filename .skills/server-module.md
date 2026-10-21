@@ -133,8 +133,11 @@ The `test-helpers` feature gates the in-process test server (`test_helpers.rs`);
 
 The server updater intentionally shells out to external `curl`. The
 updater-transport M005 milestone requalified the alternative lean
-`eggfetch-core 0.2.0` profile: the release binary grew from 3,833,152 to
+`eggfetch-core 0.2.0` profile — the version measured at that time; `snp`'s
+current pin is the exact version in `Cargo.toml`, refreshed by the Eggstack
+dependency-refresh M001. The release binary grew from 3,833,152 to
 5,145,224 bytes (+34.23%), exceeding the 10% gate, so the curl split remains
 deliberate. See
-`plans/closure/updater-transport/005-status.md`; the split is pinned by
-`tests/architecture.rs`.
+`plans/closure/updater-transport/005-status.md` and
+`plans/closure/eggstack-dependency-refresh/001-status.md`; the split is pinned
+by `tests/architecture.rs`.

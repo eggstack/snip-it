@@ -26,17 +26,24 @@ work.
 
 ## Archive layout
 
-Preserve the original planning category and subsystem where practical:
+The archive holds **pointers and retired direction documents**, not the bodies
+of closed milestones:
 
 ```text
 archive/
     flat-000-...-020-...md (pre-convention sequential plans)
-    subsystems/<subsystem>-roadmap.md
-    implementation/<subsystem>/NNN-short-title.md
-    closure/<subsystem>/NNN-status.md
 ```
 
-The `flat-000-*.md` file is the pre-convention direction plan retained in full (archival note prepended). The `flat-001`-`flat-020` files are predecessor pointers: their full bodies were promoted via `git mv` into `plans/implementation/<subsystem>/` (history preserved), so the stubs record the replacement subsystem milestone without duplicating content.
+The `flat-000-*.md` file is the pre-convention direction plan retained in full
+(archival note prepended). The `flat-001`-`flat-020` files are predecessor
+pointers: their full bodies were promoted via `git mv` into
+`plans/implementation/<subsystem>/` (history preserved), so the stubs record
+the replacement subsystem milestone without duplicating content.
+
+Closed milestone bodies stay in place as the record of record:
+`plans/implementation/<subsystem>/NNN-*.md` remains the implementation plan
+and `plans/closure/<subsystem>/NNN-status.md` remains the closure evidence.
+Only superseded or retired direction documents move here.
 
 When moving a document into the archive:
 

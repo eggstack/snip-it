@@ -18,7 +18,10 @@ Command implementations live in [commands/mod.md](commands/mod.md); the
 resolver behind `--id` / `--description-exact` / `--command-exact` is in
 [selector.md](selector.md); exit-code mapping is in [outcome.md](outcome.md);
 the auto-sync worker and pending state are in [auto_sync.md](auto_sync.md);
-the library scope model is in [library.md](library.md).
+the library scope model is in [library.md](library.md). For the working rules
+— which exit code a given failure maps to, how to classify a new subcommand's
+startup behavior, and the stdout/stderr split — see
+`.skills/cli-and-outcome-contract.md`.
 
 ## Startup sequence
 

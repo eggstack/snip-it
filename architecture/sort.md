@@ -68,7 +68,7 @@ struct RankedSnippet {
 Implementation: `src/sort.rs:157-194`.
 
 `desc_lower` is skipped entirely under `Relevance` and `cmd_lower` is
-computed only for `Command` (`src/sort.rs:129-131`), so timestamp and usage
+computed only for `Command` (`src/sort.rs:134`), so timestamp and usage
 orderings pay no string-allocation cost.
 
 ---

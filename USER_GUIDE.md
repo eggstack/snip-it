@@ -54,8 +54,9 @@ When `XDG_CONFIG_HOME` is not set, the default is `~/.config/snp/libraries/`.
 `libraries.toml` stores library metadata, including which library is primary
 and which server library it is linked to.
 
-If a legacy `snippets.toml` exists when library mode starts, snp migrates it to
-`libraries/snippets.toml` and retains the original file. Keep your own backup
+A fresh install starts with `snippets.toml` as the default single-file
+library. When library mode starts, snp migrates that file to
+`libraries/snippets.toml` and retains the original. Keep your own backup
 before making large changes.
 
 ## Pet compatibility and import
@@ -329,6 +330,10 @@ bind \co snp_select_raw
 bind \co\e snp_select_expanded
 ```
 
+These are shell-side bindings. The snippet TUI has its own keys — selector
+mode, theme picker, and the variable prompt — and `snp keybindings` prints
+the complete TUI reference.
+
 ### How it works
 
 1. The shell function reads the current command buffer.
@@ -534,7 +539,8 @@ auto_sync_failure = "warn"
 | `snp import pet --dry-run` | No | Read-only |
 | `snp library create` | Yes | |
 | `snp library delete` | Yes | |
-| `snp library list/show/set-primary` | No | Read-only |
+| `snp library list/show` | No | Read-only |
+| `snp library set-primary` | No | Rewrites `libraries.toml` (primary flag and generation); does not trigger auto-sync |
 | `snp sync` (explicit) | Clears pending | Prevents duplicate delayed sync |
 
 ### Behavior
@@ -647,7 +653,14 @@ description, and original index.
 
 Each snippet can store descriptive metadata in the `output` field (also
 called "notes"). This field is preserved during import, sync, and backup.
-It is never automatically captured from command execution.
+
+The field doubles as a stdout redirect target. When `output` is non-empty,
+`snp run` writes the snippet's stdout to the file named by `output`, resolved
+relative to the current working directory. The file is created fresh on every
+run — an existing file makes the run fail — and a path that resolves outside
+the working directory is refused. Only stdout is redirected; stderr still
+goes to the terminal. The pet difference is tabulated in
+[docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
 
 In the TUI preview, output appears below the command separated by
 `--- Output / Notes ---` when present. Empty output is hidden.
@@ -661,7 +674,15 @@ snp edit --clear-output --filter "ssh"
 ```
 
 `--output`, `--output-stdin`, and `--clear-output` are mutually exclusive.
-`--filter` is required and matches by description or command substring.
+`--filter` matches by description or command substring, and it is required
+only when no exact selector is given. `--id` (snippet ID),
+`--description-exact`, and `--command-exact` select the snippet directly and
+replace the filter; those three are mutually exclusive with each other.
+
+```bash
+snp edit --output "Example output for this command" --description-exact "SSH connection"
+snp edit --output "Example output for this command" --id legacy-1d15ea6c6428e9ebbbf2d3a0b05017d4981e02a004d638930c07980750f2a062
+```
 
 #### Output-aware search
 
@@ -727,19 +748,26 @@ shell; snp does not expand them itself.
 ## Configuration
 
 The client root is `$XDG_CONFIG_HOME/snp`, or `~/.config/snp` when that
-variable is unset.
+variable is unset. A fresh install creates `snippets.toml` (the default
+single-file library), `logs/`, and `.transaction/`; the rest appear as you
+use the features.
 
 | Path | Purpose |
 | --- | --- |
-| `snippets.toml` | Legacy single-file storage |
+| `snippets.toml` | Default single-file library (migrated to `libraries/` by library mode) |
 | `libraries/*.toml` | User library files |
 | `libraries.toml` | Library metadata and server links |
 | `premade/*.toml` | Installed premade libraries |
-| `sync.toml` | Sync settings |
+| `sync.toml` | Sync settings (the key itself lives in the OS keychain; this file holds only the `@keychain` marker) |
 | `themes/*.toml` | Halloy-compatible themes |
 | `themes.toml` | Active theme |
 | `logs/` | Rolling application logs |
 | `backups/` | Timestamped library backups |
+| `.transaction/` | Transaction journals and the local-data lock for crash-safe writes |
+| `auto-sync-pending.toml` | Pending auto-sync marker (latest mutation generation) |
+| `auto-sync-status.toml` | Result of the last auto-sync attempt and its retry schedule |
+| `auto-sync-execution.lock` | Kernel lock serializing every sync execution |
+| `auto-sync-worker.lock` | PID+nonce lock preventing concurrent auto-sync workers |
 
 Useful environment variables:
 
@@ -766,6 +794,20 @@ snp list --csv
 snp list --filter docker --json
 snp list --search-output --filter sample
 ```
+
+### Scripting with `snp get`
+
+`snp get` is the deterministic, non-TUI entry point for scripts — it never
+opens a selector and never executes a command:
+
+```bash
+snp get --query 'push a branch' --field command   # print the command
+snp get --query 'push a branch' --json            # full record as JSON
+```
+
+It exits 3 when nothing matches and 5 when a query matches more than one
+snippet, so a script can branch on the result instead of parsing stderr. The
+full table is [docs/EXIT_CODES.md](docs/EXIT_CODES.md).
 
 `snp cron` prints a cron entry and offers to copy it to the clipboard:
 
@@ -807,6 +849,29 @@ systemctl --user daemon-reload
 systemctl --user enable --now snp-sync.timer
 ```
 
+### Shell completions
+
+`snp completions` writes a completion script to stdout:
+
+```bash
+snp completions bash > ~/.local/share/bash-completion/completions/snp
+snp completions zsh  > ~/.local/share/zsh/site-functions/_snp
+snp completions fish > ~/.config/fish/completions/snp.fish
+```
+
+The accepted shells are `bash`, `elvish`, `fish`, `powershell`, and `zsh`.
+
+### Keeping snp current
+
+```bash
+snp update --dry-run   # report the available version and how it would install
+snp update             # install using the detected installation method
+```
+
+`snp update` detects how the binary was installed — Cargo, Homebrew, or a
+direct executable download — and follows that method. A Homebrew-managed
+`snp` stays owned by Homebrew.
+
 ## Troubleshooting and recovery
 
 Check the server before investigating the client:
@@ -819,9 +884,44 @@ For a remote deployment, check the reverse proxy's HTTPS endpoint and the
 server logs. `snip-sync paths` prints the active database, config, data, and
 PID paths.
 
+### Local state commands
+
+| Command | Purpose |
+| --- | --- |
+| `snp status` | Show library counts, sync state, pending auto-sync work, and the log directory (`--json`, `--sync-only`) |
+| `snp validate` | Read-only validation of every library (`--library <name>`, `--strict`, `--json`) |
+| `snp backup` | Write a checksummed snapshot of the libraries and `libraries.toml` (`--output`, `--include-usage`, `--include-sync-state`, `--json`) |
+| `snp restore <BACKUP_DIR>` | Restore a snapshot (`--mode merge\|replace\|dry-run`, `--json`) |
+| `snp repair` | Inspect and repair config, library, and interrupted-transaction state (`--dry-run`, `--apply`, `--library`, `--json`) |
+
+`snp status` is read-only and never starts a sync, so it is safe to run at
+any time. `snp validate` only reports — it never writes.
+
+`snp backup` writes a timestamped snapshot directory under `backups/`
+containing `manifest.toml` plus the library files, each entry recorded with a
+SHA-256 checksum. Usage metadata is excluded unless `--include-usage` is
+passed, and `sync.toml` is excluded unless `--include-sync-state` is passed
+(the API key is redacted when it is).
+
+`snp restore <BACKUP_DIR>` validates the manifest and the checksummed
+artifacts before touching anything. `--mode dry-run` prints the planned
+restore without writing. `--mode merge` (the default) combines each library
+with the local copy by snippet ID, keeping whichever version has the newer
+`updated_at` and adding snippets that only exist in the backup; an identical
+file is skipped, and an existing `libraries.toml`, `usage.toml`, or
+`sync.toml` is left as it is. `--mode replace` overwrites the library files
+and takes a pre-restore backup of the config directory first. Every restore
+runs inside a transaction, so a failure rolls back.
+
+`snp repair` reports problems without changing anything until `--apply` is
+passed, and it creates a backup before applying safe repairs. Repairs that
+need an operator decision are reported but never applied automatically —
+`snp repair` exits 10 when only such unsafe items were found.
+
 If a sync configuration is damaged, snp keeps a `.corrupt.bak` copy and falls
 back to defaults. Library writes create timestamped backups in `backups/`.
-Restore a library file from there before attempting another sync.
+Use `snp restore` to bring back a whole snapshot; to recover a single library
+file, copy it back from `backups/` before attempting another sync.
 
 To disconnect sync while keeping local snippets, remove `sync.toml` and
 register again later. To reset all local data, back up the config directory

@@ -29,6 +29,8 @@ maps to `closed`.
 - **conditionally closed** — substantial work landed, but a named correctness or operational evidence condition remains.
 - **superseded** — replaced by another document.
 - **archived** — no longer active and retained for traceability.
+- **corrective pass required** — closure evidence is insufficient; a named
+  corrective pass must land before the milestone can close.
 
 ## Active subsystem roadmaps
 
@@ -36,9 +38,10 @@ maps to `closed`.
 |---|---|---|---|---|
 | Distribution and release | closed | `plans/subsystems/distribution-release-roadmap.md` | M001-M005 closed | None. Corrective M005 closed without a second workflow or matrix duplication. |
 | Server lifecycle and HTTP runtime | closed | `plans/subsystems/server-lifecycle-http-roadmap.md` | M001-M004 closed | None. Direct EggServe leaf (C) is the final architecture; parity socket-proven. |
-| Updater transport | closed | `plans/subsystems/updater-transport-roadmap.md` | M001-M005 closed | None. `snp` on lean `eggfetch-core 0.2.0`; `snip-sync` on `curl` by measurement. |
+| Updater transport | closed | `plans/subsystems/updater-transport-roadmap.md` | M001-M005 closed | None. `snp` on lean `eggfetch-core` (exact pin in `Cargo.toml`); `snip-sync` on `curl` by measurement. |
 | CLI, library, selector, sync-policy consolidation | closed | `plans/subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 closed | None. Duplicate policy deleted; parity and retry unified. |
 | Local MCP integration | closed | `plans/subsystems/mcp-integration-roadmap.md` | M001 closed | None. Read-only stdio adapter with search parity and registration. |
+| Eggstack dependency refresh | closed | `plans/subsystems/eggstack-dependency-refresh-roadmap.md` | M001 closed | None. `eggfetch-core` and `eggserve-server`/`eggserve-primitives` adopted on their exact pins in `Cargo.toml` with zero source changes; wire/lifetime/transfer parity proven, both release artifacts byte-identical. |
 
 ## Dependency-ready implementation plans
 
@@ -51,7 +54,9 @@ after dependency and handoff review per `plans/003-planning-process.md`
 **Distribution gate:** M001-M004 closed the matrix, installers, platform
 gate, and publication evidence. Corrective M005 is closed
 (`snip-it 1.3.8` five binaries plus checksums; `v1.3.7` untouched;
-five-target consumer smoke; deterministic installer contracts).
+five-target consumer smoke; deterministic installer contracts). The current
+crate version is `snip-it 1.3.9` (Argon2 0.6 release, tag `v1.3.9`); M005's
+publication evidence remains the gate record for the release workflow.
 
 **Server gate:** M001 lifecycle baseline closed. M002 recorded the A/B
 measurement (A 3,833,152; B 3,963,968). M003 selected C (3,898,408) as the
@@ -74,6 +79,16 @@ retry unification with compatibility preserved.
 against the canonical selector contract. No execution, mutation,
 networked, or daemonized MCP surface exists.
 
+**Dependency-refresh gate:** M001 closed the coordinated `eggfetch-core` and
+`eggserve-server`/`eggserve-primitives` upgrade as a manifest-and-lockfile
+change with zero source edits. Real-socket HTTP parity, transfer, and
+release-binary byte-identity were re-proven on the new pins; the exact
+versions are pinned in `Cargo.toml` and guarded by `tests/architecture.rs`.
+
+**Next handoff:** None pending. All six workstreams are closed and no work is
+blocked; new work starts via `plans/README.md` lifecycle step 1 (identify
+canonical sections) rather than from this registry.
+
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
@@ -89,6 +104,7 @@ networked, or daemonized MCP surface exists.
 | Updater transport M001-M005 | closed | `plans/closure/updater-transport/001-status.md` through `005-status.md` (21 focused updater tests at adoption; byte-identical 6,776,320; server trial +34.23% discarded); predecessors `flat-004`/`flat-014`/`flat-015`/`flat-016`/`flat-017` |
 | CLI/library/selector/retry M001-M005 | closed | `plans/closure/cli-library-sync-consolidation/001-status.md` through `005-status.md`; predecessors `flat-008`-`flat-012` |
 | MCP integration M001 | closed | `plans/closure/mcp-integration/001-status.md`; predecessors `flat-005` plus MCP direction in `flat-000` |
+| Eggstack dependency refresh M001 | closed | `plans/closure/eggstack-dependency-refresh/001-status.md`; implementation `plans/implementation/eggstack-dependency-refresh/001-upgrade-eggfetch-and-eggserve.md`; roadmap `plans/subsystems/eggstack-dependency-refresh-roadmap.md` |
 | Pre-convention direction plan 000 | archived | `plans/archive/flat-000-distribution-fleet-and-mcp-roadmap.md`, superseded by canonical `000`/`001`/`002` plus the `distribution-release` and `mcp-integration` roadmaps |
 
 ## Starting new work

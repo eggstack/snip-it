@@ -265,7 +265,7 @@ already replaced it.
   (`src/transaction.rs:62-70`, `:1225-1227`), and for display/status in the
   kernel-backed family.
 - **Do not replace `toml::Table` with `toml::Value`** in
-  `remove_owned_lock_file` (`src/utils/process.rs:81`). A lock record has
+  `remove_owned_lock_file` (`src/utils/process.rs:60`). A lock record has
   multiple top-level keys and `toml::Value` cannot parse it — the helper
   would silently stop removing anything.
 - **Do not skip the `(dev, ino)` check** on Unix

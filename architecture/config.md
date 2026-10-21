@@ -77,7 +77,7 @@ or world bits, `src/utils/config.rs:94-105`).
 `src/library/manager.rs:49-51`; `.transaction/` from
 `src/library/manager.rs:617` and `src/local_data.rs:398-400`; `backups/` from
 `src/library/persistence.rs:316` and `src/commands/backup_cmd.rs:63`;
-`logs/` from `src/logging.rs:73`; `audit.log` from `src/logging.rs:362-365`.
+`logs/` from `src/logging.rs:72`; `audit.log` from `src/logging.rs:380-384`.
 
 `logs/` and `audit.log` are created lazily; `snp version` and
 `snp completions bash` do not create them.

@@ -69,7 +69,7 @@
 ### 13. Transaction journals for multi-file ops
 - Use free functions in `transaction.rs` (`begin_transaction` / `advance_to_*` / `commit_transaction`) for any operation touching 2+ files — there is no `Transaction::begin()` API
 - Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/`
-- Gate every local mutation on `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`src/transaction.rs:2441`): one journal = auto-rollback, multiple/incomplete = refuse and direct to `snp repair`. `check_interrupted_transactions` is a scan helper, not the gate
+- Gate every local mutation on `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`src/transaction.rs:2510`): one journal = auto-rollback, multiple/incomplete = refuse and direct to `snp repair`. `check_interrupted_transactions` is a scan helper, not the gate
 - Never schedule sync before local transaction is consistent
 
 ### 14. Schema versioning for migrations
@@ -109,11 +109,13 @@ Removed during the API tightening audit (closure record
 Public enums that may gain variants carry `#[non_exhaustive]` so additions don't
 break downstream callers. This is **not** blanket: only the enums in
 `src/error.rs`, `src/outcome.rs`, `src/sync_failure.rs`, `src/sort.rs`,
-`src/config/sync_settings.rs`, `src/lib.rs`, `src/auto_sync/{worker,policy,execution_lock}.rs`,
-`src/commands/mod.rs`, and `src/utils/atomic.rs` are marked. Enums in
-`src/status_snapshot.rs`, `src/selector.rs`, `src/transaction.rs`, and
-`src/auto_sync/pending.rs` are **not** — mark a new public enum when you add it
-rather than assuming the crate already does.
+`src/encryption.rs`, `src/config/sync_settings.rs`, `src/lib.rs`,
+`src/auto_sync/{worker,policy,execution_lock}.rs`, `src/commands/mod.rs`, and
+`src/utils/atomic.rs` are marked. Enums in `src/status_snapshot.rs`,
+`src/selector.rs`, `src/transaction.rs`, and `src/auto_sync/pending.rs` are
+**not** — mark a new public enum when you add it rather than assuming the crate
+already does. Verify the current set with
+`rg -n 'non_exhaustive' src/ --glob '*.rs'` rather than trusting this list.
 
 ## Durability and validation patterns
 

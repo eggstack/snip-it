@@ -43,7 +43,7 @@ run_sync() flow (sync_commands.rs):
 
 - `sync_encrypted` and `sync_encrypted_with_ceiling` both delegate to `sync_encrypted_inner`, which runs real encryption and then calls the private `sync_prepared_encrypted_inner` that owns the entire zero/one/many batch transport logic. Zero batches is a valid pull-only path — it sends an empty-upload `Sync(offset=0)` to retrieve remote snippets, not an `unreachable!` panic.
 - Multi-batch `PushSnippets` errors preserve the original `SyncFailureKind` (e.g., `ClockSkew`, `Timeout`) via the private `add_batch_context()` helper instead of flattening to `SyncRequestFailed`.
-- The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1514`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
+- The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1513`, helper `sync_encrypted_with_test_encrypt` at `:1522`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
 
 ## Merge Strategy
 

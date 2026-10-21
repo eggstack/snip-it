@@ -122,7 +122,7 @@ bookkeeping path shared by both execution branches:
   (`run_cmd.rs:191`) — a tracing event, not the audit file.
 
 The audit file is `<config>/audit.log`
-(`src/logging.rs:362-366`); entries carry a timestamp, action, snippet id,
+(`src/logging.rs:380-384`); entries carry a timestamp, action, snippet id,
 description, library id, and device id (`src/logging.rs:34-41`).
 
 ## Mutation vs read-only

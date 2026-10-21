@@ -60,7 +60,8 @@ identity (exact tags, never GitHub `latest`) and the `curl` baseline for
 
 ## 4. Current state
 
-All milestones are closed. `snp update` pins `eggfetch-core 0.2.0` on the
+All milestones are closed. `snp update` pins `eggfetch-core` (exact version in
+`Cargo.toml`) on the
 unchanged lean profile with no `src/update.rs` changes required at
 adoption and all focused updater tests passing. The fresh same-host
 release build stayed byte-identical at 6,776,320 bytes. The bounded

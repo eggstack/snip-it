@@ -202,7 +202,7 @@ subcommand). A short-lived `snp clip` exits before the timer fires.
 
 ## Audit interaction
 
-`log_clipboard_operation(operation, success)` (`src/logging.rs:337-343`)
+`log_clipboard_operation(operation, success)` (`src/logging.rs:356-362`)
 records **debug** on success and **warn** on failure. It logs the operation
 name and a boolean only — never the copied text.
 
@@ -395,7 +395,7 @@ bumps the usage index — i.e. that the copy went through
 | `src/commands/cron_cmd.rs:89` | `snp cron` prompt — direct `copy_to_clipboard_auto` call, no audit |
 | `src/commands/run_cmd.rs:194-207` | `snp run --copy` — goes through the funnel |
 | `src/error.rs:130`, `:280` | `SnipError::Clipboard` variant and constructor |
-| `src/logging.rs:337` | `log_clipboard_operation` — op name + success flag only |
+| `src/logging.rs:356` | `log_clipboard_operation` — op name + success flag only |
 | `src/config/sync_settings.rs:124`, `:493` | `clipboard_auto_clear_seconds` and its cache invalidator |
 | `src/utils/variables.rs:61` | `strip_escape_sequences` — applied to TUI batch copies |
 | `Cargo.toml:98-103` | Target-gated `clipboard-win` / `arboard` dependencies |
@@ -410,7 +410,7 @@ bumps the usage index — i.e. that the copy went through
    (`src/ui/mod.rs:1657`); the `snp cron` prompt audits nothing
    (`src/commands/cron_cmd.rs:89`).
 3. **Clipboard content is never logged.** Only operation names and success
-   flags reach `tracing` (`src/logging.rs:337-343`).
+   flags reach `tracing` (`src/logging.rs:356-362`).
 4. **The generation counter prevents a stale auto-clear from wiping a newer
    copy** (`src/clipboard.rs:24`, `:80`, `:84`).
 5. **The auto-clear is best-effort.** It runs on a detached thread and is

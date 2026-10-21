@@ -66,7 +66,8 @@ lifecycle (see `server-lifecycle-http`), or MCP behavior (see
 ## 4. Current state
 
 All milestones are closed. `snip-it 1.3.8` published with all five public
-`snp` binaries plus checksums (historical `v1.3.7` untouched). Consumer
+`snp` binaries plus checksums (historical `v1.3.7` untouched); the current
+crate version is `snip-it 1.3.9` (Argon2 0.6 release, tag `v1.3.9`). Consumer
 smoke exercises both independently versioned components across Linux
 x86_64/ARM64, macOS Intel/Apple Silicon, and Windows x86_64 plus the exact
 README bootstrap. Bash/PowerShell installer failure-mode contracts are

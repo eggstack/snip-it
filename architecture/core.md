@@ -71,7 +71,7 @@ Stored in `libraries.toml`.
 
 ## Selection types
 
-### `SnippetData` — `src/lib.rs:86-94`
+### `SnippetData` — `src/lib.rs:104-111`
 
 `#[doc(hidden)]`. Parallel vectors of snippet metadata; index `i` refers to
 the same snippet in every vector. Built by
@@ -88,7 +88,7 @@ pub struct SnippetData {
 }
 ```
 
-### `ProcessResult` — `src/lib.rs:99-114`
+### `ProcessResult` — `src/lib.rs:117-131`
 
 `#[doc(hidden)]`, `#[non_exhaustive]`. Per-snippet loop control returned by
 the TUI `process_fn` callback.
@@ -100,11 +100,11 @@ the TUI `process_fn` callback.
 | `Done(String)` | expanded command | Selection succeeded |
 | `Failed { exit_code: Option<i32>, message: String }` | child status | Child process exited nonzero |
 
-`ProcessResult::is_done()` (`src/lib.rs:118-120`) is `true` only for
+`ProcessResult::is_done()` (`src/lib.rs:135`) is `true` only for
 `Done(_)`. Usage metadata is recorded only when it is true
 (`src/commands/run_cmd.rs:175-184`), so a failed run records nothing.
 
-### `SelectionOutcome` — `src/lib.rs:129-140`
+### `SelectionOutcome` — `src/lib.rs:147-158`
 
 `#[doc(hidden)]`, `#[non_exhaustive]`. The raw result of the shared
 TUI selection loop (`run_snippet_selection`, `src/commands/mod.rs:338`).
@@ -222,8 +222,8 @@ distinct user-facing category (`src/outcome.rs:81`, `docs/EXIT_CODES.md`).
 | Tier | Items | Meaning |
 |------|-------|---------|
 | **Supported public API** | `pub mod config`, `pub mod error`, `pub mod outcome`, `pub mod sort`; root re-exports `SnipError`, `SnipResult`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `load_library`, `save_library`, and the atomic-write helpers (`src/lib.rs:27-30`, `:72-80`) | Stable for external consumers |
-| **`#[doc(hidden)]` public** | `pub mod auto_sync`, `commands`, `logging`, `mcp`, `process_file_lock`, `selector`, `sync`, `ui`, `usage`, `transaction`; `SnippetData`, `ProcessResult`, `SelectionOutcome` (`src/lib.rs:33-51`, `:68-70`, `:86-99`, `:129`) | `pub` so the binary and integration tests can reach them, but **not** part of the supported external API |
-| **`pub(crate)` internal** | `mod clipboard`, `diagnostics`, `encryption`, `library`, `local_data`, `migration`, `output`, `status_snapshot`, `sync_commands`, `sync_failure`, `test_failpoints`, `utils`; `pub(crate) use snip_proto as proto` (`src/lib.rs:43`, `:53-70`) | Not reachable outside the crate. `library` is internal, but its types are re-exported at the root |
+| **`#[doc(hidden)]` public** | `pub mod auto_sync`, `commands`, `logging`, `mcp`, `process_file_lock`, `selector`, `sync`, `ui`, `usage`, `transaction`; `SnippetData`, `ProcessResult`, `SelectionOutcome` (`src/lib.rs:33-51`, `:68-70`, `:104-131`, `:147-158`) | `pub` so the binary and integration tests can reach them, but **not** part of the supported external API |
+| **`pub(crate)` internal** | `mod clipboard`, `diagnostics`, `encryption`, `library`, `local_data`, `migration`, `output`, `status_snapshot`, `sync_commands`, `sync_failure`, `test_failpoints`, `utils`; `pub(crate) use snip_proto as proto` (`src/lib.rs:54-70`, `:53-70`) | Not reachable outside the crate. `library` is internal, but its types are re-exported at the root |
 
 `transaction` is feature-dependent: `pub(crate) mod transaction` without the
 `test-support` feature (`src/lib.rs:65-66`), and `#[doc(hidden)] pub mod

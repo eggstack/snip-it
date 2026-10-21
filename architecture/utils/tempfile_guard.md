@@ -49,7 +49,7 @@ The guard is created **immediately after** the temp path is computed and
 armed first and the file is created second, so a failure to create the file
 still leaves the guard armed for a path that does not exist — the resulting
 `NotFound` on drop is swallowed
-(`src/utils/atomic.rs:280-281`, `:370-371`).
+(`src/utils/atomic.rs:285-286`, `:370-371`).
 
 ### Persist — the success path
 
@@ -134,8 +134,8 @@ the write path panics.
 
 | Helper | Temp path format | Guard armed | `persist()` called |
 |--------|------------------|-------------|--------------------|
-| `write_private_atomic` | `{temp_prefix}.{uuid}.tmp` (`src/utils/atomic.rs:280`) | `src/utils/atomic.rs:281` | `src/utils/atomic.rs:315` |
-| `atomic_replace` | `{uuid}.tmp` (`src/utils/atomic.rs:370`) | `src/utils/atomic.rs:371` | `src/utils/atomic.rs:409` |
+| `write_private_atomic` | `{temp_prefix}.{uuid}.tmp` (`src/utils/atomic.rs:285`) | `src/utils/atomic.rs:286` | `src/utils/atomic.rs:320` |
+| `atomic_replace` | `{uuid}.tmp` (`src/utils/atomic.rs:375`) | `src/utils/atomic.rs:376` | `src/utils/atomic.rs:414` |
 
 In both helpers the ordering is the same and is the whole point of the guard:
 
@@ -155,15 +155,15 @@ newly written target file is never deleted.
 ### Ordering detail in `atomic_replace`
 
 `atomic_replace` continues past the rename with two more steps
-(`src/utils/atomic.rs:411-429`):
+(`src/utils/atomic.rs:416-434`):
 
 1. restore the original permissions if `preserve_permissions` was requested
-   (best-effort; a failure is ignored, `src/utils/atomic.rs:412-426`);
-2. sync the parent directory (`src/utils/atomic.rs:429`).
+   (best-effort; a failure is ignored, `src/utils/atomic.rs:417-431`);
+2. sync the parent directory (`src/utils/atomic.rs:434`).
 
-Both run **after** `persist()` (`src/utils/atomic.rs:409`). That matters: if
+Both run **after** `persist()` (`src/utils/atomic.rs:414`). That matters: if
 the parent-directory fsync fails and the call returns an error
-(`src/utils/atomic.rs:429`), the target file has already been written and the
+(`src/utils/atomic.rs:434`), the target file has already been written and the
 guard will not delete it. The error means "the rename may not survive power
 loss", not "the write was rolled back".
 
@@ -173,10 +173,10 @@ The guard has no dedicated unit tests of its own — it is covered through the
 atomic-write tests:
 
 - `test_atomic_replace_no_temp_file_on_success`
-  (`src/utils/atomic.rs:645-659`) — no `*.tmp` files remain after a
+  (`src/utils/atomic.rs:650-664`) — no `*.tmp` files remain after a
   successful replace.
 - `test_atomic_replace_no_temp_file_on_failure`
-  (`src/utils/atomic.rs:661`) — no `*.tmp` files remain after a failed
+  (`src/utils/atomic.rs:666`) — no `*.tmp` files remain after a failed
   replace.
 - `tests/auto_sync_concurrency.rs:401-449` — no UUID-based `.tmp` files
   accumulate across a burst of mutations.
@@ -199,7 +199,7 @@ atomic-write tests:
 1. **`persist()` consumes the guard** — it cannot be called twice, and the
    caller no longer holds it afterwards (`src/utils/tempfile_guard.rs:17`).
 2. **`persist()` is called only after a successful `fs::rename`**
-   (`src/utils/atomic.rs:315`, `:409`), so the target file is never removed by
+   (`src/utils/atomic.rs:320`, `:409`), so the target file is never removed by
    the guard.
 3. **A failed write never leaves a temp file behind** — every error path
    between guard construction and the rename drops the guard armed

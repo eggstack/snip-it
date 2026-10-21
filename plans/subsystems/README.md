@@ -28,7 +28,7 @@ mcp-integration-roadmap.md
 ```markdown
 # <Subsystem> Roadmap
 
-Status: proposed | active | closing | closed | superseded
+Status: proposed | ready | active | blocked | closing | closed | conditionally closed | superseded | archived
 
 Long-term references:
 

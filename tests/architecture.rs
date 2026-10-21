@@ -192,11 +192,13 @@ fn snp_updater_does_not_shell_out_to_curl() {
     );
 }
 
-/// Plan 017: the `snp` updater pins `eggfetch-core =0.2.2` on the lean
-/// `standard-http1 + redirects` profile, delegates redirect traversal to
-/// `RedirectPolicy::strict` and the logical request/body deadline to native
-/// `Timeout.total`. The superseded Plan 014/015 machinery — the manual
-/// redirect loop and the duplicate outer Tokio timeout — must not return.
+/// Plan 017 adopted the lean `standard-http1 + redirects` profile on
+/// `eggfetch-core =0.2.0`; the Eggstack dependency-refresh M001 later moved
+/// the pin to `=0.2.2`. Either way the `snp` updater must stay on the lean
+/// profile, delegate redirect traversal to `RedirectPolicy::strict`, and
+/// delegate the logical request/body deadline to native `Timeout.total`.
+/// The superseded Plan 014/015 machinery — the manual redirect loop and the
+/// duplicate outer Tokio timeout — must not return.
 #[test]
 fn snp_updater_pins_lean_eggfetch_profile() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();

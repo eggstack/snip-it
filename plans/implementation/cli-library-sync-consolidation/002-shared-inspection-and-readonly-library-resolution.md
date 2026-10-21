@@ -5,6 +5,7 @@
 > Primary class: infrastructure. Dependencies: hard M001.
 > Status vocabulary mapping: pre-convention `Status: complete` means `closed` with closure record at `plans/closure/cli-library-sync-consolidation/002-status.md`.
 > Pre-convention archive pointer: `plans/archive/flat-009-shared-inspection-and-readonly-library-resolution.md`.
+> Path note: the body below names the pre-split monolith target `src/library.rs`. That file no longer exists; the same code now lives in `src/library/` (`model.rs`, `persistence.rs`, `manager.rs`, `mod.rs`). The body is kept as the original target.
 
 ---
 

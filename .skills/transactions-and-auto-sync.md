@@ -16,10 +16,14 @@ this before changing either.
 - Pending APIs receive `sync_state_dir`; transaction APIs receive `transaction_dir`.
 - `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` needs BOTH.
 - `transaction_dir` has a dedicated helper — `local_data::transaction_dir()`
-  (`src/local_data.rs:301-303`) — and that is the form most call sites use
-  (e.g. `src/commands/mod.rs:178-179`, `src/commands/restore_cmd.rs`). The state
-  dir comes from `auto_sync::notification::derive_state_dir()`. Prefer the
-  helpers over re-deriving the `.transaction` suffix by hand.
+  (`src/local_data.rs:398-400`) — which is `config::derive_sync_state_dir().join(".transaction")`.
+  `src/commands/mod.rs:210-211` uses that helper. **But not every call site does**:
+  `src/commands/restore_cmd.rs:1140-1141` derives the same two directories by
+  hand (`notification::derive_state_dir()` + `.join(".transaction")`). The two
+  are currently equivalent (`notification::derive_state_dir()` delegates to
+  `config::derive_sync_state_dir()`), but a new call site should prefer the
+  helper so they cannot drift. The canonical state dir lives in
+  `src/utils/config.rs:227`.
 
 ## Transaction State Machine
 

@@ -76,8 +76,8 @@ EggServe leaf runtime -> HTTP/1 health/metrics listener
 ```
 
 One concrete native health/metrics service using only `eggserve-server`
-0.2.1 plus `eggserve-primitives` 0.2.0. No direct Axum/Tower-HTTP/core
-dependencies.
+plus `eggserve-primitives` (exact versions pinned in `snip-sync/Cargo.toml`).
+No direct Axum/Tower-HTTP/core dependencies.
 
 ## 6. Dependency graph
 

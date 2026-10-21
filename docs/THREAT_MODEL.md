@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-07-22
 **Status:** Evergreen contract
-**Last reviewed:** 2026-07-22
+**Last reviewed:** 2026-10-21
 
 ---
 
@@ -49,7 +49,7 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Timestamps | Internal | Same as commands | Yes (encrypted) | Created/modified metadata |
 | Library/index configuration | Internal | `libraries.toml`, `libraries/*.toml` | Yes (encrypted) | Library registry and per-library structure |
 | Usage metadata | Internal | `usage.toml` | No | Use count, last-used (never synced) |
-| Sync credentials | Secret | OS keychain or `sync.toml` | No | Bearer token for gRPC auth |
+| Sync credentials | Secret | OS keychain (key itself); `sync.toml` holds only the `@keychain` marker | No | Bearer token for gRPC auth |
 | Credential revisions | Sensitive | `sync.toml` | No | Tracks key rotation state |
 | Encryption keys | Secret | OS keychain (preferred) | No | Derived via Argon2id |
 | Derived material | Secret | In-memory | No | Argon2id output, session-scoped |
@@ -87,13 +87,22 @@ Each boundary below represents a transition where data crosses from one trust do
 
 **Mitigations:** CRC32 integrity checks, opaque filenames for control state, documentation of editable vs. internal files.
 
-### Boundary 3: OS Keychain vs. Plaintext Fallback
+### Boundary 3: OS Keychain vs. Refused Plaintext Storage
 
-**Description:** API keys stored in the OS keychain versus plaintext fallback in `sync.toml`.
+**Description:** API keys are stored in the OS keychain. `sync.toml` holds only
+the `@keychain` marker, never the key itself. There is **no plaintext
+fallback**: if the keychain is unavailable, the save is refused rather than
+silently downgraded.
 
-**Properties:** Keychain provides OS-level access control. Plaintext fallback is readable by any process running as the same user.
+**Properties:** Keychain provides OS-level access control. Refusing the write
+means a credential is never persisted in a form any same-user process could
+read.
 
-**Mitigations:** Keychain-first strategy, `SNP_ALLOW_PLAINTEXT_API_KEY` environment gate for fallback, backup redaction strips API keys, zeroize on drop.
+**Mitigations:** Keychain-first strategy with a hard refusal on keychain
+failure (`src/config/sync_settings.rs`), backup redaction strips API keys,
+zeroize on drop. `SNP_ALLOW_PLAINTEXT_API_KEY` is a **test-only** seam
+compiled in under `#[cfg(feature = "test-support")]`; it has no effect in a
+production build.
 
 ### Boundary 4: Parent CLI to Detached Worker
 
@@ -224,7 +233,7 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | A process running under the same user account reads snippet files, lock files, status, credentials, or other local state. |
 | **Attack vector** | Malicious script, browser extension, or co-installed application running as the same user. |
-| **Mitigations** | File permissions: `0o600` for sensitive files, `0o700` for directories. Lock files use O_EXCL creation with nonce-based ownership to detect tampering. CRC32 integrity on `auto-sync-status.toml` detects corruption (not cryptographic authentication). API keys stored in OS keychain where available; plaintext fallback is explicitly gated. |
+| **Mitigations** | File permissions: `0o600` for sensitive files, `0o700` for directories. Lock files use O_EXCL creation with nonce-based ownership to detect tampering. CRC32 integrity on `auto-sync-status.toml` detects corruption (not cryptographic authentication). API keys are stored in the OS keychain; there is **no plaintext fallback** — a save is refused when the keychain is unavailable. |
 | **Residual risk** | **Medium.** A same-user process can read all local files regardless of `0o600` permissions. CRC32 and file permissions detect corruption and reduce accidental exposure but do not authenticate state against a fully compromised user account. See [Section 6: Same-User Attacker Limitations](#6-same-user-attacker-limitations). |
 | **User responsibility** | Treat your user account as a security boundary. Be cautious about installing untrusted software that runs under your account. |
 | **Tests / evidence** | Lock nonce tests in `src/auto_sync/lock.rs`, status integrity tests in `src/auto_sync/status.rs`. |
@@ -320,10 +329,10 @@ Each boundary below represents a transition where data crosses from one trust do
 |-------|--------|
 | **Description** | A crate dependency is compromised, introducing malicious code into the build or runtime. |
 | **Attack vector** | Malicious crate publication, typosquatting, maintainer account compromise. |
-| **Mitigations** | `cargo-deny` enages license and advisory checks. Locked builds via `Cargo.lock`. Workspace uses known, audited dependencies. Unknown registries are denied. |
+| **Mitigations** | `cargo-deny` enforces license and advisory checks via `deny.toml`. Locked builds via `Cargo.lock`. Workspace uses known, audited dependencies. Unknown registries are denied. |
 | **Residual risk** | Low. `cargo-deny` and lockfiles reduce but do not eliminate supply-chain risk. A compromised transitive dependency that passes `cargo-deny` checks could still introduce vulnerabilities. |
 | **User responsibility** | Review dependency changes when updating `Cargo.lock`. Monitor security advisories. |
-| **Tests / evidence** | CI pipeline runs `cargo-deny`. |
+| **Tests / evidence** | `cargo deny check` is a **local** supply-chain gate driven by `deny.toml` — it is **not** a CI step. CI (`.github/workflows/ci.yml`) runs `bash scripts/check.sh` and `cargo check --workspace --all-targets` + `cargo test --test platform_smoke`. |
 | **Owner / module** | `Cargo.toml`, `Cargo.lock`, CI configuration. |
 
 ### T14: Test Seam Activation in Production Binary
@@ -380,7 +389,7 @@ Users who require protection against local attackers should use full-disk encryp
 | T10: Oversized/Decompression Input | `import_cmd.rs`, `sync.rs`, `encryption.rs` | Size limit tests | Low |
 | T11: Compromised Package Distribution | `update.rs` | Managed-install detection tests | Low |
 | T12: Accidental Unsafe Execution | `run_cmd.rs`, `get_cmd.rs`, `clip_cmd.rs` | CLI integration tests | **Medium** |
-| T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo-deny` | Low |
+| T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo deny check` (local gate, `deny.toml` — not a CI step) | Low |
 | T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
 
 ---

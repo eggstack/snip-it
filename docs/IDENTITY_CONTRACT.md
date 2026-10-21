@@ -27,7 +27,7 @@
   occurrence indices from the same sequence regardless of branch. Inserting or
   reordering identical-content snippets can therefore shift the provisional IDs
   of *other* missing-ID snippets — accepted churn after a sync merge, not a bug.
-- **`Snippet::new()`** leaves `id` empty (`src/library/model.rs:220`); the ID is
+- **`Snippet::new()`** leaves `id` empty (`src/library/model.rs:231`); the ID is
   assigned at the next load.
 
 > Historical note: the load path was UUID v4 before the deterministic-ID change.
@@ -58,9 +58,9 @@
 
 1. **`load_library()`** — calls `normalize_snippet_ids()` to assign IDs for empty IDs and deduplicate duplicates (`src/library/persistence.rs:158`, `:36`). This is the primary assignment path for all newly created snippets.
 2. **`commands::import_cmd`** — regenerates the ID for imported snippets with `uuid::Uuid::new_v4()`, regardless of source ID (`src/commands/import_cmd.rs:145`). Existing non-empty IDs are discarded and recorded as normalizations. This is the only random-ID site left.
-3. **`doctor_cmd`** — reports planned ID regeneration for imported snippets with non-empty IDs (`src/commands/doctor_cmd.rs:264-268`). This is a diagnostic record, not an assignment path.
+3. **`doctor_cmd`** — reports planned ID regeneration for imported snippets with non-empty IDs (`src/commands/doctor_cmd.rs:292-300`). This is a diagnostic record, not an assignment path.
 
-Note: `Snippet::new()` creates a snippet with an empty `id` field. The UUID is assigned when the library is next loaded via `load_library()`.
+Note: `Snippet::new()` creates a snippet with an empty `id` field. The deterministic ID is assigned when the library is next loaded via `load_library()`.
 
 ## Library Identity
 

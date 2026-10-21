@@ -362,9 +362,9 @@ no second HTTP client, no Tokio test runtime, no external network.
   always passes `--locked` to `cargo install` anyway
   (`src/update.rs:641-650`, `snip-sync/src/update.rs:417-423`), so the effective
   behavior is "always locked".
-- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:132` uses an
-  exact version. The manifest currently says `=0.2.2`; the architecture test
-  still expects `=0.2.0` (see [Architecture Pins](#architecture-pins)).
+- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:142` uses an
+  exact version. The manifest currently says `=0.2.2`, and the architecture
+  test asserts the same pin (see [Architecture Pins](#architecture-pins)).
 - **The `curl` adapter has no explicit redirect-depth bound.** It relies on
   curl's own default (`--max-redirs` is not passed), while the client's
   eggfetch path is explicitly bounded to 10 hops

@@ -100,6 +100,9 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 - `tonic`, `keyring`, `arboard`, `ratatui`, `crossterm`
 - `std::process::Command` (process spawning)
 
+*Only the `crate::` path entries are scanner-enforced; the external-crate and
+`std` entries are convention — see the Verification Checklist.*
+
 ---
 
 ## Sync-Client Layer
@@ -125,6 +128,9 @@ Protocol client, encryption, sync orchestration. Depends on core but not on appl
 - `crate::clipboard`, `crate::ui`, `crate::logging`
 - `crate::commands`, `crate::auto_sync`
 - `ratatui`, `crossterm`, `arboard`
+
+*Only the `crate::` path entries are scanner-enforced; the external-crate
+entries are convention — see the Verification Checklist.*
 
 ---
 
@@ -190,14 +196,46 @@ resolved by moving `CryptoError` to core or using a generic error variant.
 
 ## Verification Checklist
 
-- [x] `library/` depends only on: `config` (TOML cache only), `error`, `utils::*`
-- [x] `sort.rs` depends only on: `usage`, `library` (data types only)
-- [x] `usage.rs` depends only on: `error`, `utils::*`
-- [x] `diagnostics.rs` has zero crate dependencies (pure data)
-- [x] `output.rs` has zero crate dependencies (pure data)
-- [x] `encryption.rs` has zero crate dependencies (pure crypto)
-- [ ] `config/` depends on `crate::clipboard` — accepted exception, see above
+### Enforced by `tests/architecture.rs`
+
+These are the assertions the scanner actually makes. The layer checks match
+**crate-root `crate::` path prefixes** on any non-comment line, so they catch
+a dependency, not a specific import form. External crates and `std` items are
+**not** matched.
+
+- [x] Core modules (`library/`, `sort.rs`, `output.rs`, `usage.rs`,
+  `diagnostics.rs`) do not reference `crate::commands`, `crate::ui`,
+  `crate::logging`, `crate::auto_sync`, `crate::clipboard`,
+  `crate::sync_commands`, or `crate::sync`
+- [x] Sync-client modules (`sync.rs`, `sync_commands.rs`, `encryption.rs`) do
+  not reference `crate::commands`, `crate::ui`, `crate::logging`,
+  `crate::auto_sync`, or `crate::clipboard`
+- [x] `clipboard`, `diagnostics`, `encryption`, `library`, `output`,
+  `status_snapshot`, `sync_commands`, and `utils` are `pub(crate)` (not `pub`)
+  in `src/lib.rs`
+- [x] `src/update.rs` does not shell out to `curl`
+- [x] `Cargo.toml` pins `eggfetch-core = "=0.2.2"` with the
+  `standard-http1` + `redirects` features
+- [x] `src/update.rs` retains no manual redirect loop and no outer Tokio
+  timeout
+
+### Manual / not test-enforced
+
+These hold today, but **no assertion in `tests/architecture.rs` checks them**.
+The scanner matches `crate::` path prefixes only — it does not inspect
+external crate usage, `std` items, or dependency *allowlists*. Keep them true
+by review.
+
+- [ ] `library/` depends only on: `config` (TOML cache only), `error`, `utils::*`
+- [ ] `sort.rs` depends only on: `usage`, `library` (data types only)
+- [ ] `usage.rs` depends only on: `error`, `utils::*`
+- [ ] `diagnostics.rs` has zero crate dependencies (pure data)
+- [ ] `output.rs` has zero crate dependencies (pure data)
+- [ ] `encryption.rs` has zero crate dependencies (pure crypto)
+- [ ] No core module uses `tonic`, `keyring`, `ratatui`, `crossterm`, `arboard`, or the `snip-proto` crate
+- [ ] No core module uses `std::process::Command`
+
+### Documented exceptions (facts about the code)
+
+- [x] `config/` depends on `crate::clipboard` — accepted exception, see above
 - [x] `error.rs` depends on `encryption::CryptoError` — accepted exception, see above
-- [x] No core module uses `tonic`, `keyring`, `ratatui`, `crossterm`, `arboard`
-- [x] No core module uses `std::process::Command`
-- [x] No core module uses `crate::ui`, `crate::logging`, `crate::commands`, `crate::auto_sync`, `crate::sync`

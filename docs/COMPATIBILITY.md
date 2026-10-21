@@ -83,16 +83,21 @@ command=$(snp select -f "deploy") && eval "$command"
 
 ### From `snp get` with implicit search to deterministic `get`
 
-Before (ambiguous):
+Before (ambiguous — a fuzzy match may hit several snippets):
 ```bash
-snp get "git"          # may match multiple snippets
+snp get --query "git"          # fuzzy; exits 5 (AMBIGUOUS) on multiple matches
 ```
 
 After (deterministic):
 ```bash
-snp get --id <uuid>    # exact match by ID
-snp get "git" --exact  # exact description match
+snp get --description-exact "git"   # exact description match
+snp get --id legacy-<64-hex>        # exact match by ID (see IDENTITY_CONTRACT.md)
 ```
+
+`snp get` takes no positional argument and has no `--exact` flag; the
+selectors are `--id`, `--description-exact`, `--command-exact`, and `--query`.
+Use `--resolution first` or `--resolution all` to opt out of the unique-match
+requirement.
 
 ### From `snp list` stdout parsing to `--json`
 

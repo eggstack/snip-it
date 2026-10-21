@@ -14,7 +14,7 @@ use serde::Serialize;
 /// Canonical Clap arguments for `snp get`.
 #[derive(Debug, Clone, clap::Args)]
 pub struct GetArgs {
-    /// Match by exact snippet UUID
+    /// Match by exact snippet ID
     #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "query"])]
     pub id: Option<String>,
     /// Match by exact description (case-insensitive)
@@ -82,7 +82,7 @@ pub struct GetJsonOutput {
 /// single-file checkout is read in place without migration or file creation.
 ///
 /// # Arguments
-/// * `id` - Match by exact snippet UUID
+/// * `id` - Match by exact snippet ID
 /// * `description_exact` - Match by exact description (case-insensitive)
 /// * `command_exact` - Match by exact command text (case-insensitive)
 /// * `query` - Fuzzy query match

@@ -78,6 +78,9 @@ snp list --json                                  # every snippet as JSON
 snp list --csv                                   # every snippet as CSV
 ```
 
+`snp get` exits 3 when nothing matches and 5 when a query matches more than
+one snippet; [docs/EXIT_CODES.md](docs/EXIT_CODES.md) is the full table.
+
 `snp --help` or `snp <command> --help` covers everything else.
 
 ## Commands
@@ -119,8 +122,11 @@ snp new 'kubectl get pods' -d 'Pods' --library work
 snp list --library work
 ```
 
-One library is searched at a time. `snp get --library all` searches every
-library; `snp list` is always a single library. Details:
+One library is used at a time by default. `--library all` crosses every
+library: `snp get --library all` searches across all of them, and
+`snp list --library all` concatenates them into a single listing. `all` is a
+reserved library name — `snp library create all` is rejected — so the keyword
+can never be ambiguous. Details:
 [docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md).
 
 ## Shell integration
@@ -180,6 +186,12 @@ snp register --server http://127.0.0.1:50051
 snp sync run --push-only
 ```
 
+`snip-sync` listens on two ports: gRPC on `50051` (what `snp register` and
+`snp sync` talk to) and an HTTP control surface on `50050` serving `/health`
+and `/metrics`. See
+[USER_GUIDE.md](USER_GUIDE.md#troubleshooting-and-recovery) for the health
+check.
+
 Auto-sync after local mutations is off by default: enable it with
 `snp sync config --auto-sync on`. Deployment, systemd, and reverse-proxy setup:
 [snip-sync/README.md](snip-sync/README.md).
@@ -197,8 +209,8 @@ snp mcp install claude         # noninteractive registration where supported
 ## Configuration
 
 Everything lives under `$XDG_CONFIG_HOME/snp`, or `~/.config/snp` when that is
-unset. A fresh install creates only `snippets.toml` (the default library) and
-`logs/`; the rest appear as you use the features.
+unset. A fresh install creates `snippets.toml` (the default library), `logs/`,
+and `.transaction/`; the rest appear as you use the features.
 
 | Path | Purpose |
 | --- | --- |
@@ -206,10 +218,15 @@ unset. A fresh install creates only `snippets.toml` (the default library) and
 | `libraries.toml` | Library metadata and sync links |
 | `libraries/*.toml` | Additional libraries |
 | `premade/*.toml` | Downloaded premade libraries |
-| `sync.toml` | Sync settings (the API key is stored in the OS keychain, never here) |
+| `sync.toml` | Sync settings (the key itself lives in the OS keychain; this file holds only the `@keychain` marker) |
 | `usage.toml` | Local usage counts and last-used timestamps |
 | `themes/*.toml`, `themes.toml` | Custom themes and the active selection |
 | `logs/` | Rotating application and audit logs |
+| `.transaction/` | Transaction journals and the local-data lock for crash-safe writes |
+| `auto-sync-pending.toml` | Pending auto-sync marker (latest mutation generation) |
+| `auto-sync-status.toml` | Result of the last auto-sync attempt and its retry schedule |
+| `auto-sync-execution.lock` | Kernel lock serializing every sync execution |
+| `auto-sync-worker.lock` | PID+nonce lock preventing concurrent auto-sync workers |
 
 ## Documentation
 

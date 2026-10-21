@@ -24,7 +24,7 @@ Primary class: capability. Dependencies: interface canonical selector contract (
 
 ## 1. Executive finding
 
-M001 is closed. The local stdio read-only MCP adapter (`snippets_search`, `snippet_get` with exactly-one-argument shape) plus explicit client registration shipped with CLI search parity and no mutations, execution, networking, or daemonization.
+M001 is closed. The local stdio read-only MCP adapter (`snippets_list`, `snippets_search`, `snippet_get` with exactly-one-argument shape) plus explicit client registration shipped with CLI search parity and no mutations, execution, networking, or daemonization.
 
 ## 2. Requirement-to-evidence matrix
 

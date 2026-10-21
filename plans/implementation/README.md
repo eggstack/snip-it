@@ -21,7 +21,7 @@ defines another stable identifier.
 ```markdown
 # <Subsystem> Milestone NNN — <Title>
 
-Status: ready for handoff | active | blocked | implemented | superseded
+Status: ready | active | blocked | closing | closed | conditionally closed | superseded | archived
 
 Repository baseline: `<commit SHA or branch state>`
 

@@ -6,8 +6,6 @@
 
 # Plan 000: distribution, fleet deployment, and MCP roadmap
 
-Status: complete
-
 ## Objective
 
 Make `snip-it` practical to deploy across a small heterogeneous fleet without requiring source compilation on the common targets, while keeping the project lightweight.

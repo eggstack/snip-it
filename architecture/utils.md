@@ -77,14 +77,14 @@ dependencies.
 
 | Module | Consumer layers (representative call sites) |
 |--------|----------------------------------------------|
-| `config` | library (`src/library/manager.rs:15`), commands (`src/commands/backup_cmd.rs:13`, `restore_cmd.rs:7`, `repair_cmd.rs:863`, `doctor_cmd.rs:491`, `validate_cmd.rs:540`), diagnostics (`src/status_snapshot.rs:146`), UI (`src/ui/theme.rs:20`), usage (`src/usage.rs:21`), logging (`src/logging.rs:73`) |
+| `config` | library (`src/library/manager.rs:15`), commands (`src/commands/backup_cmd.rs:13`, `restore_cmd.rs:7`, `repair_cmd.rs:863`, `doctor_cmd.rs:491`, `validate_cmd.rs:540`), diagnostics (`src/status_snapshot.rs:146`), UI (`src/ui/theme.rs:20`), usage (`src/usage.rs:21`), logging (`src/logging.rs:72`) |
 | `variables` | commands (`src/commands/get_cmd.rs:11`, `src/commands/mod.rs:276`, `src/commands/import_cmd.rs:219`, `src/commands/doctor_cmd.rs:312`), UI (`src/ui/mod.rs:36-38`, `src/ui/variables.rs`) |
 | `toml_helpers` | commands (`src/commands/mod.rs:37`, `src/commands/pet_analysis.rs:5`), library (`src/library/persistence.rs:10`, `src/library/manager.rs:16`), config (`src/config/sync_settings.rs:16`) |
 | `atomic` | library (`src/library/persistence.rs`, `src/library/manager.rs`), config (`src/config/sync_settings.rs`), commands (`src/commands/{mod,select_cmd,import_cmd,restore_cmd,backup_archive}.rs`), auto-sync (`src/auto_sync/{pending,status}.rs`), transactions (`src/transaction.rs`), sync merge (`src/sync_commands.rs`), migration (`src/migration.rs`), UI (`src/ui/theme.rs`), usage (`src/usage.rs`) |
 | `process` | locks only (`src/transaction.rs`, `src/local_data.rs`, `src/auto_sync/execution_lock.rs`) |
-| `redact` | logging (`src/logging.rs:300`), errors (`src/error.rs:190`), auto-sync status (`src/auto_sync/status.rs:27`) |
+| `redact` | logging (`src/logging.rs:314`), errors (`src/error.rs:190`), auto-sync status (`src/auto_sync/status.rs:27`) |
 | `shell_keywords` | UI only (`src/ui/highlight.rs:8`) |
-| `tempfile_guard` | `utils::atomic` only (`src/utils/atomic.rs:371`) |
+| `tempfile_guard` | `utils::atomic` only (`src/utils/atomic.rs:376`) |
 
 ## Module Summaries
 

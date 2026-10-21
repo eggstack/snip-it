@@ -209,12 +209,13 @@ Detect host, install the verified prebuilt binary when available, fall back
 to exact-version Cargo only when needed. Integrity failure is hard failure.
 `snip-sync update` intentionally retains external `curl` after the measured
 +34.23% lean-eggfetch trial; `snp update` uses in-process lean
-`eggfetch-core 0.2.0` with delegated strict redirects and native
-`Timeout.total`.
+`eggfetch-core` (exact version pinned in `Cargo.toml`) with delegated strict
+redirects and native `Timeout.total`.
 
 ### MCP integration
 
-A local stdio read-only adapter (`snippets_search`, `snippet_get`) launched
+A local stdio read-only adapter (`snippets_list`, `snippets_search`,
+`snippet_get`) launched
 on demand by the agent client, plus explicit client registration. No
 mutations, no command execution, no networked MCP, no long-running MCP
 service.

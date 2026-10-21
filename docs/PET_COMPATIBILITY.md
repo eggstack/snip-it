@@ -11,8 +11,10 @@ For each feature area:
 - **Feature**: What the feature is
 - **Pet behavior**: How pet handles it
 - **snp current behavior**: How snp handles it today
-- **Compatibility status**: Full / Partial / None / New
-- **Release target**: Which release addresses gaps (R1A-R5)
+- **Compatibility status**: Full / Partial / None / New / Implemented
+- **Release target**: Which planned release addressed a gap (R1A-R5). These are
+  historical planning labels; current planning status is tracked in
+  `plans/registry.md`.
 - **Notes**: Details
 
 ---
@@ -26,7 +28,7 @@ For each feature area:
 | `command` field | `Command` (PascalCase) or `command` (lowercase) | Reads both `Command`, `cmd`, and `command` via serde aliases. Serializes lowercase `command`. | Full | — | pet also supports `cmd` as alias; snp reads this. |
 | `tag` field | `Tag` (PascalCase), `Tags`, `tags`, `tag` (lowercase) | Reads all four variants via serde aliases. Serializes `tag = [...]`. | Full | — | Pet uses PascalCase `Tag`; snp accepts both. |
 | `output` field | `Output` (PascalCase) or `output` (lowercase) | Reads both via aliases. Serializes `output = ""`. | Full | — | Pet displays output as metadata; snp preserves it but does not display in TUI by default. |
-| `id` field | Not present in pet | `id` (UUID, auto-generated on load if empty). Reads `Id`, `ID` aliases. | New | — | snp-only. Pet files get IDs auto-assigned on first load. |
+| `id` field | Not present in pet | `id` (deterministic `legacy-<sha256 hex>`, assigned on load if empty). Reads `Id`, `ID` aliases. | New | — | snp-only. IDs are content-derived, not random — see `docs/IDENTITY_CONTRACT.md`, the contract of record. |
 | `created_at` / `updated_at` | Not present in pet | Auto-populated on creation. Preserved through round-trips. | New | — | snp-only timestamps (unix epoch seconds). |
 | `device_id` | Not present in pet | Used for sync conflict resolution. | New | — | snp-only. Empty string in non-synced snippets. |
 | `deleted` | Not present in pet | Tombstone flag for sync. Deleted snippets are filtered from TUI display but preserved for sync propagation. | New | — | snp-only. Pet has no concept of soft-delete. |
@@ -53,7 +55,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Named libraries | Not supported. Single-file only. | `~/.config/snp/libraries/*.toml` with `~/.config/snp/libraries.toml` tracking metadata. Primary library model. | New | — | snp-only feature. First library created is auto-marked primary. |
 | Library config | No equivalent | `libraries.toml` tracks filename, library_id, is_primary, last_sync, server_id per library. | New | — | snp-only. |
 | Cross-library search | No equivalent | TUI searches within a single library. `--library` flag selects which library. | New | — | No cross-library search in TUI yet. |
-| Migration path | N/A | `LibraryManager::migrate_from_single_file()` moves `snippets.toml` into `libraries/snippets.toml` and registers it as primary. | Planned | R3 | Automatic migration on first library-mode operation. |
+| Migration path | N/A | `LibraryManager::migrate_from_single_file()` moves `snippets.toml` into `libraries/snippets.toml` and registers it as primary. | Implemented | — | Shipped. `ensure_library_mode()` calls it on every library-mode entry point. Planning status is tracked in `plans/registry.md`. |
 
 ### Config paths summary
 
@@ -90,7 +92,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Multiline support | `pet new --multiline` | `snp new --multiline` (alias: `-m`). Reads from stdin terminated by two blank lines. | Full | — | Equivalent. Multiline input from stdin. |
 | Library target | Single file only | `--library` flag to target a specific library. Falls back to primary library or legacy path. | New | — | snp-only. |
 | Config override | N/A | `--config` flag for custom config path. | New | — | snp-only. |
-| Duplicate handling | Appends to single file | Appends to library file. IDs auto-generated, deduplicated on load. | Supported differently | — | snp assigns UUIDs; pet has no IDs. |
+| Duplicate handling | Appends to single file | Appends to library file. IDs auto-generated, deduplicated on load. | Supported differently | — | snp assigns deterministic IDs; pet has no IDs. |
 
 ### Release 2A: Command ingestion and history capture
 
@@ -180,7 +182,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Import | `pet import` (imports from various sources) | `snp import pet <path>` with `--library`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human|json`, `--report-file` options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. Duplicate detection and diagnostics. |
+| Import | `pet import` (imports from various sources) | `snp import pet <path>` with `--library`, `--merge`, `--replace`, `--dry-run`, `--strict`, `--report human\|json`, `--report-file` options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. Duplicate detection and diagnostics. |
 | Export | `pet export` (exports to various formats) | Not implemented. | Under consideration | — | Structured export may be added. Not on current roadmap. |
 
 ---
@@ -260,7 +262,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | --- | --- | --- | --- | --- | --- |
 | Direct file loading | N/A | Pet TOML files load directly in snp — same `[[snippets]]` table, same field names. | Full | — | No conversion needed for basic migration. |
 | Explicit import command | `pet import` | `snp import pet <path>` with diagnostics, dry-run, merge, replace, strict, and report options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. |
-| Diagnostic tool | Not built-in | `snp doctor --pet-file <path>` for read-only pet file analysis, `snp doctor --compatibility` for environment audit, `snp doctor --library <name>` for library file analysis, `snp doctor --check-shell <bash|zsh|fish>` for shell init syntax validation. | Full | R3C | Human and JSON reports. Uses shared diagnostic model (`CompatibilityDiagnostic`, `DoctorReport`, `SourceSpan`). |
+| Diagnostic tool | Not built-in | `snp doctor --pet-file <path>` for read-only pet file analysis, `snp doctor --compatibility` for environment audit, `snp doctor --library <name>` for library file analysis, `snp doctor --check-shell <bash\|zsh\|fish>` for shell init syntax validation. | Full | R3C | Human and JSON reports. Uses shared diagnostic model (`CompatibilityDiagnostic`, `DoctorReport`, `SourceSpan`). |
 | Migration strategy | N/A | 1. Run `snp doctor --pet-file <path>` to check compatibility before importing. 2. Run `snp doctor --compatibility` to verify the installed snp environment. 3. Run `snp doctor --check-shell zsh` to validate shell init output. 4. Copy `~/.config/pet/snippets.toml` to `~/.config/snp/libraries/pet-snippets.toml`, or use `snp import pet <path>` for explicit migration with report. | Full | R3B | Recommended workflow: doctor first, then import or manual copy. |
 | Metadata loss | N/A | Pet files lose no data on import. snp adds IDs, timestamps, and device_id automatically. | Full | — | Forward-compatible — pet ignores unknown fields. |
 | Round-trip editing | N/A | If both pet and snp edit the same file, snp-only metadata (IDs, timestamps, folders, favorites) may be lost when pet writes the file. | Documented | — | Documented caveat. Not recommended for concurrent editing. |
@@ -315,7 +317,7 @@ These features have no pet equivalent and represent snp's native capabilities:
 | R3C | Compatibility diagnostics | `snp doctor --pet-file <path>`, `--compatibility`, `--sync`, `--library <name>`, `--check-shell <shell>` — five modes sharing one diagnostic model with import, `SourceSpan` type for byte-offset location tracking |
 | R4A | Optional sorting | `--sort relevance/recent/last-used/most-used/description/command` |
 | R4B | Output & notes presentation | Expose `output` field in preview, editing, export |
-| R4C | External libraries (deferred) | Deferred — zero demand, sufficient import workflow, high implementation cost | Deferred |
+| R4C | External libraries (deferred) | Deferred — zero demand, sufficient import workflow, high implementation cost |
 | Auto-sync | `snp sync config --auto-sync on` with debounce (0–300s), failure handling (ignore/warn/error), PID+nonce worker lock, shared `SyncExecutionLock`, durable pending markers (schema v2 with CRC32), one detached helper running canonical sync directly | Shipped |
 
 ---

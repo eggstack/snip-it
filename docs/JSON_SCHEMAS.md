@@ -29,8 +29,10 @@
 10. **Optional-field caveat:** most optional fields serialize as explicit
     `null`, but some carry `#[serde(skip_serializing_if = "Option::is_none")]`
     and are **omitted** entirely — e.g. `CompatibilityDiagnostic.span`
-    (`src/diagnostics.rs`) and `StatusDiagnostic.remediation`. Do not assume a
-    key is always present; check the serde attribute on the struct.
+    (`src/diagnostics.rs`). `StatusDiagnostic.remediation`
+    (`src/status_snapshot.rs`) carries **no** such attribute, so it is
+    serialized as an explicit `null`. Do not assume a key is always present;
+    check the serde attribute on the struct.
 
 ---
 

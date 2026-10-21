@@ -5,6 +5,7 @@
 > Primary class: infrastructure. Dependencies: hard M001, M002.
 > Status vocabulary mapping: pre-convention `Status: complete` means `closed` with closure record at `plans/closure/cli-library-sync-consolidation/003-status.md`.
 > Pre-convention archive pointer: `plans/archive/flat-010-module-boundary-and-hotspot-decomposition.md`.
+> Path note: the body below names the pre-split monolith targets `src/library.rs` and `src/config.rs`. Those files no longer exist; the same code now lives in `src/library/` (`model.rs`, `persistence.rs`, `manager.rs`, `mod.rs`) and `src/config/` (`mod.rs`, `sync_settings.rs`, `toml_cache.rs`). The body is kept as the original decomposition target.
 
 ---
 

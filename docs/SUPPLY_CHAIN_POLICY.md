@@ -24,7 +24,8 @@
 
 `Cargo.lock` is committed to the repository. All release builds use `--locked` to ensure deterministic dependency resolution. The lockfile captures exact versions of all transitive dependencies across the workspace.
 
-The release profile in the root `Cargo.toml` enables LTO, single codegen unit, opt-level 3, and symbol stripping:
+The release profile in the root `Cargo.toml` enables LTO, single codegen unit,
+size-optimized codegen (`opt-level = "z"`), and symbol stripping:
 
 ```toml
 [profile.release]
@@ -39,7 +40,9 @@ panic = "abort"
 
 ## cargo-deny Configuration
 
-The project uses `cargo-deny` (configuration in `deny.toml` at the workspace root) to enforce dependency policies in CI.
+The project uses `cargo-deny` (configuration in `deny.toml` at the workspace root)
+as a **local supply-chain gate** — it is not a CI step. See
+[CI Verification Commands](#ci-verification-commands).
 
 ### Advisory Settings
 
@@ -131,16 +134,20 @@ This allows `cargo deny check licenses` to pass without adding LGPL to the globa
 
 ## Duplicate Dependency Policy
 
-Duplicate dependency versions are warned, not denied. The workspace currently has known duplications driven by transitive dependency constraints:
+Duplicate dependency versions are warned, not denied. The workspace has known
+duplications driven by transitive dependency constraints — for example `sha2`
+and `digest` split across the `sqlx` and `argon2` dependency paths, and
+`getrandom` appearing at more than one major version.
 
-| Crate | Versions | Cause |
-|-------|----------|-------|
-| `sha2` | 0.10.x + 0.11.x | snip-it uses 0.11; sqlx pulls 0.10 transitively |
-| `digest` | 0.10.x + 0.11.x | Same split as sha2 |
-| `thiserror` | 1.x + 2.x | snip-it/snip-sync use 2.x; some transitive deps use 1.x |
-| `signal-hook` | 0.3.x + 0.4.x | snip-it uses 0.4; signal-hook-mio transitively pulls 0.3 |
-| `getrandom` | 0.2.x + 0.4.x | Different major versions across dependency paths |
-| `hashbrown` | 0.15 + 0.16 + 0.17 | Three versions from different transitive paths |
+**Do not hand-maintain a version table here** — it re-stales on every lockfile
+bump. Regenerate the current picture from the workspace root with:
+
+```bash
+cargo tree -d          # or: cargo tree --duplicates
+```
+
+The command prints each duplicated crate with its versions and the dependency
+paths that pull each version in, for every workspace member.
 
 These duplications are acceptable as long as each version is individually sound and the total binary size impact is bounded. The `bans.multiple-versions = "warn"` setting ensures visibility without blocking CI.
 

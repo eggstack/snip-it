@@ -21,9 +21,11 @@ library — it is a standalone binary.  The public surface exists because:
 
 ### Documented surface decisions
 
-- Implementation-only modules (`auto_sync`, `commands`, `logging`, `process_file_lock`,
-  `selector`, `sync`, `ui`, `usage`) are now `#[doc(hidden)]`; protocol types
-  are consumed from the separate `snip-proto` crate.
+- Implementation-only modules (`auto_sync`, `commands`, `logging`, `mcp`,
+  `process_file_lock`, `selector`, `sync`, `transaction`, `ui`, `usage`) are
+  now `#[doc(hidden)]`; protocol types are consumed from the separate
+  `snip-proto` crate. (`transaction` is `pub(crate)` in a default build and
+  `#[doc(hidden)] pub` under the `test-support` feature.)
 - Root-level TUI types (`SnippetData`, `ProcessResult`,
   `SelectionOutcome`) are `#[doc(hidden)]`.
 - The crate root doc comment now lists the supported API explicitly.
@@ -50,6 +52,7 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub mod auto_sync` | **application-internal** | Auto-sync subsystem; binary + integration tests only |
 | `pub mod commands` | **application-internal** | CLI command implementations; no external consumer |
 | `pub mod logging` | **application-internal** | Logging infrastructure; not for external use |
+| `pub mod mcp` | **application-internal** | Read-only stdio MCP adapter; binary + integration tests only |
 | `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock |
 | `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
 | `pub mod sync` | **integration-test-only** | `SyncClient`; used by sync integration tests |
@@ -75,8 +78,9 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub(crate) mod output` | **pub(crate)** | Output field rendering; internal |
 | `pub(crate) mod status_snapshot` | **pub(crate)** | Status projection for `snp status` and doctor |
 | `pub(crate) mod sync_commands` | **pub(crate)** | Sync orchestration; internal |
+| `pub(crate) mod sync_failure` | **pub(crate)** | `FailureClass` — sync-client error classification consumed by auto-sync policy; internal |
 | `pub(crate) mod test_failpoints` | **pub(crate)** | Test-only failpoint hooks |
-| `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary; test-support only |
+| `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary; `pub(crate)` in a default build, `#[doc(hidden)] pub` under `test-support` |
 | `pub(crate) mod utils` | **pub(crate)** | Utility functions; internal |
 
 ---
@@ -193,7 +197,7 @@ to external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod clip_cmd` through `pub mod sync_cmd` (23 command modules) | **application-internal** | All CLI command modules |
+| `pub mod backup_archive` … `pub mod validate_cmd` (25 command modules) | **application-internal** | All CLI command modules |
 | `pub enum ExpandedCommand` | **application-internal** | Command expansion result |
 | `pub fn get_config_path()` | **application-internal** | Config path resolution |
 | `pub fn get_library_path()` | **application-internal** | Library path resolution |
@@ -395,7 +399,7 @@ the root `snip-it` library no longer exposes a generated-proto module.
 ### High priority (should narrow)
 
 1. **`pub mod commands`** → `pub(crate)` — No external consumer needs CLI
-   command implementations.  The 23 command modules and their helpers are purely
+   command implementations.  The 25 command modules and their helpers are purely
    binary-internal.
 
 2. **`pub mod auto_sync`** → `pub(crate)` — The entire auto-sync subsystem

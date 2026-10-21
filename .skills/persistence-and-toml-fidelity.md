@@ -13,7 +13,7 @@ not a crash. Read it before touching the save path.
 
 ## Rule 1: the save path does NOT post-process TOML
 
-`save_library()` (`src/library/persistence.rs:216`) writes the output of
+`save_library()` (`src/library/persistence.rs:217`) writes the output of
 `toml::to_string_pretty` **verbatim**. There is exactly one
 serialization-then-write site, and nothing may run between them.
 

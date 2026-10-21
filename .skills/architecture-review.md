@@ -71,7 +71,7 @@ surface. Check them on any change to local mutation or sync triggering.
 ### Security
 - **Path canonicalization**: Output paths and editor paths should be canonicalized before use
 - **TLS verification**: `src/sync.rs` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it
-- **Shell execution**: `src/commands/run_cmd.rs:111` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh`
+- **Shell execution**: `src/commands/run_cmd.rs:108-114` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh`
 - **Atomic file operations**: Use `fs::OpenOptions::create_new(true)` to prevent TOCTOU races
 
 ### Error Handling

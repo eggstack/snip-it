@@ -86,9 +86,9 @@ Root-level TUI glue types are also `#[doc(hidden)]`:
 
 | Type | Role |
 |---|---|
-| `SnippetData` (`src/lib.rs:86-94`) | Parallel vectors for TUI display |
-| `ProcessResult` (`src/lib.rs:99-114`) | Per-snippet loop control inside the selection callback |
-| `SelectionOutcome` (`src/lib.rs:129-140`) | Raw TUI selection result |
+| `SnippetData` (`src/lib.rs:104-111`) | Parallel vectors for TUI display |
+| `ProcessResult` (`src/lib.rs:117-131`) | Per-snippet loop control inside the selection callback |
+| `SelectionOutcome` (`src/lib.rs:147-158`) | Raw TUI selection result |
 
 **`#[doc(hidden)]` means:** the item is `pub` so the binary and integration
 tests can reach it, but it is **not** part of the supported external API and
