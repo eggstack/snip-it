@@ -2,6 +2,9 @@
 
 > **Evergreen policy.** Rules for maintaining backward compatibility across
 > releases. Enforced in part by `tests/cli_surface_compat.rs`.
+>
+> The CLI surface rules below restate — and must not diverge from —
+> [`.skills/cli-and-outcome-contract.md`](../.skills/cli-and-outcome-contract.md).
 
 ---
 
@@ -22,7 +25,8 @@
 When a flag, subcommand, or behavior is deprecated:
 
 1. The old behavior continues to work.
-2. A warning is emitted to stderr: `warning: --old-flag is deprecated, use --new-flag instead`.
+2. A warning is emitted to stderr, in the form
+   `warning: --old-flag is deprecated, use --new-flag instead`.
 3. The deprecation is documented in `CHANGELOG.md`.
 
 ### Phase 2: Removal
@@ -37,28 +41,34 @@ After at least one minor version:
 
 ## Exit Code Changes
 
-- Exit codes 0-10 are stable public contract (see `EXIT_CODES.md`).
+- Exit codes 0-10 are stable public contract (see [`EXIT_CODES.md`](EXIT_CODES.md)).
 - New exit codes are additive (non-breaking).
-- Changing the meaning of an existing exit code is a breaking change.
+- Changing the meaning of an existing exit code is a breaking change — reusing
+  a number for a new meaning is breaking even when the number is unchanged.
 - Internal auto-sync worker codes are not part of the public contract.
+- `CliOutcome::ExecutionFailed { child_code }` propagates the child's exit
+  code verbatim, so a process exit code is **not** confined to 0-10.
 
 ---
 
 ## Stream Changes (stdout/stderr)
 
 - Moving human-readable output from stdout to stderr is a **breaking change** for scripts parsing stdout.
-- When making stream changes:
-  1. Introduce a `--stdout` transitional flag to restore old behavior.
-  2. Deprecate `--stdout` after one minor version.
-  3. Document the migration in release notes.
+- Changing the stdout format of a default (non-machine) mode is a **soft
+  break**: it is acceptable, but `docs/COMMAND_CONTRACTS.md` and
+  `docs/USER_GUIDE.md` must be updated in the same change.
+- Machine modes (`--json`, `--csv`) are versioned contracts — see
+  [`JSON_SCHEMAS.md`](JSON_SCHEMAS.md).
+- When making a stream change, document the migration in the release notes.
 
 ---
 
 ## JSON Schema Changes
 
 - New optional fields are non-breaking (additive).
-- Removing a field or changing its type is a breaking change — increment `schema` version.
-- See `JSON_SCHEMAS.md` for schema versioning rules.
+- Removing a field or changing its type is a breaking change — increment the
+  schema version.
+- See [`JSON_SCHEMAS.md`](JSON_SCHEMAS.md) for schema versioning rules.
 
 ---
 
@@ -73,7 +83,8 @@ command=$(snp select -f "deploy") && eval "$command"
 
 - `snp select` outputs the command string to stdout on success.
 - Exit code 0 on success, 4 on cancellation.
-- `--raw` and `--expanded` flags control output format.
+- `--expanded` expands `<var>` placeholders before printing; `--raw` (the
+  default) prints the stored command. They are mutually exclusive.
 - `--output-file` writes to a file instead of stdout.
 - No TUI rendering on the output stream (TUI is on the terminal, output is on stdout).
 
@@ -97,7 +108,7 @@ snp get --id legacy-<64-hex>        # exact match by ID (see IDENTITY_CONTRACT.m
 `snp get` takes no positional argument and has no `--exact` flag; the
 selectors are `--id`, `--description-exact`, `--command-exact`, and `--query`.
 Use `--resolution first` or `--resolution all` to opt out of the unique-match
-requirement.
+requirement. `--resolution` takes `unique` (default), `first`, or `all`.
 
 ### From `snp list` stdout parsing to `--json`
 
@@ -142,8 +153,34 @@ snp list --json | jq '.[] | select(.description | contains("deploy"))'
 | `restore` | — | No alias |
 | `shell` | — | No alias |
 | `status` | — | No alias |
+| `update` | — | No alias |
+| `mcp` | — | No alias |
 
 Aliases are removed only with a major version bump and explicit deprecation notice.
+
+---
+
+## The `snp data` Mirror
+
+`snp data` is a **mirror group**, not an alias for a single command. It
+re-spells five top-level commands and dispatches to the same handlers, so the
+two spellings must stay behaviorally identical:
+
+| `snp data` subcommand | Top-level equivalent | `snp data` alias |
+|------------------------|----------------------|-------------------|
+| `validate` | `snp validate` | `v` |
+| `backup` | `snp backup` | `b` |
+| `restore` | `snp restore` | — |
+| `repair` | `snp repair` | — |
+| `status` | `snp status` | `s` |
+
+Note that `v` is the alias for `snp data validate` and is **unrelated** to the
+top-level `v` alias for `snp version`. The two live in different namespaces.
+
+Both spellings share one Clap schema per command (`ValidateArgs`,
+`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`), so a flag added to
+one is automatically added to the other. Equivalence is checked by
+`tests/cli_surface_compat.rs`.
 
 ---
 
@@ -159,3 +196,13 @@ Before merging a breaking change:
 - [ ] JSON schema version incremented (if applicable)
 - [ ] Shell integration patterns tested (`snp select` pipeline)
 - [ ] `--help` text updated to reflect changes
+
+---
+
+## Related
+
+- [`EXIT_CODES.md`](EXIT_CODES.md) — the exit-code table.
+- [`JSON_SCHEMAS.md`](JSON_SCHEMAS.md) — the JSON envelopes and their versioning rules.
+- [`COMMAND_CONTRACTS.md`](COMMAND_CONTRACTS.md) — per-command stdout/stderr and startup-recovery contracts.
+- [`.skills/cli-and-outcome-contract.md`](../.skills/cli-and-outcome-contract.md) — the authoritative CLI-surface rules.
+- `tests/cli_surface_compat.rs` — the `snp data` mirror and alias equivalence checks.

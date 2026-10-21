@@ -9,19 +9,26 @@
 
 ---
 
-## Two resolution paths (do not mix them)
+## Three resolution paths (do not mix them)
 
 | Path | Entry point | Understands `"all"`? | Used by |
 |------|-------------|----------------------|----------|
-| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-71`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP |
-| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:773`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`) |
-| Single-library path | `commands::get_library_path` (`src/commands/mod.rs`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
+| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-71`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP `snippet_get` |
+| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:784`) → `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:248-289`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`), MCP `snippets_list` / `snippets_search` |
+| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:91-115`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
 
-`"all"` is defined in exactly one place (`LibraryScope::from_filter_arg`), with
-`readonly_library_sources` consuming the same rule, and it is covered by unit
-tests in `src/selector.rs` and `src/library/manager.rs`. A command that wants
-cross-library support must route through one of those two; adding `"all"`
-handling to `get_library_path` would fork the rule.
+There are **two independent** definitions of the keyword, and they agree:
+
+- The selector path matches the literal `"all"` in
+  `LibraryScope::from_filter_arg` (`src/selector.rs:65-71`).
+- The read-only path matches the literal `"all"` on its own, in
+  `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:277-288`);
+  it does **not** consume `LibraryScope::from_filter_arg`.
+
+Both are unit-tested (`src/selector.rs:1064-1082`, `src/library/tests.rs:495`).
+A command that wants cross-library support must route through one of those
+two; adding `"all"` handling to `get_library_path` would fork the rule a third
+time.
 
 ---
 
@@ -47,7 +54,10 @@ snp new "echo hello" --library personal
 snp get --library work --query deploy
 ```
 
-The name is matched against library filenames (case-insensitive). If the library does not exist, the command exits with an error.
+The name is matched against library filenames **exactly** (case-sensitive):
+`get_library_by_filename` compares `meta.filename == name`
+(`src/library/manager.rs:222-227`). If the library does not exist, the command
+exits with an error.
 
 ### All Libraries (`--library all`)
 
@@ -64,12 +74,22 @@ rejects the scope with an explicit error naming the supported alternatives.
 There is no `--all-libraries` flag anywhere in the CLI.
 
 `all` is a reserved library name. `validate_library_name`
-(`src/library/model.rs`) rejects `snp library create all`, so the keyword can
-never be ambiguous between "the library named all" and "every library".
+(`src/library/model.rs:218-223`) rejects `snp library create all`, so the
+keyword can never be ambiguous between "the library named all" and "every
+library". The check is on the exact lowercase string `all`.
 
 ### Library ID (sync-linked libraries)
 
-For sync-linked libraries, the **library ID** is the filename stem (e.g., `my-work` from `~/.config/snp/libraries/my-work.toml`). The ID is stable and used in sync status, pending state, and server-side operations.
+A library has **two** identifiers, and they are not interchangeable:
+
+- The **filename stem** (`my-work` from `~/.config/snp/libraries/my-work.toml`)
+  is the local name. It is what `--library` matches and what `snp library list`
+  prints.
+- The **library ID** (`LibraryMeta.library_id`, `src/library/model.rs:80-90`)
+  is the **server-side** library ID. It is assigned when the library is linked
+  to a sync server and is **empty** until then. It is the value reported as
+  `library_id` in `snp get --json` and used in sync status and server-side
+  operations.
 
 ---
 
@@ -78,32 +98,51 @@ For sync-linked libraries, the **library ID** is the filename stem (e.g., `my-wo
 | Scenario | Behavior |
 |----------|----------|
 | No `--library` flag | Use primary library |
-| `--library <name>` | Match by filename (case-insensitive), error if not found |
+| `--library <name>` | Match by filename exactly (case-sensitive), error if not found |
 | `--library all` (selector or read-only path) | Union of all visible libraries |
-| `--library all` (single-library path) | Error: unsupported for this command |
-| Primary library not set | Error with guidance to run `snp library create` or `snp library set-primary` |
+| `--library all` (single-library path) | Error: `library_not_found` — the keyword is reserved, so this reads as "does not exist" |
+| Primary library not set | Error `No primary library` with the guidance `Create a library with 'snp library create <name>'` (`src/selector.rs:633-638`) |
 
 ---
 
 ## Cross-Library Ambiguity
 
-When `--library all` is used with a selector-based command:
+When `--library all` is used with a selector-based command, every match from
+every visible library is collected and then sorted deterministically by
+**library name → description → snippet ID** (`selector::finish_aggregate`,
+`src/selector.rs:536-571`). The `--resolution` policy then decides what
+happens:
 
-- **Description match**: If multiple libraries contain snippets with the same description, the first match (by library sort order) is returned.
-- **Command match**: If multiple libraries contain snippets with the exact same command, the first match is returned.
-- **`get` with `--id`**: IDs are globally unique — no ambiguity.
+- **`unique` (default)**: more than one match is **ambiguous**, not "the first
+  one wins". `snp get` exits 5 (`AMBIGUOUS`) and prints the candidate
+  identities.
+- **`first`**: the first match in that sorted order is returned.
+- **`all`**: every match is returned.
+
+Applies to every selector, not just description:
+
+- **Description match**: two libraries with the same description → ambiguous
+  under the default policy.
+- **Command match**: two libraries with the same exact command → ambiguous
+  under the default policy.
+- **`get` with `--id`**: snippet IDs are deterministic content hashes
+  (`docs/IDENTITY_CONTRACT.md`), so the *same content* stored in two libraries
+  yields the *same* ID — that is an ambiguous match, not a unique one. An ID
+  is unique only within the resolved scope.
 
 ---
 
 ## Machine-Output Library Identity
 
 - `snp get --json` always includes `library` and `library_id`
-  (`GetJsonOutput`, `src/commands/get_cmd.rs:69-78`), including when the scope
-  came from the match itself.
+  (`GetJsonOutput`, `src/commands/get_cmd.rs:68-78`), including when the scope
+  came from the match itself. `library` is the filename stem; `library_id` is
+  the server-side library ID and is empty for a library that is not
+  sync-linked.
 - `snp list --json` emits exactly `description`, `command`, `output`, `tags`,
-  `folders`, `favorite` — **no `library` field** (`src/commands/list_cmd.rs:150-157`).
+  `folders`, `favorite` — **no `library` field** (`src/commands/list_cmd.rs:155-162`).
 - `snp list --csv` uses the same six columns; there is **no `library` column**
-  (`src/commands/list_cmd.rs:171`).
+  (`src/commands/list_cmd.rs:176`).
 
 Because `list` never reports a source library, it has no library identity in its
 output even when `--library all` concatenates several libraries.
@@ -113,25 +152,44 @@ output even when `--library all` concatenates several libraries.
 ## Flag Interaction
 
 - `snp list` warns and ignores `--library` when `--config` is set, because
-  `--config` names an explicit file path (`src/commands/list_cmd.rs:58-59`).
+  `--config` names an explicit file path (`src/commands/list_cmd.rs:59-61`).
 - `--library` help text advertises `"all"` only where the selector or read-only
-  path backs the command (`snp get`, `snp list`). Do not copy that wording onto a
-  single-library command.
+  path backs the command (`snp get`, `snp list`). `snp search` names `all` only
+  to say it is rejected. Do not copy that wording onto a single-library
+  command.
 
 ---
 
 ## Case and Canonicalization
 
-- Library names are matched **case-insensitively** for user-facing flags.
-- Library filenames are stored in lowercase with hyphens (canonical form).
-- Canonicalization is stable across platforms (no case-folding differences between macOS, Linux, Windows).
-- The `library_id` used in sync status and server operations is the filename stem (lowercase, hyphenated).
+- Library names are matched **exactly** (case-sensitive) against the stored
+  filename, on every path — selector, read-only, and single-library alike.
+  `--library Work` does not match a library stored as `work`.
+- `LibraryManager::create_library` stores the name **as given**; it does not
+  lowercase it or convert spaces to hyphens. Duplicate detection at creation
+  time is case-insensitive, so `Work` and `work` cannot both exist
+  (`src/library/manager.rs:391-401`).
+- Name **creation** is validated, not normalized: `validate_library_name`
+  rejects empty names, names over 50 characters, path separators, a `.toml`
+  suffix, and the reserved `all`
+  (`src/library/model.rs:179-225`).
+- The `library_id` used in sync status and server operations is the
+  **server-side** library ID, not the filename stem; it is empty until the
+  library is linked to a sync server.
 
 ---
 
 ## Primary Library Default
 
-- When no primary library is set, commands that require a library exit with guidance.
+- When no primary library is set, commands that require a library exit with guidance (`Create a library with 'snp library create <name>'`).
 - `snp library set-primary <name>` sets the primary.
 - `snp library list` shows which library is marked primary.
 - The primary library persists in `~/.config/snp/libraries.toml`.
+
+---
+
+## Related
+
+- [architecture/selector.md](../architecture/selector.md) — the scope model and the `searchable_text` contract.
+- [architecture/library.md](../architecture/library.md) — library layout, migration, and the read-only source resolver.
+- [MCP.md](MCP.md) — the MCP tool surface over the same resolvers.

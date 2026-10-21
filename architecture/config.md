@@ -267,8 +267,11 @@ pub enum SyncDirection { Push, Pull, Bidirectional }
 pub enum AutoSyncFailureMode { Ignore, Warn, Error }
 ```
 
-Failure behavior for post-mutation auto-sync. `Error` returns a nonzero exit
-**after** the local mutation commits — it never implies rollback.
+Log level for post-mutation auto-sync scheduling failures. The mode selects the
+`tracing` level only (`Ignore`: debug, `Warn`: warn, `Error`: error —
+`src/auto_sync/notification.rs:242-254`). It never implies rollback, never
+changes the exit code, and never suppresses the `warning:` that
+`report_notification_result` prints on stderr.
 `Display`/`FromStr` use lowercase `ignore`/`warn`/`error`, and the TOML value
 is snake_case (`#[serde(rename_all = "snake_case")]`,
 `src/config/sync_settings.rs:47`).
@@ -352,7 +355,9 @@ and gain one on the next save.
 - First load migrates an existing plaintext key into the keychain
   (`migrate_plaintext_api_key`, `:353-391`), keeping the in-memory value so
   the current operation still authenticates. Keep `keyring = "4"` default
-  features or persistence silently falls back to the mock store.
+  features. keyring 4's `default` is `v1`, which hard-enables the three
+  platform stores; `keyring::Entry` is gated on `v1`, so `default-features =
+  false` is a compile error, not a silent downgrade. There is no mock store.
 
 ### The Two Test-Only Credential Seams
 
@@ -501,8 +506,10 @@ Test-only vars are inert in production builds (proven by `scripts/ci/test-produc
   build.
 - **`SNP_ALLOW_PLAINTEXT_API_KEY=true` must not resurrect the `@keychain`
   marker as a credential** — the load fails fast instead.
-- **Keep `keyring = "4"` with default features** or persistence silently
-  falls back to the mock store.
+- **Keep `keyring = "4"` with default features.** `default` is `v1`, which
+  hard-enables the three platform stores; `keyring::Entry` is gated on `v1`, so
+  `default-features = false` is a compile error, not a silent downgrade. There
+  is no mock store.
 - **`ScopedConfigDir` is `#[cfg(any(test, feature = "test-support"))]` and
   thread-local.** It does not exist in production, and it does not propagate to
   threads the test spawns.

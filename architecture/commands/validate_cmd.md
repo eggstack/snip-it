@@ -185,7 +185,7 @@ Exit outcome (`validate_cmd.rs:731-736`):
 | Condition | Outcome | Exit code |
 |---|---|---|
 | No `Severity::Error` diagnostics | `CliOutcome::Success` | `0` |
-| At least one `Severity::Error` diagnostic | `CliOutcome::ValidationFailed` | `6` (`VALIDATION_FAILED`, `src/outcome.rs:60`) |
+| At least one `Severity::Error` diagnostic | `CliOutcome::ValidationFailed` | `6` (`VALIDATION_FAILED`, `src/outcome.rs:62`) |
 
 Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` into exit `6`.
 

@@ -51,7 +51,15 @@ as a **local supply-chain gate** — it is not a CI step. See
 ignore = []
 ```
 
-The advisory ignore list is empty. All known security advisories for dependencies are addressed by upgrading to patched versions. If a future advisory cannot be immediately resolved (e.g., transitive dependency lag), it must be documented with a rationale, owner, and review date (see [Advisory Exception Format](#advisory-exception-format)).
+The advisory ignore list is empty — no advisory is suppressed, so any advisory that
+`cargo deny check advisories` reports is a hard failure of the local gate. **The
+gate does not currently pass**: `cargo deny check` reports open advisories against
+`rustls`, `rustls-webpki`, `webpki-roots`, and the unmaintained `zbus_names`,
+`zvariant`, and `zvariant_derive` crates. See
+[Known Gaps](#cargo-deny-check-currently-fails). If a future advisory cannot be
+immediately resolved (e.g., transitive dependency lag), it must be documented with
+a rationale, owner, and review date (see
+[Advisory Exception Format](#advisory-exception-format)).
 
 ### License Settings
 
@@ -111,9 +119,18 @@ The following licenses are approved for use in the snip-it workspace:
 | Zlib License | `Zlib` | Compression-related crates |
 | 0BSD | `0BSD` | Zero-clause BSD; minimal restrictions |
 | Mozilla Public License 2.0 | `MPL-2.0` | File-level copyleft; compatible with MIT |
-| Boost Software License 1.0 | `BSL-1.0` | Permissive; Boost ecosystem crates |
+| Boost Software License 1.0 | `BSL-1.0` | Permissive; Rust's Boost Software License, used by `clipboard-win` and `error-code` |
 
-Licenses not on this list will cause `cargo deny check licenses` to fail unless explicitly added to the allow list.
+Licenses not on this list will cause `cargo deny check licenses` to fail unless
+explicitly added to the allow list. The list is a policy ceiling, not a snapshot
+of the resolved graph: `BSD-2-Clause` is currently allowed but not reached by any
+crate in the resolved graph, and `cargo deny` reports it as an unmatched
+allowance.
+
+The allow list also does not cover every license present in `Cargo.lock`:
+`webpki-roots` (pulled in by `eggfetch-core`) is `CDLA-Permissive-2.0`, which is
+not on the list and therefore fails the license check. See
+[Known Gaps](#cargo-deny-check-currently-fails).
 
 ---
 
@@ -128,16 +145,20 @@ expression = "MIT OR Apache-2.0"
 license-files = []
 ```
 
-This allows `cargo deny check licenses` to pass without adding LGPL to the global allow list. The clarification applies only to the MIT/Apache-2.0 dual-license portion of `r-efi`.
+This keeps `r-efi` acceptable to `cargo deny check licenses` without adding LGPL
+to the global allow list. The clarification applies only to the
+MIT/Apache-2.0 dual-license portion of `r-efi`.
 
 ---
 
 ## Duplicate Dependency Policy
 
 Duplicate dependency versions are warned, not denied. The workspace has known
-duplications driven by transitive dependency constraints — for example `sha2`
-and `digest` split across the `sqlx` and `argon2` dependency paths, and
-`getrandom` appearing at more than one major version.
+duplications driven by transitive dependency constraints — for example `sha2` and
+`digest` are split between the workspace's own `sha2 0.11` / `argon2` (via
+`blake2`, `digest 0.11`) path and the `sqlx-core` / `secret-service` path
+(`sha2 0.10`, `digest 0.10`), and `getrandom` appears at more than one major
+version.
 
 **Do not hand-maintain a version table here** — it re-stales on every lockfile
 bump. Regenerate the current picture from the workspace root with:
@@ -183,7 +204,7 @@ The following direct dependencies are critical to the project's security and fun
 
 | Crate | Version | Purpose | Security Relevance |
 |-------|---------|---------|-------------------|
-| `aes-gcm` | 0.11 | AES-256-GCM authenticated encryption | Encrypts snippet payloads at rest and in transit |
+| `aes-gcm` | 0.11 | AES-256-GCM authenticated encryption | Encrypts snippet content in the sync payload (ciphertext at rest on the server; TLS on the wire). Local snippet TOML files are **not** encrypted at rest |
 | `argon2` | 0.6 | Argon2id key derivation | Derives encryption keys from API keys |
 | `keyring` | 4 | OS keychain integration | Stores API keys securely in platform keychain |
 | `zeroize` | 1 | Zeroing memory for secrets | Ensures sensitive buffers are wiped after use |
@@ -235,6 +256,27 @@ Exceptions without all four fields are not accepted.
 ---
 
 ## Known Gaps
+
+### `cargo deny check` Currently Fails
+
+The local supply-chain gate does not currently pass. As of the last review,
+`cargo deny check` reports:
+
+- **Advisories (9 open):** `rustls 0.23.43`
+  (RUSTSEC-2026-0285, RUSTSEC-2026-0346, RUSTSEC-2026-0348, RUSTSEC-2026-0349),
+  `rustls-webpki 0.103.14` (RUSTSEC-2026-0382), `webpki-roots 1.0.9`
+  (RUSTSEC-2026-0381), and the unmaintained crates `zbus_names`
+  (RUSTSEC-2026-0371), `zvariant` (RUSTSEC-2026-0370), and `zvariant_derive`
+  (RUSTSEC-2026-0372).
+- **Licenses:** `webpki-roots` is `CDLA-Permissive-2.0`, which is not on the
+  license allow list (it reaches the workspace through `eggfetch-core`).
+
+`bans` and `sources` pass. Because `cargo deny` is a local gate and not a CI
+step, this failure does not block a merge — it is a standing gap, not a
+regression detector. Resolve it by upgrading the affected crates, by extending
+the license allow list with a documented rationale, or by adding an explicit
+advisory exception with an owner and review date (see
+[Advisory Exception Format](#advisory-exception-format)).
 
 ### No SBOM Generation
 

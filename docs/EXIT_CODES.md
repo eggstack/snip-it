@@ -15,7 +15,7 @@
 | 3 | `NOT_FOUND` | Not found | Snippet or resource does not exist |
 | 4 | `CANCELLED` | Cancelled | User cancelled an interactive action |
 | 5 | `AMBIGUOUS` | Ambiguous | Multiple matches found, unique match expected |
-| 6 | `VALIDATION_FAILED` | Validation failure | Data validation or local persistence failure |
+| 6 | `VALIDATION_FAILED` | Validation failure | Data validation failure |
 | 7 | `SYNC_FAILED` | Sync failure | Synchronization with remote server failed |
 | 8 | `EXECUTION_FAILED` | Execution failure | Snippet execution (child process) failed wrapper |
 | 9 | `CONFLICT_OR_REFUSED` | Conflict/refused | Destructive action refused or generation changed |
@@ -23,9 +23,10 @@
 
 ## `CliOutcome` Enum
 
-The `CliOutcome` enum (`src/outcome.rs`) is the canonical mapping type. Each variant maps to exactly one stable exit code.
+The `CliOutcome` enum (`src/outcome.rs:18-42`) is the canonical mapping type. Every variant maps to one stable exit code, with two deliberate exceptions: `PersistenceFailed` shares code 1 with `GENERAL_ERROR`, and `ExecutionFailed { child_code: Some(n) }` propagates the child's code verbatim instead of a fixed code.
 
 ```rust
+#[non_exhaustive]
 pub enum CliOutcome {
     Success,          // → 0
     NotFound,         // → 3
@@ -39,6 +40,8 @@ pub enum CliOutcome {
 }
 ```
 
+`#[non_exhaustive]` means downstream crates cannot match the enum exhaustively, so a new variant is not a breaking change for them.
+
 ### Variant-to-Code Mapping
 
 | `CliOutcome` variant | Exit code | Notes |
@@ -46,7 +49,7 @@ pub enum CliOutcome {
 | `Success` | 0 | |
 | `NotFound` | 3 | |
 | `Ambiguous` | 5 | |
-| `Cancelled` | 4 | `select` maps `CliOutcome::Cancelled` to exit 4 in `main.rs` |
+| `Cancelled` | 4 | `select` returns `CliOutcome::Cancelled` (`src/commands/select_cmd.rs:102`); `main.rs` turns it into exit 4 via `outcome.exit_code()` |
 | `ValidationFailed` | 6 | |
 | `PersistenceFailed` | 1 | Shares code with `GENERAL_ERROR` |
 | `SyncFailed` | 7 | **Reserved.** No command constructs this variant today — `main.rs` maps every command `Err` to `GENERAL_ERROR` (1). The code remains part of the stable contract. |
@@ -57,11 +60,12 @@ pub enum CliOutcome {
 ## Internal Worker/Executor Codes
 
 The detached auto-sync worker's exit status is internal and is not part of the
-public CLI contract. A failed helper exits nonzero; successful and no-work
-outcomes exit zero.
+public CLI contract. `snp auto-sync-worker` exits 1 (`GENERAL_ERROR`) when the
+helper cycle fails, and exits 0 for successful and no-work outcomes
+(`src/main.rs:858-867`).
 
-Sync failure classification is recorded in `auto-sync-status.toml` by the helper;
-there is no executor exit-code translation layer.
+Sync failure classification is recorded in `auto-sync-status.toml` by the helper
+(`src/auto_sync/status.rs:17`); there is no executor exit-code translation layer.
 
 ## Execution Failure Exit Code
 
@@ -76,7 +80,7 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ### Unified execution helper
 
-`spawn_and_wait_execution(shell, command, timeout, stdout_file)` in `src/commands/run_cmd.rs` is the unified execution helper used by both the output-file and ordinary execution branches. It returns `ProcessResult::Failed { exit_code: None }` for spawn failures, timeouts, and signal kills, which maps to exit code 8. This eliminates the previous inconsistency where the output-file branch could return `SnipError` through `?` and reach exit code 1.
+`spawn_and_wait_execution(shell, command, timeout, stdout_file)` in `src/commands/run_cmd.rs:123` is the unified execution helper used by both the output-file and ordinary execution branches. It returns `ProcessResult::Failed { exit_code: None }` for spawn failures, timeouts, and signal kills, which maps to exit code 8. This eliminates the previous inconsistency where the output-file branch could return `SnipError` through `?` and reach exit code 1.
 
 ## Child Exit Code Propagation
 
@@ -92,10 +96,10 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ## Exit-Code Mapping in `main.rs`
 
-The central exit-code mapper in `src/main.rs` handles two paths:
+The central exit-code mapper in `src/main.rs:1018-1033` handles two paths:
 
 1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1.
-2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (no `CliOutcome` variant). `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
+2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (`src/main.rs:375-388`) — there is **no** `CliOutcome` variant for exit 10, so it cannot be produced by the mapper above. `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
 
    `FindingsSafe` means the report-only invocation (no `--apply`, no
    `--dry-run`) found only `[auto]`-repairable issues. Those are *not* unsafe
@@ -115,12 +119,19 @@ match dispatch_command(cli.command) {
 }
 ```
 
+The real mapper interleaves `log_shutdown_info()` calls guarded by
+`behavior.services != StartupServices::Minimal`; they do not affect the exit
+code.
+
 ## Backward Compatibility
 
 - Exit codes 0 and 1 remain unchanged from pre-08A behavior.
 - Exit codes 2-9 are additive — scripts checking `exit != 0` continue to work.
-- `PersistenceFailed` maps to 1 (not a dedicated code) to avoid breaking existing scripts.
+- `PersistenceFailed` maps to 1 (not a dedicated code) to avoid breaking existing scripts. **Code 6 is validation only** — a persistence failure is exit 1, not 6.
 - `ExecutionFailed` propagates the child's exit code when available, preserving backward compatibility for scripts checking the child's exit code directly.
+- Exit code 7 (`SYNC_FAILED`) is **reserved but currently unreachable**: no command constructs `CliOutcome::SyncFailed`, and every sync failure surfaces as exit 1.
+- Exit code 10 (`UNSAFE_REPAIRS`) has **no `CliOutcome` variant**; it is produced only by `snp repair` through `exit_on_repair_status`.
+- The process exit code is **not** confined to 0–10: `snp run` propagates the executed child's exit code verbatim.
 
 ## Shell Integration Example
 

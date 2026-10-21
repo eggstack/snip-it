@@ -61,14 +61,23 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub struct SnippetData` | **application-internal** | Parallel vectors for TUI display; internal glue |
 | `pub enum ProcessResult` | **application-internal** | Per-snippet TUI loop control; internal glue |
 | `pub enum SelectionOutcome` | **application-internal** | Raw TUI selection result; internal glue |
+| `pub use utils::config::ScopedConfigDir` | **application-internal** | Thread-local config-dir override; compiled only under `cfg(any(test, feature = "test-support"))` |
 
-### Crate-internal (pub(crate))
+### Public modules (`pub mod`)
+
+These three are plain `pub mod` declarations in `src/lib.rs` — they are part of
+the external surface, unlike the `pub(crate)` modules below.
 
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub mod config` | **provisional-public** | `SyncSettings`, `SyncDirection`, constants; could be useful for library consumers |
 | `pub mod outcome` | **provisional-public** | `CliOutcome` enum and exit code mapping; useful for exit-code-aware consumers |
 | `pub mod sort` | **stable-public** | `SnippetSort`, `SortOptions`, `rank_snippets`; used by CLI args and tests |
+
+### Crate-internal (pub(crate))
+
+| Item | Classification | Notes |
+|------|---------------|-------|
 | `pub(crate) mod clipboard` | **pub(crate)** | Clipboard integration; internal |
 | `pub(crate) mod diagnostics` | **pub(crate)** | Import/doctor report types; internal |
 | `pub(crate) mod encryption` | **pub(crate)** | AES-256-GCM encryption; internal |
@@ -82,6 +91,21 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub(crate) mod test_failpoints` | **pub(crate)** | Test-only failpoint hooks |
 | `#[cfg(feature = "test-support")] pub mod transaction` | **application-internal** | Transaction boundary; `pub(crate)` in a default build, `#[doc(hidden)] pub` under `test-support` |
 | `pub(crate) mod utils` | **pub(crate)** | Utility functions; internal |
+
+### Smoke-test coverage
+
+`tests/public_api_smoke.rs` pins the externally visible subset. It imports
+exactly:
+
+| Import path | Pinned items |
+|-------------|--------------|
+| `snip_it::config` | `AUTO_SYNC_DEBOUNCE_MAX`, `AutoSyncFailureMode`, `DEFAULT_SERVER_URL`, `SyncDirection`, `SyncSettings` |
+| `snip_it::error` | `SnipError`, `SyncFailureKind` |
+| `snip_it::outcome` | `CliOutcome`, `OutputContext`, `exit_code` |
+| `snip_it::sort` | `SnippetSort`, `SortOptions`, `rank_snippets` |
+| `snip_it` (root) | `AtomicWriteOptions`, `Durability`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `load_library` |
+
+Anything not listed above is public but unpinned by that test.
 
 ---
 
@@ -113,11 +137,31 @@ library — it is a standalone binary.  The public surface exists because:
 
 ---
 
+## `outcome` module (`src/outcome.rs`)
+
+*Plain `pub mod` — part of the external surface.*
+
+| Item | Classification | Notes |
+|------|---------------|-------|
+| `pub enum CliOutcome` | **stable-public** | `#[non_exhaustive]` outcome enum with 9 variants |
+| `pub mod exit_code` | **stable-public** | 11 stable exit-code constants (`SUCCESS` … `UNSAFE_REPAIRS`) |
+| `CliOutcome::exit_code()` | **stable-public** | Maps an outcome to its process exit code |
+| `pub enum ColorPolicy` | **provisional-public** | `Auto` (default), `Always`, `Never` |
+| `pub enum OutputMode` | **provisional-public** | `Human` (default), `Json`, `Csv`, `Raw`, `Field`, `Expanded` |
+| `pub struct OutputContext` | **provisional-public** | Machine-output purity guard |
+| `OutputContext::human()` / `json()` / `csv()` / `raw()` / `field()` | **provisional-public** | Constructors |
+| `OutputContext::is_machine_mode()` / `suppress_ansi()` | **provisional-public** | Mode predicates |
+| `OutputContext::write_stdout()` / `writeln()` / `diagnostic()` | **provisional-public** | stdout/stderr writers |
+| `OutputContext::strip_ansi_if_needed()` | **provisional-public** | ANSI stripping utility |
+
+---
+
 ## `config` module (`src/config/`)
 
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub use crate::utils::config::get_sync_config_path` | **provisional-public** | Re-export from utils |
+| `pub use crate::utils::config::derive_sync_state_dir` | **provisional-public** | Re-export from utils |
 | `pub const DEFAULT_SERVER_URL` | **provisional-public** | Used by CLI defaults |
 | `pub const AUTO_SYNC_DEBOUNCE_MIN/MAX` | **provisional-public** | Bounds constants |
 | `pub const AUTO_SYNC_MAX_DELAY_MIN/MAX` | **provisional-public** | Bounds constants |
@@ -151,7 +195,7 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub struct EncryptedPayload` | **provisional-public** | `{ salt, nonce, ciphertext }` |
 | `pub fn encrypt()` | **provisional-public** | AES-256-GCM encryption |
 | `pub fn decrypt()` | **provisional-public** | AES-256-GCM decryption |
-| `pub fn ct_eq()` (#[cfg(test)]) | **test-only** | Constant-time comparison; present only in test builds, not in production binary |
+| `fn ct_eq()` (#[cfg(test)]) | **test-only** | Private constant-time comparison helper; not `pub`, and absent from the production binary |
 
 ---
 
@@ -160,10 +204,11 @@ library — it is a standalone binary.  The public surface exists because:
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub struct SyncRetryConfig` | **integration-test-only** | Retry config for gRPC |
-| `pub fn is_retryable_grpc_error()` | **integration-test-only** | Retry predicate |
+| `SyncRetryConfig::is_retryable_grpc_error()` | **integration-test-only** | Retry predicate (associated function, not a free `pub fn`) |
 | `pub struct SyncClient` | **integration-test-only** | gRPC client wrapper |
 | `SyncClient::create()` | **integration-test-only** | Constructor |
 | `SyncClient::sync_encrypted()` | **integration-test-only** | Encrypted sync |
+| `SyncClient::sync_encrypted_with_ceiling()` | **integration-test-only** | Encrypted sync with an explicit request-size ceiling |
 | `SyncClient::health_check()` | **integration-test-only** | Health check |
 | `SyncClient::register()` | **integration-test-only** | Device registration |
 | `SyncClient::list_libraries()` | **integration-test-only** | List server libraries |
@@ -207,6 +252,7 @@ to external consumers.*
 | `pub fn save_snippets()` | **application-internal** | Save snippets to file |
 | `pub fn get_snippet_data()` | **application-internal** | Extract TUI display data |
 | `pub fn expand_snippet_command()` | **application-internal** | Variable expansion |
+| `pub fn run_explicit_sync()` | **application-internal** | Explicit (user-triggered) sync entry point |
 | `pub fn run_snippet_selection()` | **application-internal** | TUI selection loop |
 
 ---
@@ -263,7 +309,7 @@ to external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| All 15 structs/enums | **application-internal** | Status snapshot types |
+| All 13 structs/enums | **application-internal** | Status snapshot types |
 | `pub fn capture_snapshot()` | **application-internal** | Snapshot builder |
 | `pub fn sync_configuration_state()` | **application-internal** | Config state query |
 | `pub fn pending_state_view()` | **application-internal** | Pending state query |
@@ -283,7 +329,8 @@ detached auto-sync helper management.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub use notification::*` (6 items) | **application-internal** | Notification API |
+| `pub use execution_lock::{SpawnError, WORKER_SUBCOMMAND, spawn_worker}` | **application-internal** | Worker spawn API |
+| `pub use notification::*` (9 items) | **application-internal** | Notification API |
 | `pub use pending::{ConditionalClearResult, PendingSnapshot, PendingState}` | **application-internal** | Pending state types |
 | `pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin, RetryDisposition}` | **application-internal** | Policy types |
 | `pub use worker::WorkerOutcome` | **application-internal** | Worker result type |
@@ -293,8 +340,9 @@ detached auto-sync helper management.*
 
 | Submodule | Key public items |
 |-----------|-----------------|
-| `execution_lock` | `SyncExecutionLock`, `ExecutionLockContents`, `WorkerLock`, `WorkerLockContents`, `try_acquire`, `wait_acquire`, `process_alive`, `spawn_worker`, `WORKER_SUBCOMMAND` |
-| `notification` | `MutationContext`, `AutoSyncNotificationResult`, `StartupRecoveryPolicy`, `notify_mutation`, `notify_local_mutation`, `should_attempt_auto_sync_recovery_for_policy`, `startup_recover_pending`, `clear_pending_after_explicit_sync`, `observe_pending_generation` |
+| `execution_lock` | `SyncExecutionLock`, `ExecutionLockError`, `WorkerLock`, `WorkerLockError`, `try_acquire`, `wait_acquire`, `inspect`, `is_stale`, `process_alive`, `spawn_worker`, `WORKER_SUBCOMMAND` |
+| `lock` | Backward-compatibility re-export shim over `execution_lock` (`WorkerLock`, `WorkerLockError`, `try_acquire`, `wait_acquire`, `inspect`, `is_stale`, `lock_path`) |
+| `notification` | `MutationContext`, `AutoSyncNotificationResult`, `StartupRecoveryPolicy`, `notify_mutation`, `notify_local_mutation`, `report_notification_result`, `should_attempt_auto_sync_recovery_for_policy`, `startup_recover_pending`, `clear_pending_after_explicit_sync`, `observe_pending_generation` |
 | `pending` | `PendingSnapshot`, `PendingState`, `ConditionalClearResult`, `record_pending_mutation`, `read_state`, `read_state_from_dir` |
 | `pending_lock` | `PendingTxnGuard`, `PendingTxnLockError`, `acquire_pending_txn` |
 | `policy` | `AutoSyncPolicy`, `FailureClass` (4 variants), `MutationKind`, `MutationOrigin`, `RetryDisposition`, `transient_backoff` |
@@ -303,15 +351,23 @@ detached auto-sync helper management.*
 | `test_events` | `enabled`, `sink_path`, `emit` |
 | `worker` | `WorkerOutcome`, `SpawnResult`, `Clock`, `SystemClock`, `DebounceResult`, `run`, `debounce`, `preflight_check`, `startup_recover` |
 
+The lock payload type is `process_file_lock::LockIdentity` — the
+`ExecutionLockContents` / `WorkerLockContents` names do not exist in the
+current source.
+
 ---
 
 ## Protocol types (`snip-proto`)
 
 Protobuf messages and tonic stubs are owned by the workspace's separate
 `snip-proto` crate. Integration tests import them directly from that crate;
-the root `snip-it` library no longer exposes a generated-proto module.
-| `pub mod snippet_sync_client` | **integration-test-only** | Generated gRPC client |
-| `pub mod snippet_sync_server` | **integration-test-only** | Generated gRPC server trait + impl |
+the root `snip-it` library no longer exposes a generated-proto module (it keeps
+only a `pub(crate) use snip_proto as proto;` alias).
+
+| Item | Classification | Notes |
+|------|---------------|-------|
+| `pub mod snippet_sync_client` | **integration-test-only** | Generated gRPC client (`snip-proto/src/snip_proto.rs:267`) |
+| `pub mod snippet_sync_server` | **integration-test-only** | Generated gRPC server trait + impl (`snip-proto/src/snip_proto.rs:629`) |
 
 ---
 
@@ -323,10 +379,16 @@ the root `snip-it` library no longer exposes a generated-proto module.
 |------|---------------|-------|
 | `pub struct LogConfig` | **application-internal** | Logging configuration |
 | `pub fn get_default_log_dir()` | **application-internal** | Log directory path |
+| `pub fn get_audit_log_path()` | **application-internal** | Audit log path |
+| `pub fn init_logging()` | **application-internal** | Initialize tracing from a `LogConfig` |
 | `pub fn init_default_logging()` | **application-internal** | Initialize tracing |
+| `pub fn init_default_file_logging()` | **application-internal** | Initialize file logging only (no background audit writer) |
+| `pub fn shutdown_logging()` | **application-internal** | Flush and drop the appender guard |
+| `pub fn log_panic_info()` | **application-internal** | Panic hook payload logging |
+| `pub fn setup_panic_handler()` | **application-internal** | Panic hook |
+| `pub fn log_command_execution()` | **application-internal** | Command execution logging |
 | `pub fn log_startup_info()` | **application-internal** | Log startup |
 | `pub fn log_shutdown_info()` | **application-internal** | Log shutdown |
-| `pub fn setup_panic_handler()` | **application-internal** | Panic hook |
 | `pub fn log_config_operation()` | **application-internal** | Config operation logging |
 | `pub fn log_clipboard_operation()` | **application-internal** | Clipboard operation logging |
 | `pub fn audit_log()` | **application-internal** | Audit trail |
@@ -353,7 +415,7 @@ the root `snip-it` library no longer exposes a generated-proto module.
 | `pub mod atomic` | **application-internal** | Atomic file writes |
 | `pub mod config` | **application-internal** | Config path helpers (also exports the test-only `ScopedConfigDir` override) |
 | `pub mod process` | **application-internal** | Process liveness checks and owned-lock-file removal |
-| `pub mod redact` | **application-internal** | Secret redaction for logs, backups, and diagnostics |
+| `pub mod redact` | **application-internal** | Secret redaction for log, status, and error messages |
 | `pub mod shell_keywords` | **application-internal** | Shell command-name lookup set for syntax highlighting |
 | `pub mod tempfile_guard` | **application-internal** | Temp file cleanup |
 | `pub mod toml_helpers` | **application-internal** | TOML escape handling |
@@ -431,29 +493,30 @@ the root `snip-it` library no longer exposes a generated-proto module.
 
 ### Low priority (acceptable as-is)
 
-10. **`pub mod error`** — Core error types.  Appropriately `pub` and
+9. **`pub mod error`** — Core error types.  Appropriately `pub` and
     `#[non_exhaustive]`.
 
-11. **`pub mod sort`** — Used by `#[derive(clap::ValueEnum)]` on CLI
+10. **`pub mod sort`** — Used by `#[derive(clap::ValueEnum)]` on CLI
     arguments.  Appropriately `pub`.
 
-12. **`pub(crate) mod encryption`** — Already correctly scoped.  Self-contained
+11. **`pub(crate) mod encryption`** — Already correctly scoped.  Self-contained
     crypto utilities internal to the crate.
 
-13. **`pub(crate) mod diagnostics`** — Already correctly scoped.  Report types
+12. **`pub(crate) mod diagnostics`** — Already correctly scoped.  Report types
     for import/doctor; internal to the crate.
 
-14. **`pub(crate) mod output`** — Already correctly scoped.  Self-contained
+13. **`pub(crate) mod output`** — Already correctly scoped.  Self-contained
     rendering utility internal to the crate.
 
 ### Dead/accidental items
 
-15. **`pub fn ct_eq()` in `encryption.rs`** — **test-only.** Present under `#[cfg(test)]`; not in the production binary.
+14. **`fn ct_eq()` in `encryption.rs`** — **test-only and already private.**
+    Present under `#[cfg(test)]`; not in the production binary.
 
-16. **`pub fn quote_strings_containing_backslashes()` in `utils/toml_helpers.rs`** —
-    Public helper that was used by earlier code but is no longer called in the
-    save path.  The doc comment says it's "available for callers that
-    hand-write TOML."  Consider whether it should remain public.
+15. **`pub(crate) fn quote_strings_containing_backslashes()` in
+    `utils/toml_helpers.rs`** — Already crate-internal.  It was used by earlier
+    code but is no longer called in the save path (only by its own unit tests).
+    The doc comment says it's "available for callers that hand-write TOML."
 
 ### Doc warnings
 
@@ -489,7 +552,7 @@ otherwise a new broken link reaches `main` unnoticed.
 |---------------|-------|
 | **stable-public** | ~25 items (error, sort, re-exports) |
 | **provisional-public** | ~30 items (config, some config types) |
-| **pub(crate)** | ~15 modules (encryption, diagnostics, output, status_snapshot, library, clipboard, utils, sync_commands, local_data, migration, test_failpoints, transaction, process_file_lock, selector, outcome) |
+| **pub(crate)** | 12 modules (clipboard, diagnostics, encryption, library, local_data, migration, output, status_snapshot, sync_commands, sync_failure, test_failpoints, utils) — plus `transaction` in a default build |
 | **application-internal** | ~200+ items (commands, auto_sync, logging, ui, usage) |
 | **integration-test-only** | ~40 items (sync, proto) |
 | **removed** | 0 items |

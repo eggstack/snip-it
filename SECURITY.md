@@ -49,9 +49,11 @@ is **refused** (`keychain unavailable, refusing to store API key in plaintext`)
 rather than silently downgraded to a plaintext file. On load, a plaintext key
 already present in `sync.toml` is migrated into the keychain and the file
 re-saved with the marker; a marker whose keychain entry has been lost is a hard
-error, not a silent empty credential. Keep `keyring = "4"` default features:
-building with `default-features = false` silently degrades persistence to the
-mock store.
+error, not a silent empty credential. Keep `keyring = "4"` with its default
+features: keyring 4's `default` is `v1`, which hard-enables the three platform
+stores, and `keyring::Entry` is gated on `v1` — building with
+`default-features = false` is a **compile error**, not a silent downgrade.
+There is no mock store.
 
 `SNP_ALLOW_PLAINTEXT_API_KEY=true` is a **test-only** seam, compiled in under
 `#[cfg(feature = "test-support")]` (`src/config/sync_settings.rs`). Setting it

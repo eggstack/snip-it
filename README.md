@@ -163,8 +163,12 @@ snp import pet ~/.config/pet/snippets.toml --merge   # merge into the library
 
 The behavioral matrix is in [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
 
-**Self-hosted sync.** The client encrypts snippet content with AES-256-GCM
-before sending it; the server stores only ciphertext.
+**Self-hosted sync.** The client encrypts snippet content (description,
+command, tags) with AES-256-GCM before sending it, and the server stores only
+ciphertext for that content. Sync metadata — snippet IDs, timestamps, device
+ID, and deletion markers — travels in the clear, and the server sees your API
+key as a bearer token. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for
+the trust boundary.
 
 ```bash
 cargo install snip-sync
@@ -208,6 +212,10 @@ paths, environment variables, and auto-sync settings.
 ## Documentation
 
 Start with the [docs index](docs/README.md).
+
+Contributors and reviewers should start with
+[architecture/overview.md](architecture/overview.md) — the module map, the
+cross-cutting invariants, and the index of 61 per-component deep dives.
 
 | Document | Subject |
 |----------|---------|

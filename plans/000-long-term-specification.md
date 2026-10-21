@@ -195,8 +195,9 @@ scope.
   commands never init it. `run_snippet_selection` takes
   `Option<&Runtime>` (`None` when `do_sync` is false). The detached worker
   uses `new_current_thread()`; keep the client's `rt-multi-thread`
-  feature. Keep `keyring = "4"` default features (platform stores) or
-  persistence silently falls back to the mock store.
+  feature. Keep `keyring = "4"` with its default features — keyring 4's
+  `default` is `v1`, which hard-enables the three platform stores; there is
+  no mock store, and `default-features = false` is a compile error.
 - Argon2 parameter changes break all existing encrypted payloads (version
   first).
 

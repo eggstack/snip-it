@@ -40,10 +40,12 @@ snp clip --library work
 snp edit --library work
 ```
 
-In the snippet TUI, press `d` in normal mode to delete the selected snippet.
-The confirmation box requires `y` to proceed; any other key cancels. The key
-remains ordinary filter input in insert mode. Deleted snippets are hidden from
-the TUI, and `--sync` propagates the deletion when sync is configured.
+In the snippet TUI opened by `snp run`, `snp clip`, or `snp search`, press `d`
+in normal mode to delete the selected snippet. (`snp select` is read-only and
+does not offer the shortcut.) The confirmation box requires `y` to proceed; any
+other key cancels. The key remains ordinary filter input in insert mode.
+Deleted snippets are hidden from the TUI, and `--sync` propagates the deletion
+when sync is configured.
 
 Library files live under:
 
@@ -56,9 +58,9 @@ When `XDG_CONFIG_HOME` is not set, the default is `~/.config/snp/libraries/`.
 and which server library it is linked to.
 
 A fresh install starts with `snippets.toml` as the default single-file
-library. When library mode starts, snp migrates that file to
-`libraries/snippets.toml` and retains the original. Keep your own backup
-before making large changes.
+library. The first library-mode command copies that file to
+`libraries/snippets.toml`, registers it as the primary `snippets` library, and
+leaves the original in place. Keep your own backup before making large changes.
 
 ## Pet compatibility and import
 
@@ -381,6 +383,8 @@ to reach **normal mode**, where the navigation keys live.
 | `h` / `l` or `←` / `→` | Move left / right | — |
 | `gg` / `G` | Jump to top / bottom | — |
 | `Ctrl+f` / `Ctrl+b` | Page down / up | — |
+| `Ctrl+d` / `Ctrl+u` | Page down / up (helix bindings) | — |
+| `v` / `V` | Visual mode (character / line) | — |
 | `Enter` | Select and execute | Select and execute |
 | `Esc` | No-op (use `q` to quit) | Return to normal mode |
 | `/` | Search | Start a search |
@@ -414,8 +418,8 @@ Halloy application config—into:
 $XDG_CONFIG_HOME/snp/themes/<name>.toml
 ```
 
-The default is `~/.config/snp/themes/` when `XDG_CONFIG_HOME` is not set. On
-first use, snp extracts 50 bundled themes into this directory without
+The default directory is `~/.config/snp/themes/` when `XDG_CONFIG_HOME` is not
+set. On first use, snp extracts 50 bundled themes into this directory without
 overwriting files you have edited.
 
 Press `e` in normal TUI mode to open the picker. Use `j`/`k` or the arrow keys
@@ -492,9 +496,11 @@ Deleted snippets are retained as tombstones so a later sync can converge.
 
 ## Syncing one account across environments
 
-The server authenticates a collection by API key. `snp register` creates a new
-account and API key on every invocation; it does not join an existing account.
-Therefore:
+The server authenticates a collection by API key. Every successful
+`snp register` call mints a **new** account and API key on the server; it never
+joins an existing account. If the environment already has a device ID,
+`snp register` prints `Already registered!` and exits without contacting the
+server — pass `--force` to register again. Therefore:
 
 1. Register one environment against the remote HTTPS endpoint.
 2. Use `snp sync run --push-only` there to create and seed the server libraries.
@@ -527,12 +533,14 @@ sync_direction = "Bidirectional"
 ```
 
 The API key is normally represented as `@keychain` after snp stores it in the
-OS keychain. For a headless environment, use the platform's secret manager to
-provision the key, then run `snp register` — snp will write only the
-`@keychain` marker to `sync.toml`. Note that snp **refuses** to save a plaintext
-key rather than falling back: if the keychain is unavailable the write fails
-with `keychain unavailable, refusing to store API key in plaintext`. Do not
-commit `sync.toml` either way.
+OS keychain. On a headless environment, write the key into the platform's
+secret store yourself and set `device_id` in `sync.toml` — do **not** run
+`snp register` there, because it mints a fresh key and would overwrite the
+provisioned one. Note that snp **refuses** to save a plaintext key rather than
+falling back: if the keychain is unavailable the write fails with
+`keychain unavailable: <reason>; refusing plaintext API-key storage`. Do not
+commit `sync.toml` either way. See
+[THREAT_MODEL.md](THREAT_MODEL.md) for the credential-handling contract.
 
 ## Auto-sync
 
@@ -566,7 +574,7 @@ auto_sync_failure = "warn"
 
 | Command | Trigger? | Notes |
 |---------|----------|-------|
-| `snp new` (all sources) | Yes | Positional, stdin, file, editor, interactive |
+| `snp new` (all sources) | Yes | Positional, stdin, file, editor, multiline, interactive |
 | `snp edit` (command/description) | Yes | After editor saves |
 | `snp edit --output` | No | Output is local-only, not in sync protocol |
 | TUI delete | Yes | After tombstone persisted |
@@ -594,9 +602,15 @@ auto_sync_failure = "warn"
 
 | Mode | Behavior |
 |------|----------|
-| `ignore` | Silent — no user-facing output on scheduling failure |
-| `warn` (default) | Stderr warning when the parent fails to spawn the worker; worker-side failures are logged to `~/.config/snp/logs/` and visible via `snp doctor` |
-| `error` | Stderr error and nonzero exit code on parent scheduling failure, but local mutation remains committed |
+| `ignore` | The scheduling failure is logged at debug level only. |
+| `warn` (default) | The scheduling failure is logged at warn level. |
+| `error` | The scheduling failure is logged at error level. |
+
+The mode selects the log level only. In every mode the mutating command still
+prints a `warning:` line to stderr when the worker cannot be scheduled, and the
+local mutation stays committed — no mode turns a scheduling failure into a
+nonzero exit code. Worker-side failures are logged to `~/.config/snp/logs/`
+and are visible via `snp doctor`.
 
 ## Premade libraries
 
@@ -799,7 +813,7 @@ nothing at all. The rest appear as you use the features.
 
 | Path | Purpose |
 | --- | --- |
-| `snippets.toml` | Default single-file library (migrated to `libraries/` by library mode) |
+| `snippets.toml` | Default single-file library (copied into `libraries/` by library mode) |
 | `libraries/*.toml` | User library files |
 | `libraries.toml` | Library metadata and server links |
 | `premade/*.toml` | Installed premade libraries |
@@ -808,6 +822,7 @@ nothing at all. The rest appear as you use the features.
 | `themes.toml` | Active theme |
 | `usage.toml` | Local usage counts and last-used timestamps |
 | `logs/` | Rolling application logs |
+| `audit.log` | Audit trail of local snippet mutations (rotated at 10 MB, 30-day retention) |
 | `backups/` | Timestamped library backups |
 | `.transaction/` | Transaction journals and the local-data lock for crash-safe writes |
 | `auto-sync-pending.toml` | Pending auto-sync marker (latest mutation generation) |
@@ -819,15 +834,14 @@ Useful environment variables:
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | `0` for direct terminal runs |
+| `SNP_COMMAND_TIMEOUT` | Command timeout in seconds; `0` disables it | no timeout (300 s when the snippet writes to an `output` file) |
 | `SNP_CLIPBOARD_TIMEOUT` | Clipboard timeout in seconds | `5` |
-| `SNP_ALLOW_DIR_FSYNC_FAILURE` | Allow atomic writes to continue when the filesystem rejects parent-directory fsync; weakens power-loss durability | unset |
 | `SNP_SYNC_CONNECT_TIMEOUT` | Sync connection timeout in seconds | `10` |
 | `SNP_SYNC_REQUEST_TIMEOUT` | Sync request timeout in seconds | `30` |
 | `SNP_THEME` | Legacy theme or theme filename | bundled default |
 | `SNP_LOG` / `RUST_LOG` | Tracing filters | `snip_it=info` (a bare level such as `info` also works) |
-| `EDITOR` | Editor for `snp edit` and fallback for `snp new --editor` | `vim` |
-| `VISUAL` | Editor for `snp edit` and `snp new --editor` (overrides `EDITOR` if non-empty) | unset |
+| `EDITOR` | Editor used when `VISUAL` is unset or empty | `vim` |
+| `VISUAL` | Editor for `snp edit` and `snp new --editor` (takes precedence over `EDITOR`) | unset |
 
 ## Automation
 

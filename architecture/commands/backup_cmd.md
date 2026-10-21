@@ -151,7 +151,7 @@ The destination is always a **directory**. `--output` names the final directory;
 | `--json` | stdout | `{"backup_dir", "schema", "version", "file_count", "total_bytes"}` (`src/commands/backup_cmd.rs:229-242`). |
 | default | stderr | `Backup created: <dir>`, schema, version, file count, total size, then one line per manifest entry: `<kind> (<path>): <size> bytes, sha256:<first 16 hex chars>` (`:243-257`). The digest is **truncated to 16 hex characters** in the human output; the full digest is in the manifest. |
 
-`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:411-420`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:46-70` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
+`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:411-420`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:48-72` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
 
 ## Interaction with the transaction journal and locks
 

@@ -213,7 +213,7 @@ command handler returns Ok(CliOutcome::X)
 
 `PersistenceFailed` deliberately maps to code 1 (`GENERAL_ERROR`) rather than
 a code of its own — persistence failures are operational errors, not a
-distinct user-facing category (`src/outcome.rs:81`, `docs/EXIT_CODES.md`).
+distinct user-facing category (`src/outcome.rs:83`, `docs/EXIT_CODES.md`).
 
 ## Module visibility split (summary)
 

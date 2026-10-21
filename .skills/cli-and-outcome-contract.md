@@ -22,19 +22,20 @@ Deep dive: [`../architecture/cli.md`](../architecture/cli.md),
 
 ```
 clap parse → Commands (src/main.rs:65)
-            → command_behavior(cmd)          (src/main.rs:886)  startup recovery policy
-            → dispatch_command(cli)          (src/main.rs:443)  returns SnipResult<CliOutcome>
-            → CliOutcome::exit_code()        (src/outcome.rs:74) → stable exit code
+            → command_behavior(cmd)          (src/main.rs:887)  startup recovery policy
+            → dispatch_command(cli)          (src/main.rs:444)  returns SnipResult<CliOutcome>
+            → CliOutcome::exit_code()        (src/outcome.rs:76) → stable exit code
 ```
 
 `dispatch_command` returns `SnipResult<CliOutcome>`. **`Ok(...)` carries the
 outcome; `Err(...)` is an unclassified operational failure and maps to exit 1.**
-There is exactly one exit mapper in `main.rs` — do not call `std::process::exit`
-from a command module.
+A `CliOutcome` becomes a process exit in exactly one place
+(`src/main.rs:1024`) — do not call `std::process::exit` from a command
+module.
 
 ### Exit codes are a stable public contract
 
-`exit_code` constants live in `src/outcome.rs:46`. Codes 0 and 1 are
+`exit_code` constants live in `src/outcome.rs:48`. Codes 0 and 1 are
 pre-existing and frozen; 2–10 are additive and documented in
 `docs/EXIT_CODES.md`. Three rules that are easy to get wrong:
 
@@ -44,8 +45,9 @@ pre-existing and frozen; 2–10 are additive and documented in
    pre-existing scripts checking `exit 1` keep working.
 3. **`ExecutionFailed` propagates the child's exit code** when one exists, and
    falls back to 8 only for spawn failure, signal kill, or timeout. Use the
-   unified helper `spawn_and_wait_execution()` in `src/commands/run_cmd.rs` —
-   it returns `ProcessResult::Failed { exit_code: None }` for exactly those
+   unified helper `spawn_and_wait_execution()` in
+   `src/commands/run_cmd.rs:123` — it returns
+   `ProcessResult::Failed { exit_code: None }` for exactly those
    three cases. Do not let an output-file branch return `SnipError` through `?`
    and reach exit 1 instead of 8.
 
@@ -60,14 +62,14 @@ repair found was unsafe" — it is **not** a usage error.
 
 ## Startup recovery classification — one table, two axes
 
-`command_behavior()` (`src/main.rs:886`) returns a `CommandBehavior` holding
+`command_behavior()` (`src/main.rs:887`) returns a `CommandBehavior` holding
 **both** a `StartupRecoveryPolicy` and a `StartupServices` level
-(`src/main.rs:873`) in a single `match`, so the two cannot drift.
+(`src/main.rs:874`) in a single `match`, so the two cannot drift.
 
 | Policy | Commands |
 |--------|----------|
 | `SuppressReadOnly` (+ `StartupServices::Minimal`) | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` |
-| `SuppressReadOnly` (dry-run only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — and the `data` spellings |
+| `SuppressReadOnly` (dry-run only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — plus `data restore --mode dry-run` and `data repair --dry-run` |
 | `Allow` (full logging + audit) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary`; **and no subcommand** (default TUI) |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` (internal subprocess) |
@@ -79,9 +81,12 @@ Two easy-to-miss entries:
   metadata and schedule auto-sync.
 - **`mcp` is `SuppressReadOnly`**, because the MCP surface never mutates.
 
-**Never infer the policy from the command's name.** Dry-run variants are
-classified by *command category*, not by the dry-run flag: `restore` and
-`import` stay `Allow` because they are mutation commands.
+**Never infer the policy from the command's name.** The dry-run *variants*
+are the one flag-sensitive exception: `restore --mode dry-run`,
+`repair --dry-run`, and `import pet --dry-run` are matched **before** the
+generic arms and get `SuppressReadOnly` + `StartupServices::Minimal`
+(`src/main.rs:908-925`); only their non-dry-run spellings fall through to
+`Allow`.
 
 Adding a command means editing `command_behavior()`. Adding a *subcommand* to an
 existing command means checking whether the parent already covers it —
@@ -96,7 +101,7 @@ existing command means checking whether the parent already covers it —
 pipe stdout without filtering ANSI escapes or interleaved prose.
 
 - Machine modes are `--json`, `--csv`, `--raw`, `--field`. `OutputContext`
-  (`src/outcome.rs:142`) is the guard: `is_machine_mode()` and
+  (`src/outcome.rs:144`) is the guard: `is_machine_mode()` and
   `suppress_ansi()` decide, and `write_stdout()` swallows `BrokenPipe` so
   `snp list | head` does not spew an error.
 - `snp list` default output is a **colored table with ANSI escapes** — not
@@ -122,7 +127,7 @@ a description.
 spelling** of `validate`, `status`, `backup`, `restore`, and `repair`. It has
 no independent behavior:
 
-- It dispatches to the same handlers (`src/main.rs:825-837`).
+- It dispatches to the same handlers (`src/main.rs:825-841`).
 - It shares the same argument schema and the same startup-recovery
   classification.
 - `tests/cli_surface_compat.rs` asserts both spellings succeed with the same
@@ -130,6 +135,12 @@ no independent behavior:
 
 If you change one spelling's behavior, you change both — and the compat test
 will tell you if you did not.
+
+Adding a new `snp data <x>` spelling takes **three edits** in `src/main.rs`: a
+`DataCommands` variant, a dispatch arm, and a `command_behavior()` arm. Those
+five data spellings are the only commands with single-path `handle_*`
+functions in `main.rs`; the other ~20 commands dispatch inline inside
+`dispatch_command`.
 
 ---
 

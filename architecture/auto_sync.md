@@ -92,7 +92,8 @@ max-lifetime (`src/auto_sync/policy.rs:55-66`). Clamps: debounce 0–300 s
 
 `AutoSyncFailureMode` (`Ignore` / `Warn` default / `Error`) only controls
 parent-side scheduling-failure rendering. It never rolls back the local
-commit; `Error` yields a distinct post-commit nonzero exit.
+commit and never changes the exit code — the mode selects only the `tracing`
+level of the policy log line (`src/auto_sync/notification.rs:242-254`).
 
 ### Mutation taxonomy
 
@@ -442,10 +443,13 @@ field 22. Non-Unix treats unknown PIDs as alive (conservative non-stealing).
 appended to `SNP_AUTO_SYNC_WORKER_LOG` for debugging). Unix detaches with
 `libc::setsid()` in `pre_exec` (new session, no controlling terminal, outlives
 the parent); Windows uses `DETACHED_PROCESS | CREATE_NO_WINDOW`. Parent
-scheduling failures render per `failure_mode` (`Ignore`: log only, `Warn`:
-stderr warning, `Error`: stderr + nonzero exit, local commit intact);
-worker-side failures go to logs and `doctor`, never the departed parent's
-stderr (`src/auto_sync/notification.rs:43-55`).
+scheduling failures never change the exit code — the local commit stays
+successful. `failure_mode` selects only the `tracing` level of the policy log
+line (`Ignore`: debug, `Warn`: warn, `Error`: error,
+`src/auto_sync/notification.rs:242-254`); a `warning:` on stderr is printed
+unconditionally for a scheduling failure
+(`src/auto_sync/notification.rs:43-55`). Worker-side failures go to logs and
+`doctor`, never the departed parent's stderr.
 
 ## Budgets
 

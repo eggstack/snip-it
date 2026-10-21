@@ -23,11 +23,13 @@
 
 ## 1. Purpose and Scope
 
-This document defines the security threat model for snip-it, a local-first snippet manager with optional end-to-end encrypted synchronization. It identifies assets, trust boundaries, threat actors, concrete threats, mitigations, and residual risks. The scope covers the full lifecycle of snippet data: creation, local storage, synchronization, backup, restore, and package-managed updates.
+This document defines the security threat model for snip-it, a local-first snippet manager with optional encrypted synchronization. It identifies assets, trust boundaries, threat actors, concrete threats, mitigations, and residual risks. The scope covers the full lifecycle of snippet data: creation, local storage, synchronization, backup, restore, and package-managed updates.
 
 ### Design Principles
 
-- **Local-first:** All data lives on disk; sync is optional and end-to-end encrypted.
+- **Local-first:** All data lives on disk; sync is optional, and snippet bodies are
+  encrypted at rest (see [Boundary 6](#boundary-6-client-to-sync-server) for what
+  is and is not covered).
 - **No runtime secrets in memory longer than necessary:** API keys are zeroized on drop.
 - **Least privilege:** Workers and executors receive only the minimum state they need.
 - **Defense in depth:** Atomic writes, file permissions, CRC32 integrity, and TLS all layer together.
@@ -45,17 +47,17 @@ This document defines the security threat model for snip-it, a local-first snipp
 | Snippet output | Confidential | Per-library TOML (local-only field) | No | Local-only presentation field, preserved on merge |
 | Snippet folders | Internal | Per-library TOML (local-only field) | No | Organizational structure, preserved on merge |
 | Snippet favorites | Internal | Per-library TOML (local-only field) | No | User preference, preserved on merge |
-| Stable IDs | Internal | Same as commands | Yes (encrypted) | Content-addressed identifiers |
-| Timestamps | Internal | Same as commands | Yes (encrypted) | Created/modified metadata |
-| Library/index configuration | Internal | `libraries.toml`, `libraries/*.toml` | Yes (encrypted) | Library registry and per-library structure |
+| Stable IDs | Internal | Same as commands | Yes (plaintext) | Content-addressed identifiers |
+| Timestamps | Internal | Same as commands | Yes (plaintext) | Created/modified metadata |
+| Library/index configuration | Internal | `libraries.toml`, `libraries/*.toml` | No (library name only, plaintext) | Library registry and per-library structure are local; only the library name is sent, as a plaintext `library_id` |
 | Usage metadata | Internal | `usage.toml` | No | Use count, last-used (never synced) |
 | Sync credentials | Secret | OS keychain (key itself); `sync.toml` holds only the `@keychain` marker | No | Bearer token for gRPC auth |
 | Credential revisions | Sensitive | `sync.toml` | No | Tracks key rotation state |
-| Encryption keys | Secret | OS keychain (preferred) | No | Derived via Argon2id |
+| Encryption keys | Secret | Not persisted — derived from the API key | No | Argon2id output; session-scoped, zeroized on drop |
 | Derived material | Secret | In-memory | No | Argon2id output, session-scoped |
 | Nonces | Secret | Embedded in ciphertext | Yes | 12-byte AES-GCM random nonces |
-| Encrypted remote payloads | Confidential | Sync server | Yes | Ciphertext blobs; server cannot decrypt |
-| Encrypted remote metadata | Confidential | Sync server | Yes | Encrypted field-level metadata |
+| Encrypted remote payloads | Confidential | Sync server | Yes | Ciphertext blobs; the server holds the API-key bearer token, so it is not blind to the key |
+| Remote metadata | Internal | Sync server | Yes | Plaintext proto fields: `id`, `created_at`, `updated_at`, `device_id`, `deleted` |
 | Pending intent | Sensitive | `auto-sync-pending.toml` | No | Coordinates detached worker cycles |
 | Durable attempt status | Internal | `auto-sync-status.toml` | No | CRC32-integrity-protected, redacted |
 | Lock files | Internal | `*.lock` files in state dir | No | Kernel (`flock`/`LockFileEx`) or owned-record + PID-reclaim ownership |
@@ -77,7 +79,7 @@ Each boundary below represents a transition where data crosses from one trust do
 
 **Properties:** Arbitrary content from untrusted sources. May contain shell metacharacters, oversized payloads, invalid TOML, path traversal attempts, or symlink/FIFO substitutions.
 
-**Mitigations:** Input validation, TOML parse validation, `sanitize_library_name`, path traversal rejection, size limits.
+**Mitigations:** Input validation, TOML parse validation, library-name validation, path traversal rejection, size limits.
 
 ### Boundary 2: Editable Local TOML vs. Private Control State
 
@@ -110,7 +112,7 @@ production build.
 
 **Properties:** The worker runs in a separate process group (`setsid()`). Only `--state-dir` is passed in argv. No secrets appear in process titles or command-line arguments.
 
-**Mitigations:** Minimal argv, `setsid()` for process isolation, no secrets in environment or args, nonce-based lock ownership.
+**Mitigations:** Minimal argv, `setsid()` for process isolation, no secrets in environment or args, kernel-backed lock ownership (`flock`/`LockFileEx`).
 
 ### Boundary 5: Detached helper to sync client
 
@@ -128,6 +130,8 @@ production build.
 
 **Mitigations:** AES-256-GCM encryption with random nonces, TLS via `https://`, client-side loopback check rejecting plaintext to non-loopback hosts, `SNIP_SYNC_ALLOW_HTTP` env var overrides the loopback check (loopback hosts are always allowed), server stores Argon2id hashes of API keys (not plaintext).
 
+**Trust boundary note:** the API key itself reaches the server as a `Bearer` token on every request, so the server is not blind to the key it could use to decrypt. The precise trust statement lives in [architecture/encryption.md](../architecture/encryption.md); see [T3](#t3-compromised--malformed-sync-server) for the residual risk.
+
 ### Boundary 7: Local Archive Restore
 
 **Description:** Restoring from a local backup archive.
@@ -140,17 +144,23 @@ production build.
 
 **Description:** snip-it invokes the user's configured editor for snippet editing.
 
-**Properties:** The editor path is resolved to an absolute path. No shell execution occurs in the editor invocation path. The editor process inherits only the file path being edited.
+**Properties:** The editor path is resolved to an absolute path. No shell execution occurs in the editor invocation path. The editor is passed only the path of the file to edit as an argument.
 
 **Mitigations:** Absolute path resolution for editor, no shell interpretation of editor config, editor receives only the file to edit.
 
 ### Boundary 9: Self-Update / Package Manager
 
-**Description:** The installed package is updated through Cargo or Homebrew.
+**Description:** The installed package is updated through the current installation
+method: Homebrew (`brew upgrade`), Cargo (`cargo install --locked`), or a direct
+binary download from the GitHub release.
 
-**Properties:** Package registries, formula metadata, or the local package manager may be compromised.
+**Properties:** Package registries, formula metadata, the local package manager,
+or the GitHub release host may be compromised.
 
-**Mitigations:** Updates are delegated to Cargo or Homebrew; standalone GitHub archive installation is not supported. Use official registries and review package-manager metadata.
+**Mitigations:** A downloaded release binary is verified against the SHA-256
+checksum sidecar published beside it before it replaces the installed
+executable. Homebrew and Cargo updates are delegated to those tools. No
+cryptographic signature is verified — see [Boundary 10](#boundary-10-ci--release-publishing).
 
 ### Boundary 10: CI / Release Publishing
 
@@ -158,7 +168,7 @@ production build.
 
 **Properties:** Compromised CI could inject malicious code.
 
-**Mitigations:** GitHub Actions with pinned runners, checksum publication, code review requirements.
+**Mitigations:** GitHub Actions workflows (actions pinned by version tag, not by commit SHA), SHA-256 checksum sidecars published with each release artifact, code review requirements.
 
 ---
 
@@ -185,7 +195,7 @@ production build.
 |-------|--------|
 | **Description** | A crafted `.toml` snippet file or imported library contains oversized fields, deeply nested structures, invalid TOML, path traversal sequences, or shell metacharacters in commands. |
 | **Attack vector** | User imports a shared library or receives a snippet file from an untrusted source. |
-| **Mitigations** | TOML parse validation with strict deserialization; `sanitize_library_name` rejects path separators and control characters; command size cap (16 MiB); import rejects oversized payloads; content is not executed on import. |
+| **Mitigations** | TOML parse validation with strict deserialization; `validate_library_name()` (`src/library/model.rs`) rejects slashes, null bytes, `.`/`..`, a `.toml` suffix, and over-length names; `derive_library_name()` (`src/commands/import_cmd.rs`) reduces an auto-derived library name to ASCII alphanumerics and `-`; 16 MiB cap on the imported source file; import rejects oversized payloads; content is not executed on import. |
 | **Residual risk** | Low. A valid TOML file with malicious shell content in a `command` field is by design executable when the user runs it. This is the intended use case. |
 | **User responsibility** | Review imported snippets before executing them. Treat snippet commands as you would any shell script from an untrusted source. |
 | **Tests / evidence** | `tests/auto_sync_closure.rs`, `tests/local_contracts.rs`. Golden command corpus verifies TOML round-trip fidelity. |
@@ -209,8 +219,8 @@ production build.
 |-------|--------|
 | **Description** | The sync server is compromised, returns malformed responses, or is impersonated. It could attempt to serve crafted encrypted payloads or harvest credentials. |
 | **Attack vector** | Server-side compromise, DNS hijacking (with invalid TLS policy), or supply-chain attack on server deployment. |
-| **Mitigations** | End-to-end encryption of snippet content: the server never sees plaintext commands, descriptions, or tags. AES-256-GCM with random 12-byte nonces; authentication tag verification on decryption rejects tampered ciphertext. API key is Argon2id-hashed server-side (server never stores plaintext). TLS required for non-loopback connections. |
-| **Residual risk** | Low for confidentiality and integrity of snippet **content**. A compromised server *does* learn per-snippet metadata — `id`, `created_at`, `updated_at`, `device_id`, `deleted` — plus record counts and rough payload sizes, because those fields are plaintext proto fields, not envelope headers. It also learns library names and which snippets were deleted when. It cannot forge content: the GCM tag rejects it. Denial of service is possible. |
+| **Mitigations** | Snippet *content* is encrypted client-side with AES-256-GCM and random 12-byte nonces, so the server never stores or relays plaintext commands, descriptions, or tags; authentication tag verification on decryption rejects tampered ciphertext. The API key is Argon2id-hashed server-side (server never stores plaintext). TLS required for non-loopback connections. |
+| **Residual risk** | Medium. A compromised server *does* learn per-snippet metadata — `id`, `created_at`, `updated_at`, `device_id`, `deleted` — plus record counts and rough payload sizes, because those fields are plaintext proto fields, not envelope headers. It also learns library names and which snippets were deleted when. Because the client sends the API key as a `Bearer` token on every request, a server (or a TLS-terminating proxy) that observes it can re-derive the same Argon2id key and decrypt any payload it holds or relays — the guarantee is transport confidentiality and at-rest obfuscation of snippet bodies, not server-blindness (see [architecture/encryption.md](../architecture/encryption.md)). It cannot forge content: the GCM tag rejects it. Denial of service is possible. |
 | **User responsibility** | Verify your sync server URL is correct. Use a trusted server deployment. |
 | **Tests / evidence** | `tests/sync_integration.rs`, `tests/sync_contracts.rs`. Encryption unit tests in `src/encryption.rs`. |
 | **Owner / module** | `src/sync.rs`, `src/sync_commands.rs`, `src/encryption.rs`, `src/config/` |
@@ -222,7 +232,7 @@ production build.
 | **Description** | An attacker on the network intercepts sync traffic when TLS is disabled or downgraded. |
 | **Attack vector** | `SNIP_SYNC_ALLOW_HTTP=true` or loopback exception used in a non-loopback context; network co-located attacker. |
 | **Mitigations** | TLS is enabled when the URL scheme is `https`. The client refuses `http://` connections to non-loopback hosts in `create_tls_channel`; `SNIP_SYNC_ALLOW_HTTP=true` overrides the loopback check for testing. |
-| **Residual risk** | Very low. The client-side loopback check and the server-side env-var gate make accidental plaintext use unlikely. A user who deliberately disables TLS for a non-loopback server accepts the risk. |
+| **Residual risk** | Very low. The client-side loopback check, and the server-side transport policy that refuses plaintext transport unless both the gRPC and HTTP listeners bind to loopback, make accidental plaintext use unlikely. A user who deliberately disables TLS for a non-loopback server accepts the risk. |
 | **User responsibility** | Ensure the sync server URL uses `https://` for non-loopback hosts. Do not set `SNIP_SYNC_ALLOW_HTTP=true` for non-loopback servers. Use TLS in all production and staging environments. |
 | **Tests / evidence** | `src/sync.rs` (TLS enforcement), `tests/sync_integration.rs` (loopback-only HTTP tests). |
 | **Owner / module** | `src/sync.rs`, `src/config/` |
@@ -233,7 +243,7 @@ production build.
 |-------|--------|
 | **Description** | A process running under the same user account reads snippet files, lock files, status, credentials, or other local state. |
 | **Attack vector** | Malicious script, browser extension, or co-installed application running as the same user. |
-| **Mitigations** | File permissions: `0o600` for sensitive files, `0o700` for directories. Lock files use O_EXCL creation with nonce-based ownership to detect tampering. CRC32 integrity on `auto-sync-status.toml` detects corruption (not cryptographic authentication). API keys are stored in the OS keychain; there is **no plaintext fallback** — a save is refused when the keychain is unavailable. |
+| **Mitigations** | File permissions: `0o600` for sensitive files, `0o700` for directories. Lock acquisition uses an OS kernel lock (`flock`/`LockFileEx`); the lock file additionally records a random nonce, the PID, and the process start token so a recycled PID is not mistaken for the original owner. CRC32 integrity on `auto-sync-status.toml` detects corruption (not cryptographic authentication). API keys are stored in the OS keychain; there is **no plaintext fallback** — a save is refused when the keychain is unavailable. |
 | **Residual risk** | **Medium.** A same-user process can read all local files regardless of `0o600` permissions. CRC32 and file permissions detect corruption and reduce accidental exposure but do not authenticate state against a fully compromised user account. See [Section 6: Same-User Attacker Limitations](#6-same-user-attacker-limitations). |
 | **User responsibility** | Treat your user account as a security boundary. Be cautious about installing untrusted software that runs under your account. |
 | **Tests / evidence** | Lock nonce tests in `src/auto_sync/lock.rs`, status integrity tests in `src/auto_sync/status.rs`. |
@@ -257,8 +267,8 @@ production build.
 |-------|--------|
 | **Description** | A file system entry that appears normal is actually a symlink to a sensitive path, a FIFO/pipe, or a device file, used to redirect writes or reads to unintended locations. |
 | **Attack vector** | Crafted snippet file or backup entry replaces a config file with a symlink to `/etc/passwd` or similar. |
-| **Mitigations** | `validate_target()` in `src/utils/atomic.rs` rejects FIFOs, sockets, and device files. Atomic write path canonicalizes the target before writing. Temp-file-then-rename pattern prevents partial writes to unintended targets. |
-| **Residual risk** | Low. Canonical path checks and target validation prevent most substitution attacks. Race conditions (TOCTOU) between validation and write are mitigated by the atomic rename pattern. |
+| **Mitigations** | `validate_target()` in `src/utils/atomic.rs` rejects FIFOs, sockets, and device files. It runs on the `atomic_write_bytes`/`atomic_replace` path (pending markers, durable status, theme files, the `snp select --output-file` target, restore writes, sync writes); the library, config, usage, transaction-journal, and backup-manifest writers use `write_private_atomic()`, which creates the parent directory and renames a `0o600` temp file over the target **without** running `validate_target()`. Temp-file-then-rename pattern prevents partial writes to unintended targets. |
+| **Residual risk** | Low. Target validation prevents most substitution attacks on the write paths that run it; the `write_private_atomic()` paths rely on the parent directory's own permissions. Race conditions (TOCTOU) between validation and write are mitigated by the atomic rename pattern. |
 | **User responsibility** | Ensure your config directory does not contain unexpected symlinks or special files. |
 | **Tests / evidence** | `validate_target()` tests in `src/utils/atomic.rs`. |
 | **Owner / module** | `src/utils/atomic.rs` |
@@ -269,8 +279,8 @@ production build.
 |-------|--------|
 | **Description** | A lock file from a crashed process is left behind. A new process happens to reuse the same PID, appearing to own the stale lock. |
 | **Attack vector** | Process crash during sync cycle; PID recycling by the OS. |
-| **Mitigations** | Lock files contain a nonce (random value) created at lock acquisition time. Ownership is verified by nonce match, not PID alone. Lock staleness is handled by timeout logic. `STALE_LOCK_THRESHOLD_SECS` was removed (dead code); timeout-based expiry handles stale locks. |
-| **Residual risk** | Very low. Nonce-based ownership prevents PID-reuse false positives. Timeout ensures eventual lock release after crashes. |
+| **Mitigations** | Ownership is decided by the OS kernel lock (`flock`/`LockFileEx`), not by file inspection. The lock file additionally carries a random nonce, the PID, and the process start token (Linux `/proc/<pid>/stat` field 22), so a recycled PID is not mistaken for the original owner. Lock staleness is handled by timeout logic. `STALE_LOCK_THRESHOLD_SECS` was removed (dead code); timeout-based expiry handles stale locks. |
+| **Residual risk** | Very low. Kernel lock ownership plus the start-token check prevents PID-reuse false positives. Timeout ensures eventual lock release after crashes. |
 | **User responsibility** | None. This is handled transparently. |
 | **Tests / evidence** | Lock nonce tests in `src/auto_sync/lock.rs`, `src/auto_sync/execution_lock.rs`. |
 | **Owner / module** | `src/auto_sync/lock.rs`, `src/auto_sync/execution_lock.rs` |
@@ -293,8 +303,8 @@ production build.
 |-------|--------|
 | **Description** | An oversized payload is sent to the CLI, sync client, or server, causing excessive memory allocation, disk usage, or denial of service. |
 | **Attack vector** | Crafted import file, oversized snippet, malformed gRPC message, or decompression bomb. |
-| **Mitigations** | 16 MiB command size cap. gRPC message size limits on both client and server. Import command rejects oversized payloads. Argon2id parameters are bounded (16 MiB memory, 3 iterations, 4 parallelism). |
-| **Residual risk** | Low. Size limits prevent most memory exhaustion attacks. Decompression bombs in gRPC payloads are bounded by message size limits. |
+| **Mitigations** | 16 MiB cap on the imported source file and on `snp new --command-stdin` input. gRPC message size limits on both ends: the server sets a 4 MiB decoding limit (`DEFAULT_GRPC_MAX_MESSAGE_SIZE`) and the client enforces a 3.5 MiB upload ceiling (`DEFAULT_CLIENT_REQUEST_CEILING`) under tonic's default 4 MiB receive limit. Import command rejects oversized payloads. Argon2id parameters are bounded (16 MiB memory, 3 iterations, 4 parallelism). |
+| **Residual risk** | Low. Size limits prevent most memory exhaustion attacks. Decompression bombs in gRPC payloads are bounded by the message size limits, which tonic applies to the *decoded* length. |
 | **User responsibility** | Do not manually craft oversized TOML files or send malformed gRPC messages to your own server. |
 | **Tests / evidence** | Size limit tests in `src/commands/import_cmd.rs`, gRPC config in `src/sync.rs`. |
 | **Owner / module** | `src/commands/import_cmd.rs`, `src/sync.rs`, `src/encryption.rs` |
@@ -305,10 +315,10 @@ production build.
 |-------|--------|
 | **Description** | A package manager installs a malicious or tampered snip-it binary. |
 | **Attack vector** | Compromised registry/formula, CI pipeline, or local package-manager metadata. |
-| **Mitigations** | Updates are delegated to Cargo or Homebrew; the client does not download or extract standalone archives. |
-| **Residual risk** | Low. Registry and package-manager trust remains an external dependency. |
+| **Mitigations** | Updates go through the current installation method: Homebrew (`brew upgrade`), Cargo (`cargo install --locked`), or a direct GitHub release binary. A downloaded release binary is verified against the SHA-256 checksum sidecar published beside it before it replaces the installed executable. |
+| **Residual risk** | Low to moderate. Registry, package-manager, and GitHub-release trust remain external dependencies. The checksum sidecar is fetched from the same release host, so it detects corruption and transport mismatch, not a compromised release. No cryptographic signature is verified. |
 | **User responsibility** | Use official registries and review package-manager prompts and metadata. |
-| **Tests / evidence** | Managed-install detection and unsupported-install tests in `src/update.rs`. |
+| **Tests / evidence** | Install-method detection, release-asset contract, and checksum-parsing tests in `src/update.rs`. |
 | **Owner / module** | `src/update.rs` |
 
 ### T12: Accidental Execution of Unsafe Snippet
@@ -329,8 +339,8 @@ production build.
 |-------|--------|
 | **Description** | A crate dependency is compromised, introducing malicious code into the build or runtime. |
 | **Attack vector** | Malicious crate publication, typosquatting, maintainer account compromise. |
-| **Mitigations** | `cargo-deny` enforces license and advisory checks via `deny.toml`. Locked builds via `Cargo.lock`. Workspace uses known, audited dependencies. Unknown registries are denied. |
-| **Residual risk** | Low. `cargo-deny` and lockfiles reduce but do not eliminate supply-chain risk. A compromised transitive dependency that passes `cargo-deny` checks could still introduce vulnerabilities. |
+| **Mitigations** | `cargo-deny` enforces license and advisory checks via `deny.toml` — a **local** gate, not a CI step; its current status is tracked in `docs/SUPPLY_CHAIN_POLICY.md`. Locked builds via `Cargo.lock`. Unknown registries and git sources are denied. |
+| **Residual risk** | Low. `cargo-deny` and lockfiles reduce but do not eliminate supply-chain risk. A compromised transitive dependency that passes `cargo-deny` checks could still introduce vulnerabilities. Because the gate is not run in CI, it does not block a merge on its own. |
 | **User responsibility** | Review dependency changes when updating `Cargo.lock`. Monitor security advisories. |
 | **Tests / evidence** | `cargo deny check` is a **local** supply-chain gate driven by `deny.toml` — it is **not** a CI step. CI (`.github/workflows/ci.yml`) runs `bash scripts/check.sh` and `cargo check --workspace --all-targets` + `cargo test --test platform_smoke`. |
 | **Owner / module** | `Cargo.toml`, `Cargo.lock`, CI configuration. |
@@ -339,9 +349,9 @@ production build.
 
 | Field | Detail |
 |-------|--------|
-| **Description** | Environment variables that control test-only behavior (failpoints, executor modes, worker suppression, event emission, mutation barriers) could activate in a production build, altering behavior through caller-controlled input. |
-| **Attack vector** | A caller (script, CI, or attacker) sets `SNP_TEST_FAILPOINT`, `SNP_TEST_EXECUTOR_MODE`, `SNP_SKIP_WORKER_SPAWN`, `SNP_TEST_EVENTS_DIR`, or `SNP_TEST_MUTATION_BARRIER_DIR` on a production `snp` binary. |
-| **Mitigations** | All test seams are gated behind `#[cfg(feature = "test-support")]` at compile time. Production builds (`--no-default-features`) contain no runtime environment checks for these variables — the seam functions are compiled as no-ops. Integration tests use `env!("CARGO_BIN_EXE_snp")` to select the correct feature-enabled binary. A production-seam proof script builds without `test-support` and verifies each variable is ignored. |
+| **Description** | Environment variables that control test-only behavior (failpoints, worker suppression, event emission, mutation barriers, plaintext-credential opt-out) could activate in a production build, altering behavior through caller-controlled input. |
+| **Attack vector** | A caller (script, CI, or attacker) sets `SNP_TEST_FAILPOINT`, `SNP_SKIP_WORKER_SPAWN`, `SNP_TEST_EVENTS_DIR`, `SNP_TEST_MUTATION_BARRIER_DIR`, `SNP_ALLOW_DIR_FSYNC_FAILURE`, or `SNP_ALLOW_PLAINTEXT_API_KEY` on a production `snp` binary. |
+| **Mitigations** | All test seams are gated behind `#[cfg(feature = "test-support")]` at compile time; `test-support` is an optional, non-default feature. Production builds contain no runtime environment checks for these variables — the seam functions are compiled as no-ops. Integration tests use `env!("CARGO_BIN_EXE_snp")` to select the correct feature-enabled binary. A production-seam proof script builds without `test-support` and exercises the failpoint, worker-suppression, dir-fsync, event, and mutation-barrier variables against the production binary, asserting none of them take effect. |
 | **Residual risk** | Very low. The compile-time boundary eliminates the class of vulnerability entirely — there is no code path in the production binary that reads these environment variables. |
 | **User responsibility** | None. Production builds are immune to test seam activation by construction. |
 | **Tests / evidence** | `scripts/ci/test-production-seams.sh` builds and tests the no-feature binary. `#[cfg(not(feature = "test-support"))]` no-op stubs in `src/test_failpoints.rs`, `src/auto_sync/test_events.rs`, `src/auto_sync/schedule.rs`. |
@@ -351,7 +361,7 @@ production build.
 
 ## 6. Same-User Attacker Limitations
 
-A process running under the same user account as snip-it has effectively unrestricted access to the user's file system. snip-it's local protections (file permissions, CRC32, lock nonces) are **not** cryptographic authentication mechanisms and do not provide security against a fully compromised user account.
+A process running under the same user account as snip-it has effectively unrestricted access to the user's file system. snip-it's local protections (file permissions, CRC32, kernel lock ownership) are **not** cryptographic authentication mechanisms and do not provide security against a fully compromised user account.
 
 ### What Local Protections Do
 
@@ -360,8 +370,8 @@ A process running under the same user account as snip-it has effectively unrestr
 | `0o600` file permissions | Accidental exposure to other users on a multi-user system; casual file browsing | Any process running as the same user |
 | `0o700` directory permissions | Same as above for directories | Same as above |
 | CRC32 integrity (`auto-sync-status.toml`) | Accidental corruption, bit rot, partial writes | Intentional modification by a same-user attacker (CRC32 is not a cryptographic MAC) |
-| Lock file nonces | Stale lock detection, PID-reuse false positives | A malicious process that reads the nonce from the lock file and writes a matching nonce |
-| O_EXCL lock creation | Concurrent creation races | A process that deletes the lock file and recreates it |
+| Lock file owner record (PID + process start token + nonce) | Stale lock diagnostics; PID-reuse false positives | Any same-user process — the record is metadata, not an ownership authority |
+| Kernel lock ownership (`flock`/`LockFileEx`) | Concurrent acquisition of the same lock by two snp processes | A same-user process that deletes or replaces the lock file, or that closes the descriptor and re-acquires it |
 
 ### Design Rationale
 
@@ -379,7 +389,7 @@ Users who require protection against local attackers should use full-disk encryp
 |--------|-------------------|---------------|---------------|
 | T1: Malicious Pet/TOML/Import | `import_cmd.rs`, `library.rs`, `toml_helpers.rs` | `local_contracts` | Low |
 | T2: Malicious Backup Archive | `backup_cmd.rs`, `restore_cmd.rs` | `recovery_integration`, unit tests | Low |
-| T3: Compromised Sync Server | `sync.rs`, `sync_commands.rs`, `encryption.rs` | `sync_integration`, `sync_contracts` | Low |
+| T3: Compromised Sync Server | `sync.rs`, `sync_commands.rs`, `encryption.rs` | `sync_integration`, `sync_contracts` | Medium |
 | T4: Network Attacker (TLS) | `sync.rs`, `config.rs` | `sync_integration` | Very Low |
 | T5: Same-Account Local Process | `atomic.rs`, `lock.rs`, `status.rs`, `config.rs` | Lock/status unit tests | **Medium** |
 | T6: Malicious Editor/Shell Config | `edit_cmd.rs`, `new_cmd.rs`, `ui/mod.rs` | Editor resolution tests | Low |
@@ -387,7 +397,7 @@ Users who require protection against local attackers should use full-disk encryp
 | T8: PID Reuse / Stale Locks | `lock.rs`, `execution_lock.rs` | Lock nonce tests | Very Low |
 | T9: Interrupted Writes / Crashes | `atomic.rs`, `transaction.rs` | Atomic write tests, transaction tests | Low |
 | T10: Oversized/Decompression Input | `import_cmd.rs`, `sync.rs`, `encryption.rs` | Size limit tests | Low |
-| T11: Compromised Package Distribution | `update.rs` | Managed-install detection tests | Low |
+| T11: Compromised Package Distribution | `update.rs` | Install-method detection, release-asset contract, checksum tests | Low–Medium |
 | T12: Accidental Unsafe Execution | `run_cmd.rs`, `get_cmd.rs`, `clip_cmd.rs` | CLI integration tests | **Medium** |
 | T13: Dependency/Supply-Chain | `Cargo.toml`, CI config | `cargo deny check` (local gate, `deny.toml` — not a CI step) | Low |
 | T14: Test Seam Activation | `test_failpoints.rs`, `test_events.rs`, `schedule.rs` | `test-production-seams.sh`, compile-time cfg gates | Very Low |
@@ -398,18 +408,18 @@ Users who require protection against local attackers should use full-disk encryp
 
 | Primitive | Parameters | Usage | Location |
 |-----------|-----------|-------|----------|
-| **Argon2id** | 16 MiB memory, 3 iterations, 4 parallelism, random salt per encryption | Key derivation from passphrase to AES-256 key | `src/encryption.rs` |
-| **AES-256-GCM** | Random 12-byte nonce, 16-byte auth tag | Symmetric encryption of snippet data and metadata | `src/encryption.rs` |
+| **Argon2id** | 16 MiB memory, 3 iterations, 4 parallelism, random 16-byte salt per encryption | Key derivation from the API key to an AES-256 key | `src/encryption.rs` |
+| **AES-256-GCM** | Random 12-byte nonce, 16-byte auth tag | Symmetric encryption of snippet content (`description`, `command`, `tags`) | `src/encryption.rs` |
 | **SHA-256** | Standard | Backup manifest checksums and deterministic IDs | `src/commands/backup_cmd.rs`, `src/library/` |
 | **CRC32** | Standard | Integrity check on `auto-sync-status.toml` (not cryptographic) | `src/auto_sync/status.rs` |
-| **OS Keychain** | Platform-native | API key and encryption key storage | `src/config/`, `src/encryption.rs` |
+| **OS Keychain** | Platform-native | API key storage | `src/config/` |
 
 ### Cryptographic Properties
 
-- **Confidentiality:** AES-256-GCM provides confidentiality for all synced snippet data. The sync server never has access to plaintext.
+- **Confidentiality:** AES-256-GCM provides confidentiality for snippet *content* (`description`, `command`, `tags`) in the sync payload; the server stores and relays only ciphertext for those fields. The server is not blind to the key, though: it receives the API key as a `Bearer` token on every request. See [architecture/encryption.md](../architecture/encryption.md).
 - **Integrity:** AES-GCM auth tags detect ciphertext tampering. CRC32 detects accidental corruption (not intentional modification).
 - **Nonce security:** Each encryption operation generates a cryptographically random 12-byte nonce. Nonce reuse is prevented by random generation.
-- **Key derivation:** Argon2id with memory-hard parameters resists GPU/ASIC attacks on passphrase guessing.
+- **Key derivation:** Argon2id with memory-hard parameters resists GPU/ASIC attacks on API-key guessing.
 - **No authentication of local state:** File permissions and CRC32 do not provide cryptographic authentication. A same-user attacker can modify local state without detection beyond CRC32 integrity (which is trivially recomputed).
 
 ---

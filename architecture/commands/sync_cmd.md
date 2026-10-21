@@ -425,12 +425,12 @@ instead of collapsing a corrupt or unreadable marker into `NothingToDo`
   `eprintln!("error: {e}")` + `std::process::exit(1)`
   (`src/main.rs:1026-1031`). Despite `docs/EXIT_CODES.md` listing 7
   (`SYNC_FAILED`) and `CliOutcome::SyncFailed` mapping to it
-  (`src/outcome.rs:82`), **no `snp sync` path produces exit 7** —
+  (`src/outcome.rs:84`), **no `snp sync` path produces exit 7** —
   `CliOutcome::SyncFailed` is never constructed anywhere in `src/`.
   Sync failures (including `SyncFailureKind::PartialSyncFailure`) exit **1**.
 - `run_discard_pending` returns `CliOutcome` directly: `Success` (0),
   `ConflictOrRefused` (9), `ValidationFailed` (6), `PersistenceFailed`
-  (1) — `src/outcome.rs:74-90`.
+  (1) — `src/outcome.rs:76-93`.
 - Disabled sync, missing API key, and "no pending sync work" are exit-0
   messages, not errors.
 

@@ -24,7 +24,9 @@ pub enum CliOutcome {
     Ambiguous,
     /// User cancelled an interactive action.
     Cancelled,
-    /// Data validation or local persistence failure.
+    /// Data validation failure.
+    ///
+    /// Persistence failures map to `GENERAL_ERROR` (1), not here.
     ValidationFailed,
     /// Atomic write or persistence layer error.
     PersistenceFailed,
@@ -56,7 +58,7 @@ pub mod exit_code {
     pub const CANCELLED: i32 = 4;
     /// Ambiguous match (multiple candidates, unique policy requested).
     pub const AMBIGUOUS: i32 = 5;
-    /// Validation or local persistence failure.
+    /// Data validation failure.
     pub const VALIDATION_FAILED: i32 = 6;
     /// Synchronization failure.
     pub const SYNC_FAILED: i32 = 7;

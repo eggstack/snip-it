@@ -3,14 +3,17 @@
 ## Purpose
 Guide agents through working with the snip-sync server (`snip-sync/src/`).
 
+Deep dive: `architecture/server.md` (module map, database schema, gRPC
+handlers, HTTP wire parity, rate limiting, configuration, size gate).
+
 ## Security Notes
 
 - **TLS**: snip-sync serves plaintext gRPC and HTTP. Production deployments must use a reverse proxy with TLS; `TLS_ENABLED` acknowledges proxy termination and does not enable native TLS.
-- **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS. When not set and no origins configured, cross-origin requests are blocked.
+- **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS, but the server ignores it (with a warning) when the HTTP listener is not bound to a loopback address. When not set and no origins configured, cross-origin requests are blocked.
 - **HTTP runtime**: `snip-sync/src/http.rs` is the concrete `/health` and `/metrics` EggServe leaf service. It rejects request bodies, keeps metrics Basic-auth comparison constant-time, applies configured CORS and security headers, and relies on EggServe for HEAD framing. Proven wire parity: router 404/405 are empty with no content-type (metrics-disabled 404 keeps `"Not found"`), known routes answer preflight/unsupported methods with `Allow: GET, HEAD`, every non-allow-all response carries `Vary: origin` (allow-all omits it), and preflight never carries the security headers. Keep Tonic on its separate listener and do not add EggServe TLS/H2/H3 or a general routing framework.
-- **Rate limiting**: All endpoints use `authenticate_and_rate_limit()` helper. The bucket is keyed on the **peer address** (with trusted-proxy / `x-forwarded-for` handling), not on the client-supplied API key — keying on the raw key let every attacker-chosen key get a fresh budget, so the limiter imposed no aggregate ceiling. The rate limit runs **before** API-key lookup. `RATE_LIMIT_PER_MINUTE` controls limit.
+- **Rate limiting**: Every authenticated RPC goes through the `authenticate_and_rate_limit()` helper (`snip-sync/src/lib.rs:776`); `register` is unauthenticated but rate-limits the peer address directly (`snip-sync/src/lib.rs:991`), and `health` is neither authenticated nor rate-limited. The bucket is keyed on the **peer address** (`peer_rate_limit_key`, `snip-sync/src/lib.rs:757`; with trusted-proxy / `x-forwarded-for` handling), not on the client-supplied API key — keying on the raw key let every attacker-chosen key get a fresh budget, so the limiter imposed no aggregate ceiling. The rate limit runs **before** API-key lookup. `RATE_LIMIT_PER_MINUTE` controls limit; the window itself is `RateLimiter::allow()` (`snip-sync/src/rate_limiter.rs:45`).
 - **HTTP auth**: `/metrics` returns `401` with the RFC 9110 `WWW-Authenticate: Basic realm="metrics", charset="UTF-8"` challenge; the scheme match is case-insensitive (RFC 9110 §11.1); auth failures increment `snip_sync_auth_failures_total`.
-- **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs`.
+- **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs:15`; both hashing and verification use the same parameters.
 
 ## Server Architecture
 
@@ -20,14 +23,14 @@ snip-sync/
 ├── src/lib.rs          # Config loading and SnipSyncService
 ├── src/http.rs         # EggServe health/metrics service and HTTP policy
 ├── src/db.rs           # SQLite via sqlx (19 tests)
-├── src/rate_limiter.rs # Per-peer-address sliding window (120 req/min default)
-├── src/metrics.rs      # Prometheus counters
+├── src/rate_limiter.rs # Per-peer-address request windows (120 req/min default)
+├── src/metrics.rs      # Prometheus counters + request-duration histogram
 ├── src/premade.rs      # Premade library file scanning with path traversal prevention
 ├── src/bootstrap.rs    # Server initialization and service wiring
 ├── src/paths.rs        # Default path resolution
-├── src/cert.rs         # TLS certificate handling
+├── src/cert.rs         # Dev CA generation (openssl) for a TLS-terminating proxy
 ├── src/cli.rs          # CLI argument parsing
-├── src/startup.rs      # Startup gates: SNIP_SYNC_ALLOW_HTTP loopback-only, SNIP_SYNC_STATE_DIR, TLS ack, cron
+├── src/startup.rs      # Startup gates: SNIP_SYNC_ALLOW_HTTP loopback-only, TLS ack, cron, generated-unit env propagation
 ├── src/editor.rs       # Editor integration
 ├── src/process.rs      # Legacy PID parsing for stop/restart compatibility
 ├── src/orchestration.rs # Typed Tonic/EggServe shutdown supervision
@@ -47,17 +50,20 @@ Persistent lock-file presence is not an ownership signal.
 
 ### Shutdown Orchestration
 
-- Production coordination lives in `run_eggserve_services_until_shutdown()` in `orchestration.rs`.
+- Production coordination lives in `run_eggserve_services_until_shutdown()` in `snip-sync/src/orchestration.rs:9`.
 - The supervisor selects among the process signal, the Tonic task, and EggServe's borrowed completion future; it requests shutdown of both listeners and preserves typed EggServe terminal errors.
 - EggServe owns its bounded HTTP connection drain. The supervisor waits for both services before returning and records a failed outcome for unexpected completion, errors, or forced gRPC cancellation.
-- `serve_inner` evaluates `ServiceShutdownOutcome::ensure_clean_requested_shutdown()` after persistence cleanup.
-- `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation.
+- `serve_inner` (`snip-sync/src/main.rs:122`) evaluates `ServiceShutdownOutcome::ensure_clean_requested_shutdown()` (`snip-sync/src/orchestration.rs:124`) after the supervisor returns; it errors for a forced abort, an unexpected exit, or any service error/panic.
+- `state_dir()` supports `SNIP_SYNC_STATE_DIR` env var override for test isolation (`snip-sync/src/paths.rs:28`).
 
 ## Environment Variables
 
-All environment variable overrides are strictly parsed. Missing variables fall
+Typed overrides (ports, counts, limits, timeouts) are strictly parsed via
+`parse_env` (`snip-sync/src/lib.rs:275`). Missing variables fall
 back to file/default configuration. Present but invalid values cause startup to
-fail with an error naming the variable and the supplied value. Boolean
+fail with an error naming the variable and the supplied value. String
+overrides (hosts, paths, credentials, origin lists) are taken verbatim;
+`TRUSTED_PROXIES` silently drops entries that are not valid IPs. Boolean
 variables (`TLS_ENABLED`, `SNIP_SYNC_ALLOW_HTTP`, `CORS_ALLOW_ALL`) accept case-insensitive `true`, `1`, `yes`, `on` and
 `false`, `0`, `no`, `off`; unknown values fail instead of silently falling
 back.
@@ -72,14 +78,14 @@ back.
 | `DB_MAX_CONNECTIONS` | 5 | Max SQLite connections (must be ≥ 1; `DEFAULT_DB_MAX_CONNECTIONS`) |
 | `PREMADE_DIR` | `<data_dir>/snip-sync/premade-libraries` | Premade library directory (`paths::default_premade_dir`) |
 | `CORS_ALLOWED_ORIGINS` | empty (deny-all) | Comma-separated origins |
-| `CORS_ALLOW_ALL` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow all origins |
+| `CORS_ALLOW_ALL` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow all origins (ignored on non-loopback binds) |
 | `METRICS_USERNAME` | empty | Basic auth for /metrics |
 | `METRICS_PASSWORD` | empty | Basic auth for /metrics |
 | `RATE_LIMIT_PER_MINUTE` | 120 | Requests per minute per peer address |
 | `TRUSTED_PROXIES` | empty | Comma-separated trusted proxy IPs |
 | `TLS_ENABLED` | `false` | Boolean: `true`/`1`/`yes`/`on` to acknowledge TLS termination |
-| `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP — loopback binds only (`startup.rs:282`) |
-| `SNIP_SYNC_STATE_DIR` | `<state_dir>/snip-sync` | State dir override for test isolation (`paths.rs:29`, `startup.rs:311`) |
+| `SNIP_SYNC_ALLOW_HTTP` | `false` | Boolean: `true`/`1`/`yes`/`on` to allow plaintext HTTP — loopback binds only (`startup.rs:274-293`) |
+| `SNIP_SYNC_STATE_DIR` | `<state_dir>/snip-sync` | State dir override for test isolation (`paths.rs:29`; propagated into generated units at `startup.rs:311`) |
 | `CONFIG_PATH` | `<config_dir>/snip-sync/config.toml` | Config file override (`paths.rs:15`) |
 | `RUST_LOG` | `info` | Log level (via tracing) |
 
@@ -89,7 +95,7 @@ Path defaults derive from `dirs::` (`paths.rs`): `config_dir()` → `dirs::confi
 `dirs` returns `None`, so a table entry saying "relative" is always wrong —
 these are absolute per-platform paths.
 
-### Request-limit ceilings (also strictly parsed, `lib.rs:361-390`)
+### Request-limit ceilings (also strictly parsed, `snip-sync/src/lib.rs:419-460`)
 
 Adding or changing a limit means touching **both** the env var and the
 `DEFAULT_*` constant and the `server.limits` config block:
@@ -97,6 +103,7 @@ Adding or changing a limit means touching **both** the env var and the
 | Variable | Limits |
 |----------|--------|
 | `MAX_COMMAND_LENGTH` | Snippet command length |
+| `MAX_ENCRYPTED_PAYLOAD_LENGTH` | Encrypted payload length (default 1 MiB) |
 | `MAX_DESCRIPTION_LENGTH` | Description length |
 | `MAX_TAGS`, `MAX_TAG_LENGTH` | Tag count and per-tag length |
 | `MAX_ID_LENGTH`, `MAX_DEVICE_ID_LENGTH` | Identifier lengths |
@@ -107,6 +114,10 @@ Adding or changing a limit means touching **both** the env var and the
 Read `tests/snip_sync_lifetime.rs` before touching status codes, `Allow`/`Vary`, or security headers (wire parity is locked there).
 
 ## gRPC Endpoints
+
+Service definition: `snip-proto/proto/sync.proto` (11 RPCs). Per-RPC
+validation, response contract, and counters: `architecture/server.md`
+("gRPC service").
 
 | RPC | Auth | Rate Limited | Description |
 |-----|------|-------------|-------------|

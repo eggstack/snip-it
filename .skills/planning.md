@@ -14,7 +14,8 @@ Implementation agents MUST NOT silently rewrite the long-term documents.
 Full templates live in `plans/subsystems/README.md`,
 `plans/implementation/README.md`, `plans/closure/README.md`, and
 `plans/adrs/README.md`. Governance is normative in
-`plans/003-planning-process.md`.
+`plans/003-planning-process.md`; `plans/README.md` is the entry point for
+the planning system and for starting a new workstream.
 
 > Registry truth: check `plans/registry.md` before assuming any roadmap state.
 > All currently registered milestones are `closed` with no open dependencies —
@@ -32,7 +33,7 @@ Load this skill when working on:
 - Updating `plans/registry.md` (adding dependency-ready plans, marking
   active/closing/closed, unblocking downstream work)
 - Writing an ADR under `plans/adrs/`
-- Archiving completed interim documents to `plans/archive/`
+- Archiving retired direction documents and predecessor pointers to `plans/archive/` (closed milestone bodies stay in place)
 - Reviewing whether a finished milestone unblocks other registered plans
 
 ## Document hierarchy
@@ -82,8 +83,8 @@ Authority order on conflict:
 - `blocked` — named dependency or evidence requirement prevents progress
 - `closing` — implementation landed; closure evidence being gathered
 - `closed` — closure record accepted
-- `conditionally closed` — substantial work landed but a named correctness
-  finding prevents strict closure
+- `conditionally closed` — substantial work landed, but a named correctness or
+  operational evidence condition remains
 - `superseded` — replaced by another document
 - `archived` — no longer active; retained for traceability
 - `corrective pass required` — closure evidence insufficient; a named
@@ -98,8 +99,9 @@ Pre-convention `Status: complete` in promoted flat plans maps to `closed`.
 - Implementation plan:
   `implementation/<subsystem>/NNN-short-title.md` (number local to subsystem)
 - Closure record: `closure/<subsystem>/NNN-status.md` (same number as plan)
-- Archive: predecessor pointers as `archive/flat-NNN-original-name.md`;
-  preserve subsystem grouping for later moves
+- Archive: retired direction documents and predecessor pointers as
+  `archive/flat-NNN-original-name.md`; closed milestone bodies stay in place
+  as the record of record
 
 Stable subsystem names: `distribution-release`, `server-lifecycle-http`,
 `updater-transport`, `cli-library-sync-consolidation`, `mcp-integration`,
@@ -135,8 +137,8 @@ Every planned item MUST carry one primary class:
 7. Implement and verify.
 8. Write a closure record under `closure/<subsystem>/`.
 9. Update `registry.md` and the subsystem roadmap status.
-10. Archive completed interim documents when they no longer represent
-    active work.
+10. Archive retired direction documents and predecessor pointers when they no
+    longer represent active work. Closed milestone bodies stay in place.
 11. Audit blocked work: if this closure satisfies a registered plan's
     blocker, move it to `ready` in the same commit and record the audit in
     the closure record.

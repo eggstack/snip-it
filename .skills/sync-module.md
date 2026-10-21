@@ -3,6 +3,10 @@
 ## Purpose
 Guide agents through working with the sync module (`src/sync.rs`, `src/sync_commands.rs`, `src/commands/sync_cmd.rs`).
 
+Deep dive: `architecture/sync.md` (client construction, retry macro, batching,
+merge ordering, recovery marker, skipped-id accounting). Auto-sync subsystem:
+`architecture/auto_sync.md`. Encryption: `architecture/encryption.md`.
+
 ## Known Issues
 
 ### PERF-3: Argon2 Key Derivation Per-Snippet (PARTIALLY ADDRESSED)
@@ -17,14 +21,15 @@ sync_encrypted() flow (sync.rs):
 1. Encrypt local snippets
 2. Build byte-bounded upload batches (Prost encoded_len, 3.5 MiB ceiling)
 3. Sort batches by snippet ID for deterministic ordering
-4. Send first batch via Sync RPC (upload + first response page)
-5. Send remaining batches via PushSnippets RPC (upload only)
-6. Paginate remaining response pages via Sync RPC (no upload)
-7. Aggregate and decrypt all server snippets
-8. Return merged SyncResponse
+4. Send the batch(es): zero batches -> empty-upload Sync(offset=0) pull-only; one
+   batch -> Sync RPC (upload + first response page); many batches -> PushSnippets
+   RPC per batch (upload only)
+5. Paginate remaining response pages via Sync RPC (no upload)
+6. Aggregate and decrypt all server snippets
+7. Return merged SyncResponse
 
 run_sync() flow (sync_commands.rs):
-1. Validate config (api_key, device_id)
+1. Validate config (sync enabled + api_key)
 2. Create SyncClient with TLS
 3. Health check
 4. Resolve libraries to sync
@@ -37,7 +42,7 @@ run_sync() flow (sync_commands.rs):
 8. Update last_sync timestamp (only if no encryption failures)
 ```
 
-**Note:** Encryption failures are tracked via `skipped_count`/`skipped_ids` in the response. `last_sync` is NOT updated when there are failures, preventing permanent snippet loss.
+**Note:** Encryption failures are tracked via `skipped_count`/`skipped_ids` in the response. `last_sync` is NOT advanced when there are failures, so the failed records stay above the watermark and are retried on the next run instead of being silently dropped.
 
 ### Transport and batching internals
 
@@ -46,6 +51,9 @@ run_sync() flow (sync_commands.rs):
 - The custom-encryption failure injection used by the all-encryption-failed regression lives in `#[cfg(test)] mod tests` (`src/sync.rs:1513`, helper `sync_encrypted_with_test_encrypt` at `:1522`); it drives the same prepared transport and is unreachable in production. No public custom-encryption sync entry point exists.
 
 ## Merge Strategy
+
+Full contract: `architecture/sync.md` ("Merge and Conflict Resolution",
+"`choose_version` Ordering", "Tombstone Handling in Both Directions").
 
 Live versions use deterministic ordering by `(updated_at, device_id,
 SHA-256(synced-fields))`; this is role-independent for equal timestamps.
@@ -62,7 +70,8 @@ Startup and the normal missing-library path resume the existing
 local relinking, linkage and `last_sync` are saved together, and
 corrupt/mismatched/ambiguous recovery state blocks blind recreation. A linked
 marker never creates a second remote library and is removed only after merged
-content and the final cursor are durable.
+content and the final cursor are durable. See `architecture/sync.md`
+("Remote-Library Recovery").
 
 ## Key Functions
 
@@ -76,7 +85,7 @@ content and the final cursor are durable.
 | `retry_grpc_unified!` + `RetryBackoff` | `sync.rs` | Single retry/backoff/deadline policy for all RPCs (no duplicate macros or manual loops) |
 | `build_upload_batches()` | `sync.rs` | Byte-bounded batch splitting using Prost encoded_len |
 | `accumulate_page()` | `sync.rs` | Decrypt and accumulate server snippets from a response page |
-| `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and request budget |
+| `SyncRunLimits` | `sync.rs` | Internal automatic-sync deadline and per-request timeout |
 | `SyncExecutionLock::wait_acquire()` / `try_acquire()` | `src/auto_sync/execution_lock.rs:143-158` (kernel-backed via `process_file_lock`) | Bounded-time lock acquisition for foreground callers / non-blocking for workers |
 | `clear_pending_after_explicit_sync()` | `auto_sync/notification.rs` | Generation-safe pending clear after manual sync |
 
@@ -92,28 +101,28 @@ Representative unit tests live at the end of `sync_commands.rs` (merge: newer-ti
 
 ### SyncFailureKind Enum
 
-`SyncFailureKind` (`src/error.rs`) provides typed error variants for sync operations:
+`SyncFailureKind` (`src/error.rs:30`) provides typed error variants for sync operations. The "Source" column names the module that constructs the variant; a variant with no production constructor is still classified and still reachable through the `FailureClass` mapping:
 
 | Variant | Maps to FailureClass | Source |
 |---------|---------------------|--------|
 | `NotConfigured` | Configuration | sync_commands.rs |
 | `ConnectFailed` | Transient | sync.rs |
 | `HealthCheckFailed` | Transient | sync_commands.rs |
-| `AuthenticationFailed` | Configuration | sync.rs |
+| `AuthenticationFailed` | Configuration | none (unit test only) |
 | `SyncRequestFailed` | Transient | sync.rs |
 | `CreateLibraryFailed` | Configuration | sync.rs |
 | `GetPremadeLibraryFailed` | Transient | sync.rs |
 | `RegistrationFailed` | Configuration | sync.rs |
 | `LibraryManagerInitFailed` | LocalFailure | sync_commands.rs |
 | `LibraryModeInitFailed` | LocalFailure | sync_commands.rs |
-| `LibrariesDirReadFailed` | LocalFailure | sync_commands.rs |
+| `LibrariesDirReadFailed` | LocalFailure | none (declared, never constructed) |
 | `NoLibrariesToSync` | Internal | sync_commands.rs |
 | `SaveMergedLibraryFailed` | LocalFailure | sync_commands.rs |
 | `PartialSyncFailure` | Transient | sync_commands.rs |
 | `PremadePartialFailure` | Transient | sync_commands.rs |
 | `EncryptionFailed` | Internal | sync.rs |
 | `DecryptionFailed` | Internal | sync.rs |
-| `LibraryNotFound` | Configuration | sync_commands.rs |
+| `LibraryNotFound` | Configuration | sync.rs, sync_commands.rs |
 | `Timeout` | Transient | sync.rs |
 | `RequestTooLarge` | Configuration | sync.rs |
 | `ClockSkew` | Configuration | sync.rs |
@@ -147,7 +156,7 @@ Auto-sync delegates error classification to `FailureClass::from_error()` in `pol
 
 ### Config Fingerprint and Deferral Release
 
-`compute_config_fingerprint()` hashes non-secret structural inputs (server URL, enabled flags, direction, API key presence). `release_deferral_on_config_change()` checks if the fingerprint has changed since a deferred failure; if so, it clears `attention_required`, resets `consecutive_failures`, and permits a new attempt.
+`compute_config_fingerprint()` hashes non-secret structural inputs (server URL, enabled and auto-sync flags, sync direction, and a credential-revision counter — the API key value itself is never hashed, so key replacement is captured only through that counter). `release_deferral_on_config_change()` checks if the fingerprint has changed since a deferred failure; if so, it clears `attention_required`, resets `consecutive_failures` and `next_attempt_at_unix_ms`, and permits a new attempt.
 
 ### Schedule Decision
 
@@ -178,12 +187,12 @@ The scheduler does not probe the execution lock. Worker acquisition is the sole 
 | `snp sync retry` | Immediate sync, bypass backoff | Yes (wait_acquire) | Yes (on success) |
 | `snp sync clear-failure` | Reset failure disposition | No | No |
 | `snp sync discard-pending` | Remove pending marker | No | Yes (generation-safe) |
-| `snp sync repair` | Quarantine corrupt artifacts, remove stale locks | No | No |
+| `snp sync repair` | Quarantine a corrupt status file; remove orphaned temp files | No | No |
 
 **`snp sync retry`:** Validates config, acquires execution lock, reads pending generation, runs `run_sync()`, records outcome. Use when status shows "attention required" or "pending retry".
 
 **`snp sync clear-failure`:** Resets `attention_required=false`, `consecutive_failures=0`, `next_attempt_at_unix_ms=0` in status file. Use after fixing the underlying issue to allow immediate retry.
 
-**`snp sync discard-pending`:** Reads pending generation, prompts for confirmation (unless `--force`), calls `clear_if_generation_matches`. Refuses if generation changed during prompt. Use to abandon sync intent.
+**`snp sync discard-pending`:** Reads pending generation, prompts for confirmation (unless `--force`; a non-interactive session refuses without `--force`), calls `clear_if_generation_matches`. Refuses if generation changed during prompt, or if `--generation` does not match the observed generation. Use to abandon sync intent.
 
-**`snp sync repair`:** Inspects status file, execution lock, worker lock, pending txn lock, temp files, and permissions. Without `--apply` lists issues; with `--apply` quarantines and removes stale/corrupt artifacts.
+**`snp sync repair`:** Inspects the status file, orphaned temp/quarantine files in the state dir, and status-file permissions. Kernel lock files are diagnostic-only metadata — repair never inspects, rewrites, or removes them, and it never touches the pending-transaction lock. Without `--apply` (or with `--dry-run`) it lists issues; with `--apply` it quarantines a corrupt status file, removes orphaned temp files, and hardens the status file to mode `0600`.

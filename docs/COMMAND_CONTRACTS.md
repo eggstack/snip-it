@@ -11,29 +11,29 @@
 
 | Command | Interactive | Reads stdin | Writes stdout | Writes stderr | May prompt | May mutate | May clipboard | May execute shell | May network | Machine-output modes | Exit categories |
 |---------|------------|-------------|---------------|---------------|------------|------------|---------------|-------------------|-------------|---------------------|-----------------|
-| `new` | No (unless `--editor`) | Yes (`--command-stdin`) | No | Yes | Yes (`--tags`) | Yes | No | No | No | None | 0, 1 |
+| `new` | No (unless `--editor`) | Yes (`--command-stdin`) | Yes | Yes | Yes (`--tags`) | Yes | No | Yes (`--editor`) | No | None | 0, 1 |
 | `list` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--csv` | 0, 1 |
-| `run` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (execution) | No | Yes | No | None | 0, 1, 3, 4, 5, 8 |
-| `clip` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (clipboard) | Yes | No | No | None | 0, 1, 3, 4, 5 |
-| `search` | Yes (TUI) | No | No | Yes | Yes | No | No | No | No | None | 0, 1, 4, 5 |
-| `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 4, 5 |
-| `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | No | No | None | 0, 1 |
-| `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 3, 4, 5 |
+| `run` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (execution) | No | Yes | No | None | 0, 1, 3, 5, 8 |
+| `clip` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (clipboard) | Yes | No | No | None | 0, 1, 3, 5 |
+| `search` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | None | 0, 1 |
+| `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 4 |
+| `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 3, 5 |
+| `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 3, 5 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
-| `doctor` | No | No | Yes | Yes | No | No | No | No | No | `--report json` | 0, 1, 6 |
+| `doctor` | No | No | Yes | Yes | No | No | No | Yes (diagnostic probes) | No | `--report json` | 0, 1, 6 |
 | `backup` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
-| `restore` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 6, 9 |
+| `restore` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1 |
 | `repair` | No | No | Yes | Yes | No | Yes (`--apply`) | No | No | No | `--json` | 0, 1, 10 |
 | `import` | No | No | Yes | Yes | No | Yes | No | No | No | `--report json` | 0, 1 |
-| `sync` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
-| `register` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
-| `cron` | No | No | Yes | Yes | No | Yes | No | No | No | None | 0, 1 |
+| `sync` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 6, 9 |
+| `register` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1 |
+| `cron` | No | No | Yes | Yes | Yes | Yes (clipboard copy) | Yes (on confirmation) | No | No | None | 0, 1 |
 | `library` | No | No | Yes | Yes | No | Yes | No | No | No | None | 0, 1 |
-| `premade` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 7 |
+| `premade` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1 |
 | `shell` | No | No | Yes | Yes | No | No | No | No | No | None | 0, 1 |
 | `completions` | No | No | Yes | No | No | No | No | No | No | shell completion | 0, 1 |
-| `mcp` | No (stdio protocol) | No | Yes (protocol only) | Yes (diagnostics) | No | No | No | No | No | JSON-RPC 2.0 over stdio | 0, 1, 3 |
+| `mcp` | No (stdio protocol) | No | Yes (protocol only) | Yes (diagnostics) | No | Yes (`mcp install`) | No | Yes (`mcp install`) | No | JSON-RPC 2.0 over stdio | 0, 1 |
 | `update` | No | No | Yes | Yes | No | Yes (binary replace) | No | Yes (self-replace) | Yes | `--dry-run` | 0, 1 |
 | `version` | No | No | Yes | No | No | No | No | No | No | None | 0 |
 | `keybindings` | No | No | Yes | No | No | No | No | No | No | None | 0 |
@@ -41,25 +41,27 @@
 
 `snp data <subcommand>` is a **mirror spelling** of the top-level commands
 (`validate`, `status`, `backup`, `restore`, `repair`); it has no independent
-contract. `auto-sync-worker` and `self-replace` are internal/replace
+contract. `auto-sync-worker` and `__self-replace` are internal/replace
 subprocesses and are not user-facing contracts.
 
 `snp mcp serve` is the only stdio-protocol command: **stdout carries protocol
 messages only**, all diagnostics go to stderr, and it is read-only and
-non-executing. See [`MCP.md`](MCP.md).
+non-executing. `snp mcp install` is the exception inside the `mcp` group: it
+spawns the MCP client's own CLI to register this binary and therefore mutates
+that client's configuration. See [`MCP.md`](MCP.md).
 
 ## Column Definitions
 
 - **Interactive**: Command renders a TUI (crossterm raw mode) or opens an editor. No = fully non-interactive.
-- **Reads stdin**: Command consumes bytes from stdin (e.g., `--command-stdin`, `--output-stdin`).
+- **Reads stdin**: Command consumes *data* bytes from stdin (e.g., `--command-stdin`, `--output-stdin`). TUI keystroke input is not counted here.
 - **Writes stdout**: Command writes human-readable or machine-readable data to stdout via `println!`.
 - **Writes stderr**: Command writes errors, progress, or diagnostics to stderr via `eprintln!`.
 - **May prompt**: Command may prompt the user for input (interactive TUI, `$EDITOR`, `--tags` prompt, conflict resolution).
 - **May mutate**: Command writes to the local snippet library, clipboard, or filesystem.
 - **May clipboard**: Command writes to the system clipboard.
-- **May execute shell**: Command spawns a child process to execute snippet content.
+- **May execute shell**: Command spawns a child process — snippet execution, an editor, the MCP client's own CLI, or the self-replace helper.
 - **May network**: Command makes gRPC or HTTP requests to a remote server.
-- **Machine-output modes**: Flags that produce structured output (JSON, CSV) for scripting.
+- **Machine-output modes**: Flags that produce structured or script-consumable output (JSON, CSV, raw command text, a file) for scripting.
 - **Exit categories**: See Exit Code Legend below.
 
 ## Exit Code Legend
@@ -73,10 +75,13 @@ non-executing. See [`MCP.md`](MCP.md).
 | 4 | Cancelled | User cancelled interactive action |
 | 5 | Ambiguous match | Multiple candidates, unique match expected |
 | 6 | Validation failure | Diagnostic finding or invalid data (see `docs/EXIT_CODES.md`) |
-| 7 | Sync failure | Synchronization with remote server failed |
+| 7 | Sync failure | Reserved but currently unreachable — sync failures surface as exit 1 |
 | 8 | Execution failure | Snippet execution (child process) failed |
 | 9 | Conflict/refused | Destructive action refused or generation changed |
 | 10 | Unsafe repairs | Every finding awaits an operator decision and was not applied |
+
+Every command can also exit **2** on a clap usage/argument error; the table's
+"Exit categories" column lists only the command-level outcomes.
 
 Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code mapping.
 
@@ -90,19 +95,20 @@ spellings and is classified in the same table.
 | Policy | Commands |
 |--------|----------|
 | `SuppressReadOnly` (also `StartupServices::Minimal`) | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` |
-| `SuppressReadOnly` (dry-run variants only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — and the `data` spellings of each |
-| `Allow` (full logging + audit) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
+| `SuppressReadOnly` (dry-run variants only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — plus `snp data restore --mode dry-run` and `snp data repair --dry-run` (there is no `snp data import`) |
+| `Allow` (also `StartupServices::Logging`) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` (internal subprocess) |
-| `SuppressConfiguration` | `update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
+| `SuppressConfiguration` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
 
 Two easy-to-miss entries: **`run`, `clip`, and `search` are `Allow`**, because
-they can record usage and schedule auto-sync; and **`mcp` is
-`SuppressReadOnly`**, because the MCP surface never mutates. Extending either
-list means editing `command_behavior()` — do not infer the policy from the
+they can record usage (`run`, `clip`) and schedule auto-sync; and **`mcp` is
+`SuppressReadOnly`**, because the MCP surface never mutates the snippet library
+— only `snp mcp install` touches an MCP client's own configuration. Extending
+either list means editing `command_behavior()` — do not infer the policy from the
 command's name.
 
-Dry-run commands are classified based on their command category, not the dry-run flag. `restore` and `import` are classified as `Allow` (mutation) because the command itself is a mutation command; dry-run mode prevents local mutation but the recovery policy applies to the command class, not the mode.
+Dry-run variants are classified by their **flag**, not by their command category. `command_behavior()` matches the dry-run variants first and classifies them `SuppressReadOnly` with `Minimal` services — `restore --mode dry-run`, `repair --dry-run`, and `import pet --dry-run`, plus the `data` spellings of `restore` and `repair`. The mutating spellings of those same commands are `Allow`.
 
 ## Notes
 
@@ -112,3 +118,7 @@ Dry-run commands are classified based on their command category, not the dry-run
 - **`--json`** and **`--csv`** flags conflict with each other (enforced by clap).
 - **`ExecutionFailed`** exit code: if the child process had a valid exit code, that code is propagated; otherwise exit code 8 is used.
 - **`PersistenceFailed`** maps to exit code 1 (general error) — no dedicated public exit code for persistence failures.
+- **Exit 4 (cancelled)** comes only from `snp select`. `run`, `clip`, and `search` treat a cancelled TUI selection as normal completion (exit 0).
+- **Exit 5 (ambiguous)** comes only from the exact-selector paths: `run`, `clip`, and `edit` with `--id` / `--description-exact` / `--command-exact`, and from `snp get`. The interactive TUI resolves ambiguity in-terminal instead.
+- **Exit 6 (validation failure)** comes from `snp validate`, `snp doctor`, and `snp sync discard-pending` (corrupt pending state). Exit **9 (conflict/refused)** comes from `snp sync discard-pending`.
+- **Exit 7 (sync failure)** is reserved but currently unreachable — no command constructs `CliOutcome::SyncFailed`; sync failures surface as exit 1.

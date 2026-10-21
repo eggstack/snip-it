@@ -125,7 +125,7 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 ## Error / exit mapping
 
 - `NotFound` → exit 3; `Ambiguous` → exit 5; success → exit 0
-  (`CliOutcome`, `src/outcome.rs:48-64`).
+  (`CliOutcome`, `src/outcome.rs:50-66`).
 - Usage errors (no selector, conflicting modes, bad `--var`) →
   `runtime_error` (exit 1/2 family).
 - JSON serialization failure → `runtime_error` (`get_cmd.rs:224-227`).

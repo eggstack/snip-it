@@ -35,18 +35,23 @@ Moved out of `docs/` so they cannot be mistaken for contracts. Each carries an
 | Document | Why archived |
 |----------|--------------|
 | [archive/SECURITY_AUDIT.md](archive/SECURITY_AUDIT.md) | Frozen 2026-07-22, pre-EggServe / pre-eggfetch. Current posture is in `SECURITY.md` + `THREAT_MODEL.md` |
-| [archive/FEATURE_BOUNDARIES.md](archive/FEATURE_BOUNDARIES.md) | Self-contradictory; recommends feature gates that were removed. Version numbers drifted |
 | [archive/CANONICAL_OPERATIONS.md](archive/CANONICAL_OPERATIONS.md) | Every `path:line` citation points at the pre-split `src/library.rs` / `src/config.rs` |
-| [archive/FUZZING_AND_PROPERTY_TESTS.md](archive/FUZZING_AND_PROPERTY_TESTS.md) | Planning artifact for fuzz work that was never started; no fuzz harness exists |
-| [archive/ARCHITECTURE_INVENTORY.md](archive/ARCHITECTURE_INVENTORY.md) | Superseded by the `architecture/` tree (start with `architecture/overview.md`). Names a non-existent `deduplicate_ids()` and carries wrong module/test counts |
 | [archive/CLI_EXITCODE_STREAM_POLICY_SUPERSEDED.md](archive/CLI_EXITCODE_STREAM_POLICY_SUPERSEDED.md) | Retired pre-`CliOutcome` 2–6 exit-code proposal plus an unimplemented stdout/stderr stream contract. Live contract: [`EXIT_CODES.md`](EXIT_CODES.md) |
+
+Three archived snapshots were **pruned** rather than retained, because they
+documented nothing that ever existed: a plan for fuzz work that was never
+started, a self-contradictory feature-flag analysis recommending gates that
+were removed, and a pre-`architecture/` module inventory that named a
+non-existent function and wrong counts. The surviving archives are the ones
+either still referenced from a live document or recording a decision that
+actually shipped.
 
 ## Related, outside `docs/`
 
-- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 62 architecture documents.
-- [`../AGENTS.md`](../AGENTS.md) — verify commands, gotchas, invariants.
+- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 61 deep dives (62 documents including the overview).
+- [`../AGENTS.md`](../AGENTS.md) — verify commands, gotchas, invariants; indexes into the architecture sections.
 - [`../AGENTS.override.md`](../AGENTS.override.md) — session pitfall notes.
-- [`../.skills/`](../.skills) — task-shaped skills (sync, transactions, server, selector parity, …).
+- [`../.skills/`](../.skills) — task-shaped skills (sync, transactions, server, selector parity, testing, documentation, …).
 - [`../plans/registry.md`](../plans/registry.md) — authoritative planning status.
 - [`../snip-sync/README.md`](../snip-sync/README.md) — running the sync server (systemd, Docker, reverse proxy).
 - [`../SECURITY.md`](../SECURITY.md) — vulnerability reporting and current security posture.

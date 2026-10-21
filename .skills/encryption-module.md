@@ -3,13 +3,17 @@
 ## Purpose
 Guide agents through working with the encryption module (`src/encryption.rs`).
 
+Deep dive: [`architecture/encryption.md`](../architecture/encryption.md) — payload
+format, KDF derivation, cache lifecycle, and the trust-boundary note. This skill
+carries only the rules you need while changing code.
+
 ## Argon2 Memory Cost
 
 **Location**: `src/encryption.rs`
 ```rust
-const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14;  // 16 MiB
-const ARGON2_TIME_COST: u32 = 3;
-const ARGON2_PARALLELISM: u32 = 4; // Argon2id, see derive_key in src/encryption.rs
+const ARGON2_MEMORY_COST_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
+const ARGON2_TIME_COST: u32 = 3; // 3 iterations — OWASP minimum recommendation
+const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU core count
 ```
 
 Memory cost is `1 << 14` (16 MiB), time cost 3, parallelism 4 (`src/encryption.rs:37-39`).
@@ -19,15 +23,16 @@ Memory cost is `1 << 14` (16 MiB), time cost 3, parallelism 4 (`src/encryption.r
 ## Key Derivation
 
 ```rust
-// Uses hash_password_into with raw salt bytes (argon2 0.6 KDF API)
+// src/encryption.rs:202-205 — argon2 0.6 inherent `hash_password_into`,
+// called with the raw salt bytes (not a base64-encoded salt).
 let mut key_bytes = [0u8; 32];
 argon2.hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)?;
 ```
 
 The derived key is wrapped in private `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop` (`src/encryption.rs:102-103`).
-The encrypt path zeroizes via `key.zeroize()` (`encryption.rs:243`); the decrypt path
-uses `drop(std::mem::take(&mut key))` (`encryption.rs:269`). Never `lock().unwrap()` the
-key cache directly — use `lock_key_cache()` (`encryption.rs:72-80`) with its poison
+The encrypt path zeroizes via `key.zeroize()` (`src/encryption.rs:243`); the decrypt path
+uses `drop(std::mem::take(&mut key))` (`src/encryption.rs:269`). Never `lock().unwrap()` the
+key cache directly — use `lock_key_cache()` (`src/encryption.rs:72-80`) with its poison
 recovery; `ct_eq` is `#[cfg(test)]`-only, do not re-export.
 
 ## Payload Format
@@ -52,6 +57,8 @@ ciphertext is placed in the proto `command` field; `description` is emptied and
 | `description`, `command`, `tags` | Encrypted (ciphertext in `command`, `encrypted = true`) |
 | `id`, `created_at`, `updated_at`, `device_id`, `deleted` | **Plaintext** |
 | `output` | Not in `ProtoSnippet` at all (local-only) |
+
+Full breakdown: [`architecture/encryption.md`](../architecture/encryption.md#what-sync-actually-encrypts).
 
 `decrypt_snippet` (`src/sync.rs:1327`) is the symmetric inverse and returns
 unmodified records unchanged when `encrypted == false`. An agent must not
@@ -86,8 +93,11 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 
 - **Confidentiality**: AES-256-GCM
 - **Integrity**: GCM auth tag (tested with tampered ciphertext/nonce/salt tests)
-- **Key isolation**: The server stores only an Argon2id hash of the API key, never
-  the key itself, and snippet bodies are stored as ciphertext. Note the API key
+- **Key isolation**: The server stores only an Argon2id hash of the API key
+  (`snip-sync/src/db.rs:81-98`), never the key itself — plus an 8-character
+  base64(SHA-256) prefix used for indexed lookup
+  (`snip-sync/src/db.rs:118-124`) — and snippet bodies are stored as
+  ciphertext. Note the API key
   **is** transmitted as a `Bearer` token on every request (`src/sync.rs:291-299`),
   so anything observing that token can re-derive the Argon2id key. The guarantee
   is transport + at-rest protection — not server-blindness.
@@ -101,8 +111,10 @@ Derived keys are cached per-session to avoid re-running Argon2id for the same (a
 - **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>>` — keyed by `(SHA-256(api_key), base64(salt))`
 - **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
 - **Clear**: sync takes an RAII guard `let _key_cache_guard = encryption::key_cache_guard();`
-  (`src/encryption.rs:90`, acquired at `src/sync.rs:420`); `KeyCacheGuard::drop` calls `clear_key_cache()`. There is no
-  direct `clear_key_cache()` call in `sync.rs` — keep the guard, or an early return
+  (`src/encryption.rs:90`, acquired at `src/sync.rs:420`); `KeyCacheGuard::drop` calls `clear_key_cache()`.
+  `src/sync_commands.rs` wraps the same call in its own guard
+  (`src/sync_commands.rs:43-49`, taken at `src/sync_commands.rs:675`). Neither
+  module calls `clear_key_cache()` directly — keep the guard, or an early return
   leaks derived keys for the rest of the process.
 - **Zeroize**: Cache entries are zeroized on drain
 
@@ -122,4 +134,4 @@ Tests in `encryption.rs` cover:
 - Empty string, unicode, large payload (10KB)
 - Invalid base64, truncated payload
 - Tampered ciphertext, nonce, salt
-- Key cache behavior
+- Cache-key uniqueness (same key → same hash, different keys → different hashes)

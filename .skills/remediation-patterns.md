@@ -6,22 +6,22 @@
 - `keyring = "4"` for cross-platform OS keychain access (default `v1` features)
 - `Entry::new(service, user)` to create credential entries
 - `entry.set_password()` / `entry.get_password()` for storage/retrieval
-- No plaintext downgrade: a production save **refuses** when the keychain is unavailable rather than falling back. Tests bypass it via `SNP_ALLOW_PLAINTEXT_API_KEY=true` under `test-support`
+- No plaintext downgrade: a production save **refuses** when the keychain is unavailable rather than falling back (`src/config/sync_settings.rs` surfaces the keychain write error; it is never downgraded to a plaintext key)
 - Migration: detect plaintext on load, move to keychain, save marker
-- Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true`
+- Tests bypass the OS keychain via `SNP_ALLOW_PLAINTEXT_API_KEY=true` — that seam is `test-support`-gated and compiled out of production builds
 
 ### 2. Security: Rate Limiting
-- Rate limit check BEFORE auth check (cheaper operation first)
-- Use server-controlled keys (IP address) not client-controlled (device_id)
+- Rate limit check BEFORE the database auth lookup (cheaper operation first); only the local empty-key and max-length checks precede it
+- Use server-controlled keys (IP address) not client-controlled (device_id): the key comes from `peer_rate_limit_key` (`snip-sync/src/lib.rs`), which honours `x-forwarded-for` only from a configured trusted proxy
 - Pattern: `rate_limiter.allow(&key, max_requests, window).await` (`snip-sync/src/rate_limiter.rs:45` takes `&self, key: &str, max_requests: usize, window: Duration -> bool`); canonical entry is `authenticate_and_rate_limit[_with_duration]` (`snip-sync/src/lib.rs`)
 
 ### 3. Security: CORS Configuration
 - EggServe leaf service only — do NOT reintroduce Axum/Tower-HTTP `CorsLayer`. HTTP policy lives in `snip-sync/src/http.rs` (`CorsPolicy`, `service()`); `CORS_ALLOW_ALL` is strictly parsed at startup (`snip-sync/src/main.rs`) and ignored on non-loopback binds. Keep `Vary: origin` / `Allow: GET, HEAD` wire parity (locked in `tests/snip_sync_lifetime.rs`).
 
 ### 4. Bug Fixes: Race Conditions
-- Use generation counters (`AtomicU64`) instead of `AtomicBool`
-- Increment counter on each new schedule
-- Sleeping thread checks if its generation matches current counter
+- Use generation counters instead of a bare `AtomicBool` flag
+- In-memory variant: `AtomicU64` incremented on each new operation, and the sleeping worker compares its captured generation against the current one (`src/clipboard.rs` — `CLIPBOARD_GENERATION`)
+- Durable variant: the pending generation is an on-disk `u64` in `src/auto_sync/pending.rs`; the clear step only proceeds when the observed generation still matches
 - Prevents stale timers from affecting new operations
 
 ### 5. Bug Fixes: Error Propagation
@@ -31,12 +31,12 @@
 
 ### 6. Bug Fixes: Data Integrity
 - Check for existing entries before inserting (prevent duplicates)
-- Validate input parameters (e.g., interval >= 1)
+- Validate input parameters on load (e.g. `sync_limit` uses a positive-only deserializer; auto-sync debounce, max delay, and timeout are clamped to documented ranges in `src/config/sync_settings.rs`)
 - Conflict order is `(updated_at, device_id, SHA-256(synced fields))` — never role-dependent server-wins; deletion beats live content even with an older timestamp
 
 ### 7. Code Quality: Extract Repeated Patterns
 - Identify copy-pasted auth+rate-limit blocks
-- Extract into helper method: `authenticate_and_rate_limit(&self, api_key)`
+- Extract into helper method: `authenticate_and_rate_limit(&self, api_key: &str, rate_limit_key: &str)`
 - Reduces code duplication and ensures consistency
 
 ### 8. Code Quality: Module Splitting
@@ -44,7 +44,8 @@
 - Break large files into submodules with re-exports; maintain public API via re-exports in mod.rs
 
 ### 9. Performance: SQL Optimization
-- Prefer measured, local changes; keep `snip-sync` update on external `curl` (the embedded-transport trial bloated the server +34%, past the 10% gate — see `tests/architecture.rs`). Add indexes for frequently queried columns.
+- Prefer measured, local changes; keep `snip-sync` update on external `curl` — the embedded-transport trial bloated the server +34%, past the 10% gate (`snip-sync/src/update.rs` module docs). `tests/architecture.rs` pins the `snp` half only (no `curl` in `src/update.rs`, lean `eggfetch-core` profile); `snip-sync/src/update.rs` is deliberately excluded from that scan
+- Add indexes for frequently queried columns (`snip-sync/src/db.rs` indexes users by API-key prefix, snippets by user/library/updated_at, libraries by user)
 
 ### 10. Removing Dead Public Items
 - Audit public API surface before releasing (see `docs/PUBLIC_API.md`)
@@ -59,17 +60,19 @@
 - Use `#[allow(clippy::...)]` for complex patterns that can't be collapsed
 
 ### 12. Atomic write with durability classes
-- Use `atomic_replace` with `AtomicWriteOptions::for_durability()` instead of raw `fs::write` for all user-data files
+- Never use raw `fs::write` for user-data files. Two helpers cover the two shapes:
+  - `write_private_atomic(path, content, temp_prefix)` — always fsyncs the file; fsyncs the parent directory only under `#[cfg(unix)]`. This is the library/snippet save path (`src/library/persistence.rs`, `src/commands/mod.rs`)
+  - `atomic_replace(target, bytes, &AtomicWriteOptions::for_durability(class))` — class-driven fsync, permission control, and target validation
 - Match durability class to data criticality:
-  - `DurableUserData` for libraries
-  - `SensitiveConfig` for credentials
-  - `RecoverableMetadata` for caches
-  - `EphemeralCoordination` for locks
+  - `DurableUserData` — sync recovery markers, auto-sync status and pending markers, `select --output` files, restored files, rollback restores
+  - `SensitiveConfig` — theme files and restored credential files (adds symlink rejection on top of `DurableUserData`)
+  - `RecoverableMetadata` — no production caller yet; currently exercised only by `src/utils/atomic.rs` tests
+  - `EphemeralCoordination` — no production caller yet; currently exercised only by `src/utils/atomic.rs` tests
 
 ### 13. Transaction journals for multi-file ops
 - Use free functions in `transaction.rs` (`begin_transaction` / `advance_to_*` / `commit_transaction`) for any operation touching 2+ files — there is no `Transaction::begin()` API
 - Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/`
-- Gate every local mutation on `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`src/transaction.rs:2510`): one journal = auto-rollback, multiple/incomplete = refuse and direct to `snp repair`. `check_interrupted_transactions` is a scan helper, not the gate
+- Gate every local mutation on `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` (`src/transaction.rs:2510`): one *actionable* journal = auto-recover (rollback, finalize committed-local, resume cleanup), multiple actionable = refuse and direct to `snp repair`. Corrupt journals and `Failed`-state journals refuse even when only one journal exists. `check_interrupted_transactions` is a scan helper, not the gate
 - Never schedule sync before local transaction is consistent
 
 ### 14. Schema versioning for migrations
@@ -78,13 +81,13 @@
 - Always test idempotency: second run should be a no-op
 
 ### 15. Validation-first repair
-- Always run validation before repair
-- Safe repairs: rebuild index, fix primary selection, remove orphans, generate missing IDs
-- Refuse: same-ID divergence, partially parseable TOML, corrupt pending intent, multiple primary candidates
+- Always run validation before repair (`src/commands/validate_cmd.rs` emits a `Severity` and a `Repairability` per diagnostic)
+- Safe (auto-applied by `repair --apply`): prune orphaned usage entries; transaction-journal recovery (rollback / finalize committed-local / resume cleanup / clean up legacy committed or rolled-back journals / remove a terminal journal); remove orphaned transaction artifact directories
+- Refused (reported for manual handling only): library-index and config load failures including TOML syntax errors, snippet ID repair (empty or duplicate IDs), zero timestamps, primary-library selection (missing file, no primary, multiple candidates), corrupt transaction journals, unsafe artifact-inspection failures, and journals in the `Failed` state
 
 ### 16. Backup before destructive operations
 - `backup_cmd` creates secret-free snapshots with SHA-256 checksums
-- Default excludes API keys, locks, logs
+- There is no exclusion list — the snapshot is a fixed file set: `libraries/*.toml` and `libraries.toml`, plus `usage.toml` only with `--include-usage` and `sync.toml` only with `--include-sync-state` (API key redacted before it is hashed and written). Locks, logs, and themes are absent because they are not part of that set
 - `restore_cmd --replace` creates automatic pre-restore backup
 - `repair --apply` creates pre-repair backup
 
@@ -119,36 +122,51 @@ already does. Verify the current set with
 
 ## Durability and validation patterns
 
-The following patterns are established and enforced by `tests/architecture.rs`
-and the `persistence`-focused integration targets:
+The following patterns are established in source and covered by the
+`persistence`-focused integration targets. `tests/architecture.rs` does not
+enforce them — it pins layer dependencies, the `pub` surface, and the `snp`
+updater transport only.
 
 ### Durability Classes (`src/utils/atomic.rs`)
-| Class | Use case | fsync |
-|-------|----------|-------|
-| `DurableUserData` | Libraries, snippets | fsync file + fsync parent |
-| `SensitiveConfig` | Credentials, sync settings | fsync parent only, 0o600 perms, symlink rejection |
-| `RecoverableMetadata` | Caches, status | fsync parent only |
-| `EphemeralCoordination` | Locks, temp state | no fsync |
+All four classes create the temp file with `mode(0o600)` on Unix (the target
+inherits it); they differ **only** in fsync behavior.
+
+| Class | Use case | file fsync | parent-dir fsync | extra |
+|-------|----------|------------|------------------|-------|
+| `DurableUserData` | Recovery markers, auto-sync status/pending, restored files | yes | required (hard error on failure) | — |
+| `SensitiveConfig` | Theme files, restored credential files | yes | required (hard error on failure) | symlink rejection (its only behavioral difference from `DurableUserData`) |
+| `RecoverableMetadata` | Reconstructible metadata — no production caller yet | no | best-effort (warns, continues, returns `Ok(Some(false))`) | — |
+| `EphemeralCoordination` | Coordination artifacts — no production caller yet | no | none | — |
+
+`write_private_atomic` takes no class argument: it always fsyncs the file and
+fsyncs the parent directory only under `#[cfg(unix)]`.
+
+> Known live defect (do not "fix" casually): on Windows `atomic_replace`
+> renames the target first and then calls `sync_parent_dir` unconditionally,
+> while `parent_dir_sync_durable` returns `Err` on non-Unix. A durable-class
+> `atomic_replace` on Windows therefore replaces the target and *then* returns
+> an error, never returning the `AtomicWriteReport`. `write_private_atomic` is
+> unaffected (its parent-dir fsync is `#[cfg(unix)]`-gated).
 
 ### Transaction Journal (`src/transaction.rs`)
 - Operations touching 2+ files must use the `begin_transaction` / `advance_to_*` / `commit_transaction` free functions
 - Journals live as `txn-<uuid>.toml` files in `<config>/.transaction/` (alongside locks, durable backups, and staged files)
-- On crash recovery: `gate_mutation_on_interrupted_transactions()` rolls back a single interrupted journal, refuses on multiple/incomplete
+- On crash recovery: `gate_mutation_on_interrupted_transactions()` auto-recovers a single actionable journal and refuses on multiple actionable journals, on corrupt journals, and on `Failed`-state journals
 - Journal is removed only after successful commit
 
 ### Schema Migrations (`src/migration.rs`)
 - `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`) tracks schema state
 - `write_schema_version` preserves TOML array-of-tables structure
 - Migrations are idempotent: re-running applies no changes
-- `get_schema_version()` reads from the file header
+- `get_schema_version()` reads the `schema_version` key from the file's TOML table (a missing or unparsable file yields `LEGACY`; an out-of-range integer fails closed)
 
 ### Validation (`src/commands/validate_cmd.rs`)
 - Read-only checks: orphan detection, primary selection, ID uniqueness, TOML parseability
 - Run validation before any repair operation
-- Report severity: Warning vs Error; only Errors block repair
+- Report severity as `Info` / `Warning` / `Error`, plus a `Repairability` of `Auto` / `Manual` / `Unrepairable`; only `Error` blocks repair
 
 ### Backup (`src/commands/backup_cmd.rs`)
 - Creates snapshot directory with `manifest.toml` + SHA-256 checksums
-- Excludes: `api_key`, `lock`, `logs`, `themes`
+- Captures `libraries/*.toml` and `libraries.toml`; `usage.toml` only with `--include-usage`, `sync.toml` only with `--include-sync-state` (API key redacted)
 - `restore_cmd --replace` auto-creates pre-restore backup
 - `repair --apply` auto-creates pre-repair backup

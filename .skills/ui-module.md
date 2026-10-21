@@ -1,5 +1,9 @@
 # UI Module Architecture
 
+Deep dives: [`architecture/ui.md`](../architecture/ui.md) (theme, highlight,
+variables) and [`architecture/tui.md`](../architecture/tui.md) (event loop,
+keyboard map). This skill carries only the rules you need while changing code.
+
 ## Module Structure
 ```
 src/ui/
@@ -29,9 +33,10 @@ src/ui/
 ## Syntax Highlighting
 - **Lazy and budgeted**, not pre-computed at startup: `warm_visible_highlights` fills the
   highlighted lines for the currently visible rows during the draw loop, under a
-  2 ms/frame budget (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:634`, called at `:1274-1281`)
+  2 ms/frame budget (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:634`, called at
+  `src/ui/mod.rs:1274-1281`)
 - Uses `SHELL_KEYWORDS_SET` for keyword detection (O(1) via `HashSet::contains()`)
-- Colors: keyword, string, comment, operator, escape, default
+- Colors: keyword, string, comment, flag, variable, escape, default
 - Theme-aware: string and escape colors adapt to active theme
 - Highlighting is **lossy**: `\<` renders as `<` and the backslash is dropped
   (`src/ui/highlight.rs:65-72`)
@@ -42,16 +47,24 @@ src/ui/
 - 50 bundled themes in `themes/` directory (source of truth)
 - gzip-compressed and base64-encoded by the explicit `scripts/build_themes.py` generator into `_generated_bundled_themes.rs`
 - Normal builds consume the checked-in generated file; there is no root `build.rs` hook
-- Extracted to `~/.config/snp/themes/` on first launch
+- Seeded into `~/.config/snp/themes/` lazily, when the theme picker is first
+  opened (`ensure_theme_picker_ready` → `ThemeManager::init_themes_dir`,
+  `src/ui/mod.rs:414-425`) — seeding is idempotent and never overwrites a
+  user-edited file
 - Active theme persisted in `~/.config/snp/themes.toml`
 - Default theme: `Cyber Red` (hardcoded fallback)
 
 ### Theme Picker
-- Press `e` in normal mode to open theme picker
+- Press `e` in normal mode to open theme picker (`src/ui/mod.rs:1891-1893`)
 - `j`/`k` (or arrow keys) to preview themes live
-- `i` to filter themes by name
+- `i` to filter themes by name (enters the picker's insert mode)
 - `Enter` to save selection
-- `e`/`q`/`Esc` to cancel
+- `e`/`q`/`Esc` to cancel — in the picker's *normal* mode; in insert mode `Esc`
+  only returns to normal mode (`src/ui/mod.rs:1371-1375`)
+- **Known limitation:** in the picker's insert mode the `j`/`k` arms are matched
+  before the generic character arm, so typing a filter that contains `j` or `k`
+  usually moves the preview instead of inserting the letter (they only insert at
+  the list boundary) (`src/ui/mod.rs:1376-1388`, `src/ui/mod.rs:1389-1399`)
 
 ### Legacy Fallback
 - `SNP_THEME` env var still works (`dark`/`bright`/`light`/`auto`)

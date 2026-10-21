@@ -8,6 +8,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- **`docs/` re-verified against source**: every contract doc was audited
+  line-by-line against the current tree. The most consequential fixes — the
+  durability-class column in `PERSISTENCE_INVENTORY.md` was wrong for
+  **every** row (most artifacts are written by `write_private_atomic`, which
+  applies *no* class); the per-command exit categories in
+  `COMMAND_CONTRACTS.md` were wrong for a dozen commands (`run` never exits 4,
+  `restore` never exits 6/9, `sync` exits 6/9 rather than the unreachable 7,
+  and `mcp install` does mutate and spawn a process); `LIBRARY_SCOPE.md`'s
+  claim that `"all"` has one definition when it has two independent ones;
+  `JSON_SCHEMAS.md` invented `doctor.analysis_mode` values and missed the
+  `findings_safe` repair status; `MCP.md` omitted the `library` parameter and
+  the `limit` default; `USER_GUIDE.md` presented a test-only seam
+  (`SNP_ALLOW_DIR_FSYNC_FAILURE`) as a user-facing environment variable; and
+  `COMPATIBILITY.md` described a `--stdout` flag that does not exist.
+- **`docs/THREAT_MODEL.md` and `docs/SUPPLY_CHAIN_POLICY.md` corrected against
+  the source**: the asset table claimed stable IDs and timestamps were
+  encrypted (they travel as plaintext proto fields), the residual risk for a
+  compromised server was rated *Low* (it is *Medium* — the server holds the
+  API-key bearer token and can re-derive the key), the lock model was
+  described as `O_EXCL` creation (it is the kernel lock plus a PID /
+  start-token owner record), and a `SNP_TEST_EXECUTOR_MODE` seam was described
+  that does not exist. `SUPPLY_CHAIN_POLICY.md` claimed all known advisories
+  were addressed by upgrading; `cargo deny check` actually **fails** today
+  (exit 5 — advisories and licenses both FAILED), and the policy now records
+  that as a Known Gap with the exact advisory IDs instead of asserting a clean
+  bill of health.
+- **Auto-sync failure-mode semantics corrected**: `auto_sync_failure` only
+  selects the `tracing` level of the policy log line
+  (`src/auto_sync/notification.rs:242-254`). It never changes the exit code,
+  and the `warning:` on stderr is printed unconditionally for a scheduling
+  failure. Three documents claimed `error` produced a nonzero exit.
+- **Two new skills**: `.skills/testing-and-seams.md` (isolation rules, the
+  eight `test-support`-gated seams, the `required-features` clippy gap, serial
+  targets, assertion discipline, and the two crash/failpoint suites no script
+  runs) and `.skills/documentation-authoring.md` (which document owns which
+  fact, citation discipline with the mechanical validator, the full edit set
+  for a new command, and the archive-vs-prune rule). Both close gaps that
+  previously existed only as scattered prose in `AGENTS.md`.
+- **`.skills/` re-verified against source**: every skill's claims and
+  `file:line` citations were re-checked against the current tree. Notable
+  corrections — the CLI skill's dry-run startup-recovery classification was
+  inverted relative to the code (dry-run variants are matched *first* and
+  classified `SuppressReadOnly`); the sync skill described a nonexistent
+  "first batch via `Sync`" path and a nonexistent `device_id` validation; the
+  server skill claimed every endpoint is authenticated and rate-limited
+  (`/health` is neither); the remediation skill's durability-class mapping and
+  its safe-repair list were both wrong; and the planning skill's archive rules
+  were corrected against `plans/archive/README.md`.
+- **`AGENTS.md` pruned into an index**: long explanations that duplicated a
+  deep dive were replaced with one-line pointers, and a new table maps each
+  cluster of traps to its authoritative section in `architecture/overview.md`
+  § 7 or to the owning deep dive.
+- **`docs/archive/` pruned again**: three snapshots were removed because they
+  documented nothing that ever existed — a plan for fuzz work that was never
+  started, a self-contradictory feature-flag analysis recommending gates that
+  were removed, and a pre-`architecture/` module inventory that named a
+  non-existent function and carried wrong counts. The three surviving archives
+  are the ones still referenced from a live document or recording a decision
+  that shipped.
+- **Exit-code 6 wording corrected**: `docs/EXIT_CODES.md` said code 6 meant
+  "Data validation **or local persistence failure**", contradicting its own
+  variant table where `PersistenceFailed` maps to 1. The table, the source
+  doc-comments in `src/outcome.rs`, and `architecture/outcome.md` now all say
+  validation only, and the doc states plainly that a persistence failure is
+  exit 1.
+- **The false "keyring silently falls back to a mock store" claim removed
+  from five places** (`AGENTS.md`, `SECURITY.md`, `architecture/config.md`,
+  `architecture/commands/register_cmd.md`,
+  `plans/000-long-term-specification.md`): keyring 4's `default` feature is
+  `v1`, which hard-enables exactly three platform stores (Apple Keychain,
+  Windows Credential Manager, zbus Secret Service), and `keyring::Entry` is
+  gated on `v1` — so `default-features = false` is a **compile error**, not a
+  silent downgrade. There is no mock store: an unavailable keychain makes the
+  save fail loudly, and the code refuses to persist the key in plaintext.
+- **`docs/COMMAND_CONTRACTS.md` dry-run claim corrected**: it said dry-run
+  commands are classified by command category rather than by flag. The code
+  matches the dry-run variants first and classifies them `SuppressReadOnly`.
 - **Architecture deep-dives re-verified against source**: Every one of the 61
   `architecture/` component docs was audited line-by-line against the current
   tree, and ~1,500 stale `file:line` citations and superseded claims were
@@ -79,7 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a capability map grouped by what a user is trying to do, the layer boundaries
   with how much of them is actually enforced, the cross-cutting invariants, the
   primary data flows, the on-disk state table, and the testing surface — followed
-  by a Deep-Dive Index linking all 62 component documents. Each deep dive was
+  by a Deep-Dive Index linking all 61 component documents. Each deep dive was
   re-verified against the current source and corrected where the code had moved
   on since the last review; the ones that changed the most grew substantially
   (`persistence.md` 687→951 lines, `sync.md` +979, `server.md` 410→855,

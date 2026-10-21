@@ -185,7 +185,7 @@ pub struct PetImportReport {
 
 ## Exit codes
 
-`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:775-804`). Failures map through the canonical table in `src/outcome.rs:46-70`:
+`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:775-804`). Failures map through the canonical table in `src/outcome.rs:48-72`:
 
 | Outcome | Exit code |
 |---|---|

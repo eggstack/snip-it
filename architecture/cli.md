@@ -380,7 +380,7 @@ error naming the supported alternatives (`snp list --library all`,
 
 ## Exit codes
 
-`CliOutcome` → code mapping lives in `src/outcome.rs:72-91` (stable; see
+`CliOutcome` → code mapping lives in `src/outcome.rs:74-93` (stable; see
 `docs/EXIT_CODES.md` and [outcome.md](outcome.md)):
 
 | Code | Meaning |
@@ -444,7 +444,7 @@ the handler, there is deliberately **no** `CliOutcome` variant for it — see
 [outcome.md](outcome.md).
 
 `ExecutionFailed { child_code }` propagates the child process exit code when
-available, falling back to 8 (`src/outcome.rs:83-87`); the `run` paths call
+available, falling back to 8 (`src/outcome.rs:85-89`); the `run` paths call
 `std::process::exit(child_code.unwrap_or(8))` directly
 (`src/main.rs:519`, `src/main.rs:543`). `snp clip` does not — it exits 1 on
 error.
@@ -454,7 +454,7 @@ error.
 - `src/main.rs` — CLI schema, signals, `RUNTIME`, dispatch, classification, exit mapping
 - `src/commands/mod.rs` — shared helpers, TOML load/save, selection loop, `load_readonly_snippets`
 - `src/auto_sync/notification.rs:190` — `StartupRecoveryPolicy` (5 variants) and the recovery gate
-- `src/outcome.rs:18,46` — `CliOutcome`, `exit_code` constants 0–10
+- `src/outcome.rs:18,48` — `CliOutcome`, `exit_code` constants 0–10
 - `src/selector.rs:48,65` — `LibraryScope` and the single `"all"` definition
 - `src/library/model.rs:213` — `validate_library_name`, including the reserved `all`
 - `src/commands/list_cmd.rs:65` — `snp list` read-only resolution (supports `--library all`)

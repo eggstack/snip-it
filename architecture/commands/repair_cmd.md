@@ -203,7 +203,7 @@ pub enum RepairExitStatus {
 | `PartialFailure` | `1` (`GENERAL_ERROR`) | Some repairs failed. |
 | `UnsafeOnly` | `10` (`UNSAFE_REPAIRS`) | Issues found but no safe repair was available. |
 
-`10` deliberately does **not** reuse `2` (`USAGE_ERROR`): a valid invocation that found unsafe repairs awaiting an operator decision is not a usage error (`src/main.rs:369-374`, `src/outcome.rs:67-69`).
+`10` deliberately does **not** reuse `2` (`USAGE_ERROR`): a valid invocation that found unsafe repairs awaiting an operator decision is not a usage error (`src/main.rs:369-374`, `src/outcome.rs:69-71`).
 
 ## Interaction with the transaction journal and locks
 

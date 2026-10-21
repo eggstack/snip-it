@@ -79,7 +79,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Execution mechanism | Runs via user's shell (`$SHELL -c` on Unix, `cmd /C` on Windows) | Runs via `$SHELL -c` (Unix) or `$COMSPEC /C` (Windows). Configurable timeout via `SNP_COMMAND_TIMEOUT` env var (default 300s for output-mode). | Supported differently | — | snp adds configurable timeout and output-to-file when `output` field is set. |
 | Output field behavior | Displays output metadata | When `output` field is non-empty, stdout is redirected to a file at that path (relative to CWD). Path traversal protection enforced. | Supported differently | — | snp treats `output` as a file path for stdout redirection, not just metadata display. |
 | Variable expansion | Prompts interactively for `<name>` / `<name=default>` | Same syntax. TUI prompts for variables. Supports `\<` `\>` escapes and nested brackets `<a<b>>`. | Full | — | snp is a superset of pet's variable system. |
-| Clipboard flag | Not present | `--sync` flag triggers background sync after execution. Copy flag from TUI (`c` key) copies to clipboard instead of executing. | New | — | snp adds TUI copy-mode and post-execution sync. |
+| Clipboard flag | Not present | `--sync` flag triggers background sync after execution. In the TUI, the `c` key copies to the clipboard instead of executing. | New | — | snp adds TUI copy-mode and post-execution sync. |
 | Shell selection | User's `$SHELL` | `$SHELL` on Unix, `$COMSPEC` on Windows. Falls back to `/bin/sh` or `cmd.exe`. | Full | — | Equivalent behavior. |
 
 ### 3.2 new / add
@@ -92,7 +92,7 @@ This means snp output is loadable by pet (pet ignores unknown fields), but snp o
 | Multiline support | `pet new --multiline` | `snp new --multiline` (alias: `-m`). Reads from stdin terminated by two blank lines. | Full | — | Equivalent. Multiline input from stdin. |
 | Library target | Single file only | `--library` flag to target a specific library. Falls back to primary library or legacy path. | New | — | snp-only. |
 | Config override | N/A | `--config` flag for custom config path. | New | — | snp-only. |
-| Duplicate handling | Appends to single file | Appends to library file. IDs auto-generated, deduplicated on load. | Supported differently | — | snp assigns deterministic IDs; pet has no IDs. |
+| Duplicate handling | Appends to single file | Appends to library file. IDs are deterministic (content-derived) and assigned on load; a duplicate explicit ID receives a deterministic replacement ID rather than being dropped. | Supported differently | — | snp assigns deterministic IDs; pet has no IDs. |
 
 ### Release 2A: Command ingestion and history capture
 
@@ -145,7 +145,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Output | N/A | Prints selected command to stdout (or `--output-file`). | New | — | Machine-readable output for piping and shell integration. |
 | Cancellation | N/A | Exit code 4 on `q`/`Esc`/Ctrl-C. Empty stdout. | New | — | Shell adapters check exit code 4 and restore buffer. |
 | Raw vs expanded | N/A | `--raw` (default) prints command unchanged. `--expanded` prompts for variables. Mutually exclusive. | New | — | `--raw` is for placeholder insertion; `--expanded` is for evaluated commands. |
-| Initial query | N/A | `--query` (alias `--filter`) pre-fills TUI search. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
+| Initial query | N/A | `--query` is an alternative to `--filter` (the `--filter` value wins when both are given) and pre-fills the TUI search. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
 | Output file | N/A | `--output-file` writes selection to file. Rejects symlinks and directories. | New | — | Used by shell adapters for lossless multiline transport. |
 
 ### 3.5 edit
@@ -154,7 +154,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | --- | --- | --- | --- | --- | --- |
 | Command | `pet edit` | `snp edit` (alias: `e`) | Supported differently | — | Both open the snippet file in `$EDITOR`. |
 | Target file | `~/.config/pet/snippets.toml` | Primary library TOML or `--library` target. Falls back to legacy snippets path. | Supported differently | — | snp opens the active library file. |
-| Editor resolution | `$EDITOR` | `$EDITOR`, falls back to `vim`. Resolves bare names via PATH. Symlink-attack protection. | Supported differently | — | snp adds path resolution and security checks. |
+| Editor resolution | `$EDITOR` | `$VISUAL`, then `$EDITOR`, then `vim`. Resolves bare names via PATH. Symlink-attack protection. | Supported differently | — | snp adds path resolution and security checks. |
 
 ### 3.6 list
 
@@ -171,11 +171,11 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Command | `pet sync` | `snp sync` (alias: `y`) | Intentional difference | — | Completely different sync backends. |
-| Backend | GitHub Gist / GitHub Enterprise Gist / GitLab Snippets | Self-hosted gRPC server (`snip-sync`), encrypted end-to-end. | Intentional difference | — | snp does not use hosted plaintext sync. See Product Invariant #5. |
-| Conflict resolution | Last-write-wins on Gist | Last-write-wins based on `updated_at` timestamp. Tombstone propagation for deletions. | Intentional difference | — | Different trust and conflict models. |
-| Modes | Push/pull via Git | `--push-only`, `--pull-only`, `--dry-run`, `--servers`. Bidirectional by default. | New | — | snp-only. |
+| Backend | GitHub Gist / GitHub Enterprise Gist / GitLab Snippets | Self-hosted gRPC server (`snip-sync`); snippet bodies encrypted at rest, TLS in transit. | Intentional difference | — | snp does not use hosted plaintext sync. See Product Invariant #5. |
+| Conflict resolution | Last-write-wins on Gist | Client merge order is `(updated_at, device_id, SHA-256 fingerprint of the synced fields)`. Deletion beats live content even with an older timestamp (no resurrection). Tombstone propagation for deletions. | Intentional difference | — | Different trust and conflict models; see `architecture/sync.md`. |
+| Modes | Push/pull via Git | `snp sync run --push-only`, `--pull-only`, `--dry-run`, `--servers`. Bidirectional by default. | New | — | snp-only. |
 | Encryption | Plaintext on GitHub/GitLab | AES-256-GCM + Argon2id key derivation. API keys hashed with Argon2id. | New | — | snp-only. |
-| Auto-sync | `pet` config: `auto_sync = true` | Opt-in via `snp sync config --auto-sync on`. One detached helper (`snp auto-sync-worker`) runs canonical sync after local commit. Local-first semantics. | Implemented | — | Disabled by default. PID+nonce worker lock, shared `SyncExecutionLock`, durable pending marker (schema v2 with CRC32 integrity). |
+| Auto-sync | `pet` config: `auto_sync = true` | Opt-in via `snp sync config --auto-sync on`. One detached helper (`snp auto-sync-worker`) runs canonical sync after local commit. Local-first semantics. | Implemented | — | Disabled by default. Kernel-backed worker lock with a PID / process-start-token / nonce owner record, shared `SyncExecutionLock`, durable pending marker (schema v2 with CRC32 integrity). |
 | Cron scheduling | Not built-in (user configures externally) | `snp cron --interval <minutes>` sets up automatic sync. | New | — | snp-only. |
 
 ### 3.8 import / export
@@ -225,7 +225,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Tags | `Tag = ["git", "version-control"]` | `tag = ["git", "version-control"]`. Reads `Tag`, `Tags`, `tags` aliases. | Full | — | Equivalent. snp reads all casing variants. |
+| Tags | `Tag = ["git", "version-control"]` | `tag = ["git", "version-control"]`. Reads `Tag`, `Tags`, `tags`, and `tag` spellings. | Full | — | Equivalent. snp reads all casing variants. |
 | Folders | Not supported | `folders = ["work", "scripts"]` — organizational grouping. | New | — | snp-only. |
 | Tag filtering | Via external fuzzy finder | TUI filter matches on description+command text (not tags directly). | Supported differently | — | Tag-based filtering is not yet first-class in the TUI filter. |
 | Favorite flag | Not supported | `favorite = true` — marks snippet as favorite. | New | — | snp-only. |
@@ -249,9 +249,9 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Search engine | External: `fzf`, `peco`, or custom (via `pet.config`) | Native: `fuzzy-matcher` crate (skim algorithm). Built into TUI. | Supported differently | — | snp has zero external dependencies for search. |
-| Fuzzy matching | Delegated to external tool | Built-in skim algorithm. Debounced filter updates (150ms). | Supported differently | — | Equivalent user experience, different implementation. |
+| Fuzzy matching | Delegated to external tool | Built-in skim algorithm. Debounced filter updates (35 ms). | Supported differently | — | Equivalent user experience, different implementation. |
 | TUI interaction | N/A (external tool handles UI) | Full TUI with Vim keybindings, preview, sorting, folder/favorite filtering. | New | — | snp-only rich TUI. |
-| Sorting | Configurable via pet config | `SortMode` enum in `ui/state.rs`. Relevance-based (fuzzy score). | Supported | R4A | Optional sort modes (recent, last-used, most-used, description, command) via `--sort`. Favorites-first via `--favorites-first`. Usage-aware ranking via local usage metadata. |
+| Sorting | Configurable via pet config | `SnippetSort` enum in `src/sort.rs`. Relevance-based (fuzzy score). | Supported | R4A | Optional sort modes (relevance, recent, last-used, most-used, description, command) via `--sort`. Favorites-first via `--favorites-first`. Usage-aware ranking via local usage metadata. |
 | Initial query | Shell buffer content | `--filter` flag. No shell buffer integration yet. | Partial | R1B | Will accept initial query from shell buffer. |
 
 ---
@@ -262,7 +262,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | --- | --- | --- | --- | --- | --- |
 | Direct file loading | N/A | Pet TOML files load directly in snp — same `[[snippets]]` table, same field names. | Full | — | No conversion needed for basic migration. |
 | Explicit import command | `pet import` | `snp import pet <path>` with diagnostics, dry-run, merge, replace, strict, and report options. | Full | R3B | Creates named library from pet file. Source never modified. Atomic writes with backup. |
-| Diagnostic tool | Not built-in | `snp doctor --pet-file <path>` for read-only pet file analysis, `snp doctor --compatibility` for environment audit, `snp doctor --library <name>` for library file analysis, `snp doctor --check-shell <bash\|zsh\|fish>` for shell init syntax validation. | Full | R3C | Human and JSON reports. Uses shared diagnostic model (`CompatibilityDiagnostic`, `DoctorReport`, `SourceSpan`). |
+| Diagnostic tool | Not built-in | `snp doctor --pet-file <path>` for read-only pet file analysis, `snp doctor --compatibility` for environment audit, `snp doctor --sync` for sync-status audit, `snp doctor --library <name>` for library file analysis, `snp doctor --check-shell <bash\|zsh\|fish>` for shell init syntax validation. | Full | R3C | Five modes. Human and JSON reports. Uses shared diagnostic model (`CompatibilityDiagnostic`, `DoctorReport`, `SourceSpan`). |
 | Migration strategy | N/A | 1. Run `snp doctor --pet-file <path>` to check compatibility before importing. 2. Run `snp doctor --compatibility` to verify the installed snp environment. 3. Run `snp doctor --check-shell zsh` to validate shell init output. 4. Copy `~/.config/pet/snippets.toml` to `~/.config/snp/libraries/pet-snippets.toml`, or use `snp import pet <path>` for explicit migration with report. | Full | R3B | Recommended workflow: doctor first, then import or manual copy. |
 | Metadata loss | N/A | Pet files lose no data on import. snp adds IDs, timestamps, and device_id automatically. | Full | — | Forward-compatible — pet ignores unknown fields. |
 | Round-trip editing | N/A | If both pet and snp edit the same file, snp-only metadata (IDs, timestamps, folders, favorites) may be lost when pet writes the file. | Documented | — | Documented caveat. Not recommended for concurrent editing. |
@@ -274,10 +274,10 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Aspect | Pet behavior | snp current behavior | Compatibility status | Release target | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Sync backend | GitHub Gist / GitHub Enterprise Gist / GitLab Snippets | Self-hosted gRPC server (`snip-sync`). Encrypted with AES-256-GCM + Argon2id. | Intentional difference | — | Different trust model. snp does not use hosted plaintext sync. |
-| Multi-device | Via Git push/pull | Via gRPC. Device ID tracking. Last-write-wins conflict resolution. | Intentional difference | — | Equivalent goal, different mechanism. |
-| Encryption | Plaintext (GitHub/GitLab handle transport encryption) | End-to-end encryption. API keys hashed with Argon2id. | New | — | snp-only security feature. |
+| Multi-device | Via Git push/pull | Via gRPC. Device ID tracking. Client merge order `(updated_at, device_id, SHA-256 fingerprint)`; deletions win over live content. | Intentional difference | — | Equivalent goal, different mechanism. |
+| Encryption | Plaintext (GitHub/GitLab handle transport encryption) | Snippet bodies encrypted at rest, TLS in transit. API keys hashed with Argon2id. | New | — | snp-only security feature. The API key is sent to the server as a `Bearer` token, so this is not server-blind encryption — see `architecture/encryption.md`. |
 | Auto-sync | `auto_sync = true` in pet config | Opt-in via `snp sync config --auto-sync on`. One detached helper runs canonical sync directly. Failure modes: ignore, warn, error. | Implemented | — | Disabled by default. Local-first semantics, durable pending (schema v2, CRC32), shared `SyncExecutionLock`, platform-detached. |
-| Server management | N/A | `snp register` creates account. `snp sync --servers` lists connected servers. | New | — | snp-only. |
+| Server management | N/A | `snp register` creates account. `snp sync run --servers` lists connected servers. | New | — | snp-only. |
 | Premade libraries | Not supported | `snp premade list/get/sync/search/update` — browse and download community snippet collections from server. | New | — | snp-only feature. |
 
 ---
@@ -291,9 +291,9 @@ These features have no pet equivalent and represent snp's native capabilities:
 | Themes | Halloy-compatible TOML themes. 50 bundled themes. `ThemeManager` with live preview. | Current |
 | Premade libraries | Browse/download community snippet collections from sync server. | Current |
 | Pet import | `snp import pet <path>` — import pet snippet files with diagnostics, dry-run, merge, and JSON reports. | R3B |
-| Compatibility diagnostics | `snp doctor` — four modes: `--pet-file` (pet file analysis), `--compatibility` (environment audit), `--library` (library file analysis), `--check-shell` (shell init syntax validation). Human/JSON reports. | R3C |
+| Compatibility diagnostics | `snp doctor` — five modes: `--pet-file` (pet file analysis), `--compatibility` (environment audit), `--sync` (sync-status audit), `--library` (library file analysis), `--check-shell` (shell init syntax validation). Human/JSON reports. | R3C |
 | Backup & recovery | Automatic timestamped backups before saves (max 10 per library). | Current |
-| Audit log | `~/.config/snp/audit.log` — tracks snippet operations (create, execute, copy, delete). | Current |
+| Audit log | `~/.config/snp/audit.log` — tracks snippet operations (execute, copy, delete). | Current |
 | Structured output | `snp list --json` / `snp list --csv` for scripting and spreadsheet import. | Current |
 | Output / notes presentation | `OutputPresentation` model with TUI preview, `snp edit --output/--output-stdin/--clear-output`, `--search-output` for fuzzy matching. | R4B |
 | Shell completions | Via clap_complete for bash, zsh, fish, powershell, elvish. | Current |

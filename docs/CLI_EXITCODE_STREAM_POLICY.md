@@ -6,6 +6,8 @@
 **Evergreen policy** for snp CLI exit codes and stdout/stderr stream usage.
 The authoritative code table is [`EXIT_CODES.md`](EXIT_CODES.md); this document
 covers stream discipline and the cases that are easy to get wrong. The
+per-command behavioural table (stdout/stderr flags, startup-recovery policy,
+exit categories) lives in [`COMMAND_CONTRACTS.md`](COMMAND_CONTRACTS.md). The
 "planned contract" language has been retired — the contract is implemented and
 stable via `CliOutcome` (`src/outcome.rs`).
 
@@ -13,28 +15,25 @@ stable via `CliOutcome` (`src/outcome.rs`).
 
 ### Exit Codes
 
-Exit codes are now **implemented and stable** via `CliOutcome` in
-`src/outcome.rs`, mapped to `exit_code::*` constants. The authoritative,
-verified reference is [`docs/EXIT_CODES.md`](EXIT_CODES.md).
+Exit codes are **implemented and stable** via `CliOutcome` in `src/outcome.rs`,
+mapped to the `exit_code::*` constants. The authoritative code table lives in
+[`EXIT_CODES.md`](EXIT_CODES.md) — it is deliberately **not** repeated here, so
+codes 0–10 have exactly one definition.
 
-| Code | Name | Meaning |
-|------|------|---------|
-| 0 | `SUCCESS` | Snippet executed/copied, or command completed |
-| 1 | `GENERAL_ERROR` | Any unclassified `SnipError` / persistence failure |
-| 2 | `USAGE_ERROR` | CLI argument error (clap) |
-| 3 | `NOT_FOUND` | Snippet not found |
-| 4 | `CANCELLED` | User cancelled TUI interaction (`snp select` only) |
-| 5 | `AMBIGUOUS` | Multiple snippets match filter |
-| 6 | `VALIDATION_FAILED` | Data validation failure |
-| 7 | `SYNC_FAILED` | Sync operation failure |
-| 8 | `EXECUTION_FAILED` | Snippet execution (child process) failed **wrapper** — used only when the child produced no exit code of its own; otherwise the child's code is propagated. Timeout/spawn failures are a subset, not the definition. See `EXIT_CODES.md`. |
-| 9 | `CONFLICT_OR_REFUSED` | Lock conflict, kernel refusal |
-| 10 | `UNSAFE_REPAIRS` | Valid invocation found repairs, but all are unsafe and await an operator decision (**not** a usage error — deliberately distinct from exit 2) |
+Two properties matter when reasoning about streams:
+
+- Exit **8** (`EXECUTION_FAILED`) is a **wrapper** used only when the child
+  produced no exit code of its own; otherwise the child's code is propagated
+  verbatim. Timeout and spawn failures are a subset, not the definition.
+- Exit **10** (`UNSAFE_REPAIRS`) is deliberately distinct from exit 2 — a valid
+  invocation that found only unsafe repairs is not a usage error.
 
 Selection semantics: `run_snippet_selection()` returns `SelectionOutcome`
-(Selected or Cancelled). For `run`, `clip`, and `search`, cancellation is
-treated as normal completion (exit 0). For `snp select`, cancellation maps
-to exit 4 via `CliOutcome::Cancelled` at the CLI boundary in `main.rs`.
+(`Selected`, `Cancelled`, or `ExecutionFailed`). For `run`, `clip`, and
+`search`, cancellation is treated as normal completion (exit 0). For
+`snp select`, cancellation maps to exit 4 via `CliOutcome::Cancelled`
+(`src/commands/select_cmd.rs:102`), and `main.rs` turns that outcome into the
+process exit code.
 
 ### Stream Usage (stdout vs stderr)
 
@@ -100,8 +99,11 @@ flags. Without flags, output uses the default relevance ordering.
 - **stderr**: Error messages from the main error handler.
 - **Exit**: 0 on success, 4 on user cancellation (`q`/`Esc` or variable prompt
   cancel), 1 on `SnipError` (all error variants).
-- **Output file**: Rejects symlinks and directories with exit 1. On cancellation,
-  the output file is removed if it exists and is a regular file.
+- **Output file**: Written through an atomic temp-file + rename
+  (`src/commands/select_cmd.rs:110-117`). A directory target is rejected with
+  exit 1; a symlink target is *replaced*, not followed, so the write cannot be
+  redirected elsewhere. A pre-existing output file is preserved when the
+  selection is cancelled — it is never removed on cancellation.
 - **Return type**: `SnipResult<CliOutcome>` — `CliOutcome::Success` or
   `CliOutcome::Cancelled`. Exit code 4 is mapped at the CLI boundary in
   `main.rs`.
@@ -204,7 +206,7 @@ Status messages are split across both streams. No consistent convention.
 |------------|--------|--------|
 | `list` | "Libraries:" + list | Nothing |
 | `create` | "Created library..." | Nothing |
-| `delete` | Confirmation prompt + "Deleted" | Non-interactive refusal |
+| `delete` | "Cancelled." or "Deleted library '<name>'" | Confirmation prompt and non-interactive refusal |
 | `set-primary` | "Set ... as primary" | Nothing |
 | `show` | Library metadata | "Library not found" |
 
@@ -213,7 +215,7 @@ Status messages are split across both streams. No consistent convention.
 | Subcommand | stdout | stderr |
 |------------|--------|--------|
 | `list` | Available libraries | "Sync not enabled" |
-| `get` | Download confirmation | "Sync not enabled" |
+| `get` | "Downloaded premade library '<name>' to <path>" | "Sync not enabled" |
 | `sync` | (delegates to `sync_commands`) | Errors |
 | `search` | Matching libraries | "Sync not enabled" |
 | `update` | Diff stats + confirmation | "Sync not enabled" |
@@ -253,9 +255,9 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
 
 ### Important Observations
 
-1. **TUI commands** (`run`, `clip`, `search`) render directly to the terminal
-   through crossterm's raw mode — they bypass stdout/stderr entirely for the
-   interactive portion.
+1. **TUI commands** (`run`, `clip`, `search`, `select`) render directly to the
+   terminal through crossterm's raw mode — they bypass stdout/stderr entirely
+   for the interactive portion.
 
 2. **`list` default format** goes to stdout (not stderr). It includes ANSI color
    escapes, making it unsuitable for piping without `--json` or `--csv`.
@@ -273,32 +275,38 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
    goes to stdout.
 
 7. **Error messages** always go to stderr via `eprintln!` in the main error
-   handler (`main.rs:1026`), or via `eprintln!` in individual commands before
+   handler (`src/main.rs:1027`), or via `eprintln!` in individual commands before
    returning `Ok(())` (graceful degradation pattern).
 
 8. **`new` prompts** go to stdout, not stderr. Piping `snp new` would see the
    "Command> " prompt on stdout mixed with any piped content.
 
-### Auto-Sync Error Exit Code
+### Auto-Sync Scheduling Failure
 
-When auto-sync is configured with `auto_sync_failure = "error"` and the
-parent mutation command fails to spawn the detached one-shot worker
-(`snp auto-sync-worker`), the command returns a nonzero exit code
-(1, via `SnipError::Runtime`). The local mutation has already succeeded —
-the exit code reflects the post-commit scheduling failure, not a local
-failure. Worker-side sync failures are logged to `~/.config/snp/logs/`
-and surfaced via `snp doctor --compatibility`; they do not propagate to
-the parent because the parent has already returned to the user.
+When auto-sync is configured and the parent mutation command fails to spawn the
+detached one-shot worker (`snp auto-sync-worker`), the **mutation command still
+exits 0**. A scheduling failure never becomes a command error:
+`report_notification_result()` surfaces it "without turning a successful local
+mutation into a failed command" (`src/auto_sync/notification.rs:40-55`).
 
-This is a **post-commit** exit code: scripts can distinguish local
-mutation failure (which never reaches the auto-sync stage) from a
-successful local mutation followed by a failed auto-sync spawn. The
-local state is always readable regardless of the auto-sync failure.
+The local mutation has already succeeded and is durable; the pending generation
+remains on disk for retry or startup recovery.
 
-Auto-sync scheduling failure messages
-(`error: auto-sync scheduling failed; pending work preserved for recovery`)
-go to stderr via `eprintln!` — stdout is never contaminated. Worker-side
-diagnostics appear in the log files and via `snp doctor` only.
+| Where | Stream | Text |
+|-------|--------|------|
+| `error` failure mode | log file | `auto-sync scheduling failed; pending work preserved for recovery` (`tracing::error!`) |
+| `warn` failure mode | log file | same message, `tracing::warn!` |
+| any failure mode | stderr | `warning: local change was saved, but auto-sync could not be scheduled; pending generation <n> remains for recovery` (or `…but pending sync intent could not be recorded` when the marker itself could not be written) |
+
+stdout is never contaminated. Worker-side sync failures are recorded in
+`auto-sync-status.toml` and logged; they do not propagate to the parent,
+because the parent has already returned to the user. Inspect them with
+`snp status` or `snp doctor --sync`.
+
+Practical consequence for scripts: a successful local mutation and a failed
+auto-sync spawn are **not** distinguishable by exit code. Detect a preserved
+pending generation through `snp status` (the pending line) or the log file
+instead.
 
 ## Retired Proposal (SUPERSEDED)
 
@@ -311,7 +319,10 @@ contract have been moved out of this document:
 - [`EXIT_CODES.md`](EXIT_CODES.md) — **the live exit-code contract** (codes 0–10
   via `CliOutcome` in `src/outcome.rs`).
 
-The retired exit-code table was never shipped. The stream contract it proposes
-(human-readable output moving to stderr, plus a transitional `--stdout` flag)
-is still unimplemented: human-readable output still goes to stdout and no
-`--stdout` flag exists.
+The retired exit-code table was never shipped. The transitional `--stdout` flag
+it proposes still does not exist, and most of its stream contract has not been
+applied: `list`, `search`, `keybindings`, `cron`, `new`, `sync`, `register`,
+`library`, and `premade` still write human-readable output to stdout. The
+report-style commands are the exception — `import`, `doctor`, `validate`,
+`repair`, and `backup` already write their human-readable report to stderr and
+keep machine-readable output on stdout.

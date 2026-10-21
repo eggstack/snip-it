@@ -742,7 +742,10 @@ Without that, a test writes to the developer's real `~/.config/snp/`, contends
 on the real lock, and can be refused outright by the gate if an interrupted
 transaction journal happens to be on disk.
 
-Full detail: [test-infrastructure.md](test-infrastructure.md).
+Full detail: [test-infrastructure.md](test-infrastructure.md). Task-shaped
+rules for writing and running tests — isolation, the eight seams, serial
+targets, assertion discipline, what CI does *not* run — are in
+[`../.skills/testing-and-seams.md`](../.skills/testing-and-seams.md).
 
 ---
 
@@ -894,4 +897,4 @@ touching, then the "Gotchas" section at its end — that is where the traps live
 | [`../AGENTS.md`](../AGENTS.md) | Authoritative verify commands, gotchas, invariants |
 | [`../AGENTS.override.md`](../AGENTS.override.md) | Session pitfall notes |
 | [`../plans/registry.md`](../plans/registry.md) | Authoritative planning status |
-| [`../.skills/`](../.skills) | Task-shaped agent skills — start with `planning.md`, then `architecture-review.md` |
+| [`../.skills/`](../.skills) | Task-shaped agent skills (14) — start with `planning.md`, then `architecture-review.md`; `testing-and-seams.md` and `documentation-authoring.md` cover working in this repo |

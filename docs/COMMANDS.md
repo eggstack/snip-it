@@ -27,6 +27,10 @@ Every command maps failures onto this stable set. Full definitions in
 | 9 | conflict / refused |
 | 10 | unsafe repairs pending |
 
+`snp run` propagates the executed snippet's exit code verbatim, so a failed
+snippet can exit with a code other than 8 — see
+[`EXIT_CODES.md`](EXIT_CODES.md).
+
 ## Everyday commands
 
 | Command | Alias | What it does |
@@ -37,8 +41,8 @@ Every command maps failures onto this stable set. Full definitions in
 | `snp run` | `r` | Pick a snippet in the TUI and execute it through your shell. |
 | `snp clip` | `c` | Pick a snippet in the TUI and copy it to the clipboard. |
 | `snp search` | `s` | Fuzzy-search snippets in the TUI. |
-| `snp select` | — | Pick a snippet and print its command to stdout. Does not execute. |
-| `snp edit` | `e` | Open the snippet file in `$EDITOR`. |
+| `snp select` | `sel` | Pick a snippet and print its command to stdout. Does not execute. |
+| `snp edit` | `e` | Open the snippet file in `$EDITOR`. `--output` / `--output-stdin` / `--clear-output` set the snippet's output/notes field instead. |
 | `snp version` | `v` | Print the version. |
 
 ## Snippet selection
@@ -59,10 +63,10 @@ Every command maps failures onto this stable set. Full definitions in
 `snp get` exits **3** when nothing matches and **5** when a query matches more
 than one snippet.
 
-`snp list` takes `--filter <TEXT>` for a substring match, plus `--library`,
-`--json`, `--csv`, `--search-output`, `--sort`, and `--favorites-first`. It
-has no `--field`; use `snp get --field` to pull a single field out of one
-snippet.
+`snp list` takes `--filter <TEXT>` for a fuzzy match over description,
+command, and tags, plus `--library`, `--json`, `--csv`, `--search-output`,
+`--sort`, and `--favorites-first`. It has no `--field`; use `snp get --field`
+to pull a single field out of one snippet.
 
 ## Libraries
 
@@ -70,13 +74,13 @@ snippet.
 |---------|--------------|
 | `snp library list` | List every registered library, marking the primary. |
 | `snp library create <NAME>` | Create a library. `all` is reserved and rejected. |
-| `snp library delete <NAME>` | Delete a library. Prompts for confirmation; `--force` skips it. |
+| `snp library delete <NAME>` | Delete a library. Prompts for confirmation; `--force` skips it (and is required in a non-interactive session). |
 | `snp library set-primary <NAME>` | Change which library new snippets go to and which one `snp list` reads by default. |
 | `snp library show [NAME]` | Show one library's details. |
 
 A fresh install stores snippets in a single file, `snippets.toml`. The first
-library-mode command migrates it to `libraries/snippets.toml` and registers it
-as the `snippets` library. `snp list --library all` concatenates every
+library-mode command copies it to `libraries/snippets.toml` and registers it as
+the primary `snippets` library. `snp list --library all` concatenates every
 library.
 
 ## Sync
@@ -89,7 +93,7 @@ library.
 | `snp sync clear-failure` | Clear failure state without discarding pending intent. |
 | `snp sync discard-pending` | Discard pending sync intent. |
 | `snp sync repair` | Repair sync control artifacts. |
-| `snp register` | Register this environment with a sync server. |
+| `snp register` | Register this environment with a sync server (`--server <URL>`, `--force` to re-register). Mints a new account and API key. |
 | `snp cron` | Print a crontab entry that syncs every 15 minutes (`--interval` to change). Offers to copy it to the clipboard. |
 
 ## Agent / MCP integration
@@ -114,7 +118,7 @@ never executes anything. See [`MCP.md`](MCP.md).
 | `snp doctor --sync` | Focused sync diagnostics. |
 | `snp doctor --check-shell <SHELL>` | Check the generated shell integration for syntax errors. |
 | `snp validate` | Validate snippet data. Read-only. |
-| `snp status` | Show auto-sync status. Read-only. |
+| `snp status` | Show library and auto-sync status. Read-only. |
 | `snp backup` | Create a secret-free backup snapshot. |
 | `snp restore <BACKUP_DIR>` | Restore from a backup snapshot. |
 | `snp repair` | Repair configuration and library files. |

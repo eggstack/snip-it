@@ -58,8 +58,9 @@ Two deliberate gaps, both annotated in the test source:
    sync/keychain parts of `config` are not imported by core.
 
 Modules not named in either list (`selector.rs`, `process_file_lock.rs`,
-`utils/*`, `migration.rs`, `transaction.rs`, `local_data.rs`) are governed by
-convention, not by the scanner. Keep them conservative anyway.
+`utils/*`, `migration.rs`, `transaction.rs`, `local_data.rs`, `error.rs`,
+`outcome.rs`, `sync_failure.rs`) are governed by convention, not by the
+scanner. Keep them conservative anyway.
 
 ---
 
@@ -76,6 +77,7 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 | `src/diagnostics.rs` | CompatibilityDiagnostic, PetImportReport, DoctorReport — import/doctor models |
 | `src/output.rs` | OutputPresentation — safe terminal rendering of snippet output metadata |
 | `src/error.rs` | SnipError, SnipResult, SyncFailureKind — typed error categories |
+| `src/outcome.rs` | CliOutcome enum, exit-code mapping, machine-output guard |
 | `src/selector.rs` | SnippetSelector, ResolutionPolicy — deterministic non-TUI snippet resolution |
 | `src/process_file_lock.rs` | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
 | `src/migration.rs` | SchemaVersion, `write_schema_version` (TOML array-of-tables preservation) |
@@ -85,7 +87,7 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 | `src/utils/config.rs` | Config directory paths, XDG resolution |
 | `src/utils/toml_helpers.rs` | TOML escape fixing, backslash quoting |
 | `src/utils/process.rs` | Process liveness checks, owned-lock-file removal |
-| `src/utils/redact.rs` | Secret redaction for logs, backups, diagnostics |
+| `src/utils/redact.rs` | Secret redaction for log, status, and error messages |
 | `src/utils/tempfile_guard.rs` | RAII cleanup of temporary files |
 
 **Core layer dependencies (allowed):**
@@ -93,6 +95,8 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 - `crate::utils::*` (core)
 - `crate::config::cached_read_toml` / `invalidate_toml_cache` (shared utility, see note above)
 - `crate::usage` (core)
+- `crate::test_failpoints` (compile-time no-op in production; used by
+  `library/persistence.rs` as the mutation barrier)
 
 **Core layer must NOT depend on:**
 - `crate::clipboard`, `crate::ui`, `crate::logging`, `crate::commands`
@@ -147,7 +151,6 @@ Everything that touches the terminal, spawns processes, or orchestrates user wor
 | `src/logging.rs` | Structured logging with file rotation, audit log |
 | `src/update.rs` | Self-update via lean in-process `eggfetch-core` |
 | `src/status_snapshot.rs` | Read-only status projection for `snp status` and doctor |
-| `src/outcome.rs` | CliOutcome enum and exit-code mapping |
 | `src/transaction.rs` | Transaction boundary with journal, lock, begin/commit/rollback |
 | `src/local_data.rs` | Local data lock coordination, `transaction_dir()` |
 | `src/mcp/` | Read-only stdio MCP server (`mod`, `protocol`, `tools`, `client_install`) |
@@ -226,11 +229,13 @@ The scanner matches `crate::` path prefixes only — it does not inspect
 external crate usage, `std` items, or dependency *allowlists*. Keep them true
 by review.
 
-- [ ] `library/` depends only on: `config` (TOML cache only), `error`, `utils::*`
+- [ ] `library/` depends only on: `config` (TOML cache only), `error`, `utils::*`,
+  `test_failpoints` (mutation barrier only)
 - [ ] `sort.rs` depends only on: `usage`, `library` (data types only)
 - [ ] `usage.rs` depends only on: `error`, `utils::*`
 - [ ] `diagnostics.rs` has zero crate dependencies (pure data)
 - [ ] `output.rs` has zero crate dependencies (pure data)
+- [ ] `outcome.rs` has zero crate dependencies (pure data + exit-code mapping)
 - [ ] `encryption.rs` has zero crate dependencies (pure crypto)
 - [ ] No core module uses `tonic`, `keyring`, `ratatui`, `crossterm`, `arboard`, or the `snip-proto` crate
 - [ ] No core module uses `std::process::Command`

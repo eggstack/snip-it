@@ -9,12 +9,14 @@ The server supports protocol revisions `2025-11-25`, `2025-06-18`,
 `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. EOF
 shuts it down cleanly. Requests are bounded to 1 MiB.
 
+Deep dive: [architecture/mcp.md](../architecture/mcp.md).
+
 ## Tools
 
 The initial tool set is intentionally read-only and contains exactly:
 
 - `snippets_list`: list snippets from the primary library, a named library, or
-  `all`. Optional `limit` is bounded to 1,000.
+  `all`. Optional `limit` is bounded to 1,000 (default 100).
 - `snippets_search`: fuzzy-search using the canonical selector search
   contract (`description`, `command`, and `tags` via `SkimMatcherV2` and
   CLI-consistent relevance ranking). `query` is required. Optional `tags`
@@ -22,12 +24,17 @@ The initial tool set is intentionally read-only and contains exactly:
   (case-insensitive exact equality — more predictable than relying on fuzzy
   tag-text matching alone). Optional `search_output: true` additionally
   matches bounded output/notes text, the same opt-in contract as
-  `snp list --search-output`. Optional `limit` is bounded to 1,000.
+  `snp list --search-output`. Optional `limit` is bounded to 1,000 (default
+  100).
 - `snippet_get`: retrieve one snippet by exact `id` (case-sensitive), unique
   exact `description` (case-insensitive), or unique exact `command`
   (case-insensitive) — the same identity fields and ambiguity semantics as
   `snp get`. Exactly one of the three must be supplied. Ambiguous and missing
   matches are returned as structured tool errors.
+
+All three tools accept an optional `library` argument: a library name, or
+`all` for every registered library. An unknown library name is returned as a
+tool error. Unknown tool arguments are rejected rather than ignored.
 
 Results include `id`, `library`, `description`, `command`, `tags`, `folders`,
 and `favorite`. Output/notes, sync metadata, credentials, and keychain data
@@ -38,9 +45,17 @@ single-file mode is read as the implicit `snippets` library without triggering
 the CLI's migration write path. Library source resolution is shared with the
 CLI through the canonical `library::readonly_library_sources()` resolver, so
 legacy/primary/named/`all` handling cannot drift between MCP and `snp get`.
-MCP reads do not trigger auto-sync.
+The scope rules themselves are specified in
+[LIBRARY_SCOPE.md](LIBRARY_SCOPE.md). MCP reads do not trigger auto-sync.
 
 ## Client registration
+
+`snp mcp instructions <client>` prints the setup block for one client.
+`snp mcp install <client>` **does** spawn an external client process — it runs
+that client's own registration CLI when a stable noninteractive command exists
+(`claude`, `codex`, `code`) and prints the manual block otherwise (Cursor,
+OpenCode, Zed). That is the only place under `src/mcp/` that runs a command,
+and `snp mcp serve` never reaches it.
 
 The executable path below means the absolute path printed by
 `snp mcp instructions <client>`.

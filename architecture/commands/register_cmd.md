@@ -179,14 +179,17 @@ rejects unknown flags before the handler runs.
 
 `save_sync_settings` (`src/config/sync_settings.rs:464`) writes
 `sync.toml` with a CRC32 integrity header and `0600` permissions, and
-upserts the API key into the OS keychain (`keyring`) when available. When
-the keychain is unavailable the key falls back per the
-`SNP_ALLOW_PLAINTEXT_API_KEY` seam. `migrate_plaintext_api_key`
+upserts the API key into the OS keychain (`keyring`). In a production build
+the keychain is not optional: when it is unavailable the save is **refused**
+rather than falling back to plaintext. The `SNP_ALLOW_PLAINTEXT_API_KEY` seam
+that permits plaintext is compiled in only under `test-support`. `migrate_plaintext_api_key`
 (`src/config/sync_settings.rs:353-391`) migrates a plaintext key to the
 keychain on load and replaces it with the `@keychain` marker.
 
-Keep `keyring = "4"` with its default features — without the platform
-stores, persistence silently falls back to the mock store.
+Keep `keyring = "4"` with its default features — keyring 4's `default` is `v1`,
+which hard-enables the three platform stores, and `keyring::Entry` is gated on
+`v1`, so `default-features = false` is a compile error rather than a silent
+downgrade. There is no mock store.
 
 ## Testing seams
 

@@ -20,7 +20,7 @@ which command produces which outcome (see [cli.md](cli.md) and
 
 
 The typed application outcome for public CLI exit-code mapping
-(`src/outcome.rs:16-40`):
+(`src/outcome.rs:18-42`):
 
 ```rust
 #[non_exhaustive]
@@ -38,7 +38,7 @@ pub enum CliOutcome {
 ```
 
 Each variant maps to a stable exit code via `CliOutcome::exit_code()`
-(`src/outcome.rs:74-90`).
+(`src/outcome.rs:76-93`).
 
 ## Exit Code Table
 
@@ -51,24 +51,24 @@ Each variant maps to a stable exit code via `CliOutcome::exit_code()`
 | `NOT_FOUND` | 3 | `NotFound` | Snippet or resource not found |
 | `CANCELLED` | 4 | `Cancelled` | User cancelled an interactive action |
 | `AMBIGUOUS` | 5 | `Ambiguous` | Multiple matches found, unique policy requested |
-| `VALIDATION_FAILED` | 6 | `ValidationFailed` | Data validation or persistence failure |
+| `VALIDATION_FAILED` | 6 | `ValidationFailed` | Data validation failure |
 | `SYNC_FAILED` | 7 | `SyncFailed` | Synchronization with remote server failed |
 | `EXECUTION_FAILED` | 8 | `ExecutionFailed` | Snippet execution failed (no child code) |
 | `CONFLICT_OR_REFUSED` | 9 | `ConflictOrRefused` | Destructive action refused or generation changed |
 | `UNSAFE_REPAIRS` | 10 | — | Repairs found but not applied — unsafe items await operator decision |
 
-The constants live in `outcome::exit_code` (`src/outcome.rs:46-70`).
+The constants live in `outcome::exit_code` (`src/outcome.rs:48-72`).
 
 ## Special Cases
 
 
 - **`PersistenceFailed`** maps to code 1 (`GENERAL_ERROR`), not a unique code.
   This is intentional: persistence failures are operational errors, not a
-  distinct user-facing category (`src/outcome.rs:81`).
+  distinct user-facing category (`src/outcome.rs:83`).
 
 - **`ExecutionFailed`** propagates the child process exit code when available
   (e.g., `Some(127)` for command-not-found). When no child code is available,
-  it falls back to code 8 (`src/outcome.rs:83-87`).
+  it falls back to code 8 (`src/outcome.rs:85-89`).
 
 - **`USAGE_ERROR` (2)** is not a `CliOutcome` variant. It is produced by
   Clap's error handling when invalid arguments are provided. Commands never
@@ -105,7 +105,7 @@ omission.
 
 
 The exit code mapping is centralized in `CliOutcome::exit_code()`
-(`src/outcome.rs:72-91`):
+(`src/outcome.rs:74-93`):
 
 ```rust
 impl CliOutcome {
@@ -215,10 +215,10 @@ inline (`exit_status` ∈ `clean` / `repaired` / `partial_failure` /
 
 Unit tests in `src/outcome.rs` verify:
 
-- All variants map to their documented exit codes (`src/outcome.rs:278-299`)
+- All variants map to their documented exit codes (`src/outcome.rs:280-301`)
 - `ExecutionFailed` with a child code propagates that code
 - `PersistenceFailed` maps to general error (1)
-- All exit codes are distinct (no collisions) (`src/outcome.rs:348-375`)
+- All exit codes are distinct (no collisions) (`src/outcome.rs:350-377`)
 - `OutputContext` suppresses ANSI in machine modes
 - `OutputContext` strips ANSI sequences when `suppress_ansi()` is true
 
@@ -226,7 +226,7 @@ Unit tests in `src/outcome.rs` verify:
 
 
 The machine-output guard ensures stdout is not contaminated in
-non-interactive and machine-readable modes (`src/outcome.rs:142-149`):
+non-interactive and machine-readable modes (`src/outcome.rs:144-151`):
 
 ```rust
 pub struct OutputContext {
@@ -264,7 +264,7 @@ Commands check `ctx.suppress_ansi()` before formatting output, and
 use `ctx.write_stdout()` for byte-safe output that handles broken pipe
 without noise or backtraces.
 
-### Key functions — `src/outcome.rs:151-272`
+### Key functions — `src/outcome.rs:153-274`
 
 ```rust
 OutputContext::human() -> Self

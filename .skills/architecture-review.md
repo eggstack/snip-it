@@ -38,7 +38,8 @@ Report findings directly (session summary or PR description) with:
 ## Key Files to Check
 
 `architecture/overview.md` § Deep-Dive Index is the authoritative module → doc
-map (62 files). The table below is the review *shortcut* — the highest-risk
+map — 61 deep dives, 62 documents in `architecture/` counting `overview.md`
+itself. The table below is the review *shortcut* — the highest-risk
 source files, grouped by the skill that covers them.
 
 | Area | Primary Source Files | Skill / Doc |
@@ -70,8 +71,8 @@ surface. Check them on any change to local mutation or sync triggering.
 
 ### Security
 - **Path canonicalization**: Output paths and editor paths should be canonicalized before use
-- **TLS verification**: `src/sync.rs` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it
-- **Shell execution**: `src/commands/run_cmd.rs:108-114` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh`
+- **TLS verification**: `src/sync.rs:1249` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it (deep dive: `architecture/sync.md`)
+- **Shell execution**: `src/commands/run_cmd.rs:107-113` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh` (deep dive: `architecture/commands/run_cmd.md`)
 - **Atomic file operations**: Use `fs::OpenOptions::create_new(true)` to prevent TOCTOU races
 
 ### Error Handling
@@ -80,18 +81,18 @@ surface. Check them on any change to local mutation or sync triggering.
 - **Silent failures**: Check for `let _ = ...` patterns that suppress errors without logging
 
 ### Sync
-- **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`)
-- **Conflict resolution**: Live conflicts order by `(updated_at, device_id, SHA-256(synced fields))` — never reintroduce role-dependent `>=` server-wins comparisons; deletion wins over live content regardless of timestamp
-- **Push-only counter**: `completed` should increment regardless of `has_failures`
+- **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`, `src/commands/mod.rs:243`)
+- **Conflict resolution**: Live conflicts order by `(updated_at, device_id, SHA-256(synced fields))` — never reintroduce role-dependent `>=` server-wins comparisons; deletion wins over live content regardless of timestamp (deep dive: `architecture/sync.md`)
+- **Push-only counter**: `completed` should increment regardless of `has_failures` (`src/sync_commands.rs:838,841`)
 
 ### Known Historical Fixes (verify they're still in place)
-- Encryption keys are zeroized after use: encrypt path calls `key.zeroize()` (`src/encryption.rs:243`), decrypt path uses `drop(std::mem::take(&mut key))` (`src/encryption.rs:269`)
-- Clipboard debug→warn for auto-clear failures
-- Visual mode `y` copies commands (not descriptions) - check `src/ui/mod.rs`
-- Premade TOCTOU: read from `canonical_path` not original `path`
-- Health RPC verifies database connectivity via `db.ping()`
-- `CryptoError` converts to `SnipError::SyncFailure` via the `From` impl (`error.rs`)
-- `From<io::Error>` auto-conversion with kind-based operation strings (`error.rs`)
+- Encryption keys are zeroized after use — `architecture/encryption.md`
+- Clipboard debug→warn for auto-clear failures — `architecture/clipboard.md`
+- Visual mode `y` copies commands (not descriptions) — `architecture/tui.md`
+- Premade writes are guarded by canonical containment, not the raw joined path — `architecture/commands/premade_cmd.md`
+- Health RPC verifies database connectivity via `db.ping()` — `architecture/server.md`
+- `CryptoError` converts to `SnipError::SyncFailure` via the `From` impl (`src/error.rs:316`)
+- `From<io::Error>` auto-conversion with kind-based operation strings (`src/error.rs:238`)
 
 ## Evergreen-reference checklist
 
@@ -103,7 +104,7 @@ a contract:
 1. **Public API inventory** (`docs/PUBLIC_API.md`): Every public item is accounted for and justified
 2. **Logical layers** (`docs/LOGICAL_LAYERS.md`): No internal types leak through public re-exports. This file is **executable** — `tests/architecture.rs` scans `src/` and fails on a lower layer gaining a higher-layer dependency. Update the doc and the test's constant lists together
 3. **Canonical operations**: each behavior-critical operation should have a single documented entry point. The historical analysis is in `docs/archive/CANONICAL_OPERATIONS.md`, but its `path:line` citations are stale — verify the current entry point in `architecture/` and in the source
-4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, public `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction
+4. **Dead items**: Previously removed items (`AutoSyncPolicy.max_retries`, `STALE_LOCK_THRESHOLD_SECS`, a *public* `encryption::ct_eq`) stay removed from source and are not re-introduced. Verify no re-introduction — `ct_eq` still exists as a **private** helper (`src/encryption.rs:134`) and must stay private
 5. **`#[non_exhaustive]`**: mark new public enums that may gain variants. It is **not** blanket — see the note in `.skills/remediation-patterns.md` for which modules already carry it
 
 ## Verification Checklist
